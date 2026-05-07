@@ -13,12 +13,6 @@ description = "Shared utilities for modern_format_boost tools"
 [lints]
 workspace = true
 
-[dev-dependencies]
-tempfile = { workspace = true }
-proptest = { workspace = true }
-insta    = { workspace = true }
-criterion = { workspace = true }
-
 
 
 [dependencies]

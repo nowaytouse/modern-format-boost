@@ -738,8 +738,8 @@ pub const DEFAULT_SSIM_PRIOR: f64 = 0.0;
 #[cfg(test)]
 mod tests {
     use super::{
-        is_supported_jxl_effort, jxl_distance_for_mode, jxl_effort_for_mode, JXL_DEFAULT_EFFORT,
-        JXL_ULTIMATE_DISTANCE, JXL_ULTIMATE_EFFORT,
+        JXL_DEFAULT_EFFORT, JXL_ULTIMATE_DISTANCE, JXL_ULTIMATE_EFFORT, is_supported_jxl_effort,
+        jxl_distance_for_mode, jxl_effort_for_mode,
     };
 
     #[test]

@@ -4,7 +4,7 @@
 //! (inference logging) is correctly operational.
 //!
 //! Usage: cargo run --bin `verify_db_logging`
-use shared_utils::database::{log_inference_record, open_pg_client, LoopInferenceRecord};
+use shared_utils::database::{LoopInferenceRecord, log_inference_record, open_pg_client};
 use shared_utils::loop_intent::LoopMeta;
 use std::path::Path;
 
@@ -85,7 +85,9 @@ fn main() {
             if snapshot.get("width").and_then(serde_json::Value::as_u64) == Some(640) {
                 println!("   - Snapshot data integrity: OK");
             } else {
-                println!("   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})");
+                println!(
+                    "   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})"
+                );
             }
         }
         Err(e) => {

@@ -9,8 +9,8 @@ use tracing::info;
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::SelectedCodec;
 use vid::{
-    auto_convert_with_cache, detect_video, determine_strategy_with_apple_compat, ConfigFlags,
-    ConversionConfig, VidQualityError,
+    ConfigFlags, ConversionConfig, VidQualityError, auto_convert_with_cache, detect_video,
+    determine_strategy_with_apple_compat,
 };
 
 #[derive(Parser)]
@@ -179,7 +179,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             if selected_codec == SelectedCodec::Av1 && apple_compat {
-                shared_utils::log_eprintln!("❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively.");
+                shared_utils::log_eprintln!(
+                    "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
+                );
                 std::process::exit(1);
             }
 
@@ -297,7 +299,7 @@ fn main() -> anyhow::Result<()> {
             }
             if apple_compat {
                 info!("   🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
-                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+                unsafe { std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1") };
             }
             if recursive {
                 info!("   📂 Recursive: ENABLED");

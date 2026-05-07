@@ -165,38 +165,36 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         // Concurrency Guard: If running img and vid in parallel, they might both try to copy
         // the same unsupported file (e.g. document.pdf). Check if it already exists
         // with the correct size to avoid redundant I/O and potential write-contention.
-        if dest.exists() {
-            if let (Ok(src_meta), Ok(dst_meta)) =
+        if dest.exists()
+            && let (Ok(src_meta), Ok(dst_meta)) =
                 (std::fs::metadata(path), std::fs::metadata(&dest))
-            {
-                if src_meta.len() == dst_meta.len() {
-                    debug!(file = %path.display(), "Skipping unsupported file copy (already exists in destination with matching size)");
-                    result.skipped += 1;
-                    continue;
-                }
-            }
+            && src_meta.len() == dst_meta.len()
+        {
+            debug!(file = %path.display(), "Skipping unsupported file copy (already exists in destination with matching size)");
+            result.skipped += 1;
+            continue;
         }
 
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                let error_msg = format!("Failed to create directory: {e}");
-                error!(
-                    file = %path.display(),
-                    dest_dir = %parent.display(),
-                    error = %e,
-                    "Directory creation failed"
-                );
-                eprintln!(
-                    "❌ Failed to create directory for {}: {}",
-                    path.display(),
-                    error_msg
-                );
-                result.failed += 1;
-                result
-                    .errors
-                    .push((path.to_path_buf(), error_msg, "create_dir".to_string()));
-                continue;
-            }
+        if let Some(parent) = dest.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            let error_msg = format!("Failed to create directory: {e}");
+            error!(
+                file = %path.display(),
+                dest_dir = %parent.display(),
+                error = %e,
+                "Directory creation failed"
+            );
+            eprintln!(
+                "❌ Failed to create directory for {}: {}",
+                path.display(),
+                error_msg
+            );
+            result.failed += 1;
+            result
+                .errors
+                .push((path.to_path_buf(), error_msg, "create_dir".to_string()));
+            continue;
         }
 
         match std::fs::copy(path, &dest) {

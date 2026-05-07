@@ -78,7 +78,7 @@ fn test_ultrahdr_absolute_offset_fallback() -> Result<(), Box<dyn std::error::Er
 
     // 5) Gainmap data at absolute_offset
     let gainmap_img = vec![0xFF, 0xD8, 0xFF, 0xDB, 0, 0, 0, 0, 0xFF, 0xD9]; // Minimal JPEG
-                                                                            // Ensure we don't overwrite if absolute_offset was somehow reached early
+    // Ensure we don't overwrite if absolute_offset was somehow reached early
     data.truncate(absolute_offset as usize);
     data.extend_from_slice(&gainmap_img);
 
@@ -99,7 +99,9 @@ fn test_ultrahdr_absolute_offset_fallback() -> Result<(), Box<dyn std::error::Er
             if e.contains("No MPF") {
                 panic!("❌ Failed to find MPF: {e}");
             } else if e.contains("Failed to decode base JPEG") {
-                println!("✅ Base decoding failed as expected, but MPF scanning follows (in refined logic)");
+                println!(
+                    "✅ Base decoding failed as expected, but MPF scanning follows (in refined logic)"
+                );
                 // We should test a function that ONLY does extraction if available.
             } else {
                 println!("Got error: {e}");

@@ -129,16 +129,14 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     let mut idx = 0;
 
     while idx < vf_args.len() {
-        if let Some(arg) = vf_args.get(idx) {
-            if arg == "-vf" {
-                if let Some(val) = vf_args.get(idx + 1) {
-                    if !val.is_empty() {
-                        filters.push(val.clone());
-                        idx += 2;
-                        continue;
-                    }
-                }
-            }
+        if let Some(arg) = vf_args.get(idx)
+            && arg == "-vf"
+            && let Some(val) = vf_args.get(idx + 1)
+            && !val.is_empty()
+        {
+            filters.push(val.clone());
+            idx += 2;
+            continue;
         }
         idx += 1;
     }
@@ -154,12 +152,11 @@ fn build_calibration_filter_chain(
 ) -> String {
     let mut filters = Vec::new();
 
-    if let Some(duration) = input_duration {
-        if let Some(sampling_filter) =
+    if let Some(duration) = input_duration
+        && let Some(sampling_filter) =
             crate::gpu_accel::build_multi_segment_sampling_filter(duration, ultimate_mode)
-        {
-            filters.push(sampling_filter);
-        }
+    {
+        filters.push(sampling_filter);
     }
 
     filters.extend(collect_vf_filters(vf_args));
@@ -193,7 +190,13 @@ pub fn quick_calibrate(
     use std::fs;
 
     let mut mapper = DynamicCrfMapper::new(input_size);
-    let probe = crate::ffprobe::probe_video(input).ok();
+    let probe = match crate::ffprobe::probe_video(input) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(path = %input.display(), error = %e, "Failed to probe video during dynamic calibration; using fallback parameters");
+            None
+        }
+    };
     let is_gif_input = probe
         .as_ref()
         .is_some_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
@@ -263,7 +266,13 @@ pub fn quick_calibrate(
         let gpu_result = gpu_builder.build().output();
 
         let gpu_size = match gpu_result {
-            Ok(out) if out.status.success() => fs::metadata(&gpu_path).map_or(0, |m| m.len()),
+            Ok(out) if out.status.success() => match fs::metadata(&gpu_path) {
+                Ok(m) => m.len(),
+                Err(e) => {
+                    tracing::warn!(path = %gpu_path.display(), error = %e, "Failed to read GPU test file metadata");
+                    0
+                }
+            },
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 eprintln!("   ❌ GPU calibration failed for CRF {anchor_crf:.1}");
@@ -320,7 +329,13 @@ pub fn quick_calibrate(
 
             let mut cpu_cmd = cpu_builder.output(&cpu_path).build();
             match cpu_cmd.output() {
-                Ok(out) if out.status.success() => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
+                Ok(out) if out.status.success() => match fs::metadata(&cpu_path) {
+                    Ok(m) => m.len(),
+                    Err(e) => {
+                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (GIF/x265)");
+                        0
+                    }
+                },
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}");
@@ -347,7 +362,7 @@ pub fn quick_calibrate(
                 }
             }
         } else if encoder == super::VideoEncoder::Hevc {
-            use crate::x265_encoder::{encode_with_x265, X265Config};
+            use crate::x265_encoder::{X265Config, encode_with_x265};
 
             // Probe the input to decide HDR-aware pix_fmt so the CPU calibration
             // encode doesn't silently downshift a 10-bit HDR source to 8-bit SDR.
@@ -383,7 +398,13 @@ pub fn quick_calibrate(
             };
 
             match encode_with_x265(input, &cpu_path, &config, &cpu_vf_args) {
-                Ok(_) => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
+                Ok(_) => match fs::metadata(&cpu_path) {
+                    Ok(m) => m.len(),
+                    Err(e) => {
+                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (x265)");
+                        0
+                    }
+                },
                 Err(e) => {
                     eprintln!("   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}");
                     continue;
@@ -430,7 +451,13 @@ pub fn quick_calibrate(
             let cpu_result = cpu_builder.build().output();
 
             match cpu_result {
-                Ok(out) if out.status.success() => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
+                Ok(out) if out.status.success() => match fs::metadata(&cpu_path) {
+                    Ok(m) => m.len(),
+                    Err(e) => {
+                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (generic)");
+                        0
+                    }
+                },
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!("   ❌ CPU encoding failed for CRF {anchor_crf:.1}");

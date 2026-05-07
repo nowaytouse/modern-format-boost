@@ -10,25 +10,79 @@ pub const F32_EPSILON: f32 = 1e-4;
 #[inline]
 #[must_use]
 pub fn approx_eq_f64(a: f64, b: f64) -> bool {
-    (a - b).abs() < F64_EPSILON
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+    if diff.abs() < F64_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory float comparison passed: a={}, b={}, diff={} (threshold={})",
+            a,
+            b,
+            diff,
+            F64_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_f32(a: f32, b: f32) -> bool {
-    (a - b).abs() < F32_EPSILON
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+    if diff.abs() < F32_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory float comparison passed: a={}, b={}, diff={} (threshold={})",
+            a,
+            b,
+            diff,
+            F32_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
 #[must_use]
 pub fn approx_zero_f64(a: f64) -> bool {
-    a.abs() < F64_EPSILON
+    if a == 0.0 {
+        return true;
+    }
+    if a.abs() < F64_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory zero comparison passed: a={} (threshold={})",
+            a,
+            F64_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
 #[must_use]
 pub fn approx_zero_f32(a: f32) -> bool {
-    a.abs() < F32_EPSILON
+    if a == 0.0 {
+        return true;
+    }
+    if a.abs() < F32_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory zero comparison passed: a={} (threshold={})",
+            a,
+            F32_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
@@ -52,19 +106,64 @@ pub const PSNR_EPSILON: f64 = 0.1;
 #[inline]
 #[must_use]
 pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
-    (a - b).abs() < SSIM_EPSILON
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+    if diff.abs() < SSIM_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory SSIM comparison passed: a={}, b={}, diff={} (threshold={})",
+            a,
+            b,
+            diff,
+            SSIM_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_crf(a: f32, b: f32) -> bool {
-    (a - b).abs() < CRF_EPSILON
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+    if diff.abs() < CRF_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory CRF comparison passed: a={}, b={}, diff={} (threshold={})",
+            a,
+            b,
+            diff,
+            CRF_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
-    (a - b).abs() < PSNR_EPSILON
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+    if diff.abs() < PSNR_EPSILON {
+        #[cfg(not(test))]
+        tracing::warn!(
+            "☢️ [ANOMALY] Perfunctory PSNR comparison passed: a={}, b={}, diff={} (threshold={})",
+            a,
+            b,
+            diff,
+            PSNR_EPSILON
+        );
+        return true;
+    }
+    false
 }
 
 #[inline]

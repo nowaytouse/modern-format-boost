@@ -11,8 +11,8 @@
 //! - `SIGTERM` is treated identically to `SIGINT` for clean shutdown
 
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 // ─── Shared state ────────────────────────────────────────────────────────────

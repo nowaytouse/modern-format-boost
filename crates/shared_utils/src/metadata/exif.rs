@@ -41,7 +41,13 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         .arg("-EXIF:CreateDate")
         .input(src);
 
-    let output = builder.build().output().ok()?;
+    let output = match builder.build().output() {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(path = %src.display(), error = %e, "Failed to run ExifTool to extract source date");
+            return None;
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -52,11 +58,11 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         }
     }
 
-    if let Ok(metadata) = std::fs::metadata(src) {
-        if let Ok(mtime) = metadata.modified() {
-            let datetime: chrono::DateTime<chrono::Local> = mtime.into();
-            return Some(datetime.format("%Y:%m:%d %H:%M:%S").to_string());
-        }
+    if let Ok(metadata) = std::fs::metadata(src)
+        && let Ok(mtime) = metadata.modified()
+    {
+        let datetime: chrono::DateTime<chrono::Local> = mtime.into();
+        return Some(datetime.format("%Y:%m:%d %H:%M:%S").to_string());
     }
 
     None
@@ -105,6 +111,7 @@ fn preserve_internal_metadata_fallback(
     } else {
         crate::common_utils::detect_real_extension(dst)
             .ok_or_else(|| {
+                tracing::warn!(path = %dst.display(), "Extension detection failed for content-aware metadata fallback");
                 io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content")
             })?
             .to_string()
@@ -207,14 +214,14 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
     if let Some(name) = dst.file_name() {
         let tmp_path = dst.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
-        if let Err(e) = std::fs::remove_file(&tmp_path) {
-            if e.kind() != io::ErrorKind::NotFound {
-                eprintln!(
-                    "⚠️ [metadata] Failed to remove stale ExifTool temp file {}: {}",
-                    tmp_path.display(),
-                    e
-                );
-            }
+        if let Err(e) = std::fs::remove_file(&tmp_path)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "⚠️ [metadata] Failed to remove stale ExifTool temp file {}: {}",
+                tmp_path.display(),
+                e
+            );
         }
     }
 
@@ -389,23 +396,23 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
 
-    if !output.status.success() {
-        if let Some(msg) = exiftool_error_message(&output) {
-            return Err(io::Error::other(format!("ExifTool failed: {msg}")));
-        }
+    if !output.status.success()
+        && let Some(msg) = exiftool_error_message(&output)
+    {
+        return Err(io::Error::other(format!("ExifTool failed: {msg}")));
     }
 
     let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
     backup_name.push("_original");
     let backup_path = dst.with_file_name(backup_name);
-    if let Err(e) = std::fs::remove_file(&backup_path) {
-        if e.kind() != io::ErrorKind::NotFound {
-            eprintln!(
-                "⚠️ [metadata] Failed to remove ExifTool backup file {}: {}",
-                backup_path.display(),
-                e
-            );
-        }
+    if let Err(e) = std::fs::remove_file(&backup_path)
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "⚠️ [metadata] Failed to remove ExifTool backup file {}: {}",
+            backup_path.display(),
+            e
+        );
     }
 
     if is_video_file(dst) {

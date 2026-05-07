@@ -16,9 +16,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use shared_utils::conversion::{
-    check_size_tolerance, clear_processed_list, determine_output_path_with_base,
-    finalize_conversion, format_size_change, is_already_processed, load_processed_list,
-    mark_as_processed, save_processed_list, ConversionResult, ConvertFlags, ConvertOptions,
+    ConversionResult, ConvertFlags, ConvertOptions, check_size_tolerance, clear_processed_list,
+    determine_output_path_with_base, finalize_conversion, format_size_change, is_already_processed,
+    load_processed_list, mark_as_processed, save_processed_list,
 };
 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Result<Option<PathBuf>> {
@@ -332,22 +332,21 @@ pub fn convert_to_jxl(
 
     let input_size = fs::metadata(input)?.len();
 
-    if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png"
-            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
-        {
-            if options.verbose() {
-                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
-            }
-            copy_original_on_skip(input, options)?;
-            mark_as_processed(input);
-            return Ok(ConversionResult::skipped_custom(
-                input,
-                input_size,
-                "Skipped: Small PNG (< 500KB)",
-                "small_file",
-            ));
+    if let Some(ext) = input.extension()
+        && ext.to_string_lossy().to_lowercase() == "png"
+        && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+    {
+        if options.verbose() {
+            eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
         }
+        copy_original_on_skip(input, options)?;
+        mark_as_processed(input);
+        return Ok(ConversionResult::skipped_custom(
+            input,
+            input_size,
+            "Skipped: Small PNG (< 500KB)",
+            "small_file",
+        ));
     }
     let output = get_output_path(input, "jxl", options)?;
 
@@ -396,12 +395,12 @@ pub fn convert_to_jxl(
         .apple_compat(options.apple_compat());
 
     // Add HDR metadata via CICP if available
-    if let Some(hdr) = hdr_info {
-        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            builder.cicp(&cicp);
-            if options.verbose() {
-                eprintln!("   🌈 HDR detected: applying CICP {cicp}");
-            }
+    if let Some(hdr) = hdr_info
+        && let Some(cicp) = shared_utils::color_info_to_cicp(hdr)
+    {
+        builder.cicp(&cicp);
+        if options.verbose() {
+            eprintln!("   🌈 HDR detected: applying CICP {cicp}");
         }
     }
 
@@ -445,10 +444,10 @@ pub fn convert_to_jxl(
                     .threads(max_threads)
                     .apple_compat(options.apple_compat());
 
-                if let Some(hdr) = hdr_info {
-                    if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-                        builder.cicp(cicp);
-                    }
+                if let Some(hdr) = hdr_info
+                    && let Some(cicp) = shared_utils::color_info_to_cicp(hdr)
+                {
+                    builder.cicp(cicp);
                 }
                 if let Some(icc) = patched_icc_path {
                     builder.icc_profile(icc);
@@ -864,8 +863,8 @@ pub fn convert_to_jxl(
             let mut final_output_size = output_size;
             let mut extra_info = None;
 
-            if is_extreme_explore {
-                if let Some(explore_result) = try_explore_ultimate_jxl_distance(
+            if is_extreme_explore
+                && let Some(explore_result) = try_explore_ultimate_jxl_distance(
                     input,
                     &actual_input,
                     &temp_output,
@@ -875,15 +874,15 @@ pub fn convert_to_jxl(
                     options,
                     icc_path,
                     hdr_info,
-                )? {
-                    final_output_size = explore_result.output_size;
-                    extra_info = Some(format!(
-                        "(screened e7, finalized e10 d={})",
-                        shared_utils::jxl_explorer::format_distance_for_log(
-                            explore_result.accepted_distance
-                        )
-                    ));
-                }
+                )?
+            {
+                final_output_size = explore_result.output_size;
+                extra_info = Some(format!(
+                    "(screened e7, finalized e10 d={})",
+                    shared_utils::jxl_explorer::format_distance_for_log(
+                        explore_result.accepted_distance
+                    )
+                ));
             }
 
             finalize_with_size_check(
@@ -947,10 +946,10 @@ fn run_cjxl_jpeg_transcode(
     }
 
     // Add HDR metadata via CICP if available (for wide-gamut JPEG)
-    if let Some(hdr) = hdr_info {
-        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            builder.cicp(cicp);
-        }
+    if let Some(hdr) = hdr_info
+        && let Some(cicp) = shared_utils::color_info_to_cicp(hdr)
+    {
+        builder.cicp(cicp);
     }
 
     if let Some(icc) = icc_path {
@@ -1119,22 +1118,22 @@ pub fn convert_jpeg_to_jxl(
             None,
             hdr_info,
         );
-        if let Ok(out) = retry_original {
-            if out.status.success() {
-                let label = if source_to_use == input {
-                    "JPEG lossless"
-                } else {
-                    "JPEG lossless (sanitized tail)"
-                };
-                return commit_jpeg_to_jxl_success(
-                    input,
-                    &temp_output,
-                    &output,
-                    input_size,
-                    options,
-                    label,
-                );
-            }
+        if let Ok(out) = retry_original
+            && out.status.success()
+        {
+            let label = if source_to_use == input {
+                "JPEG lossless"
+            } else {
+                "JPEG lossless (sanitized tail)"
+            };
+            return commit_jpeg_to_jxl_success(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                options,
+                label,
+            );
         }
         cleanup_temp_output(&temp_output, input);
 
@@ -1147,17 +1146,17 @@ pub fn convert_jpeg_to_jxl(
             Some(0),
             hdr_info,
         );
-        if let Ok(out) = retry_no_recon {
-            if out.status.success() {
-                return commit_jpeg_to_jxl_success(
-                    input,
-                    &temp_output,
-                    &output,
-                    input_size,
-                    options,
-                    "JPEG lossless (--allow_jpeg_reconstruction 0)",
-                );
-            }
+        if let Ok(out) = retry_no_recon
+            && out.status.success()
+        {
+            return commit_jpeg_to_jxl_success(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                options,
+                "JPEG lossless (--allow_jpeg_reconstruction 0)",
+            );
         }
         cleanup_temp_output(&temp_output, input);
         return Err(ImgQualityError::ConversionError(format!(
@@ -1583,10 +1582,10 @@ fn encode_direct_jxl_probe_with_effort(
         .threads(max_threads)
         .apple_compat(apple_compat);
 
-    if let Some(hdr) = hdr_info {
-        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            builder.cicp(&cicp);
-        }
+    if let Some(hdr) = hdr_info
+        && let Some(cicp) = shared_utils::color_info_to_cicp(hdr)
+    {
+        builder.cicp(&cicp);
     }
 
     if let Some(icc) = icc_path {
@@ -2092,14 +2091,12 @@ fn prepare_input_for_cjxl(
     let mut is_float = hdr_info.is_float;
 
     // Safety Fallback: Use extension as a hint if ffprobe failed to detect float
-    if !is_float {
-        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            if ext_lower == "exr" || ext_lower == "hdr" {
-                is_float = true;
-                if options.verbose() {
-                    tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
-                }
+    if !is_float && let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        if ext_lower == "exr" || ext_lower == "hdr" {
+            is_float = true;
+            if options.verbose() {
+                tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
             }
         }
     }
@@ -2109,14 +2106,15 @@ fn prepare_input_for_cjxl(
 
     // Safety Fallback: Use extension as a hint for high-bit integer if ffprobe failed
     let mut bit_depth = hdr_info.bit_depth;
-    if bit_depth.is_none() && !is_float {
-        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
-                bit_depth = Some(16); // Safe assumption for these pro formats
-                if options.verbose() {
-                    tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
-                }
+    if bit_depth.is_none()
+        && !is_float
+        && let Some(ext) = input.extension().and_then(|e| e.to_str())
+    {
+        let ext_lower = ext.to_lowercase();
+        if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
+            bit_depth = Some(16); // Safe assumption for these pro formats
+            if options.verbose() {
+                tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
             }
         }
     }

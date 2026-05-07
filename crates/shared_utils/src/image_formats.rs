@@ -1,4 +1,5 @@
 //! Format-specific utilities and helpers
+//! Format-specific utilities and helpers
 
 pub mod tiff {
     use crate::img_errors::{ImgQualityError, Result};
@@ -35,9 +36,9 @@ pub mod tiff {
         }
 
         let version = if is_little_endian {
-            u16::from_le_bytes([data[2], data[3]])
+            u16::from_le_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
         } else {
-            u16::from_be_bytes([data[2], data[3]])
+            u16::from_be_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
         };
         let is_bigtiff = version == 0x002B;
 
@@ -53,15 +54,16 @@ pub mod tiff {
             })
         };
         let read_u32 = |off: usize| -> Option<u32> {
-            if off + 4 > data.len() {
-                return None;
-            }
-            let bytes = [data[off], data[off + 1], data[off + 2], data[off + 3]];
-            Some(if is_little_endian {
-                u32::from_le_bytes(bytes)
+            if let Some(bytes) = data.get(off..off + 4) {
+                let arr = [bytes[0], bytes[1], bytes[2], bytes[3]];
+                Some(if is_little_endian {
+                    u32::from_le_bytes(arr)
+                } else {
+                    u32::from_be_bytes(arr)
+                })
             } else {
-                u32::from_be_bytes(bytes)
-            })
+                None
+            }
         };
         let read_u64 = |off: usize| -> Option<u64> {
             if off + 8 > data.len() {
@@ -127,28 +129,28 @@ pub mod tiff {
                 if pos + entry_size > data.len() {
                     break;
                 }
-                if let Some(tag) = read_u16(pos) {
-                    if tag == 259 {
-                        let compression = if is_bigtiff {
-                            read_u16(pos + 12).unwrap_or_else(|| {
-                                tracing::warn!(
-                                    "Failed to read TIFF compression tag at offset {}",
-                                    pos + 12
-                                );
-                                1 // Default compression
-                            })
-                        } else {
-                            read_u16(pos + 8).unwrap_or_else(|| {
-                                tracing::warn!(
-                                    "Failed to read TIFF compression tag at offset {}",
-                                    pos + 8
-                                );
-                                1 // Default compression
-                            })
-                        };
-                        if compression == 6 || compression == 7 || compression == 50001 {
-                            return Ok(false);
-                        }
+                if let Some(tag) = read_u16(pos)
+                    && tag == 259
+                {
+                    let compression = if is_bigtiff {
+                        read_u16(pos + 12).unwrap_or_else(|| {
+                            tracing::warn!(
+                                "Failed to read TIFF compression tag at offset {}",
+                                pos + 12
+                            );
+                            1 // Default compression
+                        })
+                    } else {
+                        read_u16(pos + 8).unwrap_or_else(|| {
+                            tracing::warn!(
+                                "Failed to read TIFF compression tag at offset {}",
+                                pos + 8
+                            );
+                            1 // Default compression
+                        })
+                    };
+                    if compression == 6 || compression == 7 || compression == 50001 {
+                        return Ok(false);
                     }
                 }
                 pos += entry_size;
@@ -209,11 +211,11 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer.get(i) == Some(&0xFF)
-                        && buffer.get(i + 1) == Some(&0xDB)
-                        && i + 5 < buffer.len()
+                    if let Some(&0xFF) = buffer.get(i)
+                        && let Some(&0xDB) = buffer.get(i + 1)
+                        && let Some(&q_byte) = buffer.get(i + 5)
                     {
-                        let q_value = u32::from(*buffer.get(i + 5).ok_or(0).unwrap_or(&0));
+                        let q_value = u32::from(q_byte);
                         return match q_value {
                             0..=2 => 98,
                             3..=5 => 95,
@@ -291,19 +293,20 @@ pub mod webp {
             {
                 found_any_frame = true;
                 // ANMF payload: 24 bytes header, then frame data sub-chunk
-                if let Some(frame_data) = data.get(payload_start + 24..payload_end) {
-                    if frame_data.len() >= 4 {
-                        // Check sub-chunk type: VP8L = lossless, VP8 = lossy
-                        let sub_chunk = &frame_data[0..4];
-                        if sub_chunk == b"VP8 " {
-                            return Ok(false); // Lossy
-                        } else if sub_chunk != b"VP8L" {
-                            // Unknown frame type in animated WebP — ambiguous
-                            return Err(ImgQualityError::AnalysisError(
-                                format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
-                                String::from_utf8_lossy(sub_chunk), payload_start + 24)
-                            ));
-                        }
+                if let Some(frame_data) = data.get(payload_start + 24..payload_end)
+                    && frame_data.len() >= 4
+                {
+                    // Check sub-chunk type: VP8L = lossless, VP8 = lossy
+                    let sub_chunk = &frame_data[0..4];
+                    if sub_chunk == b"VP8 " {
+                        return Ok(false); // Lossy
+                    } else if sub_chunk != b"VP8L" {
+                        // Unknown frame type in animated WebP — ambiguous
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression",
+                            String::from_utf8_lossy(sub_chunk),
+                            payload_start + 24
+                        )));
                     }
                 }
             }
@@ -349,22 +352,25 @@ pub mod webp {
             let payload_start = pos + 8;
             let chunk_end = (payload_start + chunk_size).min(data.len());
 
-            if chunk_id == b"VP8 " && payload_start + 11 <= data.len() {
-                if let Some(vp8_data) = data.get(payload_start..chunk_end) {
-                    if vp8_data.len() >= 11 && vp8_data.get(3..6) == Some(&[0x9D, 0x01, 0x2A]) {
-                        let y_ac_qi = vp8_data[10] & 0x7F;
-                        let quality = crate::numeric_cast::u32_to_u8_sat(
-                            (u32::from(127 - y_ac_qi) * 100)
-                                .checked_div(127)
-                                .unwrap_or_else(|| {
-                                    tracing::warn!("Division failed in WebP quality calculation, using max quality");
-                                    100 // Default to max quality if division fails
-                                })
-                                .min(100),
-                        );
-                        return Ok(quality);
-                    }
-                }
+            if chunk_id == b"VP8 "
+                && payload_start + 11 <= data.len()
+                && let Some(vp8_data) = data.get(payload_start..chunk_end)
+                && vp8_data.len() >= 11
+                && vp8_data.get(3..6) == Some(&[0x9D, 0x01, 0x2A])
+            {
+                let y_ac_qi = vp8_data[10] & 0x7F;
+                let quality = crate::numeric_cast::u32_to_u8_sat(
+                    (u32::from(127 - y_ac_qi) * 100)
+                        .checked_div(127)
+                        .unwrap_or_else(|| {
+                            tracing::warn!(
+                                "Division failed in WebP quality calculation, using max quality"
+                            );
+                            100 // Default to max quality if division fails
+                        })
+                        .min(100),
+                );
+                return Ok(quality);
             }
             let padded = (chunk_size + 1) & !1;
             pos = payload_start + padded;
@@ -410,6 +416,7 @@ pub mod webp {
     /// # Panics
     /// Panics if the WebP animation header is corrupted beyond recognition.
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
+        use crate::numeric_cast::AuditedCast;
         if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
             return None;
         }
@@ -418,14 +425,16 @@ pub mod webp {
         }
         let mut pos = 12usize; // RIFF payload start
         let mut total_ms = 0u64;
+
         while pos + 8 <= data.len() {
             let chunk_id = data.get(pos..pos + 4).unwrap_or(b"NULL");
-            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
+            let chunk_size = u32::from_le_bytes([
                 *data.get(pos + 4).unwrap_or(&0),
                 *data.get(pos + 5).unwrap_or(&0),
                 *data.get(pos + 6).unwrap_or(&0),
                 *data.get(pos + 7).unwrap_or(&0),
-            ]));
+            ]);
+            let chunk_size: usize = crate::numeric_cast::u32_to_f64(chunk_size).cast_sat();
             let payload_start = pos + 8;
             // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
             if chunk_size > data.len().saturating_sub(payload_start) {
@@ -446,10 +455,10 @@ pub mod webp {
         // If RIFF traversal failed (common for Safari exports), fall back to a marker scan:
         // search for ANMF and read the duration field at a fixed offset relative to chunk header.
         if total_ms == 0 {
-            for idx in
-                data.windows(4)
-                    .enumerate()
-                    .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
+            for idx in data
+                .windows(4)
+                .enumerate()
+                .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
             {
                 // ANMF chunk layout: "ANMF" (4) + size (4) + payload...
                 // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
@@ -603,9 +612,13 @@ pub mod gif {
 
     #[must_use]
     pub fn get_frame_count(path: &Path) -> usize {
-        fs::read(path).map_or(0, |b| {
-            crate::numeric_cast::u32_to_usize_sat(count_frames_from_bytes(&b))
-        })
+        match fs::read(path) {
+            Ok(b) => crate::numeric_cast::u32_to_usize_sat(count_frames_from_bytes(&b)),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to read GIF for frame counting");
+                0
+            }
+        }
     }
 }
 
@@ -631,83 +644,81 @@ pub mod avif {
     /// # Panics
     /// Panics if the AVIF container is corrupted during lossless detection.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
-        if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") {
-            if av1c_data.len() >= 3 {
-                let byte1 = av1c_data[1];
-                let byte2 = av1c_data[2];
+        if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C")
+            && av1c_data.len() >= 3
+        {
+            let byte1 = av1c_data[1];
+            let byte2 = av1c_data[2];
 
-                let seq_profile = (byte1 >> 5_i32) & 0x07;
-                let high_bitdepth = (byte2 >> 6_i32) & 0x01;
-                let twelve_bit = (byte2 >> 5_i32) & 0x01;
-                let monochrome = (byte2 >> 4_i32) & 0x01;
-                let chroma_subsampling_x = (byte2 >> 3_i32) & 0x01;
-                let chroma_subsampling_y = (byte2 >> 2_i32) & 0x01;
+            let seq_profile = (byte1 >> 5_i32) & 0x07;
+            let high_bitdepth = (byte2 >> 6_i32) & 0x01;
+            let twelve_bit = (byte2 >> 5_i32) & 0x01;
+            let monochrome = (byte2 >> 4_i32) & 0x01;
+            let chroma_subsampling_x = (byte2 >> 3_i32) & 0x01;
+            let chroma_subsampling_y = (byte2 >> 2_i32) & 0x01;
 
-                let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
-                let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
-                let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+            let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
+            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
 
-                if is_420 || is_422 {
-                    return Ok(false);
+            if is_420 || is_422 {
+                return Ok(false);
+            }
+
+            if monochrome == 1 && !is_444 {
+                return Ok(false);
+            }
+
+            // Dimension 2: colr Identity matrix (MC=0)
+            if let Some(colr_data) = find_box_data_recursive(data, *b"colr")
+                && colr_data.len() >= 11
+                && colr_data.get(0..4) == Some(b"nclx")
+            {
+                let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+                if matrix_coefficients == 0 {
+                    return Ok(true);
                 }
+            }
 
-                if monochrome == 1 && !is_444 {
-                    return Ok(false);
-                }
+            // Dimension 3: high_bitdepth/twelve_bit
+            if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
+                return Ok(true);
+            }
 
-                // Dimension 2: colr Identity matrix (MC=0)
-                if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
-                    if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-                        let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                        if matrix_coefficients == 0 {
-                            return Ok(true);
-                        }
+            // Dimension 4: Profile 0 + 4:4:4
+            if is_444 && seq_profile == 0 {
+                return Ok(true);
+            }
+
+            // Dimension 5: pixi box
+            if is_444
+                && let Some(pixi_data) = find_box_data_recursive(data, *b"pixi")
+                && !pixi_data.is_empty()
+            {
+                let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
+                if num_ch > 0 && pixi_data.len() > num_ch {
+                    let max_depth = pixi_data
+                        .get(1..=num_ch)
+                        .and_then(|slice| slice.iter().copied().max())
+                        .unwrap_or_else(|| {
+                            tracing::warn!("Failed to find max depth in pixi data, using default");
+                            8 // Default bit depth
+                        });
+                    if max_depth >= 12 {
+                        return Ok(true);
                     }
                 }
+            }
 
-                // Dimension 3: high_bitdepth/twelve_bit
-                if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
-                    return Ok(true);
-                }
+            if is_444 && monochrome == 1 {
+                return Ok(true);
+            }
 
-                // Dimension 4: Profile 0 + 4:4:4
-                if is_444 && seq_profile == 0 {
-                    return Ok(true);
-                }
-
-                // Dimension 5: pixi box
-                if is_444 {
-                    if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
-                        if !pixi_data.is_empty() {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
-                            if num_ch > 0 && pixi_data.len() > num_ch {
-                                let max_depth = pixi_data
-                                    .get(1..=num_ch)
-                                    .and_then(|slice| slice.iter().copied().max())
-                                    .unwrap_or_else(|| {
-                                        tracing::warn!(
-                                            "Failed to find max depth in pixi data, using default"
-                                        );
-                                        8 // Default bit depth
-                                    });
-                                if max_depth >= 12 {
-                                    return Ok(true);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if is_444 && monochrome == 1 {
-                    return Ok(true);
-                }
-
-                if is_444 {
-                    return Err(ImgQualityError::AnalysisError(format!(
-                        "AVIF: 4:4:4 without definitive lossless indicators; refusing to guess — {}",
-                        path.display()
-                    )));
-                }
+            if is_444 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: 4:4:4 without definitive lossless indicators; refusing to guess — {}",
+                    path.display()
+                )));
             }
         }
 
@@ -719,10 +730,16 @@ pub mod avif {
 
     #[must_use]
     pub fn is_lossless(path: &Path) -> bool {
-        fs::read(path)
-            .ok()
-            .and_then(|b| is_lossless_from_bytes(&b, path).ok())
-            .unwrap_or(false)
+        match fs::read(path) {
+            Ok(b) => is_lossless_from_bytes(&b, path).unwrap_or_else(|e| {
+                tracing::warn!(path = %path.display(), error = %e, "is_lossless_from_bytes failed; treating as lossy");
+                false
+            }),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to read AVIF for lossless detection; treating as lossy");
+                false
+            }
+        }
     }
 }
 

@@ -113,7 +113,9 @@ pub fn print_flag_help() {
     eprintln!("📋 Flag (simplified): Only the recommended combination is supported.");
     eprintln!("   Default: explore + match-quality + compress (all on).");
     eprintln!("   Optional: --ultimate for tighter 3D quality plateau search.");
-    eprintln!("   To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance");
+    eprintln!(
+        "   To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance"
+    );
 }
 
 #[cfg(test)]
@@ -177,20 +179,24 @@ mod tests {
 
     #[test]
     fn test_ultimate_invalid_with_incomplete() {
-        assert!(validate_flags_result_with_ultimate(FlagRequest {
-            explore: false,
-            match_quality: false,
-            compress: false,
-            ultimate: true,
-        })
-        .is_err());
-        assert!(validate_flags_result_with_ultimate(FlagRequest {
-            explore: true,
-            match_quality: true,
-            compress: false,
-            ultimate: true,
-        })
-        .is_err());
+        assert!(
+            validate_flags_result_with_ultimate(FlagRequest {
+                explore: false,
+                match_quality: false,
+                compress: false,
+                ultimate: true,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_flags_result_with_ultimate(FlagRequest {
+                explore: true,
+                match_quality: true,
+                compress: false,
+                ultimate: true,
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -199,12 +205,16 @@ mod tests {
             format!("{}", FlagMode::PreciseQualityWithCompress),
             "--explore --match-quality --compress"
         );
-        assert!(FlagMode::PreciseQualityWithCompress
-            .description_en()
-            .contains("Precise"));
-        assert!(FlagMode::UltimateExplore
-            .description_en()
-            .contains("Ultimate"));
+        assert!(
+            FlagMode::PreciseQualityWithCompress
+                .description_en()
+                .contains("Precise")
+        );
+        assert!(
+            FlagMode::UltimateExplore
+                .description_en()
+                .contains("Ultimate")
+        );
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
     }

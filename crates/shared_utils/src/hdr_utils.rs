@@ -327,7 +327,9 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
         let stderr_lower = stderr.to_lowercase();
         // Fallback for metadata with minor validation issues
         if stderr_lower.contains("error:") && stderr_lower.contains("invalid") {
-            crate::log_eprintln!("⚠️  WRN  hdr10plus_tool exact extract validation failed, trying fallback with --skip-validation");
+            crate::log_eprintln!(
+                "⚠️  WRN  hdr10plus_tool exact extract validation failed, trying fallback with --skip-validation"
+            );
 
             let fb_output = crate::tool_builders::Hdr10PlusBuilder::new()
                 .mode("extract")

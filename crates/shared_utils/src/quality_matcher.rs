@@ -300,9 +300,23 @@ impl SourceCodec {
     #[must_use]
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
-        let mut file = std::fs::File::open(path).ok()?;
+        let mut file = std::fs::File::open(path).map_err(|e| {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "☢️ [ANOMALY] Failed to open file for content identification! Codec detection aborted."
+            );
+            e
+        }).ok()?;
         let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
-        let n = file.read(&mut header).ok()?;
+        let n = file.read(&mut header).map_err(|e| {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "☢️ [ANOMALY] Failed to read file header for content identification! Codec detection aborted."
+            );
+            e
+        }).ok()?;
         if n < 2 {
             return None;
         }
@@ -491,21 +505,26 @@ impl SourceCodec {
         // [Any 4 bytes] + "ftyp"
         if header.len() >= 12 && header.get(4..8) == Some(b"ftyp") {
             let Some(brand) = header.get(8..12) else {
-                warn!("☢️ [ANOMALY] Required brand field missing in ISO Base Media header. Information invalidated.");
+                warn!(
+                    "☢️ [ANOMALY] Required brand field missing in ISO Base Media header. Information invalidated."
+                );
                 return None;
             };
             match brand {
                 b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
-                    return Some(Self::Heic)
+                    return Some(Self::Heic);
                 }
                 b"avif" | b"avis" => return Some(Self::Avif),
                 b"isom" | b"mp41" | b"mp42" | b"piso" | b"mp4v" | b"3gp4" | b"3gp5" | b"3g2a" => {
-                    return Some(Self::H264)
+                    return Some(Self::H264);
                 }
                 _ => {
                     // Refusing to assume H264 for unknown MP4/MOV brands.
                     // Information invalidated to prevent false quality matching.
-                    warn!("☢️ [ANOMALY] Unknown ISO Base Media brand '{}'. Refusing to forge codec information.", String::from_utf8_lossy(brand));
+                    warn!(
+                        "☢️ [ANOMALY] Unknown ISO Base Media brand '{}'. Refusing to forge codec information.",
+                        String::from_utf8_lossy(brand)
+                    );
                     return None;
                 }
             }
@@ -1032,29 +1051,29 @@ pub fn calculate_effective_bpp_with_options(
             use crate::numeric_cast::f64_to_rational_strict;
             let mut res = f64_to_rational_strict(raw_bpp, "raw_bpp").ok_or("Invalid raw_bpp")?;
             res *= f64_to_rational_strict(gop_factor, "gop_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("gop_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(chroma_factor, "chroma_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("chroma_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(hdr_factor, "hdr_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("hdr_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(aspect_factor, "aspect_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("aspect_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(complexity_factor, "complexity_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("complexity_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(grain_factor, "grain_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("grain_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(mode_adjustment, "mode_adjustment")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("mode_adjustment is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(resolution_factor, "resolution_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("resolution_factor is NaN/Inf — logic error in factor computation")?;
             res *= f64_to_rational_strict(alpha_factor, "alpha_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("alpha_factor is NaN/Inf — logic error in factor computation")?;
             res /= f64_to_rational_strict(codec_factor, "codec_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("codec_factor is NaN/Inf — logic error in factor computation")?;
             res /= f64_to_rational_strict(color_depth_factor, "color_depth_factor")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("color_depth_factor is NaN/Inf — logic error in factor computation")?;
             res /= f64_to_rational_strict(target_adjustment, "target_adjustment")
-                .unwrap_or_else(|| Rational::from(1));
+                .ok_or("target_adjustment is NaN/Inf — logic error in factor computation")?;
             res.to_f64()
         }
         #[cfg(not(feature = "high-precision"))]
@@ -1112,58 +1131,53 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         return Err("❌ Cannot calculate bpp: pixels is 0 (invalid dimensions)".to_string());
     }
 
-    if let Some(video_bitrate) = analysis.video_bitrate {
-        if video_bitrate > 0 {
-            if let Some(fps) = analysis.fps {
-                if fps > 0.0_f64 {
-                    #[cfg(feature = "high-precision")]
-                    {
-                        let bits_per_frame = Rational::from(video_bitrate)
-                            / crate::numeric_cast::f64_to_rational_strict(fps, "fps")
-                                .ok_or_else(|| "Invalid FPS for rational conversion".to_string())?;
-                        return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
-                    }
-                    #[cfg(not(feature = "high-precision"))]
-                    {
-                        let bits_per_frame = crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
-                        return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
-                    }
-                }
-            }
+    if let Some(video_bitrate) = analysis.video_bitrate
+        && video_bitrate > 0
+        && let Some(fps) = analysis.fps
+        && fps > 0.0_f64
+    {
+        #[cfg(feature = "high-precision")]
+        {
+            let bits_per_frame = Rational::from(video_bitrate)
+                / crate::numeric_cast::f64_to_rational_strict(fps, "fps")
+                    .ok_or_else(|| "Invalid FPS for rational conversion".to_string())?;
+            return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            let bits_per_frame = crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
+            return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
         }
     }
 
     if analysis.file_size > 0 {
-        if let Some(duration) = analysis.duration_secs {
-            if duration > 0.0_f64 {
-                let fps = analysis
-                    .fps
-                    .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
-                if fps <= 0.0_f64 {
-                    return Err("❌ Cannot calculate bpp: FPS is 0 or negative".to_string());
-                }
-                let total_frames =
-                    crate::numeric_cast::f64_to_u64_strict(duration * fps, "total_frames")
-                        .ok_or_else(|| {
-                            "❌ Cannot calculate bpp: total_frames is invalid".to_string()
-                        })?;
-                if total_frames == 0 {
-                    return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
-                }
-                #[cfg(feature = "high-precision")]
-                {
-                    let bits_per_frame = (Rational::from(analysis.file_size)
-                        * Rational::from(8_i32))
-                        / Rational::from(total_frames);
-                    return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
-                }
-                #[cfg(not(feature = "high-precision"))]
-                {
-                    let bits_per_frame = (crate::numeric_cast::u64_to_f64(analysis.file_size)
-                        * 8.0)
-                        / crate::numeric_cast::u64_to_f64(total_frames);
-                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
-                }
+        if let Some(duration) = analysis.duration_secs
+            && duration > 0.0_f64
+        {
+            let fps = analysis
+                .fps
+                .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
+            if fps <= 0.0_f64 {
+                return Err("❌ Cannot calculate bpp: FPS is 0 or negative".to_string());
+            }
+            let total_frames =
+                crate::numeric_cast::f64_to_u64_strict(duration * fps, "total_frames").ok_or_else(
+                    || "❌ Cannot calculate bpp: total_frames is invalid".to_string(),
+                )?;
+            if total_frames == 0 {
+                return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
+            }
+            #[cfg(feature = "high-precision")]
+            {
+                let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8_i32))
+                    / Rational::from(total_frames);
+                return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+            }
+            #[cfg(not(feature = "high-precision"))]
+            {
+                let bits_per_frame = (crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0)
+                    / crate::numeric_cast::u64_to_f64(total_frames);
+                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
             }
         }
         // BPP = bits per pixel; file_size is in bytes so multiply by 8
@@ -1431,11 +1445,13 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
         score += 3.0_f64;
     }
 
-    if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
-        if fps > 0.0_f64 && duration > 0.0_f64 && (1.0_f64..=240.0_f64).contains(&fps) {
-            score += 2.0_f64;
-            max_score += 2.0_f64;
-        }
+    if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs)
+        && fps > 0.0_f64
+        && duration > 0.0_f64
+        && (1.0_f64..=240.0_f64).contains(&fps)
+    {
+        score += 2.0_f64;
+        max_score += 2.0_f64;
     }
 
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
@@ -1778,8 +1794,7 @@ pub fn from_video_detection(
     let pixels_per_second = pixels_per_frame * fps;
 
     let bpp = if pixels_per_second > 0.0_f64 && bitrate > 0 {
-        f64::from(crate::numeric_cast::u64_to_u32_strict(bitrate, "bitrate").unwrap_or(0))
-            / pixels_per_second
+        crate::numeric_cast::u64_to_f64(bitrate) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0_f64 {
             eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
@@ -1843,11 +1858,13 @@ impl VideoAnalysisBuilder {
     #[must_use]
     pub fn video_bitrate(mut self, bitrate: u64) -> Self {
         self.analysis.video_bitrate = Some(bitrate);
-        if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height) {
-            if fps > 0.0_f64 && w > 0 && h > 0 {
-                let pixels = f64::from(w) * f64::from(h);
-                self.analysis.bpp = (crate::numeric_cast::u64_to_f64(bitrate) / fps) / pixels;
-            }
+        if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height)
+            && fps > 0.0_f64
+            && w > 0
+            && h > 0
+        {
+            let pixels = f64::from(w) * f64::from(h);
+            self.analysis.bpp = (crate::numeric_cast::u64_to_f64(bitrate) / fps) / pixels;
         }
         self
     }

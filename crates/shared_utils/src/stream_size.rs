@@ -252,17 +252,23 @@ fn calculate_stream_size_and_bitrate(
     stream: Option<&FfprobeStreamInfo>,
     duration_secs: f64,
 ) -> (u64, Option<u64>) {
-    stream
+    let Some(br) = stream
         .and_then(|s| s.bit_rate.as_ref())
         .and_then(|br_str| br_str.parse::<u64>().ok())
-        .map_or((0, None), |br| {
-            let size_rational = (Rational::from(br)
-                * crate::numeric_cast::f64_to_rational_strict(duration_secs, "duration_secs")
-                    .unwrap_or_else(|| Rational::from(0_i32)))
-                / Rational::from(8_i32);
-            let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-            (size, Some(br))
-        })
+    else {
+        return (0, None);
+    };
+
+    let Some(duration_r) =
+        crate::numeric_cast::f64_to_rational_strict(duration_secs, "duration_secs")
+    else {
+        crate::progress_mode::emit_stderr("☢️ [ANOMALY] Duration NaN/Inf in stream-size calc!");
+        return (0, None);
+    };
+
+    let size_rational = (Rational::from(br) * duration_r) / Rational::from(8_i32);
+    let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
+    (size, Some(br))
 }
 
 pub fn can_compress_pure_video(
@@ -302,9 +308,10 @@ pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
-        let overhead = Rational::from(total_file_size)
-            * crate::numeric_cast::f64_to_rational_strict(overhead_percent, "overhead_percent")
-                .unwrap_or_else(|| Rational::from(0_i32));
+        let overhead_r =
+            crate::numeric_cast::f64_to_rational_strict(overhead_percent, "overhead_percent")
+                .expect("Overhead percent constants are strictly finite");
+        let overhead = Rational::from(total_file_size) * overhead_r;
         crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);

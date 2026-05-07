@@ -55,11 +55,13 @@ impl PsnrSsimMapping {
     }
 
     pub fn insert(&mut self, psnr: f64, ssim: f64) {
-        if let Some(existing) = self
-            .points
-            .iter_mut()
-            .find(|point| (point.psnr - psnr).abs() < f64::EPSILON)
-        {
+        if let Some(existing) = self.points.iter_mut().find(|point| {
+            crate::numeric_cast::is_effectively_equal(
+                point.psnr,
+                psnr,
+                crate::numeric_cast::FloatContext::ExactMatch,
+            )
+        }) {
             existing.ssim = ssim;
             return;
         }
@@ -76,7 +78,10 @@ impl PsnrSsimMapping {
     #[inline]
     fn interpolate_or_clamp(p1: &MappingPoint, p2: &MappingPoint, psnr: f64) -> f64 {
         let delta = p2.psnr - p1.psnr;
-        if delta.abs() < f64::EPSILON {
+        if crate::numeric_cast::is_effectively_zero(
+            delta,
+            crate::numeric_cast::FloatContext::Accumulation,
+        ) {
             return p2.ssim;
         }
         let ratio = (psnr - p1.psnr) / delta;

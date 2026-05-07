@@ -6,17 +6,17 @@
 //! to learn from labeled GIF/video samples and improve classification
 //! accuracy over time.
 
+use crate::Rational;
 use crate::loop_intent::LoopMeta;
 use crate::media_meta_utils::scan_gif_headers;
 use crate::progress_mode::emit_stderr;
-use crate::Rational;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
 use postgres::Client;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::path::Path;
 use tracing::warn;
@@ -596,7 +596,9 @@ pub fn open_pg_client() -> Result<Client> {
             if !DB_WARN_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 let msg = format!("⚠️  Database Unavailable: {e}");
                 crate::progress_mode::emit_stderr(&msg);
-                crate::progress_mode::emit_stderr("💡 System running in [LEGACY LIMITED MODE] (Heuristic Tree only, no KNN/Learning).");
+                crate::progress_mode::emit_stderr(
+                    "💡 System running in [LEGACY LIMITED MODE] (Heuristic Tree only, no KNN/Learning).",
+                );
                 crate::progress_mode::emit_stderr(
                     "💡 To enable full intelligence, run: 'python3 crates/dev/scripts/database_manager.py' (option 1: Database Setup)",
                 );
@@ -807,7 +809,9 @@ fn lookup_similar_samples_inner(
         Ok(c) => c,
         Err(e) => {
             log::warn!("⚠️ PostgreSQL connection failed (graceful fallback): {e}");
-            log::warn!("💡 Suggestion: Run 'python3 crates/dev/scripts/database_manager.py' (option 1: Database Setup) to initialize and start the local database service.");
+            log::warn!(
+                "💡 Suggestion: Run 'python3 crates/dev/scripts/database_manager.py' (option 1: Database Setup) to initialize and start the local database service."
+            );
             return Ok(None);
         }
     };
@@ -823,7 +827,9 @@ fn lookup_similar_samples_inner(
     if missing_vec_count > 0 {
         let total_count: i64 = conn.query_one("SELECT COUNT(*) FROM samples", &[])?.get(0);
         if total_count > 0 {
-            log::info!("🧩 Detected {missing_vec_count} samples with missing feature vectors. Triggering automated recompute...");
+            log::info!(
+                "🧩 Detected {missing_vec_count} samples with missing feature vectors. Triggering automated recompute..."
+            );
             recompute_all_features(&mut conn)?;
         }
     }
@@ -934,16 +940,23 @@ fn lookup_similar_samples_inner(
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
-        let distance_weight =
-            Rational::from_f64(1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0))
-                .unwrap_or_else(|| Rational::from(1));
+        let Some(rel_dist_r) = rug::Rational::from_f64(
+            1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0),
+        ) else {
+            tracing::warn!(
+                distance,
+                "☢️ [ANOMALY] NaN/Inf distance in KNN neighbor — skipping corrupt neighbor"
+            );
+            continue;
+        };
+        let distance_weight = rel_dist_r;
 
         let class_weight = match label {
             LabelStatus::LoopStrong => {
-                Rational::from_f64(w_quality).unwrap_or_else(|| Rational::from(1))
+                rug::Rational::from_f64(w_quality).expect("w_quality is a finite constant")
             }
             LabelStatus::LoopWeak => {
-                Rational::from_f64(w_video).unwrap_or_else(|| Rational::from(1))
+                rug::Rational::from_f64(w_video).expect("w_video is a finite constant")
             }
             _ => Rational::from(1),
         };
@@ -970,7 +983,7 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let min_weight = Rational::from_f64(1e-6).unwrap_or_else(|| Rational::from(1));
+    let min_weight = rug::Rational::from_f64(1e-6).expect("1e-6 is strictly finite");
     let divisor = if total_weight > min_weight {
         total_weight.clone()
     } else {
@@ -1038,11 +1051,19 @@ fn lookup_similar_samples_inner(
             (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
             "p90_idx",
         )
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            crate::progress_mode::emit_stderr("☢️ [ANOMALY] p90_idx overflow! Refusing to forge percentile. Information invalidated.");
+            anyhow::anyhow!("p90_idx overflow")
+        })?;
         Some(
             *loop_durations
                 .get(idx.min(loop_durations.len().saturating_sub(1)))
-                .unwrap_or(&0.0_f64),
+                .ok_or_else(|| {
+                    crate::progress_mode::emit_stderr(
+                        "☢️ [ANOMALY] Percentile index out of bounds! Refusing to forge data.",
+                    );
+                    anyhow::anyhow!("Percentile index out of bounds")
+                })?,
         )
     };
 
@@ -1093,12 +1114,16 @@ fn resolved_duration_secs(meta: &LoopMeta) -> Option<f64> {
             Some(_fc) => {
                 // We have a frame count but no reliable duration/FPS.
                 // Refusing to forge a '12fps' baseline. Information invalidated.
-                warn!("☢️ [ANOMALY] Frame count present but duration/FPS missing for resolved_duration! Refusing to forge data.");
+                warn!(
+                    "☢️ [ANOMALY] Frame count present but duration/FPS missing for resolved_duration! Refusing to forge data."
+                );
                 None
             }
             None => {
                 // Total metadata vacuum: neither duration nor frame count.
-                warn!("☢️ [ANOMALY] Duration and frame_count missing for resolved_duration! Refusing to forge data.");
+                warn!(
+                    "☢️ [ANOMALY] Duration and frame_count missing for resolved_duration! Refusing to forge data."
+                );
                 None
             }
         }
@@ -1116,14 +1141,14 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     use crate::constants::HIGH_VALUE_LOSSLESS_DURATION_LIMIT;
 
     let mut current_meta = meta.clone();
-    if let Some(p) = path {
-        if let Err(e) = crate::loop_intent::deep_refine_meta(&mut current_meta, p) {
-            tracing::warn!(
-                error = %e,
-                path = %p.display(),
-                "lossless exploration metadata refinement failed; using existing metadata"
-            );
-        }
+    if let Some(p) = path
+        && let Err(e) = crate::loop_intent::deep_refine_meta(&mut current_meta, p)
+    {
+        tracing::warn!(
+            error = %e,
+            path = %p.display(),
+            "lossless exploration metadata refinement failed; using existing metadata"
+        );
     }
     if let Some(duration) = resolved_duration_secs(&current_meta) {
         current_meta.duration_secs = duration;
@@ -2196,7 +2221,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
         return Ok(0);
     }
 
-    let pb = ProgressBar::new(u64::try_from(candidate_paths.len()).unwrap_or(u64::MAX));
+    let pb = ProgressBar::new(candidate_paths.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
@@ -2420,26 +2445,26 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             let source_path: Option<String> = row.get(1);
             if let Some(path_str) = source_path {
                 let path = Path::new(&path_str);
-                if path.exists() {
-                    if let Some(sample) = sample_from_path(path, "integrity_refresh", None) {
-                        conn.execute(
-                            "UPDATE samples SET 
+                if path.exists()
+                    && let Some(sample) = sample_from_path(path, "integrity_refresh", None)
+                {
+                    conn.execute(
+                        "UPDATE samples SET 
                                 motion_gini = $1, 
                                 directory_loop_intent_score = $2,
                                 temporal_flatness = $3,
                                 palette_depth = $4
                              WHERE file_hash = $5",
-                            &[
-                                &sample.motion_gini,
-                                &sample.directory_loop_intent_score,
-                                &sample.temporal_flatness,
-                                &sample.palette_depth,
-                                &file_hash,
-                            ],
-                        )?;
+                        &[
+                            &sample.motion_gini,
+                            &sample.directory_loop_intent_score,
+                            &sample.temporal_flatness,
+                            &sample.palette_depth,
+                            &file_hash,
+                        ],
+                    )?;
 
-                        fixed_count += 1_i32;
-                    }
+                    fixed_count += 1_i32;
                 }
             }
         }
@@ -2742,6 +2767,69 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     clippy::missing_panics_doc,
     reason = "Explicit panic on data corruption is intended and documented inline."
 )]
+fn map_row_to_sample(row: &postgres::Row) -> Option<SampleRow> {
+    let width = crate::numeric_cast::i32_to_u32_strict(row.get::<_, i32>(2), "db_backfill_width")?;
+    let height =
+        crate::numeric_cast::i32_to_u32_strict(row.get::<_, i32>(3), "db_backfill_height")?;
+    let file_size_bytes =
+        crate::numeric_cast::i64_to_u64_strict(row.get::<_, i64>(6), "db_backfill_file_size")?;
+    let fps =
+        crate::numeric_cast::option_f64_strict(row.get::<_, Option<f64>>(7), "db_backfill_fps")?;
+
+    Some(SampleRow {
+        _loss_tolerance: row.get(1),
+        width,
+        height,
+        duration_secs: row.get(4),
+        frame_count: crate::numeric_cast::i64_to_u64_strict(
+            row.get::<_, i64>(5),
+            "db_backfill_frame_count",
+        ),
+        file_size_bytes,
+        fps,
+        temporal_bpp: row.get(8),
+        spatial_bpp: row.get(9),
+        has_transparency: row.get(10),
+        has_embedded_icc: row.get(11),
+        has_complex_color_profile: row.get(12),
+        palette_size: row.get::<_, Option<i32>>(13).and_then(|s| {
+            crate::numeric_cast::i32_to_u32_strict(s, "db_backfill_pal").or_else(|| {
+                crate::progress_mode::emit_stderr(
+                    "☢️ [ANOMALY] DB palette_size corruption! Refusing to forge data.",
+                );
+                None
+            })
+        }),
+        frame_payload_variation: row.get(14),
+        frame_delay_variation: row.get(15),
+        aspect_ratio: row.get(16),
+        _labeled_by: row.get(17),
+        _total_pixels: row.get::<_, Option<i64>>(18).and_then(|s| {
+            crate::numeric_cast::i64_to_u64_strict(s, "db_backfill_total_pixels").or_else(|| {
+                crate::progress_mode::emit_stderr("☢️ [ANOMALY] DB total_pixels corruption! Refusing to forge data. Information invalidated.");
+                None
+            })
+        }),
+        loop_frequency: row.get(19),
+        is_meme_platform: row.get(20),
+        is_human_semantic_name: row.get(21),
+        cadence_score: row.get(22),
+        directory_loop_intent_score: row.get::<_, Option<f64>>(23),
+        is_high_value_source: row.get(24),
+        is_native_gif: row.get(25),
+        palette_depth: row.get(26),
+        motion_gini: row.get(27),
+        block_skew: row.get(28),
+        temporal_flatness: row.get(29),
+        loop_closure_score: row.get(30),
+        motion_periodicity: row.get(31),
+        temporal_jitter: row.get(32),
+        webp_compression_ratio: row.get::<_, Option<f64>>(33),
+    })
+}
+
+/// # Errors
+/// Returns an error if the database transaction or query fails.
 pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let feature_map = fetch_feature_map(conn)?;
 
@@ -2769,63 +2857,11 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let mut updated_count = 0_i32;
     for row in &sample_rows {
         let file_hash: String = row.get(0);
-        let sample = SampleRow {
-            _loss_tolerance: row.get(1),
-            width: crate::numeric_cast::i32_to_u32_strict(
-                row.get::<_, i32>(2),
-                "db_backfill_width",
-            )
-            .unwrap_or(0),
-            height: crate::numeric_cast::i32_to_u32_strict(
-                row.get::<_, i32>(3),
-                "db_backfill_height",
-            )
-            .unwrap_or(0),
-            duration_secs: row.get(4),
-            frame_count: crate::numeric_cast::i64_to_u64_strict(
-                row.get::<_, i64>(5),
-                "db_backfill_frame_count",
-            ),
-            file_size_bytes: crate::numeric_cast::i64_to_u64_strict(
-                row.get::<_, i64>(6),
-                "db_backfill_file_size",
-            )
-            .unwrap_or(0),
-            fps: crate::numeric_cast::option_f64_strict(
-                row.get::<_, Option<f64>>(7),
-                "db_backfill_fps",
-            )
-            .unwrap_or(0.0),
-            temporal_bpp: row.get(8),
-            spatial_bpp: row.get(9),
-            has_transparency: row.get(10),
-            has_embedded_icc: row.get(11),
-            has_complex_color_profile: row.get(12),
-            palette_size: row
-                .get::<_, Option<i32>>(13)
-                .map(|s| crate::numeric_cast::i32_to_u32_strict(s, "db_backfill_pal").unwrap_or(0)),
-            frame_payload_variation: row.get(14),
-            frame_delay_variation: row.get(15),
-            aspect_ratio: row.get(16),
-            _labeled_by: row.get(17),
-            _total_pixels: row.get::<_, Option<i64>>(18).map(|s| {
-                crate::numeric_cast::i64_to_u64_strict(s, "db_backfill_total_pixels").unwrap_or(0)
-            }),
-            loop_frequency: row.get(19),
-            is_meme_platform: row.get(20),
-            is_human_semantic_name: row.get(21),
-            cadence_score: row.get(22),
-            directory_loop_intent_score: row.get::<_, Option<f64>>(23),
-            is_high_value_source: row.get(24),
-            is_native_gif: row.get(25),
-            palette_depth: row.get(26),
-            motion_gini: row.get(27),
-            block_skew: row.get(28),
-            temporal_flatness: row.get(29),
-            loop_closure_score: row.get(30),
-            motion_periodicity: row.get(31),
-            temporal_jitter: row.get(32),
-            webp_compression_ratio: row.get::<_, Option<f64>>(33),
+        let Some(sample) = map_row_to_sample(row) else {
+            crate::progress_mode::emit_stderr(&format!(
+                "☢️ [ANOMALY] Row corruption for {file_hash}. Skipping vector backfill."
+            ));
+            continue;
         };
 
         let vec_data = compute_sample_vector(&sample, &feature_map);
@@ -2895,13 +2931,29 @@ pub fn log_inference_record(
     record: &LoopInferenceRecord,
     path: Option<&Path>,
 ) {
-    let file_hash: Option<String> = path.and_then(|p| calculate_blake3_hex(p).ok());
+    let file_hash: Option<String> = path.and_then(|p| {
+        calculate_blake3_hex(p)
+            .map_err(|e| {
+                warn!(
+                    path = %p.display(),
+                    error = %e,
+                    "☢️ [ANOMALY] Failed to calculate file hash! Refusing to forge record data."
+                );
+                e
+            })
+            .ok()
+    });
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let snapshot = build_signal_snapshot(meta);
 
-    let knn_neighbor_count_i32 = record
-        .knn_neighbor_count
-        .map(|s| crate::numeric_cast::usize_to_i32_strict(s, "db_knn_count").unwrap_or(0));
+    let knn_neighbor_count_i32 = record.knn_neighbor_count.and_then(|s| {
+        crate::numeric_cast::usize_to_i32_strict(s, "db_knn_count").or_else(|| {
+            crate::progress_mode::emit_stderr(
+                "☢️ [ANOMALY] KNN count overflow! Refusing to forge record data.",
+            );
+            None
+        })
+    });
 
     // Explicit type binding for ToSql stability
     let duration_secs = meta.duration_secs;
@@ -2941,7 +2993,9 @@ pub fn log_inference_record(
     );
 
     if let Err(e) = result {
-        log::warn!("⚠️ Failed to write inference log (non-fatal): {e} | Parameter count: 13 | Exit Layer: {layer_exit}");
+        log::warn!(
+            "⚠️ Failed to write inference log (non-fatal): {e} | Parameter count: 13 | Exit Layer: {layer_exit}"
+        );
     }
 }
 
@@ -3223,28 +3277,26 @@ pub fn check_database_health() -> Result<DbHealthReport> {
     if let Ok(rows) = conn.query(
         "SELECT file_hash FROM samples WHERE features::text ~ 'NaN|Infinity'",
         &[],
-    ) {
-        if !rows.is_empty() {
-            report.corruption_found = true;
-            report.corruption_details.push(format!(
-                "🔥 Found {} records with NaN/Inf vectors in 'samples' table.",
-                rows.len()
-            ));
-        }
+    ) && !rows.is_empty()
+    {
+        report.corruption_found = true;
+        report.corruption_details.push(format!(
+            "🔥 Found {} records with NaN/Inf vectors in 'samples' table.",
+            rows.len()
+        ));
     }
 
     // Check 'quality_samples' table
     if let Ok(rows) = conn.query(
         "SELECT file_hash FROM quality_samples WHERE features::text ~ 'NaN|Infinity'",
         &[],
-    ) {
-        if !rows.is_empty() {
-            report.corruption_found = true;
-            report.corruption_details.push(format!(
-                "🔥 Found {} records with NaN/Inf vectors in 'quality_samples' table.",
-                rows.len()
-            ));
-        }
+    ) && !rows.is_empty()
+    {
+        report.corruption_found = true;
+        report.corruption_details.push(format!(
+            "🔥 Found {} records with NaN/Inf vectors in 'quality_samples' table.",
+            rows.len()
+        ));
     }
 
     // 4. Maturity Analysis
@@ -3309,12 +3361,22 @@ mod tests {
                     frames,
                     "gif_frame_count_types"
                 )
-                .unwrap_or(0)
+                .unwrap_or_else(|| {
+                    crate::progress_mode::emit_stderr(
+                        "☢️ [ANOMALY] GIF frame count overflow! Truncating to 0 for types.",
+                    );
+                    0
+                })
             ],
             pts_deltas: vec![
                 duration / crate::numeric_cast::u64_to_f64(frames.max(1));
                 crate::numeric_cast::u64_to_usize_strict(frames, "gif_frame_count_pts")
-                    .unwrap_or(0)
+                    .unwrap_or_else(|| {
+                        crate::progress_mode::emit_stderr(
+                            "☢️ [ANOMALY] GIF frame count overflow! Truncating to 0 for pts.",
+                        );
+                        0
+                    })
             ],
             mv_magnitudes: Vec::new(),
             cached_frame_png: None,
@@ -3456,10 +3518,11 @@ mod tests {
         let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
         let pixel_count = f64::from(meta.width) * f64::from(meta.height);
         let expected_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
-            / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(1)));
+            / (pixel_count
+                * crate::numeric_cast::u64_to_f64(meta.frame_count.expect("fixture has frames")));
         let legacy_buggy_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
             / pixel_count
-            * crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(1));
+            * crate::numeric_cast::u64_to_f64(meta.frame_count.expect("fixture has frames"));
         let expected_spatial = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count;
 
         assert!(crate::float_compare::approx_eq_f64(

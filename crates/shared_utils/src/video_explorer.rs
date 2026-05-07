@@ -21,7 +21,7 @@
 //!
 //! For terminology and comparator utilities, see the `candidate_comparator` module.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use rug::Rational;
 use std::fmt::Write as _;
 use std::fs;
@@ -1074,16 +1074,28 @@ impl TransparencyReport {
 
     /// Prints the header row for the transparency report table.
     pub fn print_header(&self) {
-        crate::log_eprintln!("┌────────────────────────────────────────────────────────────────────────────────────────────┐");
-        crate::log_eprintln!("│ 📊 Transparency Report - CRF Search Process                                               │");
-        crate::log_eprintln!("├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤");
-        crate::log_eprintln!("│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │");
-        crate::log_eprintln!("├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤");
+        crate::log_eprintln!(
+            "┌────────────────────────────────────────────────────────────────────────────────────────────┐"
+        );
+        crate::log_eprintln!(
+            "│ 📊 Transparency Report - CRF Search Process                                               │"
+        );
+        crate::log_eprintln!(
+            "├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤"
+        );
+        crate::log_eprintln!(
+            "│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │"
+        );
+        crate::log_eprintln!(
+            "├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤"
+        );
     }
 
     /// Prints the footer and summary statistics (iterations, time, final CRF/SSIM/PSNR).
     pub fn print_summary(&self) {
-        crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
+        crate::log_eprintln!(
+            "└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘"
+        );
 
         let elapsed = self
             .start_time
@@ -1335,7 +1347,7 @@ impl VideoExplorer {
     /// # Errors
     /// Returns an error if exploration fails.
     pub fn explore_with_strategy(&self) -> Result<ExploreResult> {
-        use crate::explore_strategy::{create_strategy, ExploreContext};
+        use crate::explore_strategy::{ExploreContext, create_strategy};
 
         let mut ctx = ExploreContext::new(crate::explore_strategy::ExploreContextArgs {
             input_path: self.input_path.clone(),
@@ -1921,7 +1933,9 @@ impl VideoExplorer {
             // each time for simplicity: no tracking of which point to keep, and the same 1
             // encode per iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
             // full GSS; the tradeoff is lower code complexity and easier maintenance.
-            log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
+            log_realtime!(
+                "   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)"
+            );
 
             let mut low = self.config.min_crf;
             let mut high = self.config.max_crf;
@@ -2293,8 +2307,18 @@ impl VideoExplorer {
             let elapsed = start_time.elapsed();
             let saved = self.input_size - best_size;
             pb.finish_and_clear();
-            crate::log_eprintln!("✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
-                best_crf, ssim, status, self.calc_change_pct(best_size), crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0), iterations, elapsed.as_secs_f64());
+            crate::log_eprintln!(
+                "✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
+                best_crf,
+                ssim,
+                status,
+                self.calc_change_pct(best_size),
+                crate::numeric_cast::f64_to_f32_lossy(
+                    crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0
+                ),
+                iterations,
+                elapsed.as_secs_f64()
+            );
 
             return Ok(ExploreResult {
                 optimal_crf: best_crf,
@@ -2496,7 +2520,7 @@ impl VideoExplorer {
             }
         }
 
-        if (best_boundary - boundary_crf).abs() < 1e-6_f32 {
+        if crate::float_compare::approx_eq_f32(best_boundary, boundary_crf) {
             fine_tune_history.clear();
 
             for offset in [0.25_f32, 0.5, 0.75, 1.0] {
@@ -2540,7 +2564,7 @@ impl VideoExplorer {
         }
         progress_done();
 
-        if (best_boundary - boundary_crf).abs() > 1e-6_f32 {
+        if !crate::float_compare::approx_eq_f32(best_boundary, boundary_crf) {
             boundary_crf = best_boundary;
         }
 
@@ -2751,12 +2775,12 @@ impl VideoExplorer {
                 ),
             );
 
-            if self.encoder == VideoEncoder::Hevc && is_animated {
-                if let Some(pos) = args.iter().position(|x| x == "-x265-params") {
-                    if let Some(param_val) = args.get_mut(pos.saturating_add(1)) {
-                        param_val.push_str(":bframes=0");
-                    }
-                }
+            if self.encoder == VideoEncoder::Hevc
+                && is_animated
+                && let Some(pos) = args.iter().position(|x| x == "-x265-params")
+                && let Some(param_val) = args.get_mut(pos.saturating_add(1))
+            {
+                param_val.push_str(":bframes=0");
             }
 
             for arg in args {
@@ -3070,12 +3094,11 @@ impl VideoExplorer {
                         let end = value_str
                             .find(|c: char| !c.is_numeric() && c != '.')
                             .unwrap_or(value_str.len());
-                        if end > 0 {
-                            if let Ok(s) = value_str[..end].parse::<f64>() {
-                                if precision::is_valid_ssim(s) {
-                                    ssim = Some(s);
-                                }
-                            }
+                        if end > 0
+                            && let Ok(s) = value_str[..end].parse::<f64>()
+                            && precision::is_valid_ssim(s)
+                        {
+                            ssim = Some(s);
                         }
                     }
                     if let Some(pos) = line.find("average:") {
@@ -3086,12 +3109,11 @@ impl VideoExplorer {
                             let end = value_str
                                 .find(|c: char| !c.is_numeric() && c != '.' && c != '-')
                                 .unwrap_or(value_str.len());
-                            if end > 0 {
-                                if let Ok(p) = value_str[..end].parse::<f64>() {
-                                    if precision::is_valid_psnr(p) {
-                                        psnr = Some(p);
-                                    }
-                                }
+                            if end > 0
+                                && let Ok(p) = value_str[..end].parse::<f64>()
+                                && precision::is_valid_psnr(p)
+                            {
+                                psnr = Some(p);
                             }
                         }
                     }
@@ -3188,10 +3210,10 @@ impl VideoExplorer {
                 let end = value_str
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(value_str.len());
-                if end > 0 {
-                    if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                        return Ok(Some(ssim));
-                    }
+                if end > 0
+                    && let Ok(ssim) = value_str[..end].parse::<f64>()
+                {
+                    return Ok(Some(ssim));
                 }
             }
         }
@@ -3226,12 +3248,11 @@ impl VideoExplorer {
                         let end = value_str
                             .find(|c: char| !c.is_numeric() && c != '.' && c != '-')
                             .unwrap_or(value_str.len());
-                        if end > 0 {
-                            if let Ok(psnr) = value_str[..end].parse::<f64>() {
-                                if precision::is_valid_psnr(psnr) {
-                                    return Ok(Some(psnr));
-                                }
-                            }
+                        if end > 0
+                            && let Ok(psnr) = value_str[..end].parse::<f64>()
+                            && precision::is_valid_psnr(psnr)
+                        {
+                            return Ok(Some(psnr));
                         }
                     }
                 }
@@ -3296,13 +3317,13 @@ impl VideoExplorer {
                     if let Some(pos) = line.find("MS-SSIM score:") {
                         let value_str = &line[pos + 11..];
                         let value_str = value_str.trim();
-                        if let Ok(vmaf) = value_str.parse::<f64>() {
-                            if precision::is_valid_ms_ssim(vmaf) {
-                                if use_sampling {
-                                    crate::log_eprintln!("   VMAF (sampled): {:.2}", vmaf);
-                                }
-                                return Ok(Some(vmaf));
+                        if let Ok(vmaf) = value_str.parse::<f64>()
+                            && precision::is_valid_ms_ssim(vmaf)
+                        {
+                            if use_sampling {
+                                crate::log_eprintln!("   VMAF (sampled): {:.2}", vmaf);
                             }
+                            return Ok(Some(vmaf));
                         }
                     }
                 }
@@ -4038,8 +4059,8 @@ pub mod dynamic_mapping;
 /// GPU-accelerated coarse search implementations.
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
-    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, GpuSearchFeatures,
-    GpuSearchFlags, GpuSearchRequest, GpuSearchValidation,
+    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation, explore_av1_with_gpu,
+    explore_hevc_with_gpu, explore_with_gpu_coarse_search,
 };
 
 #[cfg(test)]

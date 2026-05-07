@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 /// Returns an error if the MFB temporary directory cannot be created.
 pub fn init_ghost_mode() -> Result<()> {
     let tmp = get_mfb_tmp_dir()?;
-    std::env::set_var("TMPDIR", &tmp);
+    // SAFETY: Single-threaded initialization context.
+    unsafe { std::env::set_var("TMPDIR", &tmp) };
     Ok(())
 }
 
@@ -92,7 +93,7 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
             return Err(anyhow!(
-                "This directory is already being processed by another Modern Format Boost instance.\nLocked path: {}", 
+                "This directory is already being processed by another Modern Format Boost instance.\nLocked path: {}",
                 abs_path.display()
             ));
         }

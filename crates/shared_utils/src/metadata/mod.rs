@@ -113,25 +113,25 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     // Verify creation time was preserved (macOS only)
     #[cfg(target_os = "macos")]
     {
-        if let (Ok(expected_created), Ok(dst_meta)) = (m.created(), std::fs::metadata(dst)) {
-            if let Ok(actual_created) = dst_meta.created() {
-                debug!("Verified creation time: {:?}", actual_created);
-                // Check if it matches (allow 1 second tolerance for filesystem precision)
-                let diff = if actual_created > expected_created {
-                    actual_created
-                        .duration_since(expected_created)
-                        .unwrap_or_default()
-                } else {
-                    expected_created
-                        .duration_since(actual_created)
-                        .unwrap_or_default()
-                };
-                if diff.as_secs() > 1 {
-                    eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
-                    eprintln!("   Expected: {expected_created:?}");
-                    eprintln!("   Got:      {actual_created:?}");
-                    eprintln!("   Diff:     {diff:?}");
-                }
+        if let (Ok(expected_created), Ok(dst_meta)) = (m.created(), std::fs::metadata(dst))
+            && let Ok(actual_created) = dst_meta.created()
+        {
+            debug!("Verified creation time: {:?}", actual_created);
+            // Check if it matches (allow 1 second tolerance for filesystem precision)
+            let diff = if actual_created > expected_created {
+                actual_created
+                    .duration_since(expected_created)
+                    .unwrap_or_default()
+            } else {
+                expected_created
+                    .duration_since(actual_created)
+                    .unwrap_or_default()
+            };
+            if diff.as_secs() > 1 {
+                eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
+                eprintln!("   Expected: {expected_created:?}");
+                eprintln!("   Got:      {actual_created:?}");
+                eprintln!("   Diff:     {diff:?}");
             }
         }
     }
@@ -249,15 +249,15 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         let rel_path = src_path.strip_prefix(src_dir).unwrap_or(src_path);
         let dst_path = dst_dir.join(rel_path);
 
-        if !dst_path.exists() {
-            if let Err(e) = std::fs::create_dir_all(&dst_path) {
-                eprintln!(
-                    "⚠️ Failed to create directory {}: {}",
-                    dst_path.display(),
-                    e
-                );
-                continue;
-            }
+        if !dst_path.exists()
+            && let Err(e) = std::fs::create_dir_all(&dst_path)
+        {
+            eprintln!(
+                "⚠️ Failed to create directory {}: {}",
+                dst_path.display(),
+                e
+            );
+            continue;
         }
 
         #[cfg(unix)]
@@ -278,14 +278,14 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         // macOS: set creation time BEFORE atime/mtime (will re-apply after)
         #[cfg(target_os = "macos")]
         {
-            if let Ok(created) = metadata.created() {
-                if let Err(e) = macos::set_creation_time(&dst_path, created) {
-                    eprintln!(
-                        "⚠️ Failed to set creation time for {}: {}",
-                        dst_path.display(),
-                        e
-                    );
-                }
+            if let Ok(created) = metadata.created()
+                && let Err(e) = macos::set_creation_time(&dst_path, created)
+            {
+                eprintln!(
+                    "⚠️ Failed to set creation time for {}: {}",
+                    dst_path.display(),
+                    e
+                );
             }
         }
 
@@ -302,24 +302,24 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         // macOS: re-apply creation time AFTER atime/mtime (filetime may reset it)
         #[cfg(target_os = "macos")]
         {
-            if let Ok(created) = metadata.created() {
-                if let Err(e) = macos::set_creation_time(&dst_path, created) {
-                    eprintln!(
-                        "⚠️ Failed to set creation time for {}: {}",
-                        dst_path.display(),
-                        e
-                    );
-                }
+            if let Ok(created) = metadata.created()
+                && let Err(e) = macos::set_creation_time(&dst_path, created)
+            {
+                eprintln!(
+                    "⚠️ Failed to set creation time for {}: {}",
+                    dst_path.display(),
+                    e
+                );
             }
             // Also preserve added time for directories
-            if let Ok(added) = macos::get_added_time(src_path) {
-                if let Err(e) = macos::set_added_time(&dst_path, added) {
-                    eprintln!(
-                        "⚠️ Failed to set added time for {}: {}",
-                        dst_path.display(),
-                        e
-                    );
-                }
+            if let Ok(added) = macos::get_added_time(src_path)
+                && let Err(e) = macos::set_added_time(&dst_path, added)
+            {
+                eprintln!(
+                    "⚠️ Failed to set added time for {}: {}",
+                    dst_path.display(),
+                    e
+                );
             }
         }
 
@@ -578,10 +578,10 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let Some(parent) = dst.parent() else {
         return false;
     };
-    let stem = dst
-        .file_stem()
-        .map(|s| s.to_string_lossy())
-        .unwrap_or_default();
+    let Some(stem_raw) = dst.file_stem() else {
+        return false;
+    };
+    let stem = stem_raw.to_string_lossy();
     let sidecar_for_exiv2 = parent.join(format!("{stem}.xmp"));
     if sidecar_for_exiv2 == *xmp_path {
         return false;
@@ -692,62 +692,62 @@ pub(crate) fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
         return Some(xmp_stem);
     }
 
-    if let Some(parent) = src.parent() {
-        if let Some(src_stem_raw) = src.file_stem() {
-            let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
-            let src_ext = src
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase())
-                .unwrap_or_default();
-            let src_compound = if src_ext.is_empty() {
-                src_stem.clone()
-            } else {
-                format!("{src_stem}.{src_ext}")
-            };
+    if let Some(parent) = src.parent()
+        && let Some(src_stem_raw) = src.file_stem()
+    {
+        let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
+        let src_ext = src
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let src_compound = if src_ext.is_empty() {
+            src_stem.clone()
+        } else {
+            format!("{src_stem}.{src_ext}")
+        };
 
-            match std::fs::read_dir(parent) {
-                Ok(entries) => {
-                    for entry in entries {
-                        let entry = match entry {
-                            Ok(entry) => entry,
-                            Err(err) => {
-                                tracing::warn!(
-                                    dir = %parent.display(),
-                                    error = %err,
-                                    "Failed to inspect sibling file while searching for XMP sidecar"
-                                );
-                                continue;
-                            }
-                        };
-                        let path = entry.path();
-
-                        if !path.is_file() {
+        match std::fs::read_dir(parent) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(err) => {
+                            tracing::warn!(
+                                dir = %parent.display(),
+                                error = %err,
+                                "Failed to inspect sibling file while searching for XMP sidecar"
+                            );
                             continue;
                         }
+                    };
+                    let path = entry.path();
 
-                        if !path
-                            .extension()
-                            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
-                        {
-                            continue;
-                        }
+                    if !path.is_file() {
+                        continue;
+                    }
 
-                        if let Some(xmp_stem_raw) = path.file_stem() {
-                            let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
+                    if !path
+                        .extension()
+                        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
+                    {
+                        continue;
+                    }
 
-                            if xmp_stem == src_stem || xmp_stem == src_compound {
-                                return Some(path);
-                            }
+                    if let Some(xmp_stem_raw) = path.file_stem() {
+                        let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
+
+                        if xmp_stem == src_stem || xmp_stem == src_compound {
+                            return Some(path);
                         }
                     }
                 }
-                Err(err) => {
-                    tracing::warn!(
-                        dir = %parent.display(),
-                        error = %err,
-                        "Failed to read parent directory while searching for XMP sidecar"
-                    );
-                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    dir = %parent.display(),
+                    error = %err,
+                    "Failed to read parent directory while searching for XMP sidecar"
+                );
             }
         }
     }

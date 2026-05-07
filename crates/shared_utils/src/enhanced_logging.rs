@@ -18,10 +18,10 @@ use std::path::Path;
 use std::sync::Mutex;
 use tracing::Level;
 use tracing_subscriber::{
+    EnvFilter,
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter,
 };
 
 // ─── Color Palette (24-bit True Color) ─────────────────────────────────────

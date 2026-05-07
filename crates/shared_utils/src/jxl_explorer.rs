@@ -590,7 +590,7 @@ fn near_best_margin(input_size: u64) -> u64 {
                 JXL_NEAR_BEST_MARGIN_RATIO,
                 "JXL_NEAR_BEST_MARGIN_RATIO",
             )
-            .unwrap_or_else(|| Rational::from(0_i32));
+            .expect("JXL_NEAR_BEST_MARGIN_RATIO is a finite constant");
         crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
     }
     #[cfg(not(feature = "high-precision"))]
@@ -1050,88 +1050,88 @@ where
     // Once [lo=d_over, hi=d_under] is established, binary search narrows it to precision.
     //
     // If no d_under is ever found, return None (skip JXL — nothing compresses below source).
-    if d_under.is_none() {
-        if let Some(start) = d_over {
-            // Discovery: probe upward with exponentially growing steps until d_under found
-            let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(f32::EPSILON);
-            let mut probe = start;
-            let mut step = (plan.target_distance - start).max(precision);
+    if d_under.is_none()
+        && let Some(start) = d_over
+    {
+        // Discovery: probe upward with exponentially growing steps until d_under found
+        let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(f32::EPSILON);
+        let mut probe = start;
+        let mut step = (plan.target_distance - start).max(precision);
 
-            log.push(format!(
-                "Phase 2 discovery: extending from d={} toward ceiling (no d_under in Phase 1)",
-                format_distance_for_log(start)
-            ));
+        log.push(format!(
+            "Phase 2 discovery: extending from d={} toward ceiling (no d_under in Phase 1)",
+            format_distance_for_log(start)
+        ));
 
-            while iterations < JXL_EXPLORE_MAX_ITERATIONS {
-                let next = canonicalize_generated_distance(f64::from(probe) + f64::from(step))?;
-                if next >= JXL_EXPLORE_CEILING || next <= probe + f32::EPSILON {
-                    break;
-                }
-                if tested.contains(&distance_key(next)) {
-                    probe = next;
-                    step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
-                    continue;
-                }
-                tested.insert(distance_key(next));
-
-                let size = try_candidate(next)?;
-                iterations += 1;
-
-                let status = if near_boundary(size, input_size) {
-                    "near break-even"
-                } else if size < input_size {
-                    "below source"
-                } else {
-                    "still oversize"
-                };
-
-                log.push(format!(
-                    "Phase 2 discovery: d={} -> {:.1}% of input ({status})",
-                    format_distance_for_log(next),
-                    size_ratio_pct(size, input_size)
-                ));
-
-                candidates.push(JxlScreenedCandidate {
-                    distance: next,
-                    output_size: size,
-                    ladder_phase: false,
-                    reasons: Vec::new(),
-                });
-                let probe_idx = candidates.len() - 1;
-
-                if region_keys.insert(candidate_region_key(next)) {
-                    add_reason(
-                        &mut candidates,
-                        probe_idx,
-                        JxlPromotionReason::NewRegion,
-                        &mut log,
-                    );
-                }
-
-                if near_boundary(size, input_size) {
-                    add_reason(
-                        &mut candidates,
-                        probe_idx,
-                        JxlPromotionReason::BoundaryRegion,
-                        &mut log,
-                    );
-                }
-
-                if size < input_size {
-                    d_under = Some(next);
-                    best_below_idx = Some(probe_idx);
-                    add_reason(
-                        &mut candidates,
-                        probe_idx,
-                        JxlPromotionReason::BetterThanCurrentBest,
-                        &mut log,
-                    );
-                    break; // hand off to binary search
-                }
-                d_over = Some(next);
+        while iterations < JXL_EXPLORE_MAX_ITERATIONS {
+            let next = canonicalize_generated_distance(f64::from(probe) + f64::from(step))?;
+            if next >= JXL_EXPLORE_CEILING || next <= probe + f32::EPSILON {
+                break;
+            }
+            if tested.contains(&distance_key(next)) {
                 probe = next;
                 step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
+                continue;
             }
+            tested.insert(distance_key(next));
+
+            let size = try_candidate(next)?;
+            iterations += 1;
+
+            let status = if near_boundary(size, input_size) {
+                "near break-even"
+            } else if size < input_size {
+                "below source"
+            } else {
+                "still oversize"
+            };
+
+            log.push(format!(
+                "Phase 2 discovery: d={} -> {:.1}% of input ({status})",
+                format_distance_for_log(next),
+                size_ratio_pct(size, input_size)
+            ));
+
+            candidates.push(JxlScreenedCandidate {
+                distance: next,
+                output_size: size,
+                ladder_phase: false,
+                reasons: Vec::new(),
+            });
+            let probe_idx = candidates.len() - 1;
+
+            if region_keys.insert(candidate_region_key(next)) {
+                add_reason(
+                    &mut candidates,
+                    probe_idx,
+                    JxlPromotionReason::NewRegion,
+                    &mut log,
+                );
+            }
+
+            if near_boundary(size, input_size) {
+                add_reason(
+                    &mut candidates,
+                    probe_idx,
+                    JxlPromotionReason::BoundaryRegion,
+                    &mut log,
+                );
+            }
+
+            if size < input_size {
+                d_under = Some(next);
+                best_below_idx = Some(probe_idx);
+                add_reason(
+                    &mut candidates,
+                    probe_idx,
+                    JxlPromotionReason::BetterThanCurrentBest,
+                    &mut log,
+                );
+                break; // hand off to binary search
+            }
+            d_over = Some(next);
+            probe = next;
+            step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
         }
     }
 
@@ -1253,11 +1253,7 @@ mod tests {
                 100,
                 120,
                 |distance| {
-                    if distance <= 0.01 {
-                        Ok(90)
-                    } else {
-                        Ok(110)
-                    }
+                    if distance <= 0.01 { Ok(90) } else { Ok(110) }
                 },
             )
             .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
@@ -1267,10 +1263,12 @@ mod tests {
         assert!(result.best_distance > JXL_EXPLORE_FLOOR);
         assert!(result.iterations >= 2);
         // Shortlist must contain at least one below-source candidate (output_size=90)
-        assert!(result
-            .finalists
-            .iter()
-            .any(|candidate| candidate.output_size == 90));
+        assert!(
+            result
+                .finalists
+                .iter()
+                .any(|candidate| candidate.output_size == 90)
+        );
         // All finalists must be below source (no oversize candidates when below-source ones fill slots)
         let all_below = result
             .finalists
@@ -1388,9 +1386,11 @@ mod tests {
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert!(!probed.is_empty());
-        assert!(probed
-            .iter()
-            .all(|distance| *distance > JXL_EXPLORE_FLOOR + f32::EPSILON));
+        assert!(
+            probed
+                .iter()
+                .all(|distance| *distance > JXL_EXPLORE_FLOOR + f32::EPSILON)
+        );
     }
 
     #[test]

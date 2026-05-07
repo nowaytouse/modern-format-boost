@@ -63,9 +63,9 @@
 //! **Call chain**: `analyze_image` → format (HEIC/JXL/AVIF/…) → `detect_lossless` / `detect_compression` → `Result<CompressionType>`.\
 //! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
 
+use crate::Rational;
 use crate::img_errors::{ImgQualityError, Result};
 use crate::io_utils::ByteSliceExt;
-use crate::Rational;
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -436,11 +436,12 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::Unknown("Truncated ftyp".to_string());
     };
 
-    let box_size = crate::numeric_cast::u32_to_usize_strict(box_size_u32, "box_size")
-        .unwrap_or_else(|| {
-            tracing::warn!("Failed to convert box size from HEIC header, using 0");
-            0
-        });
+    let Some(box_size) = crate::numeric_cast::u32_to_usize_strict(box_size_u32, "box_size") else {
+        crate::progress_mode::emit_stderr(
+            "☢️ [ANOMALY] ISOBMFF box_size overflow! Refusing to forge data. Information invalidated.",
+        );
+        return DetectedFormat::Unknown("ISOBMFF box_size overflow".to_string());
+    };
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -566,15 +567,15 @@ pub fn detect_animation(
 
         // If metadata probe fails to find frame count (common for AVIF/JXL sequences),
         // we explicitly count the packets. This demuxes the file and is 100% accurate.
-        if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL) {
-            if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
-                if explicit_count > 1 {
-                    let final_count =
-                        crate::numeric_cast::u64_to_u32_strict(explicit_count, "explicit_count");
-                    return Ok((true, final_count, fps));
-                }
-                return Ok((false, Some(1), fps));
+        if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL)
+            && let Some(explicit_count) = crate::ffprobe::get_frame_count(path)
+        {
+            if explicit_count > 1 {
+                let final_count =
+                    crate::numeric_cast::u64_to_u32_strict(explicit_count, "explicit_count");
+                return Ok((true, final_count, fps));
             }
+            return Ok((false, Some(1), fps));
         }
     }
 
@@ -777,11 +778,10 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
             .input(path)
             .build()
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-                return stdout.contains("animation");
-            }
+            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            return stdout.contains("animation");
         }
         return false;
     }
@@ -814,24 +814,18 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
         .input(temp_apng_path)
         .build()
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                if let Some(stream) = json
-                    .get("streams")
-                    .and_then(|s| s.as_array())
-                    .and_then(|s| s.first())
-                {
-                    if let Some(nb_frames_str) =
-                        stream.get("nb_read_frames").and_then(|v| v.as_str())
-                    {
-                        if let Ok(nb_frames) = nb_frames_str.parse::<u32>() {
-                            return nb_frames > 1;
-                        }
-                    }
-                }
-            }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout)
+            && let Some(stream) = json
+                .get("streams")
+                .and_then(|s| s.as_array())
+                .and_then(|s| s.first())
+            && let Some(nb_frames_str) = stream.get("nb_read_frames").and_then(|v| v.as_str())
+            && let Ok(nb_frames) = nb_frames_str.parse::<u32>()
+        {
+            return nb_frames > 1;
         }
     }
 
@@ -1042,7 +1036,8 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             }
             #[cfg(not(feature = "high-precision"))]
             {
-                (num / Rational::from_f64(den_f).unwrap_or(Rational::from(1))).to_f64()
+                (num / Rational::from_f64(den_f).expect("den_f is a finite >0 pixel count"))
+                    .to_f64()
             }
         };
 
@@ -1098,142 +1093,144 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         explanations.push(format!("Tool signature detected: {tool}"));
     }
 
-    if png_info.color_type == 3 {
-        if let Some(p) = path {
-            if let Ok(img) = open_image_with_limits(p) {
-                let dithering_score = detect_dithering_pattern(&img);
-                factors.dithering_detected = dithering_score;
-                if dithering_score > 0.5_f64 {
+    if png_info.color_type == 3
+        && let Some(p) = path
+        && let Ok(img) = open_image_with_limits(p)
+    {
+        let dithering_score = detect_dithering_pattern(&img);
+        factors.dithering_detected = dithering_score;
+        if dithering_score > 0.5_f64 {
+            explanations.push(format!(
+                "Dithering pattern detected (score: {dithering_score:.2})"
+            ));
+        }
+
+        let (unique_colors, _expected_colors) =
+            analyze_color_distribution(&img, png_info.palette_size);
+        let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
+        let is_large_image = pixel_count > 100_000;
+
+        if let Some(palette_size) = png_info.palette_size {
+            let usage_ratio = (Rational::from(unique_colors as u64)
+                / Rational::from(palette_size as u64).max(Rational::from(1)))
+            .to_f64();
+
+            if is_large_image {
+                if usage_ratio > 0.8_f64 {
+                    factors.color_count_anomaly = 0.85_f64;
                     explanations.push(format!(
-                        "Dithering pattern detected (score: {dithering_score:.2})"
+                        "Large image using {:.0}% of {} color palette",
+                        usage_ratio * 100.0_f64,
+                        palette_size
                     ));
+                } else if usage_ratio > 0.5_f64 {
+                    factors.color_count_anomaly = 0.70_f64;
+                } else {
+                    factors.color_count_anomaly = 0.50_f64;
                 }
+            } else if usage_ratio > 0.9_f64 && palette_size > 200 {
+                factors.color_count_anomaly = 0.8_f64;
+                explanations.push(format!(
+                    "High palette utilization ({:.0}%)",
+                    usage_ratio * 100.0_f64
+                ));
+            } else if usage_ratio > 0.7_f64 && palette_size > 128 {
+                factors.color_count_anomaly = 0.5_f64;
+            }
+        }
 
-                let (unique_colors, _expected_colors) =
-                    analyze_color_distribution(&img, png_info.palette_size);
-                let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
-                let is_large_image = pixel_count > 100_000;
-
-                if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = (Rational::from(
-                        crate::numeric_cast::u64_to_u32_strict(
-                            unique_colors as u64,
-                            "unique_colors",
-                        )
-                        .unwrap_or(0),
-                    ) / Rational::from(
-                        crate::numeric_cast::u64_to_u32_strict(palette_size as u64, "palette_size")
-                            .unwrap_or(1),
-                    ))
-                    .to_f64();
-
-                    if is_large_image {
-                        if usage_ratio > 0.8_f64 {
-                            factors.color_count_anomaly = 0.85_f64;
-                            explanations.push(format!(
-                                "Large image using {:.0}% of {} color palette",
-                                usage_ratio * 100.0_f64,
-                                palette_size
-                            ));
-                        } else if usage_ratio > 0.5_f64 {
-                            factors.color_count_anomaly = 0.70_f64;
-                        } else {
-                            factors.color_count_anomaly = 0.50_f64;
-                        }
-                    } else if usage_ratio > 0.9_f64 && palette_size > 200 {
-                        factors.color_count_anomaly = 0.8_f64;
-                        explanations.push(format!(
-                            "High palette utilization ({:.0}%)",
-                            usage_ratio * 100.0_f64
-                        ));
-                    } else if usage_ratio > 0.7_f64 && palette_size > 128 {
-                        factors.color_count_anomaly = 0.5_f64;
-                    }
-                }
-
-                // Cheap sampled estimate: if a small sampled palette appears (<=256 bins)
-                // on a large true-indexed image, treat as strong quantization signal.
-                let sampled_uniques = sample_unique_color_count(&img, 10_000);
-                if sampled_uniques > 0 && is_large_image {
-                    if sampled_uniques <= 256 {
-                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
-                        explanations.push(format!(
+        // Cheap sampled estimate: if a small sampled palette appears (<=256 bins)
+        // on a large true-indexed image, treat as strong quantization signal.
+        let sampled_uniques = sample_unique_color_count(&img, 10_000);
+        if sampled_uniques > 0 && is_large_image {
+            if sampled_uniques <= 256 {
+                factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
+                explanations.push(format!(
                             "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong quantization indicator"
                         ));
-                    } else if sampled_uniques <= 512 {
-                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
-                        explanations.push(format!(
+            } else if sampled_uniques <= 512 {
+                factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                explanations.push(format!(
                             "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
                         ));
-                    }
-                }
-
-                let banding_score = detect_gradient_banding(&img);
-                factors.gradient_banding = banding_score;
-                if banding_score > 0.5_f64 {
-                    explanations.push(format!(
-                        "Gradient banding detected (score: {banding_score:.2})"
-                    ));
-                }
-
-                let freq_score = detect_color_frequency_distribution(&img);
-                factors.color_frequency_distribution = freq_score;
-                if freq_score > 0.5_f64 {
-                    explanations.push(format!(
-                        "Color frequency concentrated (score: {freq_score:.2}) — quantization indicator"
-                    ));
-                }
-
-                let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
-                    || {
-                        let e = calculate_rgb_entropy(&img);
-                        let ps = 256.0f64;
-                        let me = ps.log2();
-                        let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
-                        (e, me, ratio)
-                    },
-                    |p_size| {
-                        let pe = calculate_palette_index_entropy(&img, p_size);
-                        (pe.0, pe.1, pe.2)
-                    },
-                );
-                let palette_size =
-                    f64::from(u16::try_from(png_info.palette_size.unwrap_or(256)).unwrap_or(256));
-                if palette_size >= 64.0_f64 && entropy_ratio < 0.6_f64 && pixel_count > 10_000 {
-                    factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
-                    factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
-                    if factors.entropy_anomaly > 0.4_f64 {
-                        explanations.push(format!(
-                            "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
-                            entropy_ratio, 1.0_f64
-                        ));
-                    }
-                } else if palette_size >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
-                    factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
-                    factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
-                    if factors.entropy_anomaly > 0.4_f64 {
-                        explanations.push(format!(
-                            "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
-                        ));
-                    }
-                } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000
-                {
-                    factors.entropy_anomaly = 0.35_f64;
-                }
             }
+        }
+
+        let banding_score = detect_gradient_banding(&img);
+        factors.gradient_banding = banding_score;
+        if banding_score > 0.5_f64 {
+            explanations.push(format!(
+                "Gradient banding detected (score: {banding_score:.2})"
+            ));
+        }
+
+        let freq_score = detect_color_frequency_distribution(&img);
+        factors.color_frequency_distribution = freq_score;
+        if freq_score > 0.5_f64 {
+            explanations.push(format!(
+                "Color frequency concentrated (score: {freq_score:.2}) — quantization indicator"
+            ));
+        }
+
+        let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
+            || {
+                let e = calculate_rgb_entropy(&img);
+                let ps = 256.0f64;
+                let me = ps.log2();
+                let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
+                (e, me, ratio)
+            },
+            |p_size| {
+                let pe = calculate_palette_index_entropy(&img, p_size);
+                (pe.0, pe.1, pe.2)
+            },
+        );
+        let palette_size = crate::numeric_cast::usize_to_f64(png_info.palette_size.unwrap_or(256));
+        if palette_size >= 64.0_f64 && entropy_ratio < 0.6_f64 && pixel_count > 10_000 {
+            factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
+            factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
+            if factors.entropy_anomaly > 0.4_f64 {
+                explanations.push(format!(
+                    "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
+                    entropy_ratio, 1.0_f64
+                ));
+            }
+        } else if palette_size >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
+            factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
+            factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
+            if factors.entropy_anomaly > 0.4_f64 {
+                explanations.push(format!(
+                    "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
+                ));
+            }
+        } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
+            factors.entropy_anomaly = 0.35_f64;
         }
     }
 
     let expected_size = estimate_uncompressed_size(&png_info);
-    let actual_size = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|e| warn!("☢️ [ANOMALY] Seek failed: {}", e))
-        .unwrap_or(0);
-    let compression_ratio = if expected_size > 0 {
-        f64::from(crate::numeric_cast::u64_to_u32_strict(actual_size, "actual_size").unwrap_or(0))
-            / f64::from(
-                crate::numeric_cast::u64_to_u32_strict(expected_size, "expected_size").unwrap_or(1),
-            )
+    let actual_size = match reader.seek(SeekFrom::End(0)) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::progress_mode::emit_stderr(&format!(
+                "☢️ [ANOMALY] Seek failed: {e}. Refusing to forge actual_size."
+            ));
+            0 // We still use 0 for the variable, but we will handle it below.
+        }
+    };
+    let compression_ratio = if expected_size > 0 && actual_size > 0 {
+        let actual = crate::numeric_cast::u64_to_u32_strict(actual_size, "actual_size");
+        let expected = crate::numeric_cast::u64_to_u32_strict(expected_size, "expected_size");
+
+        match (actual, expected) {
+            (Some(a), Some(e)) if e > 0 => f64::from(a) / f64::from(e),
+            _ => {
+                crate::progress_mode::emit_stderr(
+                    "☢️ [ANOMALY] Compression ratio calculation failed due to overflow. Refusing to forge anomaly.",
+                );
+                1.0_f64
+            }
+        }
     } else {
         1.0_f64
     };
@@ -1325,86 +1322,85 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
     if (png_info.color_type == 2 || png_info.color_type == 6) && detected_tool.is_none() {
         // Analyze truecolor for quantization signals (conservative: need 2+ strong signals)
-        if let Some(p) = path {
-            if let Ok(img) = open_image_with_limits(p) {
-                let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
+        if let Some(p) = path
+            && let Ok(img) = open_image_with_limits(p)
+        {
+            let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
 
-                // Signal 1: color frequency concentration
-                let freq_signal = detect_color_frequency_distribution(&img);
+            // Signal 1: color frequency concentration
+            let freq_signal = detect_color_frequency_distribution(&img);
 
-                // Signal 2: per-channel entropy
-                let rgb_entropy = calculate_rgb_entropy(&img);
-                let max_entropy = 8.0f64;
-                let entropy_ratio = rgb_entropy / max_entropy;
-                let entropy_signal = if entropy_ratio < 0.55_f64 && pixel_count > 10_000 {
-                    0.70_f64
-                } else if entropy_ratio < 0.65_f64 && pixel_count > 10_000 {
-                    0.40_f64
-                } else {
-                    0.0_f64
-                };
+            // Signal 2: per-channel entropy
+            let rgb_entropy = calculate_rgb_entropy(&img);
+            let max_entropy = 8.0f64;
+            let entropy_ratio = rgb_entropy / max_entropy;
+            let entropy_signal = if entropy_ratio < 0.55_f64 && pixel_count > 10_000 {
+                0.70_f64
+            } else if entropy_ratio < 0.65_f64 && pixel_count > 10_000 {
+                0.40_f64
+            } else {
+                0.0_f64
+            };
 
-                // Signal 3: gradient banding
-                let banding_signal = detect_gradient_banding(&img);
-                // Sample-based quick check: detect palette-like distribution cheaply.
-                let sampled_uniques = sample_unique_color_count(&img, 10_000);
-                if sampled_uniques > 0 && pixel_count > 100_000 {
-                    if sampled_uniques <= 256 {
-                        return Ok(PngQuantizationAnalysis {
-                            is_quantized: true,
-                            confidence: 0.80,
-                            factor_scores: factors,
-                            detected_tool: None,
-                            explanation: format!(
-                                "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely pngquant-style quantization"
-                            ),
-                        });
-                    } else if sampled_uniques <= 512 {
-                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
-                        explanations.push(format!(
-                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
-                        ));
-                    }
-                }
-
-                let strong_signals = [freq_signal, entropy_signal, banding_signal]
-                    .iter()
-                    .filter(|&&s| s >= 0.50_f64)
-                    .count();
-
-                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                    eprintln!(
-                        "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
-                    );
-                }
-
-                if strong_signals >= 2 {
-                    let tc_score = (Rational::from_f64(freq_signal)
-                        .unwrap_or_else(|| Rational::from(0))
-                        + Rational::from_f64(entropy_signal).unwrap_or_else(|| Rational::from(0))
-                        + Rational::from_f64(banding_signal).unwrap_or_else(|| Rational::from(0)))
-                        / Rational::from(3);
-                    let tc_score_f = tc_score.to_f64();
+            // Signal 3: gradient banding
+            let banding_signal = detect_gradient_banding(&img);
+            // Sample-based quick check: detect palette-like distribution cheaply.
+            let sampled_uniques = sample_unique_color_count(&img, 10_000);
+            if sampled_uniques > 0 && pixel_count > 100_000 {
+                if sampled_uniques <= 256 {
                     return Ok(PngQuantizationAnalysis {
                         is_quantized: true,
-                        confidence: 0.70 + tc_score_f * 0.15,
+                        confidence: 0.80,
                         factor_scores: factors,
                         detected_tool: None,
                         explanation: format!(
-                            "Truecolor quantization detected (freq={freq_signal:.2}, entropy={entropy_signal:.2}, band={banding_signal:.2})"
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely pngquant-style quantization"
                         ),
                     });
-                } else if strong_signals == 1 {
-                    return Ok(PngQuantizationAnalysis {
-                        is_quantized: false,
-                        confidence: 0.65,
-                        factor_scores: factors,
-                        detected_tool: None,
-                        explanation:
-                            "Truecolor PNG — weak quantization signal, treating as lossless"
-                                .to_string(),
-                    });
+                } else if sampled_uniques <= 512 {
+                    factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                    explanations.push(format!(
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
+                        ));
                 }
+            }
+
+            let strong_signals = [freq_signal, entropy_signal, banding_signal]
+                .iter()
+                .filter(|&&s| s >= 0.50_f64)
+                .count();
+
+            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                eprintln!(
+                    "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
+                );
+            }
+
+            if let (Some(freq_r), Some(ent_r), Some(band_r)) = (
+                Rational::from_f64(freq_signal),
+                Rational::from_f64(entropy_signal),
+                Rational::from_f64(banding_signal),
+            ) {
+                let tc_score = (freq_r + ent_r + band_r) / Rational::from(3);
+                let tc_score_f = tc_score.to_f64();
+                return Ok(PngQuantizationAnalysis {
+                    is_quantized: true,
+                    confidence: 0.70 + tc_score_f * 0.15,
+                    factor_scores: factors,
+                    detected_tool: None,
+                    explanation: format!(
+                        "Truecolor quantization detected (freq={freq_signal:.2}, entropy={entropy_signal:.2}, band={banding_signal:.2})"
+                    ),
+                });
+            } else {
+                return Ok(PngQuantizationAnalysis {
+                    is_quantized: false,
+                    confidence: 0.65,
+                    factor_scores: factors,
+                    detected_tool: None,
+                    explanation: "Truecolor PNG — weak quantization signal, treating as lossless"
+                        .to_string(),
+                });
             }
         }
         return Ok(PngQuantizationAnalysis {
@@ -1572,11 +1568,14 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
 
         match chunk_type {
             b"PLTE" if color_type == 3 => {
-                palette_size = Some(
+                let plte_len =
                     crate::numeric_cast::u64_to_usize_strict(chunk_len, "PLTE chunk_len")
-                        .unwrap_or(0)
-                        / 3,
-                );
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError(format!(
+                                "Invalid PLTE length: {chunk_len}"
+                            ))
+                        })?;
+                palette_size = Some(plte_len / 3);
                 skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
             }
             b"tRNS" => {
@@ -1585,12 +1584,19 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
-                let mut payload =
-                    vec![
-                        0u8;
-                        crate::numeric_cast::u64_to_usize_strict(chunk_len, "PNG text chunk_len")
-                            .unwrap_or(0)
-                    ];
+                let text_len =
+                    crate::numeric_cast::u64_to_usize_strict(chunk_len, "PNG text chunk_len")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError(format!(
+                                "Invalid text length: {chunk_len}"
+                            ))
+                        })?;
+                if text_len > 10 * 1024 * 1024 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG text chunk exceeds 10MB safety limit".to_string(),
+                    ));
+                }
+                let mut payload = vec![0u8; text_len];
                 reader.read_exact(&mut payload).map_err(|e| {
                     ImgQualityError::AnalysisError(format!(
                         "Failed to read PNG text chunk payload: {e}"
@@ -1716,11 +1722,20 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         return 0.0;
     }
 
-    let dithering_ratio = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(high_freq_count, "high_freq_count").unwrap_or(0),
-    ) / f64::from(
-        crate::numeric_cast::u64_to_u32_strict(total_comparisons, "total_comparisons").unwrap_or(1),
-    );
+    let dithering_ratio = {
+        let count = crate::numeric_cast::u64_to_u32_strict(high_freq_count, "high_freq_count");
+        let total = crate::numeric_cast::u64_to_u32_strict(total_comparisons, "total_comparisons");
+
+        match (count, total) {
+            (Some(c), Some(t)) if t > 0 => f64::from(c) / f64::from(t),
+            _ => {
+                crate::progress_mode::emit_stderr(
+                    "☢️ [ANOMALY] Dithering ratio overflow! Refusing to forge anomaly score.",
+                );
+                0.0
+            }
+        }
+    };
 
     let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
 
@@ -1745,12 +1760,18 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         }
     }
     let bayer_score = if bayer_total > 0 {
-        ((f64::from(
-            crate::numeric_cast::u64_to_u32_strict(bayer_count, "bayer_count").unwrap_or(0),
-        ) / f64::from(
-            crate::numeric_cast::u64_to_u32_strict(bayer_total, "bayer_total").unwrap_or(1),
-        )) * 4.0)
-            .min(1.0)
+        let count = crate::numeric_cast::u64_to_u32_strict(bayer_count, "bayer_count");
+        let total = crate::numeric_cast::u64_to_u32_strict(bayer_total, "bayer_total");
+
+        match (count, total) {
+            (Some(c), Some(t)) if t > 0 => ((f64::from(c) / f64::from(t)) * 4.0).min(1.0),
+            _ => {
+                crate::progress_mode::emit_stderr(
+                    "☢️ [ANOMALY] Bayer ratio overflow! Refusing to forge anomaly score.",
+                );
+                0.0
+            }
+        }
     } else {
         0.0_f64
     };
@@ -1789,23 +1810,20 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
 
     let total = u64::from(width) * u64::from(height);
     let step = crate::numeric_cast::f64_to_u32_strict(
-        (f64::from(crate::numeric_cast::u64_to_u32_strict(total, "total").unwrap_or(0))
-            / f64::from(
-                crate::numeric_cast::u64_to_u32_strict(max_samples as u64, "max_samples")
-                    .unwrap_or(1),
-            ))
+        (crate::numeric_cast::u64_to_f64(total)
+            / crate::numeric_cast::usize_to_f64(max_samples).max(1.0))
         .sqrt()
         .ceil(),
         "step",
     )
-    .unwrap_or(1);
+    .expect("step fits in u32");
     let step = step.max(1);
 
     let mut set = HashSet::new();
 
     let mut sampled = 0usize;
-    for y in (0..height).step_by(usize::try_from(step).unwrap_or(1)) {
-        for x in (0..width).step_by(usize::try_from(step).unwrap_or(1)) {
+    for y in (0..height).step_by(step as usize) {
+        for x in (0..width).step_by(step as usize) {
             let p = rgba.get_pixel(x, y);
             // 5-bit per channel quantization (approximate palette bins)
             let r5 = p[0] >> 3_i32;
@@ -1837,15 +1855,14 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     let (width, height) = rgba.dimensions();
     let total_pixels =
         crate::numeric_cast::u64_to_usize_strict(u64::from(width * height), "width * height")
-            .unwrap_or(0);
+            .expect("width*height easily fits within 64-bit usize");
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
     let grid_size: u32 = 16; // 16x16 = 256 blocks
     let block_w = (width / grid_size).max(1);
     let block_h = (height / grid_size).max(1);
-    let samples_per_block =
-        (target_samples / usize::try_from(grid_size * grid_size).unwrap_or(1)).max(1);
+    let samples_per_block = (target_samples / ((grid_size * grid_size) as usize)).max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
@@ -1868,7 +1885,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
                 u64::from(current_block_width) * u64::from(current_block_height),
                 "block_pixels",
             )
-            .unwrap_or(0);
+            .expect("block_pixels easily fits within 64-bit usize");
             if block_pixels == 0 {
                 continue;
             }
@@ -1905,9 +1922,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total_pixels = crate::numeric_cast::u64_to_usize_strict(u64::from(width), "width")
-        .unwrap_or(0)
-        * crate::numeric_cast::u64_to_usize_strict(u64::from(height), "height").unwrap_or(0);
+    let total_pixels = crate::numeric_cast::u32_to_usize_sat(width)
+        * crate::numeric_cast::u32_to_usize_sat(height);
     if total_pixels < 100 {
         return 0.0;
     }
@@ -1917,23 +1933,14 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     // step-based sampling always hits the same spatial columns/rows.
     let target_samples: usize = 50_000.min(total_pixels);
     let block_size = crate::numeric_cast::f64_to_usize_strict(
-        (f64::from(
-            crate::numeric_cast::u64_to_u32_strict(total_pixels as u64, "total_pixels")
-                .unwrap_or(0),
-        ) / f64::from(
-            crate::numeric_cast::u64_to_u32_strict(target_samples as u64, "target_samples")
-                .unwrap_or(1),
-        ))
+        (crate::numeric_cast::u64_to_f64(total_pixels as u64)
+            / crate::numeric_cast::usize_to_f64(target_samples).max(1.0))
         .max(1.0),
         "block_size",
     )
-    .unwrap_or(1);
-    let blocks_x = crate::numeric_cast::u64_to_usize_strict(u64::from(width), "width")
-        .unwrap_or(0)
-        .div_ceil(block_size.max(1));
-    let blocks_y = crate::numeric_cast::u64_to_usize_strict(u64::from(height), "height")
-        .unwrap_or(0)
-        .div_ceil(block_size.max(1));
+    .expect("block_size fits in usize");
+    let blocks_x = crate::numeric_cast::u32_to_usize_sat(width).div_ceil(block_size.max(1));
+    let blocks_y = crate::numeric_cast::u32_to_usize_sat(height).div_ceil(block_size.max(1));
 
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
     let mut sampled = 0u64;
@@ -1972,7 +1979,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         crate::numeric_cast::u64_to_f64(sampled) * 0.85,
         "entropy_target",
     )
-    .unwrap_or(0);
+    .expect("85% of sampled fits in u64");
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
@@ -1984,12 +1991,8 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 
     // Low ratio = few colors dominate = quantized
-    let coverage_ratio = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(colors_for_85pct as u64, "colors_for_85pct")
-            .unwrap_or(0),
-    ) / f64::from(
-        crate::numeric_cast::u64_to_u32_strict(freqs.len() as u64, "freqs_len").unwrap_or(1),
-    );
+    let coverage_ratio = crate::numeric_cast::u64_to_f64(colors_for_85pct as u64)
+        / crate::numeric_cast::u64_to_f64(freqs.len() as u64).max(1.0);
 
     if coverage_ratio < 0.05 {
         0.85
@@ -2192,16 +2195,12 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
         }
     }
 
-    let total = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(gray.pixels().count() as u64, "pixel_count")
-            .unwrap_or(1),
-    );
+    let total = crate::numeric_cast::u64_to_f64(gray.pixels().count() as u64).max(1.0);
     let mut entropy = 0.0_f64;
 
     for &count in &histogram {
         if count > 0 {
-            let p = f64::from(crate::numeric_cast::u64_to_u32_strict(count, "count").unwrap_or(0))
-                / total;
+            let p = crate::numeric_cast::u64_to_f64(count) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
     }
@@ -2222,13 +2221,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(
-            u64::from(width) * u64::from(height),
-            "width * height",
-        )
-        .unwrap_or(1),
-    );
+    let total = crate::numeric_cast::u64_to_f64(u64::from(width) * u64::from(height));
     if total == 0.0_f64 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
     }
@@ -2246,16 +2239,14 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     let mut entropy = 0.0_f64;
     for &count in color_freq.values() {
         if count > 0 {
-            let p = f64::from(crate::numeric_cast::u64_to_u32_strict(count, "count").unwrap_or(0))
-                / total;
+            let p = crate::numeric_cast::u64_to_f64(count) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
     }
 
-    let max_entropy = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(palette_size as u64, "palette_size").unwrap_or(1),
-    )
-    .log2();
+    let max_entropy = crate::numeric_cast::u64_to_f64(palette_size as u64)
+        .max(1.0)
+        .log2();
     let ratio = if max_entropy > 0.0_f64 {
         entropy / max_entropy
     } else {
@@ -2270,9 +2261,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         let mut h = 0.0_f64;
         for &count in hist {
             if count > 0 {
-                let p =
-                    f64::from(crate::numeric_cast::u64_to_u32_strict(count, "count").unwrap_or(0))
-                        / total;
+                let p = crate::numeric_cast::u64_to_f64(count) / total;
                 h = p.mul_add(-p.log2(), h);
             }
         }
@@ -2296,10 +2285,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         }
     }
 
-    let total = f64::from(
-        crate::numeric_cast::u64_to_u32_strict(rgba.pixels().count() as u64, "pixel_count")
-            .unwrap_or(1),
-    );
+    let total = crate::numeric_cast::u64_to_f64(rgba.pixels().count() as u64).max(1.0);
 
     let er = channel_entropy(&hist_r, total);
     let eg = channel_entropy(&hist_g, total);
@@ -2380,7 +2366,11 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                     precision.quality_estimate = match estimate_webp_quality(path) {
                         Ok(q) => Some(q),
                         Err(e) => {
-                            tracing::warn!("☢️ [ANOMALY] Failed to estimate WebP quality for {}: {}. Information invalidated.", path.display(), e);
+                            tracing::warn!(
+                                "☢️ [ANOMALY] Failed to estimate WebP quality for {}: {}. Information invalidated.",
+                                path.display(),
+                                e
+                            );
                             None
                         }
                     };
@@ -2392,7 +2382,11 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             precision.quality_estimate = match estimate_jpeg_quality(path) {
                 Ok(q) => Some(q),
                 Err(e) => {
-                    tracing::warn!("☢️ [ANOMALY] Failed to estimate JPEG quality for {}: {}. Information invalidated.", path.display(), e);
+                    tracing::warn!(
+                        "☢️ [ANOMALY] Failed to estimate JPEG quality for {}: {}. Information invalidated.",
+                        path.display(),
+                        e
+                    );
                     None
                 }
             };
@@ -2460,45 +2454,42 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     // ── Penetrating Content Verification ──
     // Verify transparency claim by checking actual alpha channel usage
-    if result.has_alpha {
-        if let crate::media_penetration::PenetrationResult::Verified(is_real) =
+    if result.has_alpha
+        && let crate::media_penetration::PenetrationResult::Verified(is_real) =
             crate::media_penetration::detect_real_transparency(path, result.duration.map(f64::from))
-        {
-            if !is_real {
-                crate::progress_mode::emit_stderr(&format!(
-                    "⚠️  [{}] Image transparency penetration: FAKE alpha (unused)",
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-                ));
-                result.has_alpha = false;
-            }
-        }
+        && !is_real
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚠️  [{}] Image transparency penetration: FAKE alpha (unused)",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+        ));
+        result.has_alpha = false;
     }
 
     // Verify frame count for animated images
     if is_animated {
         let current_count = frame_count.unwrap_or(1);
-        if current_count <= 1 || current_count > 50000 {
-            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+        if (current_count <= 1 || current_count > 50000)
+            && let crate::media_penetration::PenetrationResult::Verified(real_count) =
                 crate::media_penetration::detect_real_frame_count(path, u64::from(current_count))
-            {
-                let real_u32 = u32::try_from(real_count).unwrap_or(current_count);
-                if real_u32 != current_count {
-                    crate::progress_mode::emit_stderr(&format!(
-                        "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
-                        path.file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or_else(|| {
-                                tracing::warn!(
-                                    "☢️ [ANOMALY] Failed to get file name for {}",
-                                    path.display()
-                                );
-                                "?"
-                            }),
-                        current_count,
-                        real_u32
-                    ));
-                    result.frame_count = Some(real_u32);
-                }
+        {
+            let real_u32 = u32::try_from(real_count).expect("real frame count fits in u32");
+            if real_u32 != current_count {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_else(|| {
+                            tracing::warn!(
+                                "☢️ [ANOMALY] Failed to get file name for {}",
+                                path.display()
+                            );
+                            "?"
+                        }),
+                    current_count,
+                    real_u32
+                ));
+                result.frame_count = Some(real_u32);
             }
         }
     }
@@ -2557,7 +2548,7 @@ fn estimate_lossy_quality_fallback(
             .clamp(10.0, 100.0),
         "bpp_quality",
     )
-    .unwrap_or(0);
+    .expect("clamped 10..100 fits in u8");
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
@@ -2629,8 +2620,11 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Skip chunk data and CRC
-        let chunk_data_size =
-            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size").unwrap_or(0);
+        let Some(chunk_data_size) =
+            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
+        else {
+            break;
+        };
         pos += chunk_data_size + 4;
     }
 
@@ -2705,8 +2699,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
-        let entry_offset =
-            6 + crate::numeric_cast::usize_to_u64_strict(i, "ICO entry index").unwrap_or(0) * 16;
+        let entry_offset = 6 + crate::numeric_cast::usize_to_u64_strict(i, "ICO entry index")
+            .expect("ICO index fits in u64")
+            * 16;
         if file.seek(SeekFrom::Start(entry_offset)).is_err() {
             warn!(
                 "☢️ [ANOMALY] Failed to seek to ICO entry {} at offset {}",
@@ -2744,14 +2739,13 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                     // This is infinitely safer than loading the whole 64MB ICO.
                     let mut png_data = Vec::with_capacity(
                         crate::numeric_cast::u64_to_usize_strict(img_size, "tga_img_size")
-                            .unwrap_or(0),
+                            .expect("ICO image size fits in usize"),
                     );
-                    if img_reader.read_to_end(&mut png_data).is_ok() {
-                        if let Ok(analysis) = analyze_png_quantization_from_bytes(&png_data) {
-                            if analysis.is_quantized {
-                                return Ok(CompressionType::Lossy);
-                            }
-                        }
+                    if img_reader.read_to_end(&mut png_data).is_ok()
+                        && let Ok(analysis) = analyze_png_quantization_from_bytes(&png_data)
+                        && analysis.is_quantized
+                    {
+                        return Ok(CompressionType::Lossy);
                     }
                 }
             }
@@ -2789,7 +2783,9 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     }
 
     // Check version field for multi-part flag (bit 9)
-    let version = data.get_u32_le_strict(4, "EXR version").unwrap_or(0);
+    let version = data
+        .get_u32_le_strict(4, "EXR version")
+        .ok_or_else(|| anyhow::anyhow!("Truncated EXR version field"))?;
     let is_multipart = (version & (1 << 9_i32)) != 0;
 
     let mut pos = 8; // skip magic + version
@@ -2835,10 +2831,14 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
             // Read value size (u32 LE)
             let value_size = crate::numeric_cast::u32_to_usize_strict(
                 data.get_u32_le_strict(pos, "EXR attribute value size")
-                    .unwrap_or(0),
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "Truncated EXR attribute value size".to_string(),
+                        )
+                    })?,
                 "EXR value_size",
             )
-            .unwrap_or(0);
+            .expect("u32 always fits in usize");
             pos += 4;
 
             if name == b"compression" && value_size >= 1 {
@@ -2998,10 +2998,11 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_strict(
-            data.get_u32_be_strict(pos, "JP2 box size").unwrap_or(0),
+            data.get_u32_be_strict(pos, "JP2 box size")
+                .expect("bounds checked by while condition"),
             "jp2_box_size",
         )
-        .unwrap_or(0);
+        .expect("u32 always fits in usize");
         let box_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
 
         if box_type == b"jp2c" {
@@ -3016,10 +3017,10 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
             }
             let ext = crate::numeric_cast::u64_to_usize_strict(
                 data.get_u64_be_strict(pos + 8, "JP2 extended box size")
-                    .unwrap_or(0),
+                    .expect("bounds checked above"),
                 "jp2_ext_box_size",
             )
-            .unwrap_or(0);
+            .expect("memory-mapped size fits in usize");
             pos += ext;
         } else if size < 8 {
             break;
@@ -3045,7 +3046,9 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             pos += 1;
             continue;
         }
-        let marker = cs.get_byte_strict(pos + 1, "JP2 marker").unwrap_or(0);
+        let Some(marker) = cs.get_byte_strict(pos + 1, "JP2 marker") else {
+            break;
+        };
 
         // SOC (FF 4F) — no length field
         if marker == 0x4F {
@@ -3059,12 +3062,14 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COD marker (FF 52)
         if marker == 0x52 && pos + 4 <= cs.len() {
-            let seg_len = crate::numeric_cast::u16_to_usize_strict(
-                cs.get_u16_be_strict(pos + 2, "JP2 COD segment length")
-                    .unwrap_or(0),
-                "jp2_seg_len",
-            )
-            .unwrap_or(0);
+            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COD segment length") else {
+                break;
+            };
+            let Some(seg_len) =
+                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
+            else {
+                break;
+            };
             // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
             // SPcod starts at offset 5 within segment data
             // SPcod layout: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
@@ -3072,9 +3077,9 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             // segment_data starts at pos+4, so transform is at pos+4+9 = pos+13
             let transform_offset = pos + 4 + 9;
             if transform_offset < cs.len() && seg_len >= 10 {
-                let wavelet = cs
-                    .get_byte_strict(transform_offset, "JP2 COD wavelet")
-                    .unwrap_or(2);
+                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COD wavelet") else {
+                    break;
+                };
                 if wavelet <= 1 {
                     cod_wavelet = Some(wavelet);
                 }
@@ -3083,12 +3088,14 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COC marker (FF 53) — component-specific coding style
         if marker == 0x53 && pos + 4 <= cs.len() {
-            let seg_len = crate::numeric_cast::u16_to_usize_strict(
-                cs.get_u16_be_strict(pos + 2, "JP2 COC segment length")
-                    .unwrap_or(0),
-                "jp2_coc_seg_len",
-            )
-            .unwrap_or(0);
+            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COC segment length") else {
+                break;
+            };
+            let Some(seg_len) =
+                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_coc_seg_len")
+            else {
+                break;
+            };
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
             // We'll assume 1 byte for simplicity (most common case)
@@ -3098,13 +3105,15 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
 
             if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let component = u16::from(
+                let Some(comp_idx) =
                     cs.get_byte_strict(component_offset, "JP2 COC component index")
-                        .unwrap_or(0),
-                );
-                let wavelet = cs
-                    .get_byte_strict(transform_offset, "JP2 COC wavelet")
-                    .unwrap_or(2);
+                else {
+                    break;
+                };
+                let component = u16::from(comp_idx);
+                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COC wavelet") else {
+                    break;
+                };
                 if wavelet <= 1 {
                     coc_wavelets.push((component, wavelet));
                 }
@@ -3115,12 +3124,13 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         if pos + 4 > cs.len() {
             break;
         }
-        let seg_len = crate::numeric_cast::u16_to_usize_strict(
-            cs.get_u16_be_strict(pos + 2, "JP2 segment length")
-                .unwrap_or(0),
-            "jp2_seg_len",
-        )
-        .unwrap_or(0);
+        let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 segment length") else {
+            break;
+        };
+        let Some(seg_len) = crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
+        else {
+            break;
+        };
         pos += 2 + seg_len;
     }
 
@@ -3380,10 +3390,10 @@ mod tests {
         let pixel_y = (by * block_size + block_size / 2) as u64;
 
         // Clamp to image dimensions before conversion
-        let px =
-            u64_to_u32_strict(pixel_x.min(u64::from(width.saturating_sub(1))), "px").unwrap_or(0);
-        let py =
-            u64_to_u32_strict(pixel_y.min(u64::from(height.saturating_sub(1))), "py").unwrap_or(0);
+        let px = u64_to_u32_strict(pixel_x.min(u64::from(width.saturating_sub(1))), "px")
+            .expect("clamped px fits in u32");
+        let py = u64_to_u32_strict(pixel_y.min(u64::from(height.saturating_sub(1))), "py")
+            .expect("clamped py fits in u32");
 
         // Coordinates should be within image bounds
         assert!(px < width);

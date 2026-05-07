@@ -11,7 +11,7 @@
 
 use crate::image_detection::PrecisionMetadata;
 use crate::progress_mode::{has_log_file, write_to_log_at_level};
-use image::{open, GenericImageView};
+use image::{GenericImageView, open};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::Level;
@@ -97,15 +97,15 @@ struct ThresholdRange {
 
 impl ThresholdRange {
     fn matches(&self, value: f64) -> bool {
-        if let Some(min) = self.min {
-            if value < min {
-                return false;
-            }
+        if let Some(min) = self.min
+            && value < min
+        {
+            return false;
         }
-        if let Some(max) = self.max {
-            if value > max {
-                return false;
-            }
+        if let Some(max) = self.max
+            && value > max
+        {
+            return false;
         }
         true
     }
@@ -702,66 +702,66 @@ fn classify_content_type(input: &ClassifierInput) -> ImageContentType {
     for rule in rules {
         let cond = &rule.rules;
 
-        if let Some(v) = cond.is_animated {
-            if v != is_animated {
-                continue;
-            }
+        if let Some(v) = cond.is_animated
+            && v != is_animated
+        {
+            continue;
         }
-        if let Some(v) = cond.has_alpha {
-            if v != has_alpha {
-                continue;
-            }
+        if let Some(v) = cond.has_alpha
+            && v != has_alpha
+        {
+            continue;
         }
 
-        if let Some(r) = &cond.complexity {
-            if !r.matches(complexity) {
-                continue;
-            }
+        if let Some(r) = &cond.complexity
+            && !r.matches(complexity)
+        {
+            continue;
         }
-        if let Some(r) = &cond.edge_density {
-            if !r.matches(edge_density) {
-                continue;
-            }
+        if let Some(r) = &cond.edge_density
+            && !r.matches(edge_density)
+        {
+            continue;
         }
-        if let Some(r) = &cond.color_diversity {
-            if !r.matches(color_diversity) {
-                continue;
-            }
+        if let Some(r) = &cond.color_diversity
+            && !r.matches(color_diversity)
+        {
+            continue;
         }
-        if let Some(r) = &cond.texture_variance {
-            if !r.matches(texture_variance) {
-                continue;
-            }
+        if let Some(r) = &cond.texture_variance
+            && !r.matches(texture_variance)
+        {
+            continue;
         }
-        if let Some(r) = &cond.noise_level {
-            if !r.matches(noise_level) {
-                continue;
-            }
+        if let Some(r) = &cond.noise_level
+            && !r.matches(noise_level)
+        {
+            continue;
         }
-        if let Some(r) = &cond.sharpness {
-            if !r.matches(sharpness) {
-                continue;
-            }
+        if let Some(r) = &cond.sharpness
+            && !r.matches(sharpness)
+        {
+            continue;
         }
-        if let Some(r) = &cond.contrast {
-            if !r.matches(contrast) {
-                continue;
-            }
+        if let Some(r) = &cond.contrast
+            && !r.matches(contrast)
+        {
+            continue;
         }
-        if let Some(r) = &cond.aspect_ratio {
-            if !r.matches(aspect_ratio) {
-                continue;
-            }
+        if let Some(r) = &cond.aspect_ratio
+            && !r.matches(aspect_ratio)
+        {
+            continue;
         }
-        if let Some(r) = &cond.width {
-            if !r.matches(f64::from(width)) {
-                continue;
-            }
+        if let Some(r) = &cond.width
+            && !r.matches(f64::from(width))
+        {
+            continue;
         }
-        if let Some(r) = &cond.height {
-            if !r.matches(f64::from(height)) {
-                continue;
-            }
+        if let Some(r) = &cond.height
+            && !r.matches(f64::from(height))
+        {
+            continue;
         }
 
         if best_rule.is_none_or(|best| rule.priority > best.priority) {
@@ -854,14 +854,14 @@ pub fn analyze_image_quality_with_cache(
     }
 
     let analysis = analyze_image_quality_from_path_internal(path)?;
-    if let Some(cache) = cache {
-        if let Err(err) = cache.store_quality_analysis(path, &analysis) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %err,
-                "Failed to store image quality analysis in cache"
-            );
-        }
+    if let Some(cache) = cache
+        && let Err(err) = cache.store_quality_analysis(path, &analysis)
+    {
+        tracing::warn!(
+            path = %path.display(),
+            error = %err,
+            "Failed to store image quality analysis in cache"
+        );
     }
     Some(analysis)
 }
@@ -877,15 +877,27 @@ pub fn analyze_image_quality_with_cache(
 /// # Returns
 /// Image quality analysis results, or None if loading fails
 fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityAnalysis> {
-    let img = open(path).ok()?;
+    let img = match open(path) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to open image for quality analysis");
+            return None;
+        }
+    };
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();
-    let file_size = std::fs::metadata(path).ok()?.len();
+    let file_size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to get metadata for quality analysis");
+            return None;
+        }
+    };
     let format = path.extension().map_or_else(
         || "unknown".to_string(),
         |e| e.to_string_lossy().to_uppercase(),
     );
-    analyze_image_quality(
+    match analyze_image_quality(
         width,
         height,
         rgba.as_raw(),
@@ -893,8 +905,13 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
         &format,
         Some(1),
         PrecisionMetadata::default(),
-    )
-    .ok()
+    ) {
+        Ok(res) => Some(res),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Image quality analysis calculation failed");
+            None
+        }
+    }
 }
 
 pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_path: &Path) {
@@ -919,7 +936,18 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
             analysis.content_type.name, analysis.complexity, analysis.edge_density
         ),
     );
-    write_to_log_at_level(Level::DEBUG, &format!("  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}", analysis.color_diversity, analysis.texture_variance, analysis.noise_level, analysis.sharpness, analysis.contrast, analysis.confidence));
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}",
+            analysis.color_diversity,
+            analysis.texture_variance,
+            analysis.noise_level,
+            analysis.sharpness,
+            analysis.contrast,
+            analysis.confidence
+        ),
+    );
     write_to_log_at_level(Level::DEBUG, "");
 }
 

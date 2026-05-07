@@ -4,6 +4,7 @@
 //! All detection functions decode actual media content instead of trusting container headers.
 
 use crate::progress_mode::emit_stderr;
+use std::intrinsics::likely;
 use std::path::Path;
 use tracing::warn;
 
@@ -72,12 +73,11 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
 
     // Parse mean_volume from volumedetect output
     for line in stderr.lines() {
-        if let Some(idx) = line.find("mean_volume:") {
-            if let Some(vol_str) = line[idx + 12..].split_whitespace().next() {
-                if let Ok(mean_volume) = vol_str.parse::<f64>() {
-                    return PenetrationResult::Verified(mean_volume < SILENCE_THRESHOLD_DB);
-                }
-            }
+        if let Some(idx) = line.find("mean_volume:")
+            && let Some(vol_str) = line[idx + 12..].split_whitespace().next()
+            && let Ok(mean_volume) = vol_str.parse::<f64>()
+        {
+            return PenetrationResult::Verified(mean_volume < SILENCE_THRESHOLD_DB);
         }
     }
 
@@ -140,16 +140,15 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
 
         // Parse "lavfi.stats.0.Min" from stderr
         for line in stderr.lines() {
-            if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or_else(|| {
-                    tracing::warn!("☢️ [ANOMALY] Failed to parse Min value from ffmpeg stats output for {}", path.display());
-                    ""
-                });
-                if let Ok(min_val) = min_str.parse::<f64>() {
-                    if min_val < 255.0_f64 {
-                        found_transparency = true;
-                        break;
-                    }
+            if let Some(idx) = line.find("lavfi.stats.0.Min:")
+                && let Some(part) = line.get(idx + 18..)
+            {
+                let min_str = part.split_whitespace().next().unwrap_or("");
+                if let Ok(min_val) = min_str.parse::<f64>()
+                    && likely(min_val < 255.0_f64)
+                {
+                    found_transparency = true;
+                    break;
                 }
             }
         }
@@ -209,22 +208,15 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
 
     // Check all frames for any Min < 255
     for line in stderr.lines() {
-        if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-            let min_str = line[idx + 18..]
-                .split_whitespace()
-                .next()
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "☢️ [ANOMALY] Failed to parse Min value from ffmpeg stats output for {}",
-                        path.display()
-                    );
-                    ""
-                });
-            if let Ok(min_val) = min_str.parse::<f64>() {
-                if min_val < 255.0_f64 {
-                    emit_stderr("   Full decode found transparency in at least one frame");
-                    return PenetrationResult::Verified(true);
-                }
+        if let Some(idx) = line.find("lavfi.stats.0.Min:")
+            && let Some(part) = line.get(idx + 18..)
+        {
+            let min_str = part.split_whitespace().next().unwrap_or("");
+            if let Ok(min_val) = min_str.parse::<f64>()
+                && likely(min_val < 255.0_f64)
+            {
+                emit_stderr("   Full decode found transparency in at least one frame");
+                return PenetrationResult::Verified(true);
             }
         }
     }
@@ -272,15 +264,10 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
     // Example line: "frame=  123 fps=0.1 q=-0.0 Lsize=N/A time=00:00:05.12 bitrate=N/A speed=4.5x"
     let mut actual_u64 = None;
     for line in stderr.lines().rev() {
-        if let Some(pos) = line.find("frame=") {
-            let part = &line[pos + 6..];
-            let count_str = part.split_whitespace().next().unwrap_or_else(|| {
-                tracing::warn!(
-                    "☢️ [ANOMALY] Failed to parse frame count from ffmpeg summary for {}",
-                    path.display()
-                );
-                ""
-            });
+        if let Some(pos) = line.find("frame=")
+            && let Some(part) = line.get(pos + 6..)
+        {
+            let count_str = part.split_whitespace().next().unwrap_or("");
             if let Ok(count) = count_str.parse::<u64>() {
                 actual_u64 = Some(count);
                 break;
@@ -421,38 +408,38 @@ impl PenetrationSummary {
     pub fn report(&self) -> String {
         let mut lines = Vec::new();
 
-        if self.audio_checked {
-            if let Some(is_silent) = self.audio_result {
-                lines.push(format!(
-                    "  Audio: {}",
-                    if is_silent {
-                        "SILENT (verified)"
-                    } else {
-                        "AUDIBLE (verified)"
-                    }
-                ));
-            }
+        if self.audio_checked
+            && let Some(is_silent) = self.audio_result
+        {
+            lines.push(format!(
+                "  Audio: {}",
+                if is_silent {
+                    "SILENT (verified)"
+                } else {
+                    "AUDIBLE (verified)"
+                }
+            ));
         }
 
-        if self.transparency_checked {
-            if let Some(is_real) = self.transparency_result {
-                lines.push(format!(
-                    "  Transparency: {}",
-                    if is_real {
-                        "REAL (verified)"
-                    } else {
-                        "FAKE (metadata lied)"
-                    }
-                ));
-            }
+        if self.transparency_checked
+            && let Some(is_real) = self.transparency_result
+        {
+            lines.push(format!(
+                "  Transparency: {}",
+                if is_real {
+                    "REAL (verified)"
+                } else {
+                    "FAKE (metadata lied)"
+                }
+            ));
         }
 
-        if self.frame_count_checked {
-            if let Some((claimed, actual)) = self.frame_count_mismatch {
-                lines.push(format!(
-                    "  Frame count: MISMATCH (claimed={claimed}, actual={actual})"
-                ));
-            }
+        if self.frame_count_checked
+            && let Some((claimed, actual)) = self.frame_count_mismatch
+        {
+            lines.push(format!(
+                "  Frame count: MISMATCH (claimed={claimed}, actual={actual})"
+            ));
         }
 
         if lines.is_empty() {

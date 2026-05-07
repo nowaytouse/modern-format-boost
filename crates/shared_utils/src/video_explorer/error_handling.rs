@@ -1,6 +1,6 @@
 //! Honest error handling module - no silent fallbacks, explicit error reporting
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Quality metric that must be explicitly present, not defaulted
 #[derive(Debug, Clone)]

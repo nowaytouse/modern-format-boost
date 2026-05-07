@@ -18,7 +18,7 @@ const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
 const COPYFILE_FLAGS: u32 = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR | COPYFILE_RECURSIVE;
 
 pub fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
-    extern "C" {
+    unsafe extern "C" {
         fn copyfile(
             from: *const i8,
             to: *const i8,
@@ -79,7 +79,7 @@ pub fn set_added_time(path: &Path, time: std::time::SystemTime) -> io::Result<()
 }
 
 pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
-    extern "C" {
+    unsafe extern "C" {
         fn getattrlist(
             path: *const i8,
             attrList: *mut Attrlist,
@@ -127,7 +127,7 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
 }
 
 fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Result<()> {
-    extern "C" {
+    unsafe extern "C" {
         fn setattrlist(
             path: *const i8,
             attrList: *mut Attrlist,

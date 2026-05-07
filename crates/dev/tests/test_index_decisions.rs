@@ -51,25 +51,25 @@ fn main() -> Result<()> {
             total += 1;
             match row.media_type.as_str() {
                 "image" => {
-                    if let Ok(rec) = get_recommendation_from_row(&row) {
-                        if rec.recommended_format != rec.current_format {
-                            image_conversions += 1;
-                            let rel_path = &row.rel_path;
-                            let rec_format = &rec.recommended_format;
-                            let reason = &rec.reason;
-                            println!("📸 [Img] {rel_path} -> {rec_format} ({reason})");
-                        }
+                    if let Ok(rec) = get_recommendation_from_row(&row)
+                        && rec.recommended_format != rec.current_format
+                    {
+                        image_conversions += 1;
+                        let rel_path = &row.rel_path;
+                        let rec_format = &rec.recommended_format;
+                        let reason = &rec.reason;
+                        println!("📸 [Img] {rel_path} -> {rec_format} ({reason})");
                     }
                 }
                 "video" => {
-                    if let Ok(rec) = get_video_recommendation_from_row(&row) {
-                        if rec.is_archival_upgrade {
-                            video_conversions += 1;
-                            let rel_path = &row.rel_path;
-                            let rec_codec = &rec.recommended_codec;
-                            let reason = &rec.reason;
-                            println!("🎞️ [Vid] {rel_path} -> {rec_codec} ({reason})");
-                        }
+                    if let Ok(rec) = get_video_recommendation_from_row(&row)
+                        && rec.is_archival_upgrade
+                    {
+                        video_conversions += 1;
+                        let rel_path = &row.rel_path;
+                        let rec_codec = &rec.recommended_codec;
+                        let reason = &rec.reason;
+                        println!("🎞️ [Vid] {rel_path} -> {rec_codec} ({reason})");
                     }
                 }
                 _ => {}

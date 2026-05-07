@@ -17,10 +17,10 @@ use std::path::PathBuf;
 
 // Re-export types from modules we're keeping
 pub use crate::error_handler::{
-    add_context, handle_error, install_panic_handler, report_error, ErrorAction, ErrorCategory,
-    ResultExt,
+    ErrorAction, ErrorCategory, ResultExt, add_context, handle_error, install_panic_handler,
+    report_error,
 };
-pub use crate::error_logging::{classify_error, log_enhanced_error, ErrorSeverity};
+pub use crate::error_logging::{ErrorSeverity, classify_error, log_enhanced_error};
 pub use crate::types::{CrfError, IterationError, SsimError};
 
 // ─── Unified Error Types ─────────────────────────────────────────────────────

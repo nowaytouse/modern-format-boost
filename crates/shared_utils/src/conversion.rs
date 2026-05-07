@@ -24,18 +24,18 @@
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
+use crate::Rational;
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::conversion_types::SelectedCodec;
 use crate::modern_ui::{colors, symbols};
-use crate::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     LazyLock, Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1264,10 +1264,10 @@ pub fn commit_temp_to_output_with_metadata(
                 .and_then(|e| e.to_str())
                 .map(str::to_lowercase)
                 .unwrap_or_default();
-            if ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif" {
-                if let Err(e) = crate::metadata::append_mfb_branding(output) {
-                    tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
-                }
+            if (ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif")
+                && let Err(e) = crate::metadata::append_mfb_branding(output)
+            {
+                tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
             }
         }
 
@@ -1289,10 +1289,11 @@ pub fn commit_temp_to_output_with_metadata(
 /// Returns an error message if ffprobe fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
     // Method 1: ffprobe
-    if let Ok(probe) = crate::probe_video(input) {
-        if probe.width > 0 && probe.height > 0 {
-            return Ok((probe.width, probe.height));
-        }
+    if let Ok(probe) = crate::probe_video(input)
+        && probe.width > 0
+        && probe.height > 0
+    {
+        return Ok((probe.width, probe.height));
     }
 
     // Method 2: image crate
@@ -1316,20 +1317,19 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
                     .build()
                     .output()
             });
-        if let Ok(out) = output {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout);
-                if let Some(line) = s.lines().next() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let (Some(p0), Some(p1)) = (parts.first(), parts.get(1)) {
-                            if let (Ok(w), Ok(h)) = (p0.parse::<u32>(), p1.parse::<u32>()) {
-                                if w > 0 && h > 0 {
-                                    return Ok((w, h));
-                                }
-                            }
-                        }
-                    }
+        if let Ok(out) = output
+            && out.status.success()
+        {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().next() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2
+                    && let (Some(p0), Some(p1)) = (parts.first(), parts.get(1))
+                    && let (Ok(w), Ok(h)) = (p0.parse::<u32>(), p1.parse::<u32>())
+                    && w > 0
+                    && h > 0
+                {
+                    return Ok((w, h));
                 }
             }
         }
@@ -1832,12 +1832,12 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
     if let Some(aae) = existing_aae {
         if apple_compat {
             // Migrate AAE to output directory
-            if let Some(output_dir) = output.parent() {
-                if let Some(filename) = aae.file_name() {
-                    let target_aae = output_dir.join(filename);
-                    if let Err(e) = fs::copy(&aae, &target_aae) {
-                        eprintln!("⚠️  Failed to migrate AAE file: {e}");
-                    }
+            if let Some(output_dir) = output.parent()
+                && let Some(filename) = aae.file_name()
+            {
+                let target_aae = output_dir.join(filename);
+                if let Err(e) = fs::copy(&aae, &target_aae) {
+                    eprintln!("⚠️  Failed to migrate AAE file: {e}");
                 }
             }
         } else {
@@ -1851,7 +1851,7 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::{tempdir_in, NamedTempFile};
+    use tempfile::{NamedTempFile, tempdir_in};
 
     #[test]
     fn test_strict_size_reduction_formula() {

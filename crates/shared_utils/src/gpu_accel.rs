@@ -1634,29 +1634,29 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     // Try multiple parsing strategies
     for line in stderr.lines() {
         // Strategy 1: Look for "psnr_avg:" in stats output
-        if line.contains("psnr_avg:") {
-            if let Some(pos) = line.find("psnr_avg:") {
-                let after = &line[pos + 9..];
-                if let Some(space_pos) = after.find(char::is_whitespace) {
-                    if let Ok(psnr) = after[..space_pos].trim().parse::<f64>() {
-                        return Ok(psnr);
-                    }
-                } else if let Ok(psnr) = after.trim().parse::<f64>() {
+        if line.contains("psnr_avg:")
+            && let Some(pos) = line.find("psnr_avg:")
+        {
+            let after = &line[pos + 9..];
+            if let Some(space_pos) = after.find(char::is_whitespace) {
+                if let Ok(psnr) = after[..space_pos].trim().parse::<f64>() {
                     return Ok(psnr);
                 }
+            } else if let Ok(psnr) = after.trim().parse::<f64>() {
+                return Ok(psnr);
             }
         }
 
         // Strategy 2: Look for "average:" in stats output
-        if line.contains("average:") {
-            if let Some(pos) = line.find("average:") {
-                let after = &line[pos + 8..];
-                let parts: Vec<&str> = after.split_whitespace().collect();
-                if let Some(first) = parts.first() {
-                    if let Ok(psnr) = first.trim().parse::<f64>() {
-                        return Ok(psnr);
-                    }
-                }
+        if line.contains("average:")
+            && let Some(pos) = line.find("average:")
+        {
+            let after = &line[pos + 8..];
+            let parts: Vec<&str> = after.split_whitespace().collect();
+            if let Some(first) = parts.first()
+                && let Ok(psnr) = first.trim().parse::<f64>()
+            {
+                return Ok(psnr);
             }
         }
     }
@@ -1758,7 +1758,10 @@ impl PsnrSsimMapper {
 
             if psnr >= psnr1 && psnr <= psnr2 {
                 let denom = psnr2 - psnr1;
-                if denom.abs() < f64::EPSILON {
+                if crate::numeric_cast::is_effectively_zero(
+                    denom,
+                    crate::numeric_cast::FloatContext::Accumulation,
+                ) {
                     return Some(f64::midpoint(ssim1, ssim2));
                 }
                 let ratio = (psnr - psnr1) / denom;
@@ -1771,7 +1774,10 @@ impl PsnrSsimMapper {
             let (psnr1, ssim1) = *points.first().unwrap_or(&(0.0, 0.0));
             let (psnr2, ssim2) = *points.get(1).unwrap_or(&(0.0, 0.0));
             let denom = psnr2 - psnr1;
-            if denom.abs() < f64::EPSILON {
+            if crate::numeric_cast::is_effectively_zero(
+                denom,
+                crate::numeric_cast::FloatContext::Accumulation,
+            ) {
                 return Some(ssim1);
             }
             let slope = (ssim2 - ssim1) / denom;
@@ -1781,7 +1787,10 @@ impl PsnrSsimMapper {
             let (psnr1, ssim1) = *points.get(n.saturating_sub(2)).unwrap_or(&(0.0, 0.0));
             let (psnr2, ssim2) = *points.last().unwrap_or(&(0.0, 0.0));
             let denom = psnr2 - psnr1;
-            if denom.abs() < f64::EPSILON {
+            if crate::numeric_cast::is_effectively_zero(
+                denom,
+                crate::numeric_cast::FloatContext::Accumulation,
+            ) {
                 return Some(ssim2);
             }
             let slope = (ssim2 - ssim1) / denom;
@@ -1878,14 +1887,14 @@ pub fn gpu_coarse_search_with_log(
         log_cb,
     );
     // Ensure temp output is always deleted, regardless of success/failure
-    if let Err(err) = std::fs::remove_file(output) {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            crate::progress_mode::emit_stderr(&format!(
-                "⚠️ Failed to remove GPU coarse-search temp output {}: {}",
-                output.display(),
-                err
-            ));
-        }
+    if let Err(err) = std::fs::remove_file(output)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚠️ Failed to remove GPU coarse-search temp output {}: {}",
+            output.display(),
+            err
+        ));
     }
     result
 }
@@ -1925,7 +1934,7 @@ fn gpu_coarse_search_with_log_impl(
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
 ) -> GpuCoarseResult {
-    use anyhow::{bail, Context};
+    use anyhow::{Context, bail};
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
     const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
@@ -2171,14 +2180,14 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             0
         };
-        if let Err(err) = std::fs::remove_file(&warmup_output) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                crate::progress_mode::emit_stderr(&format!(
-                    "⚠️ Failed to remove GPU warmup output {}: {}",
-                    warmup_output.display(),
-                    err
-                ));
-            }
+        if let Err(err) = std::fs::remove_file(&warmup_output)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            crate::progress_mode::emit_stderr(&format!(
+                "⚠️ Failed to remove GPU warmup output {}: {}",
+                warmup_output.display(),
+                err
+            ));
         }
         Ok(size)
     };
@@ -2302,75 +2311,74 @@ fn gpu_coarse_search_with_log_impl(
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
-                        if let Some(val) = line.strip_prefix("out_time_us=") {
-                            if let Ok(time_us) = val.parse::<u64>() {
-                                if last_progress_time.elapsed().as_secs_f64() >= 1.0_f64 {
-                                    let current_secs =
-                                        crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
-                                    let pct = (current_secs / f64::from(actual_sample_duration)
-                                        * 100.0)
-                                        .min(100.0);
-                                    let elapsed_secs = start_time.elapsed().as_secs_f64();
-                                    let eta = if pct > 0.1_f64
-                                        && current_secs > 0.0_f64
-                                        && elapsed_secs > 0.0_f64
-                                    {
-                                        let speed = current_secs / elapsed_secs;
-                                        if speed > 0.0_f64 {
-                                            crate::numeric_cast::f64_to_u64_sat(
-                                                ((f64::from(actual_sample_duration)
-                                                    - current_secs)
-                                                    / speed)
-                                                    .max(0.0),
-                                            )
-                                        } else {
-                                            0
-                                        }
-                                    } else {
-                                        0
-                                    };
-                                    let speed = if current_secs > 0.0_f64 {
-                                        start_time.elapsed().as_secs_f64() / current_secs
-                                    } else {
-                                        0.0_f64
-                                    };
-
-                                    let estimated_final_size = if let Ok(metadata) =
-                                        std::fs::metadata(output)
-                                    {
-                                        let current_size = metadata.len();
-                                        fallback_logged = false;
-                                        crate::numeric_cast::f64_to_u64_sat(
-                                            crate::numeric_cast::u64_to_f64(current_size)
-                                                / pct.max(1.0)
-                                                * 100.0,
-                                        )
-                                    } else {
-                                        if !fallback_logged {
-                                            crate::log_eprintln!(
-                                                "Using linear estimation (metadata unavailable)"
-                                            );
-                                            fallback_logged = true;
-                                        }
-                                        crate::numeric_cast::f64_to_u64_sat(
-                                            (crate::numeric_cast::u64_to_f64(sample_input_size)
-                                                * (1.0 / pct.max(0.1)))
-                                            .min(
-                                                crate::numeric_cast::u64_to_f64(sample_input_size)
-                                                    * 10.0,
-                                            ),
-                                        )
-                                    };
-
-                                    crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
-                                        pct, current_secs, actual_sample_duration, eta, speed);
-
-                                    if let Some(cb) = progress_cb {
-                                        cb(crf, estimated_final_size);
-                                    }
-                                    last_progress_time = Instant::now();
+                        if let Some(val) = line.strip_prefix("out_time_us=")
+                            && let Ok(time_us) = val.parse::<u64>()
+                            && last_progress_time.elapsed().as_secs_f64() >= 1.0_f64
+                        {
+                            let current_secs =
+                                crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
+                            let pct = (current_secs / f64::from(actual_sample_duration) * 100.0)
+                                .min(100.0);
+                            let elapsed_secs = start_time.elapsed().as_secs_f64();
+                            let eta = if pct > 0.1_f64
+                                && current_secs > 0.0_f64
+                                && elapsed_secs > 0.0_f64
+                            {
+                                let speed = current_secs / elapsed_secs;
+                                if speed > 0.0_f64 {
+                                    crate::numeric_cast::f64_to_u64_sat(
+                                        ((f64::from(actual_sample_duration) - current_secs)
+                                            / speed)
+                                            .max(0.0),
+                                    )
+                                } else {
+                                    0
                                 }
+                            } else {
+                                0
+                            };
+                            let speed = if current_secs > 0.0_f64 {
+                                start_time.elapsed().as_secs_f64() / current_secs
+                            } else {
+                                0.0_f64
+                            };
+
+                            let estimated_final_size = if let Ok(metadata) =
+                                std::fs::metadata(output)
+                            {
+                                let current_size = metadata.len();
+                                fallback_logged = false;
+                                crate::numeric_cast::f64_to_u64_sat(
+                                    crate::numeric_cast::u64_to_f64(current_size) / pct.max(1.0)
+                                        * 100.0,
+                                )
+                            } else {
+                                if !fallback_logged {
+                                    crate::log_eprintln!(
+                                        "Using linear estimation (metadata unavailable)"
+                                    );
+                                    fallback_logged = true;
+                                }
+                                crate::numeric_cast::f64_to_u64_sat(
+                                    (crate::numeric_cast::u64_to_f64(sample_input_size)
+                                        * (1.0 / pct.max(0.1)))
+                                    .min(crate::numeric_cast::u64_to_f64(sample_input_size) * 10.0),
+                                )
+                            };
+
+                            crate::log_eprintln!(
+                                "⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
+                                pct,
+                                current_secs,
+                                actual_sample_duration,
+                                eta,
+                                speed
+                            );
+
+                            if let Some(cb) = progress_cb {
+                                cb(crf, estimated_final_size);
                             }
+                            last_progress_time = Instant::now();
                         }
                     }
                     Err(err) => {
@@ -2386,13 +2394,13 @@ fn gpu_coarse_search_with_log_impl(
 
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
-        if let Some(handle) = stderr_handle {
-            if let Err(payload) = handle.join() {
-                crate::log_eprintln!(
-                    "⚠️  GPU stderr capture thread panicked: {}",
-                    describe_thread_panic(payload)
-                );
-            }
+        if let Some(handle) = stderr_handle
+            && let Err(payload) = handle.join()
+        {
+            crate::log_eprintln!(
+                "⚠️  GPU stderr capture thread panicked: {}",
+                describe_thread_panic(payload)
+            );
         }
 
         if !status.success() {
@@ -2468,14 +2476,14 @@ fn gpu_coarse_search_with_log_impl(
                         Err(e) => Err(anyhow::anyhow!("{e}")),
                     };
 
-                    if let Err(err) = std::fs::remove_file(&output_path) {
-                        if err.kind() != std::io::ErrorKind::NotFound {
-                            crate::progress_mode::emit_stderr(&format!(
-                                "⚠️ Failed to remove GPU probe output {}: {}",
-                                output_path.display(),
-                                err
-                            ));
-                        }
+                    if let Err(err) = std::fs::remove_file(&output_path)
+                        && err.kind() != std::io::ErrorKind::NotFound
+                    {
+                        crate::progress_mode::emit_stderr(&format!(
+                            "⚠️ Failed to remove GPU probe output {}: {}",
+                            output_path.display(),
+                            err
+                        ));
                     }
 
                     (crf, size)
@@ -2621,19 +2629,20 @@ fn gpu_coarse_search_with_log_impl(
                 boundary_high
             );
 
-            if let Some((_, Ok(max_size))) = max_result {
-                if *max_size < sample_input_size && *max_size < *initial_size {
-                    best_crf = Some(config.max_crf);
-                    best_size = Some(*max_size);
-                    log_msg!(
-                        "   📊 max_crf {:.0} is better: {:.1}% smaller",
-                        config.max_crf,
-                        (1.0_f64
-                            - crate::numeric_cast::u64_to_f64(*max_size)
-                                / crate::numeric_cast::u64_to_f64(*initial_size))
-                            * 100.0_f64
-                    );
-                }
+            if let Some((_, Ok(max_size))) = max_result
+                && *max_size < sample_input_size
+                && *max_size < *initial_size
+            {
+                best_crf = Some(config.max_crf);
+                best_size = Some(*max_size);
+                log_msg!(
+                    "   📊 max_crf {:.0} is better: {:.1}% smaller",
+                    config.max_crf,
+                    (1.0_f64
+                        - crate::numeric_cast::u64_to_f64(*max_size)
+                            / crate::numeric_cast::u64_to_f64(*initial_size))
+                        * 100.0_f64
+                );
             }
         } else {
             boundary_low = config.min_crf;
@@ -2646,13 +2655,13 @@ fn gpu_coarse_search_with_log_impl(
                 boundary_high
             );
 
-            if let Some((_, Ok(min_size))) = min_result {
-                if *min_size < sample_input_size {
-                    best_crf = Some(config.min_crf);
-                    best_size = Some(*min_size);
-                    found_compress_point = true;
-                    log_msg!("   ✅ min_crf {:.0} compresses!", config.min_crf);
-                }
+            if let Some((_, Ok(min_size))) = min_result
+                && *min_size < sample_input_size
+            {
+                best_crf = Some(config.min_crf);
+                best_size = Some(*min_size);
+                found_compress_point = true;
+                log_msg!("   ✅ min_crf {:.0} compresses!", config.min_crf);
             }
         }
     }
@@ -2682,14 +2691,15 @@ fn gpu_coarse_search_with_log_impl(
 
             let mut stagnation_count = 0u32;
             let mut last_size =
-                crate::numeric_cast::option_u64_strict(best_size, "stage1a_best_size").unwrap_or(0);
+                crate::numeric_cast::option_u64_strict(best_size, "stage1a_best_size")
+                    .expect("best_size is guaranteed Some when found_compress_point is true");
             let mut current_step = initial_step;
             let mut wall_hits: u32 = 0;
             let mut test_crf = boundary_low + current_step;
             let mut last_compressible_crf = boundary_low;
             let mut last_compressible_size =
                 crate::numeric_cast::option_u64_strict(best_size, "stage1a_last_compressible_size")
-                    .unwrap_or(0);
+                    .expect("best_size is guaranteed Some when found_compress_point is true");
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
@@ -3030,22 +3040,19 @@ fn gpu_coarse_search_with_log_impl(
                         if let Ok(psnr) = calculate_psnr_fast(&input_str, &output_str) {
                             log_msg!("      📊 PSNR: {:.2}dB", psnr);
 
-                            if ceiling_detector.add_sample(test_crf, psnr) {
-                                if let Some((ceiling_crf, ceiling_psnr)) =
+                            if ceiling_detector.add_sample(test_crf, psnr)
+                                && let Some((ceiling_crf, ceiling_psnr)) =
                                     ceiling_detector.get_ceiling()
-                                {
-                                    log_msg!("   🎯 GPU Quality Ceiling Detected!");
-                                    log_msg!(
-                                        "      └─ CRF {:.1}, PSNR {:.2}dB (PSNR plateau)",
-                                        ceiling_crf,
-                                        ceiling_psnr
-                                    );
-                                    log_msg!(
-                                        "      └─ Further CRF reduction won't improve quality"
-                                    );
-                                    log_msg!("   ⚡ Stop: GPU reached its quality limit");
-                                    break;
-                                }
+                            {
+                                log_msg!("   🎯 GPU Quality Ceiling Detected!");
+                                log_msg!(
+                                    "      └─ CRF {:.1}, PSNR {:.2}dB (PSNR plateau)",
+                                    ceiling_crf,
+                                    ceiling_psnr
+                                );
+                                log_msg!("      └─ Further CRF reduction won't improve quality");
+                                log_msg!("   ⚡ Stop: GPU reached its quality limit");
+                                break;
                             }
                         } else {
                             log_msg!("      ⚠️ PSNR calc failed, fallback to size-only");
@@ -3095,15 +3102,15 @@ fn gpu_coarse_search_with_log_impl(
                 );
             }
 
-            if ceiling_detector.ceiling_detected {
-                if let Some((ceiling_crf, ceiling_psnr)) = ceiling_detector.get_ceiling() {
-                    log_msg!("   ═══════════════════════════════════════════════════");
-                    log_msg!("   🎯 GPU Quality Ceiling Summary:");
-                    log_msg!("      CRF: {:.1}", ceiling_crf);
-                    log_msg!("      PSNR: {:.2}dB", ceiling_psnr);
-                    log_msg!("      Note: GPU encoder reached its quality limit");
-                    log_msg!("      CPU encoding can break through this ceiling");
-                }
+            if ceiling_detector.ceiling_detected
+                && let Some((ceiling_crf, ceiling_psnr)) = ceiling_detector.get_ceiling()
+            {
+                log_msg!("   ═══════════════════════════════════════════════════");
+                log_msg!("   🎯 GPU Quality Ceiling Summary:");
+                log_msg!("      CRF: {:.1}", ceiling_crf);
+                log_msg!("      PSNR: {:.2}dB", ceiling_psnr);
+                log_msg!("      Note: GPU encoder reached its quality limit");
+                log_msg!("      CPU encoding can break through this ceiling");
             }
         }
     }
@@ -3245,14 +3252,14 @@ fn gpu_coarse_search_with_log_impl(
         if fine_tuned { "yes" } else { "no" }
     );
 
-    if let Err(err) = std::fs::remove_file(output) {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            crate::progress_mode::emit_stderr(&format!(
-                "⚠️ Failed to remove final GPU coarse-search temp output {}: {}",
-                output.display(),
-                err
-            ));
-        }
+    if let Err(err) = std::fs::remove_file(output)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚠️ Failed to remove final GPU coarse-search temp output {}: {}",
+            output.display(),
+            err
+        ));
     }
 
     GpuCoarseResult {

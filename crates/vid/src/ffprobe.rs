@@ -4,8 +4,8 @@
 //! Provides a thin wrapper for error type conversion.
 
 pub use shared_utils::ffprobe::{
-    detect_bit_depth, get_duration, get_frame_count, is_ffprobe_available, parse_frame_rate,
-    FFprobeError, FFprobeResult,
+    FFprobeError, FFprobeResult, detect_bit_depth, get_duration, get_frame_count,
+    is_ffprobe_available, parse_frame_rate,
 };
 
 use crate::{Result, VidQualityError};

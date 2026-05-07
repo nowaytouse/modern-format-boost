@@ -16,8 +16,8 @@
 
 use crate::progress_mode::write_to_log_at_level;
 use crate::quality_matcher::{
-    parse_source_codec, should_skip_video_codec, ContentType, QualityAnalysis, SourceCodec,
-    VideoAnalysisBuilder,
+    ContentType, QualityAnalysis, SourceCodec, VideoAnalysisBuilder, parse_source_codec,
+    should_skip_video_codec,
 };
 use crate::video_detection::VideoDetectionResult;
 use rug::Rational;
@@ -169,6 +169,7 @@ pub enum CompressionLevel {
     HighQuality,
     Standard,
     LowQuality,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -211,9 +212,18 @@ impl CompressionLevel {
             _ => 1.0_f64,
         };
 
-        let bpp_r = f64_to_rational_strict(bpp, "bpp").unwrap_or_else(|| Rational::from(0_i32));
-        let efficiency_r = f64_to_rational_strict(efficiency, "efficiency")
-            .unwrap_or_else(|| Rational::from(1_i32));
+        let Some(bpp_r) = f64_to_rational_strict(bpp, "bpp") else {
+            crate::progress_mode::emit_stderr(
+                "☢️ [ANOMALY] BPP NaN/Inf! Refusing to forge data. Information invalidated.",
+            );
+            return Self::Unknown;
+        };
+        let Some(efficiency_r) = f64_to_rational_strict(efficiency, "efficiency") else {
+            crate::progress_mode::emit_stderr(
+                "☢️ [ANOMALY] Efficiency NaN/Inf! Refusing to forge data. Information invalidated.",
+            );
+            return Self::Unknown;
+        };
         let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
         if adjusted_bpp > 1.0 {
@@ -274,10 +284,12 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
     let bpp = {
-        let pixels_per_second = Rational::from(width)
-            * Rational::from(height)
-            * crate::numeric_cast::f64_to_rational_strict(fps, "fps")
-                .unwrap_or_else(|| Rational::from(1_i32));
+        let pixels_per_second = Rational::from(width) * Rational::from(height) * {
+            let Some(fps_r) = crate::numeric_cast::f64_to_rational_strict(fps, "fps") else {
+                return Err("❌ Invalid frame rate: fps is NaN/Inf".to_string());
+            };
+            fps_r
+        };
         if pixels_per_second > 0 {
             // effective_bitrate is u64; Rational::from requires i64 or smaller.
             // Saturate to i64::MAX for astronomically large bitrates (>9 Pbps).
@@ -573,6 +585,7 @@ fn calculate_quality_score(
         CompressionLevel::HighQuality => 80,
         CompressionLevel::Standard => 60,
         CompressionLevel::LowQuality => 40,
+        CompressionLevel::Unknown => 50, // Neutral fallback for unknown compression
     };
 
     let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
@@ -594,7 +607,7 @@ fn calculate_quality_score(
                 0
             });
             // t is clamped to 0..=5, always fits u8.
-            u8::try_from(t.clamp(0, 5)).unwrap_or(0)
+            u8::try_from(t.clamp(0, 5)).expect("Clamped value strictly bounded to <= 5")
         }
         CompressionLevel::HighQuality => {
             let t = crate::numeric_cast::f64_to_u32_strict(
@@ -606,7 +619,7 @@ fn calculate_quality_score(
                 1 // Default middle value
             });
             // t is clamped to 0..=3, always fits u8.
-            u8::try_from(t.clamp(0, 3)).unwrap_or(0)
+            u8::try_from(t.clamp(0, 3)).expect("Clamped value strictly bounded to <= 3")
         }
         _ => 0,
     };
@@ -626,10 +639,13 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         _ => 1.0_f64,
     };
 
-    let bpp_r = crate::numeric_cast::f64_to_rational_strict(bpp, "bpp")
-        .unwrap_or_else(|| Rational::from(0_i32));
-    let efficiency_r = crate::numeric_cast::f64_to_rational_strict(efficiency, "efficiency")
-        .unwrap_or_else(|| Rational::from(1_i32));
+    let Some(bpp_r) = crate::numeric_cast::f64_to_rational_strict(bpp, "bpp") else {
+        return 35;
+    };
+    let Some(efficiency_r) = crate::numeric_cast::f64_to_rational_strict(efficiency, "efficiency")
+    else {
+        return 35;
+    };
     let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
     for &(threshold, crf) in crate::constants::DENSITY_TO_CRF_LUT {
@@ -1406,10 +1422,12 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero width");
-        assert!(result
-            .err()
-            .unwrap_or_default()
-            .contains("Invalid dimensions"));
+        assert!(
+            result
+                .err()
+                .unwrap_or_default()
+                .contains("Invalid dimensions")
+        );
     }
 
     #[test]
@@ -1433,10 +1451,12 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero height");
-        assert!(result
-            .err()
-            .unwrap_or_default()
-            .contains("Invalid dimensions"));
+        assert!(
+            result
+                .err()
+                .unwrap_or_default()
+                .contains("Invalid dimensions")
+        );
     }
 
     #[test]
@@ -1460,10 +1480,12 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero fps");
-        assert!(result
-            .err()
-            .unwrap_or_default()
-            .contains("Invalid frame rate"));
+        assert!(
+            result
+                .err()
+                .unwrap_or_default()
+                .contains("Invalid frame rate")
+        );
     }
 
     #[test]
@@ -1510,10 +1532,12 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero duration");
-        assert!(result
-            .err()
-            .unwrap_or_default()
-            .contains("Invalid duration"));
+        assert!(
+            result
+                .err()
+                .unwrap_or_default()
+                .contains("Invalid duration")
+        );
     }
 
     #[test]

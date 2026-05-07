@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use shared_utils::{
-    loop_intent::{evaluate_loop_tree, LoopMeta},
+    loop_intent::{LoopMeta, evaluate_loop_tree},
     media_meta_utils::scan_gif_headers,
     quality_matcher::SourceCodec,
 };
@@ -289,16 +289,12 @@ fn test_concurrent_access_blocking() -> Result<()> {
             success_count += 1;
         }
         total_time += elapsed;
-        println!(
-            "   ✅ Thread {thread_id}: success={success}, took={elapsed:?}"
-        );
+        println!("   ✅ Thread {thread_id}: success={success}, took={elapsed:?}");
     }
 
     assert!(success_count >= 8, "At least 8 threads should succeed");
     let avg_time = total_time / 10;
-    println!(
-        "   📊 Success rate: {success_count}/10, average time: {avg_time:?}"
-    );
+    println!("   📊 Success rate: {success_count}/10, average time: {avg_time:?}");
 
     println!("✅ Concurrent access blocking test passed");
     Ok(())
@@ -335,9 +331,7 @@ fn test_memory_pressure_blocking() {
         match handle.join() {
             Ok((thread_id, result, elapsed)) => {
                 completed += 1;
-                println!(
-                    "   ✅ Thread {thread_id}: {result:?} (took: {elapsed:?})"
-                );
+                println!("   ✅ Thread {thread_id}: {result:?} (took: {elapsed:?})");
             }
             Err(_) => {
                 println!("   ❌ Thread panicked");

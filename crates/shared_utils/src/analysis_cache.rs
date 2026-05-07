@@ -18,7 +18,7 @@ use std::time::UNIX_EPOCH;
 use tracing::{debug, info, warn};
 
 // Import unified version management
-use crate::version::{cache_algorithm_version, CACHE_SCHEMA_VERSION};
+use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm_version};
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
@@ -53,7 +53,7 @@ impl CacheStatistics {
     pub fn stale_records(&self) -> i64 {
         self.algorithm_version_distribution
             .iter()
-            .filter(|(&v, _)| v < self.current_algorithm_version)
+            .filter(|&(&v, _)| v < self.current_algorithm_version)
             .map(|(_, &count)| count)
             .sum()
     }
@@ -242,16 +242,15 @@ impl AnalysisCache {
                     && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
                 {
                     let data: Vec<u8> = row.get(0);
-                    if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                        if calculate_checksum(&data)
+                    if let Some(stored_checksum) = row.get::<_, Option<i64>>(2)
+                        && calculate_checksum(&data)
                             != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                        {
-                            warn!(
-                                "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
-                                path.display()
-                            );
-                            return Ok(None);
-                        }
+                    {
+                        warn!(
+                            "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                            path.display()
+                        );
+                        return Ok(None);
                     }
 
                     let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
@@ -274,16 +273,15 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1);
             if algorithm_version >= cache_algorithm_version() {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                    if calculate_checksum(&data)
+                if let Some(stored_checksum) = row.get::<_, Option<i64>>(2)
+                    && calculate_checksum(&data)
                         != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                    {
-                        warn!(
-                            "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
-                            path.display()
-                        );
-                        return Ok(None);
-                    }
+                {
+                    warn!(
+                        "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                        path.display()
+                    );
+                    return Ok(None);
                 }
 
                 let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
@@ -335,13 +333,12 @@ impl AnalysisCache {
                 && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data)
+                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
+                    && calculate_checksum(&data)
                         != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                    {
-                        warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
-                        return Ok(None);
-                    }
+                {
+                    warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
+                    return Ok(None);
                 }
 
                 let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
@@ -360,14 +357,13 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
-            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data)
+            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
+                && calculate_checksum(&data)
                     != u32::try_from(stored_checksum)
                         .expect("Failed to parse integer or missing required value")
-                {
-                    warn!("⚠️  [Cache] Quality checksum mismatch (Hash).");
-                    return Ok(None);
-                }
+            {
+                warn!("⚠️  [Cache] Quality checksum mismatch (Hash).");
+                return Ok(None);
             }
 
             let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
@@ -491,13 +487,12 @@ impl AnalysisCache {
                 && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data)
+                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
+                    && calculate_checksum(&data)
                         != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                    {
-                        warn!("⚠️  [Cache] Video checksum mismatch (Path).");
-                        return Ok(None);
-                    }
+                {
+                    warn!("⚠️  [Cache] Video checksum mismatch (Path).");
+                    return Ok(None);
                 }
 
                 let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
@@ -516,14 +511,13 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
-            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data)
+            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
+                && calculate_checksum(&data)
                     != u32::try_from(stored_checksum)
                         .expect("Failed to parse integer or missing required value")
-                {
-                    warn!("⚠️  [Cache] Video checksum mismatch (Hash).");
-                    return Ok(None);
-                }
+            {
+                warn!("⚠️  [Cache] Video checksum mismatch (Hash).");
+                return Ok(None);
             }
 
             let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)

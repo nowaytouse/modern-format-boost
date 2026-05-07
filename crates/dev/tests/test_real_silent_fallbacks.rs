@@ -156,10 +156,10 @@ fn test_detect_expect_patterns() {
 }
 
 fn extract_expect_message(line: &str) -> String {
-    if let Some(start) = line.find(".expect(\"") {
-        if let Some(end) = line[start + 9..].find('"') {
-            return line[start + 9..start + 9 + end].to_string();
-        }
+    if let Some(start) = line.find(".expect(\"")
+        && let Some(end) = line[start + 9..].find('"')
+    {
+        return line[start + 9..start + 9 + end].to_string();
     }
     String::new()
 }

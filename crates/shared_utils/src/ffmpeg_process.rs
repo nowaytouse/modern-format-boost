@@ -216,22 +216,22 @@ impl FfmpegProgressParser {
     }
 
     pub fn parse_line(&mut self, line: &str) -> Option<f64> {
-        if let Some(frame_str) = line.strip_prefix("frame=") {
-            if let Ok(frame) = frame_str.split_whitespace().next()?.parse::<u64>() {
-                self.current_frame = frame;
-            }
+        if let Some(frame_str) = line.strip_prefix("frame=")
+            && let Ok(frame) = frame_str.split_whitespace().next()?.parse::<u64>()
+        {
+            self.current_frame = frame;
         }
 
-        if let Some(fps_str) = line.strip_prefix("fps=") {
-            if let Ok(fps) = fps_str.split_whitespace().next()?.parse::<f64>() {
-                self.current_fps = fps;
-            }
+        if let Some(fps_str) = line.strip_prefix("fps=")
+            && let Ok(fps) = fps_str.split_whitespace().next()?.parse::<f64>()
+        {
+            self.current_fps = fps;
         }
 
-        if let Some(time_str) = line.strip_prefix("time=") {
-            if let Some(time) = Self::parse_time(time_str.split_whitespace().next()?) {
-                self.current_time = time;
-            }
+        if let Some(time_str) = line.strip_prefix("time=")
+            && let Some(time) = Self::parse_time(time_str.split_whitespace().next()?)
+        {
+            self.current_time = time;
         }
 
         if let Some(speed_str) = line.strip_prefix("speed=") {
@@ -250,28 +250,30 @@ impl FfmpegProgressParser {
             return None;
         }
 
-        let hours: f64 = parts.first()?.parse().ok()?;
-        let minutes: f64 = parts.get(1)?.parse().ok()?;
-        let seconds: f64 = parts.get(2)?.parse().ok()?;
+        let hours: f64 = crate::numeric_cast::parse_strict(parts.first()?, "ffmpeg_time_hours")?;
+        let minutes: f64 = crate::numeric_cast::parse_strict(parts.get(1)?, "ffmpeg_time_minutes")?;
+        let seconds: f64 = crate::numeric_cast::parse_strict(parts.get(2)?, "ffmpeg_time_seconds")?;
 
         Some(hours.mul_add(3600.0, minutes.mul_add(60.0, seconds)))
     }
 
     fn calculate_progress(&self) -> Option<f64> {
-        if let Some(total) = self.total_frames {
-            if total > 0 && self.current_frame > 0 {
-                return Some(
-                    (crate::numeric_cast::u64_to_f64(self.current_frame)
-                        / crate::numeric_cast::u64_to_f64(total))
-                    .min(1.0),
-                );
-            }
+        if let Some(total) = self.total_frames
+            && total > 0
+            && self.current_frame > 0
+        {
+            return Some(
+                (crate::numeric_cast::u64_to_f64(self.current_frame)
+                    / crate::numeric_cast::u64_to_f64(total))
+                .min(1.0),
+            );
         }
 
-        if let Some(total) = self.total_duration {
-            if total > 0.0_f64 && self.current_time > 0.0_f64 {
-                return Some((self.current_time / total).min(1.0));
-            }
+        if let Some(total) = self.total_duration
+            && total > 0.0_f64
+            && self.current_time > 0.0_f64
+        {
+            return Some((self.current_time / total).min(1.0));
         }
 
         None

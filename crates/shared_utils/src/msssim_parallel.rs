@@ -97,15 +97,13 @@ impl ParallelMsssimCalculator {
             return Ok(MsssimResult::skipped());
         }
 
-        if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path) {
-            if probe.format_name.eq_ignore_ascii_case("gif") {
-                eprintln!(
-                    "❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback."
-                );
-                return Err(AppError::Other(anyhow::anyhow!(
-                    "GIF does not support MS-SSIM quality verification."
-                )));
-            }
+        if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path)
+            && probe.format_name.eq_ignore_ascii_case("gif")
+        {
+            eprintln!("❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback.");
+            return Err(AppError::Other(anyhow::anyhow!(
+                "GIF does not support MS-SSIM quality verification."
+            )));
         }
 
         eprintln!("🔄 Calculating MS-SSIM");

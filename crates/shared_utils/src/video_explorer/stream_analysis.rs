@@ -63,6 +63,10 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .arg("default=noprint_wrappers=1:nokey=1")
         .build()
         .output()
+        .map_err(|e| {
+            warn!(path = %input.display(), error = %e, "ffprobe failed to start for duration check");
+            e
+        })
         .ok()?;
 
     if !output.status.success() {
@@ -96,7 +100,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
             crate::image_formats::gif::get_frame_count(path),
             "gif_frame_count",
         )
-        .unwrap_or(0);
+        .expect("usize always fits in u64");
         if frames > 0 {
             return Some(frames);
         }
@@ -107,7 +111,13 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("webp"));
     if is_webp {
-        let data = std::fs::read(path).ok()?;
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "Failed to read WebP file for frame counting");
+                return None;
+            }
+        };
         let frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
         if frames > 0 {
             return Some(frames);
@@ -115,7 +125,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
     }
 
     let try_ffprobe_count = |mode: &str, entry: &str| -> Option<u64> {
-        let out = crate::tool_builders::FfprobeBuilder::new()
+        let out = match crate::tool_builders::FfprobeBuilder::new()
             .input(path)
             .loglevel("error")
             .select_stream(crate::tool_builders::StreamType::Video, 0)
@@ -124,16 +134,32 @@ fn count_video_frames(path: &Path) -> Option<u64> {
             .arg(mode)
             .build()
             .output()
-            .ok()?;
+        {
+            Ok(o) => o,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "Failed to execute ffprobe for frame count");
+                return None;
+            }
+        };
 
         if !out.status.success() {
+            warn!(
+                path = %path.display(),
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "ffprobe frame count failed"
+            );
             return None;
         }
 
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<u64>()
-            .ok()
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let trimmed = stdout.trim();
+        match trimmed.parse::<u64>() {
+            Ok(count) => Some(count),
+            Err(e) => {
+                warn!(path = %path.display(), output = %trimmed, error = %e, "Failed to parse ffprobe frame count");
+                None
+            }
+        }
     };
 
     try_ffprobe_count("-count_frames", "stream=nb_read_frames")
@@ -205,11 +231,11 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
         match result {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                if let Some(ssim) = parse_ssim_from_output(&stderr) {
-                    if is_valid_ssim_value(ssim) {
-                        info!(method = %name, ssim = %ssim, "SSIM calculated");
-                        return Some(ssim);
-                    }
+                if let Some(ssim) = parse_ssim_from_output(&stderr)
+                    && is_valid_ssim_value(ssim)
+                {
+                    info!(method = %name, ssim = %ssim, "SSIM calculated");
+                    return Some(ssim);
                 }
                 warn!(method = %name, "SSIM method failed, trying next method");
             }
@@ -225,7 +251,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 
 /// Run ffmpeg with the given lavfi filter and parse SSIM Y/U/V/All from stderr.
 fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64, f64, f64, f64)> {
-    let ffmpeg_output = crate::tool_builders::FfmpegBuilder::new()
+    let ffmpeg_output = match crate::tool_builders::FfmpegBuilder::new()
         .input(input)
         .input(output)
         .filter_complex(lavfi)
@@ -233,7 +259,13 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
         .output_pipe()
         .build()
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to start ffmpeg for SSIM-All calculation");
+            return None;
+        }
+    };
 
     // Some filters (ssim) might return non-zero exit code if the streams
     // end at slightly different points for GIFs, even if the result is valid.
@@ -245,10 +277,11 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
             let u = extract_ssim_value(line, "U:");
             let v = extract_ssim_value(line, "V:");
             let all = extract_ssim_value(line, "All:");
-            if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
-                if is_valid_ssim_value(y) && is_valid_ssim_value(all) {
-                    return Some((y, u, v, all));
-                }
+            if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all)
+                && is_valid_ssim_value(y)
+                && is_valid_ssim_value(all)
+            {
+                return Some((y, u, v, all));
             }
         }
     }
@@ -299,19 +332,20 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
 
 fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
     for line in stderr.lines() {
-        if line.contains("SSIM") && line.contains("All:") {
-            if let Some(all_pos) = line.find("All:") {
-                let after_all = &line[all_pos + 4..];
-                let after_all = after_all.trim_start();
-                if after_all.starts_with("inf") {
-                    return Some(1.0);
-                }
-                let end = after_all
-                    .find(|c: char| !c.is_numeric() && c != '.')
-                    .unwrap_or(after_all.len());
-                if end > 0 {
-                    return after_all[..end].parse::<f64>().ok();
-                }
+        if line.contains("SSIM")
+            && line.contains("All:")
+            && let Some(all_pos) = line.find("All:")
+        {
+            let after_all = &line[all_pos + 4..];
+            let after_all = after_all.trim_start();
+            if after_all.starts_with("inf") {
+                return Some(1.0);
+            }
+            let end = after_all
+                .find(|c: char| !c.is_numeric() && c != '.')
+                .unwrap_or(after_all.len());
+            if end > 0 {
+                return after_all[..end].parse::<f64>().ok();
             }
         }
     }
@@ -364,10 +398,6 @@ fn is_valid_ssim_value(ssim: f64) -> bool {
 ///
 /// # Errors
 /// Returns an error if the frame-count ffprobe command fails to spawn.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn check_lossless_integrity(
     input: &Path,
     output: &Path,
@@ -397,10 +427,18 @@ pub fn check_lossless_integrity(
                 // For animated images (GIF/WebP), frame counts often decrease due to
                 // FFmpeg's VFR-to-CFR alignment (merging frames into the same slot).
                 // We pivot to duration validation: if the timeline remains intact, the data is OK.
-                let i_dur =
-                    get_video_duration(input).expect("Required floating point value missing");
-                let o_dur =
-                    get_video_duration(output).expect("Required floating point value missing");
+                let i_dur = get_video_duration(input).ok_or_else(|| {
+                    format!(
+                        "Integrity check failed: cannot determine input duration for {}",
+                        input.display()
+                    )
+                })?;
+                let o_dur = get_video_duration(output).ok_or_else(|| {
+                    format!(
+                        "Integrity check failed: cannot determine output duration for {}",
+                        output.display()
+                    )
+                })?;
 
                 let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
 
@@ -432,7 +470,9 @@ pub fn check_lossless_integrity(
         }
         (None, _) | (_, None) => {
             // Cannot determine frame count — treat as a soft warning, not a hard failure
-            warn!("CRF=0 integrity: could not determine frame count via ffprobe; skipping frame check");
+            warn!(
+                "CRF=0 integrity: could not determine frame count via ffprobe; skipping frame check"
+            );
             // File is non-empty (checked above), so accept
             Ok(true)
         }

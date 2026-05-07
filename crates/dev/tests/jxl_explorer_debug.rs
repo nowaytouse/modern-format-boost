@@ -1,4 +1,4 @@
-use img::lossless_converter::{convert_to_jxl, ConvertOptions};
+use img::lossless_converter::{ConvertOptions, convert_to_jxl};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -67,7 +67,7 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
     fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("failed to create inputs: {e:?}"));
     fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("failed to create outputs: {e:?}"));
     fs::create_dir_all(&mfb_home).unwrap_or_else(|e| panic!("failed to create mfb_home: {e:?}"));
-    std::env::set_var("MFB_HOME_ROOT", &mfb_home);
+    unsafe { std::env::set_var("MFB_HOME_ROOT", &mfb_home) };
     shared_utils::init_ghost_mode().unwrap_or_else(|e| panic!("failed to init ghost mode: {e:?}"));
 
     let mut processed = 0usize;

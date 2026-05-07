@@ -305,16 +305,16 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
     ];
 
     for (date_opt, source) in candidates {
-        if let Some(date_str) = date_opt {
-            if let Some(parsed) = parse_date(date_str, config) {
-                return FileDateInfo {
-                    filename,
-                    path,
-                    best_date: Some(parsed),
-                    date_source: source,
-                    all_dates,
-                };
-            }
+        if let Some(date_str) = date_opt
+            && let Some(parsed) = parse_date(date_str, config)
+        {
+            return FileDateInfo {
+                filename,
+                path,
+                best_date: Some(parsed),
+                date_source: source,
+                all_dates,
+            };
         }
     }
 
@@ -392,13 +392,13 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         }
     }
 
-    if let Some(latest) = &result.latest {
-        if let Some(date) = &latest.best_date {
-            println!();
-            println!("   Latest:   {}", date.format("%Y-%m-%d %H:%M:%S"));
-            println!("   File:     {}", latest.filename);
-            println!("   Source:   {}", latest.date_source.name());
-        }
+    if let Some(latest) = &result.latest
+        && let Some(date) = &latest.best_date
+    {
+        println!();
+        println!("   Latest:   {}", date.format("%Y-%m-%d %H:%M:%S"));
+        println!("   File:     {}", latest.filename);
+        println!("   Source:   {}", latest.date_source.name());
     }
 
     if !result.by_year.is_empty() {

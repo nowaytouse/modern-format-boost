@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::fmt::Write;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use std::vec::Vec;
 use tracing;
@@ -560,13 +560,10 @@ pub fn emit_stderr(line: &str) {
 pub fn flush_log_file() {
     match LOG_FILE_WRITER.lock() {
         Ok(mut guard) => {
-            if let Some(ref mut w) = *guard {
-                if let Err(err) = w.flush() {
-                    report_run_log_io_failure(
-                        "failed to flush run log at shutdown",
-                        &err.to_string(),
-                    );
-                }
+            if let Some(ref mut w) = *guard
+                && let Err(err) = w.flush()
+            {
+                report_run_log_io_failure("failed to flush run log at shutdown", &err.to_string());
             }
         }
         Err(err) => {

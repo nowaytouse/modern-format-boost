@@ -137,10 +137,9 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
             if let Some(rest) = line
                 .strip_prefix("page size of ")
                 .and_then(|s| s.strip_suffix(" bytes"))
+                && let Ok(n) = rest.replace(',', "").parse::<u64>()
             {
-                if let Ok(n) = rest.replace(',', "").parse::<u64>() {
-                    page_size = n;
-                }
+                page_size = n;
             }
         } else if line.starts_with("Pages available:") {
             pages_available = parse_vm_stat_value(line);
@@ -158,7 +157,14 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
 }
 
 fn parse_vm_stat_value(line: &str) -> Option<u64> {
-    line.split(':').nth(1)?.trim().replace('.', "").parse().ok()
+    let val_str = line.split(':').nth(1)?.trim().replace('.', "");
+    match val_str.parse::<u64>() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!(input = %val_str, error = %e, "Failed to parse vm_stat value");
+            None
+        }
+    }
 }
 
 fn get_memory_linux() -> (u64, u64) {
@@ -176,13 +182,29 @@ fn get_memory_linux() -> (u64, u64) {
             mem_available = line
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse::<u64>().ok())
+                .and_then(|s| {
+                    match s.parse::<u64>() {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            warn!(input = %s, error = %e, "Failed to parse MemAvailable from /proc/meminfo");
+                            None
+                        }
+                    }
+                })
                 .map(|kb| kb / 1024);
         } else if line.starts_with("MemTotal:") {
             mem_total = line
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse::<u64>().ok())
+                .and_then(|s| {
+                    match s.parse::<u64>() {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            warn!(input = %s, error = %e, "Failed to parse MemTotal from /proc/meminfo");
+                            None
+                        }
+                    }
+                })
                 .map(|kb| kb / 1024);
         }
     }

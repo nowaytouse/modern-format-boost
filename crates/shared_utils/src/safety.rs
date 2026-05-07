@@ -161,10 +161,11 @@ pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
 
     // Check each component of the path
     for ancestor in canonical.ancestors() {
-        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
-            if name.ends_with(".photoslibrary") || name.ends_with(".photolibrary") {
-                return Err(format!(
-                    "🚨 APPLE PHOTOS LIBRARY DETECTED!\n\
+        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str())
+            && (name.ends_with(".photoslibrary") || name.ends_with(".photolibrary"))
+        {
+            return Err(format!(
+                "🚨 APPLE PHOTOS LIBRARY DETECTED!\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
                      ❌ Target path '{}' is inside an Apple Photos library:\n\
                      ❌ '{}'\n\
@@ -179,10 +180,9 @@ pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
                      💡 2. Run this tool on the exported folder\n\
                      💡 3. Import the converted photos back into Photos if needed\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                    path.display(),
-                    ancestor.display()
-                ));
-            }
+                path.display(),
+                ancestor.display()
+            ));
         }
     }
 
@@ -219,16 +219,20 @@ mod tests {
     #[test]
     fn test_apple_photos_library_detection() {
         // Test .photoslibrary detection
-        assert!(check_apple_photos_library(Path::new(
-            "/Users/test/Pictures/My Library.photoslibrary/Masters/2024/01/01/IMG_1234.jpg"
-        ))
-        .is_err());
+        assert!(
+            check_apple_photos_library(Path::new(
+                "/Users/test/Pictures/My Library.photoslibrary/Masters/2024/01/01/IMG_1234.jpg"
+            ))
+            .is_err()
+        );
 
         // Test .photolibrary detection (older format)
-        assert!(check_apple_photos_library(Path::new(
-            "/Users/test/Pictures/My Library.photolibrary/Masters/2024/01/01/IMG_1234.jpg"
-        ))
-        .is_err());
+        assert!(
+            check_apple_photos_library(Path::new(
+                "/Users/test/Pictures/My Library.photolibrary/Masters/2024/01/01/IMG_1234.jpg"
+            ))
+            .is_err()
+        );
 
         // Test safe paths
         assert!(

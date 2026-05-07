@@ -1,5 +1,8 @@
-//! Shared Utilities for `modern_format_boost` tools
-#![deny(clippy::unwrap_used)]
+#![allow(internal_features)]
+#![feature(core_intrinsics, portable_simd, try_blocks, specialization)]
+#![allow(incomplete_features)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::panic))]
 #![allow(
     clippy::multiple_crate_versions,
@@ -383,21 +386,21 @@ pub mod media_penetration;
 pub mod video_recommender;
 
 pub use blake3;
-pub use database::{lookup_similar_samples, SampleMatch};
+pub use database::{SampleMatch, lookup_similar_samples};
 #[cfg(feature = "jpegxl-ffi")]
 pub use depth_channel::{
-    encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
+    DepthMap, DepthType, encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic,
 };
-pub use image_quality_db::{lookup_image_quality, QualityScore};
+pub use image_quality_db::{QualityScore, lookup_image_quality};
 pub use loop_intent::{
-    apply_apple_compat_modern_animation_policy, assess_loop_intent, assess_loop_intent_from_meta,
-    assess_loop_intent_from_probe, identify_loop_intent, is_lossless_exploration_safe,
-    should_use_gif_fast_path, LoopIntentVerdict, LoopMeta,
+    LoopIntentVerdict, LoopMeta, apply_apple_compat_modern_animation_policy, assess_loop_intent,
+    assess_loop_intent_from_meta, assess_loop_intent_from_probe, identify_loop_intent,
+    is_lossless_exploration_safe, should_use_gif_fast_path,
 };
 
 pub use hdr_synthesis::{
-    convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr,
-    convert_ultrahdr_jpeg_to_jxl_migration, GainMapParams, HdrIntermediateFormat,
+    GainMapParams, HdrIntermediateFormat, convert_heic_with_gainmap_to_jxl_hdr,
+    convert_ultrahdr_jpeg_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_migration,
 };
 
 pub use batch::*;
@@ -405,12 +408,12 @@ pub use codecs::*;
 pub use constants::*;
 pub use conversion::*;
 pub use date_analysis::{
-    analyze_directory, print_analysis, DateAnalysisConfig, DateAnalysisResult, DateSource,
-    FileDateInfo,
+    DateAnalysisConfig, DateAnalysisResult, DateSource, FileDateInfo, analyze_directory,
+    print_analysis,
 };
 pub use ffprobe::{
-    detect_bit_depth, get_duration, get_frame_count, is_ffprobe_available, parse_frame_rate,
-    probe_video, FFprobeError, FFprobeResult,
+    FFprobeError, FFprobeResult, detect_bit_depth, get_duration, get_frame_count,
+    is_ffprobe_available, parse_frame_rate, probe_video,
 };
 pub use metadata::{
     apply_saved_timestamps_to_dst, copy_metadata, preserve_directory_metadata,
@@ -419,20 +422,21 @@ pub use metadata::{
     save_directory_timestamps,
 };
 pub use progress::{
+    BatchProgress, CoarseProgressBar, DetailedCoarseProgressBar, ExploreLogger, ExploreProgress,
+    FixedBottomProgress, GlobalProgressManager, ProgressStats, SmartProgressBar,
     create_compact_progress_bar, create_detailed_progress_bar, create_multi_progress,
     create_progress_bar, create_progress_bar_with_eta, create_spinner, format_bytes,
-    format_duration, BatchProgress, CoarseProgressBar, DetailedCoarseProgressBar, ExploreLogger,
-    ExploreProgress, FixedBottomProgress, GlobalProgressManager, ProgressStats, SmartProgressBar,
+    format_duration,
 };
 pub use quality_matcher::{
+    AnalysisDetails, AppleFallbackKeepRequest, ContentType, EncoderType, MatchMode, MatchedQuality,
+    QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
     calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
     calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
     from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
     is_apple_native_format, is_size_guard_active, log_quality_analysis, parse_source_codec,
     should_keep_apple_fallback_hevc_output, should_skip_image_format, should_skip_video_codec,
-    should_skip_video_codec_apple_compat, AnalysisDetails, AppleFallbackKeepRequest, ContentType,
-    EncoderType, MatchMode, MatchedQuality, QualityAnalysis, QualityBias, SkipDecision,
-    SourceCodec, VideoAnalysisBuilder,
+    should_skip_video_codec_apple_compat,
 };
 pub use report::*;
 pub use safety::*;
@@ -440,17 +444,20 @@ pub use tools::*;
 pub use video::*;
 
 pub use image_quality_detector::{
-    analyze_image_quality, analyze_image_quality_from_path, log_media_info_for_image_quality,
-    ImageContentType, ImageQualityAnalysis,
+    ImageContentType, ImageQualityAnalysis, analyze_image_quality, analyze_image_quality_from_path,
+    log_media_info_for_image_quality,
 };
 
 pub use video_quality_detector::{
+    ChromaSubsampling, CompressionLevel, VideoCodecType, VideoContentType, VideoQualityAnalysis,
     analyze_video_quality, analyze_video_quality_from_detection, log_media_info_for_quality,
-    to_quality_analysis as video_to_quality_analysis, ChromaSubsampling, CompressionLevel,
-    VideoCodecType, VideoContentType, VideoQualityAnalysis,
+    to_quality_analysis as video_to_quality_analysis,
 };
 
 pub use video_explorer::{
+    CompressionVerifyStrategy, ExploreConfig, ExploreMode, ExploreResult, IterationMetrics,
+    METADATA_MARGIN_MAX, METADATA_MARGIN_MIN, METADATA_MARGIN_PERCENT, QualityThresholds,
+    SMALL_FILE_THRESHOLD, SsimSource, TransparencyReport, VideoEncoder, VideoExplorer,
     calculate_metadata_margin, can_compress_with_metadata, compression_target_size,
     detect_metadata_size, explore_av1, explore_av1_compress_only,
     explore_av1_compress_with_quality, explore_av1_quality_match, explore_av1_size_only,
@@ -459,10 +466,7 @@ pub use video_explorer::{
     explore_precise_quality_match, explore_precise_quality_match_with_compression,
     explore_quality_match, explore_size_only, precision, precision::SearchPhase,
     precision::ThreePhaseSearch, pure_video_size, verify_compression_precise,
-    verify_compression_simple, CompressionVerifyStrategy, ExploreConfig, ExploreMode,
-    ExploreResult, IterationMetrics, QualityThresholds, SsimSource, TransparencyReport,
-    VideoEncoder, VideoExplorer, METADATA_MARGIN_MAX, METADATA_MARGIN_MIN, METADATA_MARGIN_PERCENT,
-    SMALL_FILE_THRESHOLD,
+    verify_compression_simple,
 };
 
 pub use types::EncoderPreset;
@@ -473,43 +477,43 @@ pub use video_explorer::{
     explore_quality_match_gpu, explore_size_only_gpu,
 };
 
-pub use checkpoint::{safe_delete_original, verify_output_integrity, CheckpointManager};
+pub use checkpoint::{CheckpointManager, safe_delete_original, verify_output_integrity};
 
 pub use quality_verifier_enhanced::{
-    verify_after_encode, verify_output_file, EnhancedVerifyResult, VerifyOptions,
-    DEFAULT_MIN_FILE_SIZE,
+    DEFAULT_MIN_FILE_SIZE, EnhancedVerifyResult, VerifyOptions, verify_after_encode,
+    verify_output_file,
 };
 
 pub use xmp_merger::{
-    merge_xmp_for_copied_file, MergeResult, MergeSummary, XmpFile, XmpMerger, XmpMergerConfig,
+    MergeResult, MergeSummary, XmpFile, XmpMerger, XmpMergerConfig, merge_xmp_for_copied_file,
 };
 
 pub use flag_validator::{
-    print_flag_help, validate_flags, validate_flags_result, validate_flags_result_with_ultimate,
-    validate_flags_with_ultimate, FlagMode, FlagRequest, FlagValidation,
+    FlagMode, FlagRequest, FlagValidation, print_flag_help, validate_flags, validate_flags_result,
+    validate_flags_result_with_ultimate, validate_flags_with_ultimate,
 };
 
 pub use gpu_accel::{
+    CrfMapping, GpuAccel, GpuCoarseConfig, GpuCoarseResult, GpuEncoder, GpuType,
     estimate_cpu_search_center, get_cpu_search_range_from_gpu, gpu_boundary_to_cpu_range,
-    gpu_coarse_search, gpu_coarse_search_with_log, CrfMapping, GpuAccel, GpuCoarseConfig,
-    GpuCoarseResult, GpuEncoder, GpuType,
+    gpu_coarse_search, gpu_coarse_search_with_log,
 };
 
 pub use video_explorer::{
-    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, is_gif_magic,
-    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation,
+    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation, explore_av1_with_gpu,
+    explore_hevc_with_gpu, explore_with_gpu_coarse_search, is_gif_magic,
 };
 
 pub use modern_ui::{
-    colors, format_size, format_size_change, format_size_diff, print_error, print_info,
-    print_result_box, print_stage, print_substage, print_success, print_warning, progress_style,
-    render_colored_progress, render_progress_bar, spinner_dots, spinner_frame, symbols,
-    ExploreProgressState, ProgressStyle,
+    ExploreProgressState, ProgressStyle, colors, format_size, format_size_change, format_size_diff,
+    print_error, print_info, print_result_box, print_stage, print_substage, print_success,
+    print_warning, progress_style, render_colored_progress, render_progress_bar, spinner_dots,
+    spinner_frame, symbols,
 };
 
 pub use lru_cache::{CacheEntry, LruCache, SerializableCache};
 
-pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
+pub use error_handler::{ErrorAction, ErrorCategory, handle_error};
 
 // Re-export unified error types
 pub use unified_error::{
@@ -519,16 +523,16 @@ pub use unified_error::{
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 
 pub use explore_strategy::{
-    create_strategy, CompressOnlyStrategy, CompressWithQualityStrategy, ExploreContext,
-    ExploreStrategy, PreciseQualityMatchStrategy, PreciseQualityMatchWithCompressionStrategy,
-    ProgressConfig, QualityMatchStrategy, SizeOnlyStrategy, SsimResult,
+    CompressOnlyStrategy, CompressWithQualityStrategy, ExploreContext, ExploreStrategy,
+    PreciseQualityMatchStrategy, PreciseQualityMatchWithCompressionStrategy, ProgressConfig,
+    QualityMatchStrategy, SizeOnlyStrategy, SsimResult, create_strategy,
 };
 
 pub use ffmpeg_builder::{
     FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
 };
 pub use ffmpeg_process::{
-    format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,
+    FfmpegProcess, FfmpegProgressParser, format_ffmpeg_error, is_recoverable_error,
 };
 pub use image_builders::{
     AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder,
@@ -537,13 +541,13 @@ pub use image_builders::{
 pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 
 pub use float_compare::{
+    CRF_EPSILON, F32_EPSILON, F64_EPSILON, PSNR_EPSILON, SSIM_EPSILON as FLOAT_SSIM_EPSILON,
     approx_eq_crf, approx_eq_f32, approx_eq_f64, approx_eq_psnr, approx_eq_ssim, approx_ge_f64,
     approx_le_f64, approx_zero_f32, approx_zero_f64, crf_in_range, ssim_below_threshold,
-    ssim_meets_threshold, CRF_EPSILON, F32_EPSILON, F64_EPSILON, PSNR_EPSILON,
-    SSIM_EPSILON as FLOAT_SSIM_EPSILON,
+    ssim_meets_threshold,
 };
 
-pub use path_validator::{validate_path, validate_paths, PathValidationError};
+pub use path_validator::{PathValidationError, validate_path, validate_paths};
 
 pub use crf_constants::{
     AV1_CRF_DEFAULT, AV1_CRF_MAX, AV1_CRF_MIN, AV1_CRF_PRACTICAL_MAX, AV1_CRF_VISUALLY_LOSSLESS,
@@ -553,7 +557,7 @@ pub use crf_constants::{
     VP9_CRF_DEFAULT, VP9_CRF_MAX, VP9_CRF_MIN, X264_CRF_DEFAULT, X264_CRF_MAX, X264_CRF_MIN,
 };
 
-pub use ffprobe_json::{extract_color_info as ffprobe_extract_color_info, ColorInfo};
+pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};
 
 pub use hdr_decode::{decode_hdr_image_to_png16, needs_hdr_decode};
 
@@ -564,26 +568,26 @@ pub use hdr_utils::{
 };
 
 pub use stream_size::{
-    extract_stream_sizes, get_container_overhead_percent, ExtractionMethod, StreamSizeInfo,
-    DEFAULT_OVERHEAD_PERCENT, MKV_OVERHEAD_PERCENT, MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT,
+    DEFAULT_OVERHEAD_PERCENT, ExtractionMethod, MKV_OVERHEAD_PERCENT, MOV_OVERHEAD_PERCENT,
+    MP4_OVERHEAD_PERCENT, StreamSizeInfo, extract_stream_sizes, get_container_overhead_percent,
 };
 
 pub use pure_media_verifier::{
-    is_video_compressed, verify_pure_media_compression, video_compression_ratio,
-    PureMediaVerifyResult,
+    PureMediaVerifyResult, is_video_compressed, verify_pure_media_compression,
+    video_compression_ratio,
 };
 
 pub use types::{
     Av1Encoder, Crf, CrfError, EncoderBounds, FileSize, HevcEncoder, IterationError,
-    IterationGuard, Ssim, SsimError, Vp9Encoder, X264Encoder, SSIM_EPSILON,
+    IterationGuard, SSIM_EPSILON, Ssim, SsimError, Vp9Encoder, X264Encoder,
 };
 
 pub use app_error::AppError;
 
 pub use file_copier::{
-    copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
-    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
-    SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
+    CopyResult, FileStats, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
+    SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, VerifyResult,
+    copy_unsupported_files, count_files as count_all_files, verify_output_completeness,
 };
 pub use smart_file_copier::{
     check_extension_mismatch_readonly, copy_on_skip_or_fail, fix_extension_if_mismatch,
@@ -594,8 +598,8 @@ pub use live_photo::is_live_photo;
 pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, hash_path_to_hex, init_ghost_mode};
 
 pub use file_sorter::{
-    sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,
-    SortStrategy,
+    FileInfo, FileSorter, SortStrategy, sort_by_name, sort_by_size_ascending,
+    sort_by_size_descending,
 };
 
 pub use msssim_sampling::{SamplingConfig, SamplingStrategy};
@@ -605,18 +609,18 @@ pub use msssim_progress::MsssimProgressMonitor;
 pub use msssim_parallel::{MsssimResult, ParallelMsssimCalculator};
 
 pub use logging::{
-    flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start, LogConfig,
+    LogConfig, flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start,
 };
 
 // Enhanced logging with 24-bit color support
 pub mod enhanced_logging;
 pub use enhanced_logging::{
-    init_enhanced_logging, LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger,
+    LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger, init_enhanced_logging,
 };
 
 // Modern terminal logging with color safety
 pub mod terminal_logging;
-pub use terminal_logging::{init_terminal_logger, terminal_logger, ColorGuard, TerminalLogger};
+pub use terminal_logging::{ColorGuard, TerminalLogger, init_terminal_logger, terminal_logger};
 
 pub use common_utils::{
     compute_relative_path, copy_file_with_context, ensure_dir_exists, ensure_parent_dir_exists,
@@ -627,9 +631,9 @@ pub use common_utils::{
 };
 
 pub use thread_manager::{
-    calculate_optimal_threads, disable_multi_instance_mode, enable_multi_instance_mode,
-    get_ffmpeg_threads, get_optimal_threads, get_rsync_path, get_rsync_version, is_multi_instance,
-    memory_cap_hint, ThreadConfig,
+    ThreadConfig, calculate_optimal_threads, disable_multi_instance_mode,
+    enable_multi_instance_mode, get_ffmpeg_threads, get_optimal_threads, get_rsync_path,
+    get_rsync_version, is_multi_instance, memory_cap_hint,
 };
 
-pub use version::{cache_algorithm_version, VersionInfo, CACHE_SCHEMA_VERSION, PROGRAM_VERSION};
+pub use version::{CACHE_SCHEMA_VERSION, PROGRAM_VERSION, VersionInfo, cache_algorithm_version};

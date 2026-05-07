@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use shared_utils::{
-    loop_intent::{evaluate_loop_tree, LoopMeta},
+    loop_intent::{LoopMeta, evaluate_loop_tree},
     media_meta_utils::scan_gif_headers,
     quality_matcher::SourceCodec,
 };
@@ -94,7 +94,7 @@ mod test_utils {
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // flags (animation)
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // width
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // height
-                                                           // ANIM chunk (infinite loop)
+        // ANIM chunk (infinite loop)
         webp.extend_from_slice(b"ANIM");
         webp.extend_from_slice(&[0x06, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // background color
@@ -358,9 +358,7 @@ fn test_memory_pressure_blocking() {
         match handle.join() {
             Ok((thread_id, result, elapsed)) => {
                 completed += 1;
-                println!(
-                    "   ✅ Thread {thread_id}: {result:?} (Time: {elapsed:?})"
-                );
+                println!("   ✅ Thread {thread_id}: {result:?} (Time: {elapsed:?})");
             }
             Err(_) => {
                 println!("   ❌ Thread panicked");
@@ -410,16 +408,12 @@ fn test_concurrent_access_blocking() -> Result<()> {
             success_count += 1;
         }
         total_time += elapsed;
-        println!(
-            "   ✅ Thread {thread_id}: Success={success}, Time={elapsed:?}"
-        );
+        println!("   ✅ Thread {thread_id}: Success={success}, Time={elapsed:?}");
     }
 
     assert!(success_count >= 15, "At least 15 threads should succeed");
     let avg_time = total_time / 20;
-    println!(
-        "   📊 Success rate: {success_count}/20, Avg time: {avg_time:?}"
-    );
+    println!("   📊 Success rate: {success_count}/20, Avg time: {avg_time:?}");
 
     println!("✅ Concurrent access blocking test passed");
     Ok(())
@@ -478,9 +472,7 @@ fn test_extreme_case_blocking() -> Result<()> {
         success_count >= 40,
         "At least 40 corrupted files should be identified successfully"
     );
-    println!(
-        "   ✅ Corrupted file batch processing: {success_count}/50 success"
-    );
+    println!("   ✅ Corrupted file batch processing: {success_count}/50 success");
 
     println!("✅ Extreme case blocking test passed");
     Ok(())

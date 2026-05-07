@@ -15,7 +15,7 @@
 //! - Higher SSIM quality (≥0.98 vs `VideoToolbox` ~0.95)
 //! - Strict CPU encoding path (no GPU fallback)
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -355,7 +355,9 @@ fn encode_to_hevc(
                 "FFmpeg decode failed"
             );
             if is_broken_pipe {
-                warn!("Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream");
+                warn!(
+                    "Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream"
+                );
                 if !x265_stderr.is_empty() {
                     eprintln!("x265 stderr (often shows why pipe closed):\n{x265_stderr}");
                 }
@@ -588,9 +590,10 @@ mod tests {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect();
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["-pix_fmt", "yuv420p10le"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-pix_fmt", "yuv420p10le"])
+        );
         assert!(args.windows(2).any(|pair| pair == ["-strict", "-1"]));
     }
 

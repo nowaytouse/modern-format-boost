@@ -1,5 +1,5 @@
 use insta::assert_debug_snapshot;
-use shared_utils::loop_intent::{assess_loop_intent_from_meta, LoopMeta};
+use shared_utils::loop_intent::{LoopMeta, assess_loop_intent_from_meta};
 
 fn main() {
     println!("Running classification snapshot tests...");

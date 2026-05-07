@@ -1,7 +1,7 @@
 use crate::ffprobe_json::ColorInfo;
-use crate::image_detection::{detect_image, PrecisionMetadata};
-use crate::image_heic_analysis::{analyze_heic_file_v4, is_heic_file, HeicAnalysis};
-use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
+use crate::image_detection::{PrecisionMetadata, detect_image};
+use crate::image_heic_analysis::{HeicAnalysis, analyze_heic_file_v4, is_heic_file};
+use crate::image_jpeg_analysis::{JpegQualityAnalysis, analyze_jpeg_file};
 use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
 use crate::types::{ProcessHistory, VisualPerception};
@@ -212,10 +212,11 @@ pub fn analyze_image_with_cache(
         .map(|e| e.to_string_lossy().to_lowercase())
         .is_some_and(|e| e == "jpg" || e == "jpeg");
 
-    if is_jpeg_hint && cache.is_some() {
-        if let Ok(analysis) = analyze_image_internal(path) {
-            return Ok(analysis);
-        }
+    if is_jpeg_hint
+        && cache.is_some()
+        && let Ok(analysis) = analyze_image_internal(path)
+    {
+        return Ok(analysis);
     }
 
     if let Some(cache) = cache {
@@ -245,12 +246,11 @@ pub fn analyze_image_with_cache(
 
     let analysis = analyze_image_internal(path)?;
 
-    if let Some(cache) = cache {
-        if let Err(e) = cache.store_analysis(path, &analysis) {
-            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                log_eprintln!("⚠️ [Cache] Store error: {}", e);
-            }
-        }
+    if let Some(cache) = cache
+        && let Err(e) = cache.store_analysis(path, &analysis)
+        && std::env::var("IMGQUALITY_DEBUG").is_ok()
+    {
+        log_eprintln!("⚠️ [Cache] Store error: {}", e);
     }
 
     debug!(
@@ -378,15 +378,15 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
             real_extension_suggestion = suggested.to_string();
 
             log_eprintln!(
-                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format",
-                 path.display(),
-                 ext_str,
-                 format_str
-             );
+                "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                path.display(),
+                ext_str,
+                format_str
+            );
 
             apple_warning = format!(
-                 "⚠️ Extension mismatch (.{ext_str} vs {format_str}). This will prevent Apple Photos import. Run repair_apple_photos.sh to fix."
-             );
+                "⚠️ Extension mismatch (.{ext_str} vs {format_str}). This will prevent Apple Photos import. Run repair_apple_photos.sh to fix."
+            );
         }
     }
 
@@ -716,14 +716,14 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
 
     let mut metadata = extract_metadata(path);
 
-    if let Some(jpeg) = jpeg_analysis.as_ref() {
-        if !jpeg.is_complete {
-            metadata.insert("is_truncated".to_string(), "true".to_string());
-            log_eprintln!(
-                "⚠️  [Integrity] JPEG file appears truncated or incomplete (missing EOI): {}",
-                path.display()
-            );
-        }
+    if let Some(jpeg) = jpeg_analysis.as_ref()
+        && !jpeg.is_complete
+    {
+        metadata.insert("is_truncated".to_string(), "true".to_string());
+        log_eprintln!(
+            "⚠️  [Integrity] JPEG file appears truncated or incomplete (missing EOI): {}",
+            path.display()
+        );
     }
     let jxl_indicator =
         generate_jxl_indicator(ImageFormat::Jpeg, false, jpeg_analysis.as_ref(), path);
@@ -1041,7 +1041,10 @@ fn check_png_animation(path: &Path) -> Result<bool> {
     if (apng_actl_found || apng_fctl_detected) && !structural_is_animated {
         // [Disagreement] Deep Internal Validation
         if deep_research_png_animation(&bytes) {
-            log_eprintln!("🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}", path.display());
+            log_eprintln!(
+                "🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}",
+                path.display()
+            );
             return Ok(true);
         }
     }
@@ -1070,37 +1073,45 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
     if gce_hints > structural_count {
         // [Disagreement] Internal Deep Research
         if deep_research_gif_animation(&bytes, gce_hints) {
-            log_eprintln!("🎞️  [Deep Research: GIF] Structural scan saw {} frames, but internal byte-research confirmed {} valid GCE markers: {}", structural_count, gce_hints, path.display());
+            log_eprintln!(
+                "🎞️  [Deep Research: GIF] Structural scan saw {} frames, but internal byte-research confirmed {} valid GCE markers: {}",
+                structural_count,
+                gce_hints,
+                path.display()
+            );
             return Ok(true);
         }
 
         // Final Tie-breaker: if byte-scan and structural-scan disagree on frame count,
         // check external duration to settle the dispute.
-        if let Some(duration) = try_ffprobe_json(path) {
-            if duration > 0.0 {
-                log_eprintln!("🎞️  [Joint Audit: GIF] Structural scan missed animation ({} frames), but GCE hints ({}) and duration confirm it: {}", structural_count, gce_hints, path.display());
-                return Ok(true);
-            }
+        if let Some(duration) = try_ffprobe_json(path)
+            && duration > 0.0
+        {
+            log_eprintln!(
+                "🎞️  [Joint Audit: GIF] Structural scan missed animation ({} frames), but GCE hints ({}) and duration confirm it: {}",
+                structural_count,
+                gce_hints,
+                path.display()
+            );
+            return Ok(true);
         }
     }
 
     // Stage 3: Penetrating decode fallback (ground-truth frame count)
     // Some edge GIFs can bypass structural/GCE heuristics; use decode-based verification
     // only when metadata is suspiciously static to keep cost bounded.
-    if structural_count <= 1 {
-        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+    if structural_count <= 1
+        && let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(path, u64::from(structural_count))
-        {
-            if real_count > 1 {
-                log_eprintln!(
-                    "🎞️  [Penetration: GIF] Structural scan reported {} frame, decode confirmed {} frames: {}",
-                    structural_count,
-                    real_count,
-                    path.display()
-                );
-                return Ok(true);
-            }
-        }
+        && real_count > 1
+    {
+        log_eprintln!(
+            "🎞️  [Penetration: GIF] Structural scan reported {} frame, decode confirmed {} frames: {}",
+            structural_count,
+            real_count,
+            path.display()
+        );
+        return Ok(true);
     }
 
     Ok(structural_count > 1)
@@ -1133,16 +1144,23 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
         }
 
         if confirmed_frames > 1_i32 {
-            log_eprintln!("🎞️  [Deep Research: WebP] Structural scan missed frames, but internal byte-research confirmed {} ANMF chunks: {}", confirmed_frames, path.display());
+            log_eprintln!(
+                "🎞️  [Deep Research: WebP] Structural scan missed frames, but internal byte-research confirmed {} ANMF chunks: {}",
+                confirmed_frames,
+                path.display()
+            );
             return Ok(true);
         }
 
         // Final fallback tie-breaker
-        if let Some(duration) = get_animation_duration(path) {
-            if duration > 0.01 {
-                log_eprintln!("🎞️  [Joint Audit: WebP] Byte markers found but structural walk failed; duration confirmed animation: {}", path.display());
-                return Ok(true);
-            }
+        if let Some(duration) = get_animation_duration(path)
+            && duration > 0.01
+        {
+            log_eprintln!(
+                "🎞️  [Joint Audit: WebP] Byte markers found but structural walk failed; duration confirmed animation: {}",
+                path.display()
+            );
+            return Ok(true);
         }
     }
 
@@ -1215,28 +1233,26 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         .map(|e| e.to_string_lossy().to_lowercase())
         .as_deref()
         == Some("webp")
+        && let Ok(data) = std::fs::read(path)
+        && let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data)
     {
-        if let Ok(data) = std::fs::read(path) {
-            if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
-                final_duration = Some(secs);
-            }
-        }
+        final_duration = Some(secs);
     }
 
     if let Some(d) = final_duration {
         // Enforce the single-frame static image check for ALL modern formats (WebP, AVIF, HEIC, etc.)
         // If the duration is suspiciously short (e.g., < 0.25s) but not already 0, we run an exact packet count.
         // A duration of 0.04s is exactly 1 frame at 25fps.
-        if d > 0.0 && d < 0.25 {
-            if let Some(frame_count) = try_get_frame_count(path) {
-                if frame_count <= 1 {
-                    log_eprintln!(
-                        "🔍 Detected static media (1 frame despite non-zero duration): {}",
-                        path.display()
-                    );
-                    return Some(0.0);
-                }
-            }
+        if d > 0.0
+            && d < 0.25
+            && let Some(frame_count) = try_get_frame_count(path)
+            && frame_count <= 1
+        {
+            log_eprintln!(
+                "🔍 Detected static media (1 frame despite non-zero duration): {}",
+                path.display()
+            );
+            return Some(0.0);
         }
         return Some(d);
     }
@@ -1247,16 +1263,15 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         .map(|e| e.to_string_lossy().to_lowercase())
         .as_deref()
         == Some("gif")
+        && let Some(frame_count) = try_get_frame_count(path)
     {
-        if let Some(frame_count) = try_get_frame_count(path) {
-            if frame_count <= 1 {
-                log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
-                return Some(0.0);
-            }
-            // For a valid animated GIF without explicit duration metadata,
-            // we fallback to 10fps (0.1s per frame) as a rough estimate
-            return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1);
+        if frame_count <= 1 {
+            log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+            return Some(0.0);
         }
+        // For a valid animated GIF without explicit duration metadata,
+        // we fallback to 10fps (0.1s per frame) as a rough estimate
+        return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1);
     }
 
     None
@@ -1420,18 +1435,18 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
             let after_quote = &after_key[quote_start + 1..];
             if let Some(quote_end) = after_quote.find('"') {
                 let duration_str = &after_quote[..quote_end];
-                return duration_str
-                    .parse::<f32>()
-                    .map_err(|e| {
+                return match duration_str.parse::<f32>() {
+                    Ok(v) => Some(v),
+                    Err(e) => {
                         log_eprintln!(
                             "⚠️  Failed to parse ffprobe JSON duration '{}' for {}: {}",
                             duration_str,
                             path.display(),
                             e
                         );
-                        e
-                    })
-                    .ok();
+                        None
+                    }
+                };
             }
         }
     }
@@ -1467,18 +1482,18 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
     }
 
     let duration_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    duration_str
-        .parse::<f32>()
-        .map_err(|e| {
+    match duration_str.parse::<f32>() {
+        Ok(v) => Some(v),
+        Err(e) => {
             log_eprintln!(
                 "⚠️  Failed to parse ffprobe default duration '{}' for {}: {}",
                 duration_str,
                 path.display(),
                 e
             );
-            e
-        })
-        .ok()
+            None
+        }
+    }
 }
 
 /// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify -format "%T"`.
@@ -1524,9 +1539,23 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
     let mut frame_count = 0u32;
 
     for line in stdout.lines() {
-        if let Ok(delay_cs) = line.trim().parse::<u32>() {
-            total_cs += delay_cs;
-            frame_count += 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.parse::<u32>() {
+            Ok(delay_cs) => {
+                total_cs += delay_cs;
+                frame_count += 1;
+            }
+            Err(e) => {
+                log_eprintln!(
+                    "⚠️  [Duration Fallback] Failed to parse delay '{}' for {}: {}",
+                    trimmed,
+                    path.display(),
+                    e
+                );
+            }
         }
     }
 
@@ -1608,7 +1637,7 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
 /// Uses `image_detection::detect_compression` for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
 fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
     use crate::image_detection::{
-        detect_compression, detect_format_from_bytes, CompressionType, DetectedFormat,
+        CompressionType, DetectedFormat, detect_compression, detect_format_from_bytes,
     };
 
     match format {
@@ -1690,7 +1719,7 @@ fn is_jxl_file(path: &Path) -> bool {
 }
 
 fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
-    use crate::image_detection::{detect_animation, DetectedFormat};
+    use crate::image_detection::{DetectedFormat, detect_animation};
 
     let (width, height, has_alpha, color_depth) =
         if crate::tool_builders::JxlinfoBuilder::check_available() {
@@ -1789,7 +1818,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
 )]
 fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{
-        detect_animation, detect_compression, CompressionType, DetectedFormat,
+        CompressionType, DetectedFormat, detect_animation, detect_compression,
     };
 
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
@@ -1914,14 +1943,10 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             if let (Some(w_part), Some(h_part)) = (parts.first(), parts.get(1)) {
                 let w_str: String = w_part.chars().filter(char::is_ascii_digit).collect();
                 let h_str: String = h_part.chars().filter(char::is_ascii_digit).collect();
-                width = w_str.parse().unwrap_or_else(|_| {
-                    tracing::warn!("ImageMagick width parsing failed for '{}'", w_str);
-                    0
-                });
-                height = h_str.parse().unwrap_or_else(|_| {
-                    tracing::warn!("ImageMagick height parsing failed for '{}'", h_str);
-                    0
-                });
+                width =
+                    crate::numeric_cast::parse_strict::<u32>(&w_str, "jxlinfo_width").unwrap_or(0);
+                height =
+                    crate::numeric_cast::parse_strict::<u32>(&h_str, "jxlinfo_height").unwrap_or(0);
             }
         }
 

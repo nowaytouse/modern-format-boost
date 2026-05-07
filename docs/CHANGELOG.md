@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
+
+- **Comprehensive Nightly Audit & Lint Resolution**:
+  - **Zero-Warning Workspace (Pass 2)**: Achieved a perfectly clean `cargo clippy --all-targets -- -D warnings` build on the latest nightly toolchain across all workspace crates.
+  - **Idiomatic Import Relocation**: Resolved numerous `items_after_statements` lints by relocating SIMD (`f64x8`) and branching intrinsics (`likely`/`unlikely`) to the top of function scopes in `loop_intent.rs` and `image_formats.rs`.
+  - **Feature Flag Cleanup**: Removed the redundant `let_chains` nightly feature from `shared_utils/src/lib.rs` as it has been stabilized in Rust 1.88.0.
+  - **Selective Test Lint Relaxation**: Implemented a `cfg_attr`-driven policy to allow `clippy::unwrap_used` in test environments while strictly denying it in production code, ensuring build stability without compromising safety.
+
+- **Environment & Memory Safety Hardening**:
+  - **Unsafe Environment Modification**: Wrapped all `std::env::set_var` calls in `unsafe` blocks across `vid`, `img`, and the `dev` test suite, complying with the latest nightly safety requirements for environment variable modification in multi-threaded programs.
+  - **Pattern Matching Modernization**: Resolved `explicit_ref_binding` warnings in `conversion_api.rs` by removing redundant `ref` keywords, aligning with modern Rust binding modes.
+
+- **Test Suite Reliability & Isolation**:
+  - **Flaky Test Remediation**: Fixed a critical failure in `media_flow_tests.rs` by migrating from static shared temporary directories to isolated `tempfile::tempdir()` guards. This eliminates race conditions and permission issues during high-concurrency performance testing.
+  - **Cleanup Automation**: Removed manual `fs::remove_dir_all` calls in favor of automatic RAII-based cleanup provided by `tempfile`, reducing boilerplate and improving test robustness.
+
+- **Precision Performance Maintenance**:
+  - **Specialization Preservation**: Explicitly allowed `incomplete_features` in `shared_utils` to maintain the high-performance `specialization`-based numeric casting architecture while meeting strict Clippy audit requirements.
+
+
 ## 🛡️ Ultra-Strict Clippy Compliance & App Shell Hardening (2026-05-06)
 
 - **Strict Clippy & Lint Resolution**:

@@ -5,7 +5,7 @@
 //!
 //! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate duplication.
 
-use crate::ffprobe::{probe_video, FFprobeError};
+use crate::ffprobe::{FFprobeError, probe_video};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -302,10 +302,10 @@ pub fn determine_compression_type(
     }
 
     // HEVC/AV1 Lossless often uses specific profiles or encoder params
-    if let Some(ref settings) = precision.original_encoder {
-        if settings.contains("lossless=1") || settings.contains("qp=0") {
-            return CompressionType::Lossless;
-        }
+    if let Some(ref settings) = precision.original_encoder
+        && (settings.contains("lossless=1") || settings.contains("qp=0"))
+    {
+        return CompressionType::Lossless;
     }
 
     // Use original CRF if available
@@ -433,14 +433,14 @@ pub fn detect_video_with_cache(
 
     let result = detect_video(path)?;
 
-    if let Some(cache) = cache {
-        if let Err(err) = cache.store_video_analysis(path, &result) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %err,
-                "Failed to store video analysis in cache"
-            );
-        }
+    if let Some(cache) = cache
+        && let Err(err) = cache.store_video_analysis(path, &result)
+    {
+        tracing::warn!(
+            path = %path.display(),
+            error = %err,
+            "Failed to store video analysis in cache"
+        );
     }
 
     Ok(result)
@@ -564,52 +564,45 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // ── Penetrating Content Verification ──
     // Verify critical metadata claims by decoding actual content
-    if result.has_audio {
-        if let crate::media_penetration::PenetrationResult::Verified(is_silent) =
+    if result.has_audio
+        && let crate::media_penetration::PenetrationResult::Verified(is_silent) =
             crate::media_penetration::detect_audio_silence(path)
-        {
-            if is_silent {
-                crate::progress_mode::emit_stderr(&format!(
-                    "🔊 [{}] Audio penetration: SILENT track detected, treating as no audio",
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-                ));
-                result.has_audio = false;
-            }
-        }
+        && is_silent
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "🔊 [{}] Audio penetration: SILENT track detected, treating as no audio",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+        ));
+        result.has_audio = false;
     }
 
     let has_transparency = result.pix_fmt.contains('a')
         || result.pix_fmt.contains("yuva")
         || result.pix_fmt.contains("gbrap");
-    if has_transparency {
-        if let crate::media_penetration::PenetrationResult::Verified(is_real) =
+    if has_transparency
+        && let crate::media_penetration::PenetrationResult::Verified(is_real) =
             crate::media_penetration::detect_real_transparency(path, Some(result.duration_secs))
-        {
-            if !is_real {
-                crate::progress_mode::emit_stderr(&format!(
-                    "⚠️  [{}] Transparency penetration: FAKE alpha channel (unused)",
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-                ));
-            }
-        }
+        && !is_real
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚠️  [{}] Transparency penetration: FAKE alpha channel (unused)",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+        ));
     }
 
-    if let Some(fc_val) = result.frame_count {
-        if fc_val <= 1 || fc_val > 50000 {
-            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-                crate::media_penetration::detect_real_frame_count(path, fc_val)
-            {
-                if real_count != fc_val {
-                    crate::progress_mode::emit_stderr(&format!(
-                        "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
-                        path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                        fc_val,
-                        real_count
-                    ));
-                    result.frame_count = Some(real_count);
-                }
-            }
-        }
+    if let Some(fc_val) = result.frame_count
+        && (fc_val <= 1 || fc_val > 50000)
+        && let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, fc_val)
+        && real_count != fc_val
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+            fc_val,
+            real_count
+        ));
+        result.frame_count = Some(real_count);
     }
 
     // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
@@ -618,12 +611,10 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         && result.duration_secs <= 18.0_f64
         && result.format != "gif"
         && result.format != "webp"
-    {
-        if let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =
+        && let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =
             crate::media_penetration::detect_interlacing(path)
-        {
-            result.is_interlaced = Some(is_interlaced);
-        }
+    {
+        result.is_interlaced = Some(is_interlaced);
     }
 
     Ok(result)

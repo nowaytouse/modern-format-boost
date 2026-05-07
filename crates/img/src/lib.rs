@@ -19,7 +19,7 @@ pub mod recommender;
 pub mod conversion_api;
 pub mod detection_api;
 
-pub use analyzer::{analyze_image, ImageAnalysis};
+pub use analyzer::{ImageAnalysis, analyze_image};
 pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
@@ -28,14 +28,14 @@ pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,
 };
-pub use recommender::{get_recommendation, UpgradeRecommendation};
+pub use recommender::{UpgradeRecommendation, get_recommendation};
 
 pub use conversion_api::{
-    determine_strategy, smart_convert, ConfigFlags, ConversionConfig, ConversionOutput,
-    TargetFormat,
+    ConfigFlags, ConversionConfig, ConversionOutput, TargetFormat, determine_strategy,
+    smart_convert,
 };
 pub use detection_api::{
-    detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,
+    CompressionType, DetectedFormat, DetectionResult, ImageType, detect_image,
 };
 
 pub use shared_utils::img_errors::{ImgQualityError, Result};

@@ -87,7 +87,15 @@ fn print_file_stats(result: &BatchResult) {
     };
     println!(
         "{}│{}  {}📈 Success Rate:{}        {}{:>9.1}%{}                                         {}│{}",
-        MFB_BLUE, RESET, BRIGHT_CYAN, RESET, rate_color, result.success_rate(), RESET, MFB_BLUE, RESET
+        MFB_BLUE,
+        RESET,
+        BRIGHT_CYAN,
+        RESET,
+        rate_color,
+        result.success_rate(),
+        RESET,
+        MFB_BLUE,
+        RESET
     );
     println!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
@@ -148,7 +156,9 @@ fn print_time_info(result: &BatchResult, duration: Duration) {
             "{MFB_BLUE}│{RESET}  ⏱️  Avg Time/File:      {DIM}{avg_time:>9.2}s{RESET}                                         {MFB_BLUE}│{RESET}"
         );
     } else {
-        println!("{MFB_BLUE}│{RESET}                                                                            {MFB_BLUE}│{RESET}");
+        println!(
+            "{MFB_BLUE}│{RESET}                                                                            {MFB_BLUE}│{RESET}"
+        );
     }
     println!(
         "{MFB_BLUE}╰────────────────────────────────────────────────────────────────────────────╯{RESET}"

@@ -14,8 +14,8 @@ use console::{measure_text_width, truncate_str};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{self, Write};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 use tracing::warn;
@@ -43,12 +43,11 @@ fn progress_line_enabled() -> bool {
 }
 
 fn terminal_columns() -> usize {
-    if let Ok(cols) = std::env::var("COLUMNS") {
-        if let Ok(parsed) = cols.parse::<usize>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
+    if let Ok(cols) = std::env::var("COLUMNS")
+        && let Ok(parsed) = cols.parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
     }
 
     let (_, cols) = console::Term::stderr().size();
@@ -390,11 +389,9 @@ pub fn wrap_output_for_active_progress(line: &str) -> String {
 impl CoarseProgressBar {
     pub fn new(total: u64, prefix: &str) -> Self {
         let enabled = progress_line_enabled();
-        if enabled {
-            if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
-                eprint!("\x1b[?25l");
-                let _ = io::stderr().flush();
-            }
+        if enabled && let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            eprint!("\x1b[?25l");
+            let _ = io::stderr().flush();
         }
 
         Self {
@@ -416,11 +413,11 @@ impl CoarseProgressBar {
             return;
         }
 
-        if let Ok(mut last) = self.last_render.try_lock() {
-            if last.elapsed() >= Duration::from_millis(33) {
-                self.render();
-                *last = Instant::now();
-            }
+        if let Ok(mut last) = self.last_render.try_lock()
+            && last.elapsed() >= Duration::from_millis(33)
+        {
+            self.render();
+            *last = Instant::now();
         }
     }
 
@@ -532,13 +529,13 @@ impl CoarseProgressBar {
             return;
         }
 
-        if self.enabled {
-            if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
-                set_active_progress_line(None);
-                eprint!("\r\x1b[K");
-                eprint!("\x1b[?25h");
-                let _ = io::stderr().flush();
-            }
+        if self.enabled
+            && let Ok(_guard) = PROGRESS_STDERR_LOCK.lock()
+        {
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K");
+            eprint!("\x1b[?25h");
+            let _ = io::stderr().flush();
         }
     }
 }
@@ -1057,7 +1054,15 @@ impl ExploreProgress {
 
         let line = format!(
             "🔍 Explore: {} • CRF {:.1} • SSIM {} • Size {:+.1}% {} • Iter {} • Best: CRF {:.1} / SSIM {:.4} • ⏱️ {:.1}s",
-            stage, crf, ssim_str, size_change, compress_icon, iter, best_crf, best_ssim, elapsed.as_secs_f64()
+            stage,
+            crf,
+            ssim_str,
+            size_change,
+            compress_icon,
+            iter,
+            best_crf,
+            best_ssim,
+            elapsed.as_secs_f64()
         );
 
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {

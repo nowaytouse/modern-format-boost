@@ -10,13 +10,14 @@
 //!
 //! Controlled by the `MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB` environment variable.
 
+use crate::Rational;
 use crate::image_analyzer::ImageAnalysis;
 use crate::progress_mode::emit_stderr;
-use crate::Rational;
 use anyhow::{Context, Result};
 use postgres::Client;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tracing::warn;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -429,9 +430,15 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         let distance: f64 = row.get(1);
 
         // Inverse Distance Weighting (IDW)
-        let mut weight = Rational::from(1)
-            / (Rational::from_f64(distance).unwrap_or_else(|| Rational::from(0))
-                + Rational::from_f64(0.01).unwrap_or_else(|| Rational::from(1)));
+        let Some(dist_r) = Rational::from_f64(distance) else {
+            warn!(
+                distance,
+                "☢️ [ANOMALY] NaN/Inf distance from KNN — skipping corrupt neighbor"
+            );
+            continue;
+        };
+        let epsilon = Rational::from_f64(0.01).expect("0.01 is strictly finite");
+        let mut weight = Rational::from(1) / (dist_r + epsilon);
 
         if label.contains("high") {
             weight *= high_factor.clone();
@@ -504,12 +511,22 @@ pub fn log_quality_inference_record(
         1.0_f64
     };
 
-    let file_hash: Option<String> =
-        path.and_then(|p| crate::common_utils::calculate_blake3_hash(p).ok());
+    let file_hash: Option<String> = path.and_then(|p| {
+        crate::common_utils::calculate_blake3_hash(p)
+            .map_err(|e| {
+                warn!(
+                    path = %p.display(),
+                    error = %e,
+                    "☢️ [ANOMALY] Failed to calculate file hash! Information invalidated to prevent forgery."
+                );
+                e
+            })
+            .ok()
+    });
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let neighbor_count_i32 = record
         .knn_neighbor_count
-        .and_then(|n| i32::try_from(n).ok());
+        .and_then(|n| crate::numeric_cast::usize_to_i32_strict(n, "knn_neighbor_count"));
 
     let f64_safe = |v: f64| if v.is_finite() { Some(v) } else { None };
     let entropy = f64_safe(analysis.features.entropy);
@@ -581,14 +598,37 @@ pub fn ingest_quality_sample(
 
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
     let total_pixels_u64 = u64::from(analysis.width).saturating_mul(u64::from(analysis.height));
-    let total_pixels = crate::numeric_cast::u64_to_i64_strict(total_pixels_u64, "total_pixels")
-        .unwrap_or_else(|| {
-            tracing::warn!("Failed to convert total pixels to i64, using 0");
-            0
-        });
+    let Some(total_pixels) =
+        crate::numeric_cast::u64_to_i64_strict(total_pixels_u64, "total_pixels")
+    else {
+        crate::progress_mode::emit_stderr(
+            "☢️ [ANOMALY] Data corruption detected: total_pixels overflow. Refusing to forge sample. Skipping ingestion.",
+        );
+        return Ok(());
+    };
     let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size)
         / crate::numeric_cast::u64_to_f64(total_pixels_u64).max(1.0);
     let features = get_quality_features(&analysis);
+
+    let Some(width) = crate::numeric_cast::u32_to_i32_strict(analysis.width, "width") else {
+        crate::progress_mode::emit_stderr(
+            "☢️ [ANOMALY] Width overflow. Refusing to forge sample. Skipping ingestion.",
+        );
+        return Ok(());
+    };
+    let Some(height) = crate::numeric_cast::u32_to_i32_strict(analysis.height, "height") else {
+        crate::progress_mode::emit_stderr(
+            "☢️ [ANOMALY] Height overflow. Refusing to forge sample. Skipping ingestion.",
+        );
+        return Ok(());
+    };
+    let Some(file_size) = crate::numeric_cast::u64_to_i64_strict(analysis.file_size, "file_size")
+    else {
+        crate::progress_mode::emit_stderr(
+            "☢️ [ANOMALY] File size overflow. Refusing to forge sample. Skipping ingestion.",
+        );
+        return Ok(());
+    };
 
     conn.execute(
         "INSERT INTO quality_samples (
@@ -603,9 +643,9 @@ pub fn ingest_quality_sample(
             &file_hash,
             &path.to_string_lossy().to_string(),
             &analysis.format,
-            &crate::numeric_cast::u32_to_i32_strict(analysis.width, "width").unwrap_or(0),
-            &crate::numeric_cast::u32_to_i32_strict(analysis.height, "height").unwrap_or(0),
-            &crate::numeric_cast::u64_to_i64_strict(analysis.file_size, "file_size").unwrap_or(0),
+            &width,
+            &height,
+            &file_size,
             &analysis.features.entropy,
             &analysis.features.compression_ratio,
             &spatial_bpp,

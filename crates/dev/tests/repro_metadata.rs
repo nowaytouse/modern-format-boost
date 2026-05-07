@@ -55,5 +55,7 @@ fn main() {
         }
     }
 
-    println!("\n💡 Analysis: If this succeeds now, it confirms the 'cscachefs' lock in the log was transient and our retry logic would have saved it.");
+    println!(
+        "\n💡 Analysis: If this succeeds now, it confirms the 'cscachefs' lock in the log was transient and our retry logic would have saved it."
+    );
 }

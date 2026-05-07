@@ -20,7 +20,7 @@ pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
 pub use perception::{ProcessHistory, VisualPerception};
 pub use preset::EncoderPreset;
-pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
+pub use ssim::{SSIM_EPSILON, Ssim, SsimError};
 
 /// Result of a specific verification check.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

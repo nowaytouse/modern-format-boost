@@ -5,13 +5,13 @@
 //!
 //! Batch Processing Module with File Sorting
 
-use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
+use crate::file_sorter::{SortStrategy, sort_by_size_ascending};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 use walkdir::{DirEntry, WalkDir};
@@ -558,9 +558,13 @@ fn format_priority_for_image(path: &Path) -> u8 {
 /// # Returns
 /// Total pixel count, or None if the image cannot be read
 fn image_pixel_count(path: &Path) -> Option<u64> {
-    image::image_dimensions(path)
-        .ok()
-        .map(|(width, height)| u64::from(width).saturating_mul(u64::from(height)))
+    match image::image_dimensions(path) {
+        Ok((width, height)) => Some(u64::from(width).saturating_mul(u64::from(height))),
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
+            None
+        }
+    }
 }
 
 /// Converts a floating-point value to a sortable ordinal key.
@@ -629,8 +633,11 @@ fn sort_cached_image_entries(entries: &mut [CachedImageSortEntry]) {
 ///
 /// # Returns
 /// Cached image entry, or None if metadata cannot be read
-fn build_cached_image_entry(root: &Path, path: &Path) -> Option<CachedImageSortEntry> {
-    let metadata = fs::metadata(path).ok()?;
+fn build_cached_image_entry(
+    root: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Option<CachedImageSortEntry> {
     Some(CachedImageSortEntry {
         path: path.to_path_buf(),
         size: metadata.len(),
@@ -700,9 +707,31 @@ fn load_cached_image_tree(
     extensions: &[&str],
     recursive: bool,
 ) -> Option<CachedImageTreeSnapshot> {
-    let cache_file = path_tree_cache_file(dir, extensions, recursive, "image").ok()?;
-    let content = fs::read_to_string(cache_file).ok()?;
-    serde_json::from_str(&content).ok()
+    let cache_file = match path_tree_cache_file(dir, extensions, recursive, "image") {
+        Ok(f) => f,
+        Err(e) => {
+            debug!(path = %dir.display(), error = %e, "Failed to generate cache file path");
+            return None;
+        }
+    };
+    if !cache_file.exists() {
+        return None;
+    }
+    let content = match fs::read_to_string(&cache_file) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(path = %cache_file.display(), error = %e, "Failed to read image tree cache file");
+            return None;
+        }
+    };
+    match serde_json::from_str::<CachedImageTreeSnapshot>(&content) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            warn!(path = %cache_file.display(), error = %e, "Corrupted image tree cache; invalidating");
+            let _ = fs::remove_file(&cache_file);
+            None
+        }
+    }
 }
 
 /// Saves a cached image tree snapshot to disk.
@@ -743,9 +772,31 @@ fn load_cached_video_tree(
     extensions: &[&str],
     recursive: bool,
 ) -> Option<CachedVideoTreeSnapshot> {
-    let cache_file = path_tree_cache_file(dir, extensions, recursive, "video").ok()?;
-    let content = fs::read_to_string(cache_file).ok()?;
-    serde_json::from_str(&content).ok()
+    let cache_file = match path_tree_cache_file(dir, extensions, recursive, "video") {
+        Ok(f) => f,
+        Err(e) => {
+            debug!(path = %dir.display(), error = %e, "Failed to generate video cache file path");
+            return None;
+        }
+    };
+    if !cache_file.exists() {
+        return None;
+    }
+    let content = match fs::read_to_string(&cache_file) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(path = %cache_file.display(), error = %e, "Failed to read video tree cache file");
+            return None;
+        }
+    };
+    match serde_json::from_str::<CachedVideoTreeSnapshot>(&content) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            warn!(path = %cache_file.display(), error = %e, "Corrupted video tree cache; invalidating");
+            let _ = fs::remove_file(&cache_file);
+            None
+        }
+    }
 }
 
 /// Saves a cached video tree snapshot to disk.
@@ -893,11 +944,21 @@ fn scan_image_tree_snapshot(
 
                     if let Some(codec) =
                         crate::quality_matcher::SourceCodec::identify_by_content(path)
+                        && codec.is_image()
                     {
-                        if codec.is_image() {
-                            if let Some(file_entry) = build_cached_image_entry(&root, path) {
-                                files.push(file_entry);
+                        let metadata = match fs::metadata(path) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                warn!(
+                                    path = %path.display(),
+                                    error = %e,
+                                    "Failed to read metadata for image entry during batch scan"
+                                );
+                                continue;
                             }
+                        };
+                        if let Some(file_entry) = build_cached_image_entry(&root, path, &metadata) {
+                            files.push(file_entry);
                         }
                     }
                 }
@@ -1046,7 +1107,17 @@ fn sort_cached_video_entries(entries: &mut [CachedVideoSortEntry]) {
 /// # Returns
 /// Cached video entry, or None if metadata cannot be read
 fn build_cached_video_entry(root: &Path, path: &Path) -> Option<CachedVideoSortEntry> {
-    let metadata = fs::metadata(path).ok()?;
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to read metadata for video entry during batch scan"
+            );
+            return None;
+        }
+    };
     let (pixel_count, duration_secs, frame_rate, estimated_work) = video_probe_priority_data(path);
     Some(CachedVideoSortEntry {
         path: path.to_path_buf(),
@@ -1111,10 +1182,10 @@ fn scan_video_tree_snapshot(
                         crate::quality_matcher::SourceCodec::identify_by_content(path)
                     {
                         // Admission: it's a video OR it's an animated image candidate for the 'vid' tool
-                        if codec.is_video() || codec.can_be_animated() {
-                            if let Some(file_entry) = build_cached_video_entry(&root, path) {
-                                files.push(file_entry);
-                            }
+                        if (codec.is_video() || codec.can_be_animated())
+                            && let Some(file_entry) = build_cached_video_entry(&root, path)
+                        {
+                            files.push(file_entry);
                         }
                     }
                 }
@@ -1491,7 +1562,7 @@ mod tests {
 
         let bumped = FileTime::from_unix_time(
             crate::numeric_cast::u64_to_i64_strict(path_modified_unix_secs(&nested), "mtime")
-                .unwrap_or(0)
+                .expect("Failed to get mtime for test directory")
                 + 10,
             0,
         );

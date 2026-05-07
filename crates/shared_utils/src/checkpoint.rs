@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::version::{cache_algorithm_version, CACHE_SCHEMA_VERSION};
+use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm_version};
 
 /// The central location for all MFB progress tracking to avoid polluting user directories.
 fn get_central_progress_dir() -> PathBuf {
@@ -97,7 +97,8 @@ struct CheckpointEntry {
 impl CheckpointEntry {
     fn from_path(path: &Path) -> io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
-        let size = crate::numeric_cast::u64_to_i64_strict(metadata.len(), "size").unwrap_or(0);
+        let size = crate::numeric_cast::u64_to_i64_strict(metadata.len(), "size")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "File size cast failed"))?;
         let mtime = crate::numeric_cast::u128_to_i64_strict(
             metadata
                 .modified()?
@@ -106,7 +107,7 @@ impl CheckpointEntry {
                 .as_nanos(),
             "mtime",
         )
-        .unwrap_or(0);
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mtime cast failed"))?;
 
         #[cfg(unix)]
         let ctime = {
@@ -117,7 +118,7 @@ impl CheckpointEntry {
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
         let ctime = crate::numeric_cast::u64_to_i64_strict(metadata.last_write_time(), "ctime")
-            .unwrap_or(0);
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "ctime cast failed"))?;
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
@@ -259,7 +260,7 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let elapsed_secs = match field {
-                "etimes" => stdout.trim().parse::<u64>().ok(),
+                "etimes" => crate::numeric_cast::parse_strict::<u64>(stdout.trim(), "ps_etimes"),
                 "etime" => parse_ps_etime_to_secs(&stdout),
                 _ => None,
             };
@@ -321,19 +322,30 @@ fn parse_ps_etime_to_secs(raw: &str) -> Option<u64> {
     }
 
     let (days, clock) = match trimmed.split_once('-') {
-        Some((days, rest)) => (days.trim().parse::<u64>().ok()?, rest.trim()),
+        Some((days_str, rest)) => (
+            crate::numeric_cast::parse_strict::<u64>(days_str.trim(), "ps_etime_days")?,
+            rest.trim(),
+        ),
         None => (0, trimmed),
     };
 
     let parts: Vec<_> = clock.split(':').collect();
     let clock_secs = match parts.as_slice() {
         [minutes, seconds] => {
-            minutes.trim().parse::<u64>().ok()? * 60 + seconds.trim().parse::<u64>().ok()?
+            crate::numeric_cast::parse_strict::<u64>(minutes.trim(), "ps_etime_minutes")
+                .map(|m| m * 60)
+                .and_then(|m_scaled| {
+                    crate::numeric_cast::parse_strict::<u64>(seconds.trim(), "ps_etime_seconds")
+                        .map(|s| m_scaled + s)
+                })?
         }
         [hours, minutes, seconds] => {
-            hours.trim().parse::<u64>().ok()? * 3600
-                + minutes.trim().parse::<u64>().ok()? * 60
-                + seconds.trim().parse::<u64>().ok()?
+            let h = crate::numeric_cast::parse_strict::<u64>(hours.trim(), "ps_etime_hours")
+                .map(|h| h * 3600)?;
+            let m = crate::numeric_cast::parse_strict::<u64>(minutes.trim(), "ps_etime_minutes")
+                .map(|m| m * 60)?;
+            let s = crate::numeric_cast::parse_strict::<u64>(seconds.trim(), "ps_etime_seconds")?;
+            h + m + s
         }
         _ => return None,
     };
@@ -426,14 +438,14 @@ impl CheckpointManager {
 
         if let Some(reason) = reset_reason.as_deref() {
             eprintln!("⚠️ [checkpoint] {reason}");
-            if progress_file.exists() {
-                if let Err(err) = fs::remove_file(&progress_file) {
-                    eprintln!(
-                        "⚠️ [checkpoint] Failed to remove invalidated checkpoint file {}: {}",
-                        progress_file.display(),
-                        err
-                    );
-                }
+            if progress_file.exists()
+                && let Err(err) = fs::remove_file(&progress_file)
+            {
+                eprintln!(
+                    "⚠️ [checkpoint] Failed to remove invalidated checkpoint file {}: {}",
+                    progress_file.display(),
+                    err
+                );
             }
         }
 
@@ -446,10 +458,10 @@ impl CheckpointManager {
             resume_mode: AtomicBool::new(resume_mode),
         };
 
-        if manager.resume_mode.load(Ordering::Relaxed) {
-            if let Err(err) = manager.rewrite_progress_file() {
-                eprintln!("⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}");
-            }
+        if manager.resume_mode.load(Ordering::Relaxed)
+            && let Err(err) = manager.rewrite_progress_file()
+        {
+            eprintln!("⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}");
         }
 
         Ok(manager)
@@ -515,17 +527,17 @@ impl CheckpointManager {
                     return Ok(None);
                 }
 
-                if let Some(current_start) = get_process_start_time_for_pid(lock_info.pid) {
-                    if current_start != lock_info.start_time {
-                        eprintln!(
-                            "⚠️ LOCK STALE: PID {} reused (start time mismatch), removing",
-                            lock_info.pid
-                        );
-                        if let Err(e) = fs::remove_file(&self.lock_file) {
-                            eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
-                        }
-                        return Ok(None);
+                if let Some(current_start) = get_process_start_time_for_pid(lock_info.pid)
+                    && current_start != lock_info.start_time
+                {
+                    eprintln!(
+                        "⚠️ LOCK STALE: PID {} reused (start time mismatch), removing",
+                        lock_info.pid
+                    );
+                    if let Err(e) = fs::remove_file(&self.lock_file) {
+                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                     }
+                    return Ok(None);
                 }
 
                 return Ok(Some(lock_info.pid));
@@ -544,17 +556,15 @@ impl CheckpointManager {
                 }
                 return Ok(None);
             }
-            if let Ok(meta) = fs::metadata(&self.lock_file) {
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS {
-                            if let Err(e) = fs::remove_file(&self.lock_file) {
-                                eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
-                            }
-                            return Ok(None);
-                        }
-                    }
+            if let Ok(meta) = fs::metadata(&self.lock_file)
+                && let Ok(modified) = meta.modified()
+                && let Ok(elapsed) = modified.elapsed()
+                && elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS
+            {
+                if let Err(e) = fs::remove_file(&self.lock_file) {
+                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                 }
+                return Ok(None);
             }
             return Ok(Some(pid));
         }
@@ -745,23 +755,23 @@ impl CheckpointManager {
     ///
     /// Returns an error if the progress or lock files cannot be removed.
     pub fn cleanup(&self) -> io::Result<()> {
-        if self.progress_file.exists() {
-            if let Err(err) = fs::remove_file(&self.progress_file) {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to remove progress file {}: {}",
-                    self.progress_file.display(),
-                    err
-                );
-            }
+        if self.progress_file.exists()
+            && let Err(err) = fs::remove_file(&self.progress_file)
+        {
+            eprintln!(
+                "⚠️ [checkpoint] Failed to remove progress file {}: {}",
+                self.progress_file.display(),
+                err
+            );
         }
-        if self.lock_file.exists() {
-            if let Err(err) = fs::remove_file(&self.lock_file) {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to remove lock file {}: {}",
-                    self.lock_file.display(),
-                    err
-                );
-            }
+        if self.lock_file.exists()
+            && let Err(err) = fs::remove_file(&self.lock_file)
+        {
+            eprintln!(
+                "⚠️ [checkpoint] Failed to remove lock file {}: {}",
+                self.lock_file.display(),
+                err
+            );
         }
         Ok(())
     }
@@ -892,18 +902,19 @@ impl CheckpointManager {
             );
         }
 
-        if let Some(output_root) = output_root {
-            if !output_root.exists() && !loaded.entries.is_empty() {
-                return (
-                    HashMap::new(),
-                    false,
-                    Some(format!(
-                        "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
-                        loaded.entries.len(),
-                        output_root.display()
-                    )),
-                );
-            }
+        if let Some(output_root) = output_root
+            && !output_root.exists()
+            && !loaded.entries.is_empty()
+        {
+            return (
+                HashMap::new(),
+                false,
+                Some(format!(
+                    "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+                    loaded.entries.len(),
+                    output_root.display()
+                )),
+            );
         }
 
         let mut valid = HashMap::new();
@@ -1054,14 +1065,14 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
 
     fs::remove_file(input)?;
 
-    if let Some(xmp) = companion_xmp {
-        if let Err(e) = fs::remove_file(&xmp) {
-            eprintln!(
-                "⚠️  XMP sidecar cleanup failed for {}: {}",
-                xmp.display(),
-                e
-            );
-        }
+    if let Some(xmp) = companion_xmp
+        && let Err(e) = fs::remove_file(&xmp)
+    {
+        eprintln!(
+            "⚠️  XMP sidecar cleanup failed for {}: {}",
+            xmp.display(),
+            e
+        );
     }
     Ok(())
 }
@@ -1080,12 +1091,14 @@ mod tests {
         let temp_target = TempDir::new().map_err(|e| anyhow::anyhow!("target temp dir: {e}"))?;
         let temp_progress =
             TempDir::new().map_err(|e| anyhow::anyhow!("progress temp dir: {e}"))?;
-        std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());
+        // SAFETY: Test setup, sequential context.
+        unsafe { std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path()) };
         Ok((temp_target, temp_progress, guard))
     }
 
     fn teardown_test_env(_guard: std::sync::MutexGuard<'static, ()>) {
-        std::env::remove_var("MFB_PROGRESS_DIR");
+        // SAFETY: Test teardown, sequential context.
+        unsafe { std::env::remove_var("MFB_PROGRESS_DIR") };
     }
 
     fn create_test_file(path: &Path) {
@@ -1295,10 +1308,12 @@ mod tests {
 
         let checkpoint = CheckpointManager::new(target).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        assert!(checkpoint
-            .check_lock()
-            .unwrap_or_else(|e| panic!("error: {e:?}"))
-            .is_none());
+        assert!(
+            checkpoint
+                .check_lock()
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .is_none()
+        );
 
         checkpoint
             .acquire_lock()

@@ -145,9 +145,21 @@ pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
 #[must_use]
 pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to open file for extension detection");
+            return None;
+        }
+    };
     let mut buffer = [0u8; 12];
-    let bytes_read = file.read(&mut buffer).ok()?;
+    let bytes_read = match file.read(&mut buffer) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to read header for extension detection");
+            return None;
+        }
+    };
 
     if bytes_read < 4 {
         return None;
@@ -436,14 +448,12 @@ fn find_box_data_recursive_impl(
                 payload_start
             };
 
-            if sub_start < next_pos {
-                if let Some(sub) = data.get(sub_start..next_pos) {
-                    if let Some(payload) =
-                        find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth)
-                    {
-                        return Some(payload);
-                    }
-                }
+            if sub_start < next_pos
+                && let Some(sub) = data.get(sub_start..next_pos)
+                && let Some(payload) =
+                    find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth)
+            {
+                return Some(payload);
             }
         }
 
@@ -501,12 +511,11 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
         } else {
             (pos + 8, (pos + size).min(data.len()))
         };
-        if next_pos > payload_start {
-            if let Some(sub_data) = data.get(payload_start..next_pos) {
-                if find_any_box_recursive_impl(sub_data, box_type, depth + 1, max_depth) {
-                    return true;
-                }
-            }
+        if next_pos > payload_start
+            && let Some(sub_data) = data.get(payload_start..next_pos)
+            && find_any_box_recursive_impl(sub_data, box_type, depth + 1, max_depth)
+        {
+            return true;
         }
         pos = next_pos;
     }
@@ -528,6 +537,10 @@ pub fn get_command_version(command_name: &str) -> Option<String> {
         .arg("--version")
         .output()
         .or_else(|_| Command::new(command_name).arg("-version").output())
+        .map_err(|e| {
+            debug!(command = %command_name, error = %e, "Failed to execute command to check version");
+            e
+        })
         .ok()?;
 
     if output.status.success() {
@@ -635,10 +648,12 @@ mod tests {
         let file_path = temp.path().join("a/b/c/file.txt");
 
         ensure_parent_dir_exists(&file_path).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert!(file_path
-            .parent()
-            .unwrap_or_else(|| panic!("missing parent"))
-            .exists());
+        assert!(
+            file_path
+                .parent()
+                .unwrap_or_else(|| panic!("missing parent"))
+                .exists()
+        );
     }
 
     #[test]

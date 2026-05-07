@@ -435,10 +435,10 @@ impl ExploreContext {
         let mut iterations = 0u32;
 
         self.progress_update(&format!("Test CRF {:.1}...", self.config.initial_crf));
-        if let Ok(result) = self.calculate_ssim(self.config.initial_crf) {
-            if result.value >= min_ssim {
-                best_ssim = result.value;
-            }
+        if let Ok(result) = self.calculate_ssim(self.config.initial_crf)
+            && result.value >= min_ssim
+        {
+            best_ssim = result.value;
         }
         iterations = iterations.saturating_add(1);
 
@@ -498,7 +498,7 @@ impl ExploreContext {
     }
 
     fn do_encode(&self, crf: f32) -> Result<u64> {
-        use anyhow::{bail, Context};
+        use anyhow::{Context, bail};
         use std::fs;
 
         let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
@@ -587,12 +587,12 @@ impl ExploreContext {
             .build()
             .output();
 
-        if let Ok(out) = output {
-            if out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if let Some(ssim) = Self::parse_ssim(&stderr) {
-                    return Ok(SsimResult::actual(ssim, None));
-                }
+        if let Ok(out) = output
+            && out.status.success()
+        {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if let Some(ssim) = Self::parse_ssim(&stderr) {
+                return Ok(SsimResult::actual(ssim, None));
             }
         }
 
@@ -619,12 +619,11 @@ impl ExploreContext {
                 let end = value_str
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(value_str.len());
-                if end > 0 {
-                    if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                        if (0.0_f64..=1.0_f64).contains(&ssim) {
-                            return Some(ssim);
-                        }
-                    }
+                if end > 0
+                    && let Ok(ssim) = value_str[..end].parse::<f64>()
+                    && (0.0_f64..=1.0_f64).contains(&ssim)
+                {
+                    return Some(ssim);
                 }
             }
         }
@@ -654,10 +653,10 @@ impl ExploreContext {
                     let end = value_str
                         .find(|c: char| !c.is_numeric() && c != '.' && c != '-')
                         .unwrap_or(value_str.len());
-                    if end > 0 {
-                        if let Ok(psnr) = value_str[..end].parse::<f64>() {
-                            return Ok(Some(psnr));
-                        }
+                    if end > 0
+                        && let Ok(psnr) = value_str[..end].parse::<f64>()
+                    {
+                        return Ok(Some(psnr));
                     }
                 }
             }
@@ -852,12 +851,12 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
             iterations += 1;
 
             if size < ctx.input_size {
-                if let Ok(result) = ctx.calculate_ssim(crf) {
-                    if result.value > best_ssim {
-                        best_ssim = result.value;
-                        best_crf = crf;
-                        best_size = size;
-                    }
+                if let Ok(result) = ctx.calculate_ssim(crf)
+                    && result.value > best_ssim
+                {
+                    best_ssim = result.value;
+                    best_crf = crf;
+                    best_size = size;
                 }
             } else {
                 break;

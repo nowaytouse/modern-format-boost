@@ -9,7 +9,7 @@ use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
-use shared_utils::loop_intent::{is_lossless_exploration_safe, LoopMeta};
+use shared_utils::loop_intent::{LoopMeta, is_lossless_exploration_safe};
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VideoStreamInfo {
     index: usize,
@@ -18,15 +18,15 @@ struct VideoStreamInfo {
 }
 
 fn cleanup_temp_output(temp_output: &Path, input: &Path) {
-    if let Err(e) = fs::remove_file(temp_output) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                input = %input.display(),
-                temp_output = %temp_output.display(),
-                error = %e,
-                "Failed to remove temporary output"
-            );
-        }
+    if let Err(e) = fs::remove_file(temp_output)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            input = %input.display(),
+            temp_output = %temp_output.display(),
+            error = %e,
+            "Failed to remove temporary output"
+        );
     }
 }
 
@@ -377,10 +377,11 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             parsing_frames = true;
         } else if parsing_frames {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 7 && parts.first().is_some_and(|p| p.ends_with(':')) {
-                if let Some(Ok(duration)) = parts.get(6).map(|p| p.parse::<u32>()) {
-                    frame_durations_ms.push(duration);
-                }
+            if parts.len() >= 7
+                && parts.first().is_some_and(|p| p.ends_with(':'))
+                && let Some(Ok(duration)) = parts.get(6).map(|p| p.parse::<u32>())
+            {
+                frame_durations_ms.push(duration);
             }
         }
     }
@@ -406,7 +407,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
                 u64::from(frame_count),
                 "webp_frame_count",
             )
-            .unwrap_or(0),
+            .expect("webp frame count fits in usize"),
             pad,
         );
     }
@@ -487,11 +488,11 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // the final `file 'X.png'` entry (without a new duration) to force ffmpeg to
     // honour the final frame's delay. Skip this for single-frame WebPs, where adding
     // a duplicate line would create a spurious second frame.
-    if frame_durations_ms.len() >= 2 {
-        if let Some(last_i) = frame_durations_ms.len().checked_sub(1) {
-            use std::fmt::Write;
-            let _ = writeln!(concat_content, "file 'frame_{:04}.png'", last_i + 1);
-        }
+    if frame_durations_ms.len() >= 2
+        && let Some(last_i) = frame_durations_ms.len().checked_sub(1)
+    {
+        use std::fmt::Write;
+        let _ = writeln!(concat_content, "file 'frame_{:04}.png'", last_i + 1);
     }
 
     if let Err(e) = std::fs::write(&concat_list_path, concat_content) {
@@ -633,13 +634,13 @@ fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> Conve
 /// Return true when the input is either a native GIF or a GIF-like silent loop
 /// video that the scorer says should stay in the GIF domain.
 fn assess_loop_intent_for_path(path: &Path) -> Option<shared_utils::LoopIntentVerdict> {
-    if shared_utils::should_use_gif_fast_path(path) {
-        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(path) {
-            return Some(shared_utils::assess_loop_intent_from_meta(
-                &meta,
-                Some(path),
-            ));
-        }
+    if shared_utils::should_use_gif_fast_path(path)
+        && let Some(meta) = shared_utils::LoopMeta::from_gif_path(path)
+    {
+        return Some(shared_utils::assess_loop_intent_from_meta(
+            &meta,
+            Some(path),
+        ));
     }
 
     shared_utils::probe_video(path)
@@ -664,16 +665,14 @@ fn is_static_animated_image(path: &Path) -> bool {
     if !shared_utils::quality_matcher::parse_source_codec(&ext).can_be_animated() {
         return false;
     }
-    if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
-        if let Some(duration_secs) = analysis.duration_secs {
-            if duration_secs
-                < shared_utils::numeric_cast::f64_to_f32_lossy(
-                    shared_utils::constants::NEGLIGIBLE_DURATION_SECS,
-                )
-            {
-                return true;
-            }
-        }
+    if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path)
+        && let Some(duration_secs) = analysis.duration_secs
+        && duration_secs
+            < shared_utils::numeric_cast::f64_to_f32_lossy(
+                shared_utils::constants::NEGLIGIBLE_DURATION_SECS,
+            )
+    {
+        return true;
     }
     false
 }
@@ -762,7 +761,9 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+                eprintln!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                );
             }
 
             // Check if djxl is available
@@ -1006,14 +1007,14 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
-            if options.should_delete_original() {
-                if let Err(e) = shared_utils::conversion::safe_delete_original(
+            if options.should_delete_original()
+                && let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                ) {
-                    tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC conversion");
-                }
+                )
+            {
+                tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC conversion");
             }
 
             let codec_name = options.codec.as_str().to_uppercase();
@@ -1119,7 +1120,9 @@ pub fn convert_to_mp4_matched(
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+                eprintln!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                );
             }
             if which::which("djxl").is_err() {
                 tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
@@ -1209,7 +1212,9 @@ pub fn convert_to_mp4_matched(
             out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
         } {
             if options.verbose() {
-                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+                eprintln!(
+                    "   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly"
+                );
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -1257,8 +1262,12 @@ pub fn convert_to_mp4_matched(
 
                 if has_multiple_streams && probe.stream_index > 0 {
                     if options.verbose() {
-                        eprintln!("   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)", 
-                            input_ext.to_uppercase(), probe.stream_index, probe.frame_count.unwrap_or(0));
+                        eprintln!(
+                            "   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)",
+                            input_ext.to_uppercase(),
+                            probe.stream_index,
+                            probe.frame_count.unwrap_or(0)
+                        );
                     }
 
                     // Create temporary APNG file
@@ -1614,15 +1623,15 @@ pub fn convert_to_mp4_matched(
     shared_utils::copy_metadata(input, &output);
     mark_as_processed(input);
 
-    if options.should_delete_original() {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(
+    if options.should_delete_original()
+        && let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        ) {
-            let codec_name = options.codec.as_str().to_uppercase();
-            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after {} animated conversion", codec_name);
-        }
+        )
+    {
+        let codec_name = options.codec.as_str().to_uppercase();
+        tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after {} animated conversion", codec_name);
     }
 
     Ok(ConversionResult::success_video_explored(
@@ -1724,14 +1733,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
-            if options.should_delete_original() {
-                if let Err(e) = shared_utils::conversion::safe_delete_original(
+            if options.should_delete_original()
+                && let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                ) {
-                    tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
-                }
+                )
+            {
+                tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
             }
 
             Ok(ConversionResult::success(
@@ -1836,7 +1845,9 @@ pub fn convert_to_gif_apple_compat(
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+                eprintln!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                );
             }
 
             // Check if djxl is available
@@ -2021,8 +2032,10 @@ pub fn convert_to_gif_apple_compat(
         };
 
         if options.verbose() {
-            eprintln!("   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS", 
-                extracted_count, probe_res.duration, fps);
+            eprintln!(
+                "   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS",
+                extracted_count, probe_res.duration, fps
+            );
         }
         let mut gifski_builder = shared_utils::GifskiBuilder::new();
         gifski_builder
@@ -2159,14 +2172,14 @@ pub fn convert_to_gif_apple_compat(
     shared_utils::copy_metadata(input, &output);
     mark_as_processed(input);
 
-    if options.should_delete_original() {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(
+    if options.should_delete_original()
+        && let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        ) {
-            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
-        }
+        )
+    {
+        tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
     }
 
     Ok(ConversionResult::success(

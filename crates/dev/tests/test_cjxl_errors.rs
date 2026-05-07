@@ -1,4 +1,4 @@
-use img::lossless_converter::{convert_to_jxl, ConvertOptions};
+use img::lossless_converter::{ConvertOptions, convert_to_jxl};
 use std::process::Command;
 use tempfile::tempdir;
 

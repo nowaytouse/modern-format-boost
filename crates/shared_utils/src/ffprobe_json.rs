@@ -92,8 +92,8 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
     match v {
         serde_json::Value::String(s) => {
             if let Some((n, d)) = s.split_once('/') {
-                let n: f64 = n.trim().parse().ok()?;
-                let d: f64 = d.trim().parse().ok()?;
+                let n: f64 = crate::numeric_cast::parse_strict(n, "hdr_gx_num")?;
+                let d: f64 = crate::numeric_cast::parse_strict(d, "hdr_gx_den")?;
                 if d == 0.0 {
                     return None;
                 }
@@ -101,7 +101,7 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
                     ((n / d) * 50000.0).round(),
                 ))
             } else {
-                let f: f64 = s.trim().parse().ok()?;
+                let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_gx_val")?;
                 if f <= 1.0 {
                     Some(crate::numeric_cast::f64_to_u64_sat((f * 50000.0).round()))
                 } else {
@@ -125,8 +125,8 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
     match v {
         serde_json::Value::String(s) => {
             if let Some((n, d)) = s.split_once('/') {
-                let n: f64 = n.trim().parse().ok()?;
-                let d: f64 = d.trim().parse().ok()?;
+                let n: f64 = crate::numeric_cast::parse_strict(n, "hdr_lmax_num")?;
+                let d: f64 = crate::numeric_cast::parse_strict(d, "hdr_lmax_den")?;
                 if d == 0.0 {
                     return None;
                 }
@@ -134,7 +134,7 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
                     ((n / d) * 10000.0).round(),
                 ))
             } else {
-                let f: f64 = s.trim().parse().ok()?;
+                let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_lmax_val")?;
                 if f <= 10000.0 {
                     Some(crate::numeric_cast::f64_to_u64_sat((f * 10000.0).round()))
                 } else {
@@ -173,8 +173,9 @@ fn parse_side_data_list(
         {
             *is_hdr10_plus = true;
         }
-        if sd_type.contains("mastering display") && mastering_display.is_none() {
-            if let (
+        if sd_type.contains("mastering display")
+            && mastering_display.is_none()
+            && let (
                 Some(gx),
                 Some(gy),
                 Some(bx),
@@ -196,16 +197,17 @@ fn parse_side_data_list(
                 sd.white_point_y.as_ref().and_then(rational_to_50k),
                 sd.max_luminance.as_ref().and_then(rational_to_10k),
                 sd.min_luminance.as_ref().and_then(rational_to_10k),
-            ) {
-                *mastering_display = Some(format!(
-                    "G({gx},{gy})B({bx},{by_})R({rx},{ry})WP({wx},{wy})L({lmax},{lmin})"
-                ));
-            }
+            )
+        {
+            *mastering_display = Some(format!(
+                "G({gx},{gy})B({bx},{by_})R({rx},{ry})WP({wx},{wy})L({lmax},{lmin})"
+            ));
         }
-        if sd_type.contains("content light level") && max_cll.is_none() {
-            if let (Some(mc), Some(ma)) = (sd.max_content, sd.max_average) {
-                *max_cll = Some(format!("{mc},{ma}"));
-            }
+        if sd_type.contains("content light level")
+            && max_cll.is_none()
+            && let (Some(mc), Some(ma)) = (sd.max_content, sd.max_average)
+        {
+            *max_cll = Some(format!("{mc},{ma}"));
         }
     }
 }
@@ -236,7 +238,11 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             if stderr.contains("Could find no file with path")
                 && stderr.contains("and index in the range")
             {
-                crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
+                crate::log_rare_error!(
+                    "FFprobe",
+                    "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none",
+                    input_str
+                );
                 // Retry with -pattern_type none to disable sequence pattern matching
                 match crate::ffmpeg_builder::FfprobeBuilder::new()
                     .input(input)
@@ -319,10 +325,10 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         return ColorInfo::default();
     };
 
-    let bit_depth = stream
-        .bits_per_raw_sample
-        .as_ref()
-        .and_then(|s| s.parse::<u8>().ok());
+    let bit_depth = crate::numeric_cast::parse_option_strict(
+        stream.bits_per_raw_sample.as_deref(),
+        "bits_per_raw_sample",
+    );
 
     let color_space = stream
         .color_space
@@ -532,7 +538,11 @@ pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
                 if pts < last - 1e-4_f64 {
                     has_backwards = true;
                     break;
-                } else if (pts - last).abs() < 1e-4_f64 {
+                } else if crate::numeric_cast::is_effectively_equal(
+                    pts,
+                    last,
+                    crate::numeric_cast::FloatContext::FfmpegMeasurement,
+                ) {
                     has_duplicates = true;
                 }
             }

@@ -441,9 +441,21 @@ impl LoopMeta {
         reason = "Explicit panic on data corruption is intended and documented inline."
     )]
     pub fn from_gif_path(path: &Path) -> Option<Self> {
-        let scan = crate::media_meta_utils::scan_gif_headers(path).ok()?;
+        let scan = match crate::media_meta_utils::scan_gif_headers(path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to scan GIF headers for loop intent");
+                return None;
+            }
+        };
 
-        let file_size = std::fs::metadata(path).ok()?.len();
+        let file_size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to read GIF metadata for loop intent");
+                return None;
+            }
+        };
         let file_name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -539,21 +551,20 @@ impl LoopMeta {
         if self.should_sample_webp_compression_ratio() {
             // Extract one frame, read into memory, compute the WebP ratio, and cache the
             // frame bytes in-memory to avoid repeated ffmpeg invocations later.
-            if let Some(temp_frame) = extract_frame_to_temp(path) {
-                if let Ok(bytes) = std::fs::read(&temp_frame) {
-                    // Remove the temporary file immediately; keep bytes in-memory only.
-                    std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
-                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
-                    });
+            if let Some(temp_frame) = extract_frame_to_temp(path)
+                && let Ok(bytes) = std::fs::read(&temp_frame)
+            {
+                // Remove the temporary file immediately; keep bytes in-memory only.
+                std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
+                });
 
-                    // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
-                    self.cached_frame_png = Some(bytes.clone());
+                // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
+                self.cached_frame_png = Some(bytes.clone());
 
-                    // Compute the WebP compression ratio from the in-memory image.
-                    if let Ok(img) = image::load_from_memory(&bytes) {
-                        self.webp_compression_ratio =
-                            sampled_webp_compression_ratio_from_image(&img);
-                    }
+                // Compute the WebP compression ratio from the in-memory image.
+                if let Ok(img) = image::load_from_memory(&bytes) {
+                    self.webp_compression_ratio = sampled_webp_compression_ratio_from_image(&img);
                 }
             }
         }
@@ -974,6 +985,8 @@ fn apply_structural_signals(
     is_image: bool,
     is_video: bool,
 ) {
+    use std::intrinsics::{likely, unlikely};
+
     let short_silent_asset = is_short_silent_asset(meta, thresholds);
     let is_short_tier = matches!(
         meta.tier(),
@@ -984,14 +997,17 @@ fn apply_structural_signals(
     // content. Positive signal restricted to short tiers only — for long content, CBR encoding
     // and H.264 GOP structure create false periodicity in pkt_sizes. Negative signal kept
     // universal since low autocorrelation reliably indicates scene changes.
-    if let Some(closure) = meta.loop_closure_score {
-        if closure >= 0.82_f64 && is_short_tier {
+
+    if likely(meta.loop_closure_score.is_some_and(|c| c >= 0.82_f64) && is_short_tier) {
+        if let Some(closure) = meta.loop_closure_score {
             let strength = ((closure - 0.82) / 0.18).clamp(0.25, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
-        } else if closure <= 0.35_f64 {
-            let strength = ((0.35 - closure) / 0.35).clamp(0.25, 1.0);
-            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
         }
+    } else if unlikely(meta.loop_closure_score.is_some_and(|c| c <= 0.35_f64))
+        && let Some(closure) = meta.loop_closure_score
+    {
+        let strength = ((0.35 - closure) / 0.35).clamp(0.25, 1.0);
+        log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
     }
 
     if let Some(periodicity) = meta.motion_periodicity {
@@ -2260,7 +2276,9 @@ pub fn apply_apple_compat_modern_animation_policy(
     {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (duration={:.2}s, frames={}, audio={})",
-            meta.duration_secs, meta.frame_count.map_or(0, |fc| fc), meta.has_audio
+            meta.duration_secs,
+            meta.frame_count.map_or(0, |fc| fc),
+            meta.has_audio
         ));
     }
 
@@ -2269,7 +2287,8 @@ pub fn apply_apple_compat_modern_animation_policy(
     if meta.duration_secs <= 0.0_f64 && meta.frame_count.is_none_or(|fc| fc <= 300) {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
-            meta.frame_count.map_or(0, |fc| fc), meta.has_audio
+            meta.frame_count.map_or(0, |fc| fc),
+            meta.has_audio
         ));
     }
 
@@ -2311,8 +2330,8 @@ pub fn assess_loop_intent_from_probe(
 )]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
-        fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
-        LoopInferenceRecord,
+        LoopInferenceRecord, fetch_loop_reference_profile, log_inference_record,
+        lookup_similar_samples, open_pg_client,
     };
 
     let disable_db = developer_layer1_override_enabled(crate::constants::ENV_DISABLE_DB_FEEDBACK);
@@ -2367,7 +2386,9 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     if is_real {
                         emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
                     } else {
-                        emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");
+                        emit_stderr(
+                            "⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata",
+                        );
                         mutable_meta.has_transparency = false;
                     }
                 }
@@ -2532,58 +2553,54 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 if final_score > crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
                     && final_score < crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_HIGH
                     && confidence < crate::constants::LAYER6_CONFIDENCE_HIGH
+                    && let Some(p) = path
                 {
-                    if let Some(p) = path {
-                        emit_stderr(
-                            "   🔍 Triggering high-cost visual heuristics (extreme uncertainty)...",
-                        );
-                        let mut tier3_nudge = AuxiliaryNudge::default();
+                    emit_stderr(
+                        "   🔍 Triggering high-cost visual heuristics (extreme uncertainty)...",
+                    );
+                    let mut tier3_nudge = AuxiliaryNudge::default();
 
-                        let mut img_opt: Option<image::DynamicImage> = None;
-                        if let Some(bytes) = meta.cached_frame_png.as_ref() {
-                            if let Ok(img) = image::load_from_memory(bytes) {
-                                img_opt = Some(img);
-                            }
-                        } else if let Some(temp_frame) = extract_frame_to_temp(p) {
-                            if let Ok(bytes) = std::fs::read(&temp_frame) {
-                                std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
-                                    tracing::warn!(
-                                        "Non-fatal cleanup/fallback operation failed: {}",
-                                        e
-                                    );
-                                });
-                                if let Ok(img) = image::load_from_memory(&bytes) {
-                                    img_opt = Some(img);
-                                }
-                            }
+                    let mut img_opt: Option<image::DynamicImage> = None;
+                    if let Some(bytes) = meta.cached_frame_png.as_ref() {
+                        if let Ok(img) = image::load_from_memory(bytes) {
+                            img_opt = Some(img);
                         }
-
-                        if let Some(ref img) = img_opt {
-                            if detect_heavy_letterboxing_from_image(img) {
-                                tier3_nudge.apply(
-                                    crate::constants::LETTERBOXING_NUDGE,
-                                    "Letterboxing detected",
-                                );
-                            }
-                            if detect_high_text_density_from_image(img) {
-                                tier3_nudge.apply(
-                                    crate::constants::HIGH_TEXT_DENSITY_NUDGE,
-                                    "High text density",
-                                );
-                            }
+                    } else if let Some(temp_frame) = extract_frame_to_temp(p)
+                        && let Ok(bytes) = std::fs::read(&temp_frame)
+                    {
+                        std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
+                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
+                        });
+                        if let Ok(img) = image::load_from_memory(&bytes) {
+                            img_opt = Some(img);
                         }
+                    }
 
-                        if !tier3_nudge.trace.is_empty() {
-                            emit_stderr(&format!(
-                                "   📊 Tier 3 Visual ({:+.2}): {}",
-                                tier3_nudge.score,
-                                tier3_nudge.trace.join(" | ")
-                            ));
-                            final_score += tier3_nudge.score.clamp(
-                                -crate::constants::AUXILIARY_NUDGE_CAP,
-                                crate::constants::AUXILIARY_NUDGE_CAP,
+                    if let Some(ref img) = img_opt {
+                        if detect_heavy_letterboxing_from_image(img) {
+                            tier3_nudge.apply(
+                                crate::constants::LETTERBOXING_NUDGE,
+                                "Letterboxing detected",
                             );
                         }
+                        if detect_high_text_density_from_image(img) {
+                            tier3_nudge.apply(
+                                crate::constants::HIGH_TEXT_DENSITY_NUDGE,
+                                "High text density",
+                            );
+                        }
+                    }
+
+                    if !tier3_nudge.trace.is_empty() {
+                        emit_stderr(&format!(
+                            "   📊 Tier 3 Visual ({:+.2}): {}",
+                            tier3_nudge.score,
+                            tier3_nudge.trace.join(" | ")
+                        ));
+                        final_score += tier3_nudge.score.clamp(
+                            -crate::constants::AUXILIARY_NUDGE_CAP,
+                            crate::constants::AUXILIARY_NUDGE_CAP,
+                        );
                     }
                 }
 
@@ -2839,15 +2856,40 @@ fn calculate_cv(values: &[u64]) -> Option<f64> {
 }
 
 fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
+    use std::simd::f64x8;
+    use std::simd::num::SimdFloat;
+
     if values.is_empty() {
         return None;
     }
     let n = crate::numeric_cast::usize_to_f64(values.len());
-    let mean = values.iter().sum::<f64>() / n;
+
+    // SIMD mean calculation
+
+    let (prefix, chunks, suffix) = values.as_simd::<8>();
+    let mut sum_simd = f64x8::splat(0.0);
+    for chunk in chunks {
+        sum_simd += *chunk;
+    }
+    let sum = sum_simd.reduce_sum() + prefix.iter().sum::<f64>() + suffix.iter().sum::<f64>();
+    let mean = sum / n;
+
     if mean <= 0.0_f64 {
         return Some(0.0);
     }
-    let var = values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
+
+    // SIMD variance calculation
+    let mean_simd = f64x8::splat(mean);
+    let mut var_sum_simd = f64x8::splat(0.0);
+    for chunk in chunks {
+        let diff = *chunk - mean_simd;
+        var_sum_simd += diff * diff;
+    }
+    let var_sum = var_sum_simd.reduce_sum()
+        + prefix.iter().map(|&v| (v - mean).powi(2)).sum::<f64>()
+        + suffix.iter().map(|&v| (v - mean).powi(2)).sum::<f64>();
+
+    let var = var_sum / n;
     Some(var.sqrt() / mean)
 }
 
@@ -3113,37 +3155,39 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
 fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Generate unique filename: timestamp + random seed
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    let timestamp_bytes = timestamp.to_le_bytes();
-    let rand_seed = std::process::id()
-        ^ u32::from_le_bytes([
-            timestamp_bytes[0],
-            timestamp_bytes[1],
-            timestamp_bytes[2],
-            timestamp_bytes[3],
-        ]);
+    try {
+        // Generate unique filename: timestamp + random seed
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let timestamp_bytes = timestamp.to_le_bytes();
+        let rand_seed = std::process::id()
+            ^ u32::from_le_bytes([
+                timestamp_bytes[0],
+                timestamp_bytes[1],
+                timestamp_bytes[2],
+                timestamp_bytes[3],
+            ]);
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("mfb_frame_{timestamp:x}_{rand_seed:x}.png"));
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join(format!("mfb_frame_{timestamp:x}_{rand_seed:x}.png"));
 
-    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
-        .input(path)
-        .frames_v(1)
-        .format("image2")
-        .overwrite()
-        .output(&temp_path)
-        .build()
-        .output()
-        .ok()?;
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(path)
+            .frames_v(1)
+            .format("image2")
+            .overwrite()
+            .output(&temp_path)
+            .build()
+            .output()
+            .ok()?;
 
-    if output.status.success() && temp_path.exists() {
-        Some(temp_path)
-    } else {
-        None
+        if output.status.success() && temp_path.exists() {
+            temp_path
+        } else {
+            None?
+        }
     }
 }
 
@@ -3306,17 +3350,16 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut ydif_values = Vec::new();
     for line in stderr.lines() {
-        if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
-            if let Ok(val) = line
+        if let Some(idx) = line.find("lavfi.signalstats.YDIF=")
+            && let Ok(val) = line
                 .get(idx + 23..)
                 .unwrap_or("")
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
                 .parse::<f64>()
-            {
-                ydif_values.push(val);
-            }
+        {
+            ydif_values.push(val);
         }
     }
     if !ydif_values.is_empty() {
@@ -3651,12 +3694,12 @@ mod tests {
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288); // 24fps × 12s
-                                      // Make this look like a real video: widescreen, large file, scene cuts
+        // Make this look like a real video: widescreen, large file, scene cuts
         meta.width = 1920;
         meta.height = 1080;
         meta.file_size_bytes = 8_000_000;
         meta.pkt_sizes = vec![120, 130, 1400, 150, 120, 125]; // scene cut signature
-                                                              // Remove all pro-loop signals
+        // Remove all pro-loop signals
         meta.loop_closure_score = None;
         meta.motion_periodicity = None;
         meta.frame_payload_variation = None;
@@ -3746,7 +3789,7 @@ mod tests {
         meta.height = 1080;
         meta.file_size_bytes = 8_000_000;
         meta.pkt_sizes = vec![120, 130, 1400, 150, 120, 125]; // scene cut signature
-                                                              // Remove all pro-loop signals
+        // Remove all pro-loop signals
         meta.loop_closure_score = None;
         meta.motion_periodicity = None;
         meta.frame_payload_variation = None;
@@ -4105,6 +4148,32 @@ mod tests {
             !matches!(dev_long_verdict, LoopIntentVerdict::LoopStrong(_)),
             "developer override should suppress LoopStrong: {dev_long_verdict:?}"
         );
+    }
+
+    #[test]
+    fn test_calculate_cv_f64_simd() {
+        // Test with uniform data (CV should be 0)
+        let data = vec![10.0; 16];
+        let cv = calculate_cv_f64(&data);
+        assert!(cv.is_some());
+        assert!(cv.unwrap().abs() < 1e-10);
+
+        // Test with known variation
+        // mean = 4.5, std_dev ≈ 2.29, cv ≈ 0.509
+        let data2 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let cv2 = calculate_cv_f64(&data2);
+        assert!(cv2.is_some());
+        assert!((cv2.unwrap() - 0.509).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_likely_unlikely_logic_integrity() {
+        use std::intrinsics::{likely, unlikely};
+        // Verify that the intrinsics don't change logic
+        assert!(likely(true));
+        assert!(!likely(false));
+        assert!(unlikely(true));
+        assert!(!unlikely(false));
     }
 
     #[test]

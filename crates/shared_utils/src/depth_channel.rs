@@ -17,7 +17,7 @@
 //! The `cjxl` CLI does not support `--extra-channel` parameters.
 //! This module uses `jpegxl-rs` crate for direct libjxl FFI encoding.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
 use jpegxl_rs::encode::EncoderSpeed;
 use jpegxl_rs::encoder_builder;

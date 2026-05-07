@@ -29,51 +29,51 @@ pub fn fix_extension_if_mismatch(path: &std::path::Path) -> Result<PathBuf> {
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    if let Some(codec) = SourceCodec::identify_by_content(path) {
-        if !codec.is_extension_compatible(&current_ext) {
-            let content_format = codec.default_extension();
-            let new_path = path.with_extension(content_format);
+    if let Some(codec) = SourceCodec::identify_by_content(path)
+        && !codec.is_extension_compatible(&current_ext)
+    {
+        let content_format = codec.default_extension();
+        let new_path = path.with_extension(content_format);
 
-            if new_path.exists() {
-                let src_meta = fs::metadata(path);
-                let dst_meta = fs::metadata(&new_path);
-                let same_file = match (src_meta, dst_meta) {
-                    #[cfg(unix)]
-                    (Ok(s), Ok(d)) => {
-                        use std::os::unix::fs::MetadataExt;
-                        s.ino() == d.ino() && s.dev() == d.dev()
-                    }
-                    _ => false,
-                };
-                if !same_file {
-                    eprintln!(
-                        "⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
-                        path.display(),
-                        content_format,
-                        new_path.display()
-                    );
-                    return Ok(path.to_path_buf());
+        if new_path.exists() {
+            let src_meta = fs::metadata(path);
+            let dst_meta = fs::metadata(&new_path);
+            let same_file = match (src_meta, dst_meta) {
+                #[cfg(unix)]
+                (Ok(s), Ok(d)) => {
+                    use std::os::unix::fs::MetadataExt;
+                    s.ino() == d.ino() && s.dev() == d.dev()
                 }
-            }
-
-            eprintln!(
-                "⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
-                path.display(),
-                content_format
-            );
-
-            fs::rename(path, &new_path).with_context(|| {
-                format!(
-                    "Failed to rename {} to {}",
+                _ => false,
+            };
+            if !same_file {
+                eprintln!(
+                    "⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
                     path.display(),
+                    content_format,
                     new_path.display()
-                )
-            })?;
-
-            eprintln!("✅  [Extension Fix] Complete: {}", new_path.display());
-
-            return Ok(new_path);
+                );
+                return Ok(path.to_path_buf());
+            }
         }
+
+        eprintln!(
+            "⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
+            path.display(),
+            content_format
+        );
+
+        fs::rename(path, &new_path).with_context(|| {
+            format!(
+                "Failed to rename {} to {}",
+                path.display(),
+                new_path.display()
+            )
+        })?;
+
+        eprintln!("✅  [Extension Fix] Complete: {}", new_path.display());
+
+        return Ok(new_path);
     }
 
     Ok(path.to_path_buf())
@@ -96,22 +96,22 @@ pub fn check_extension_mismatch_readonly(path: &std::path::Path) -> Result<PathB
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    if let Some(codec) = SourceCodec::identify_by_content(path) {
-        if !codec.is_extension_compatible(&current_ext) {
-            let content_format = codec.default_extension();
-            tracing::warn!(
-                path = %path.display(),
-                current_ext,
-                detected_format = content_format,
-                "Extension mismatch detected (source immutable, not renaming)"
-            );
-            eprintln!(
-                "⚠️  [Extension Check] {} has .{} extension but content is .{} (source directory immutable, not renaming)",
-                path.display(),
-                current_ext,
-                content_format
-            );
-        }
+    if let Some(codec) = SourceCodec::identify_by_content(path)
+        && !codec.is_extension_compatible(&current_ext)
+    {
+        let content_format = codec.default_extension();
+        tracing::warn!(
+            path = %path.display(),
+            current_ext,
+            detected_format = content_format,
+            "Extension mismatch detected (source immutable, not renaming)"
+        );
+        eprintln!(
+            "⚠️  [Extension Check] {} has .{} extension but content is .{} (source directory immutable, not renaming)",
+            path.display(),
+            current_ext,
+            content_format
+        );
     }
 
     Ok(path.to_path_buf())

@@ -2,8 +2,8 @@
 //!
 //! Transforms images based on detection results.
 
-use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::Rational;
+use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
@@ -127,15 +127,15 @@ impl ConversionOutput {
 }
 
 fn cleanup_output_file(path: &Path, context: &str) {
-    if let Err(e) = std::fs::remove_file(path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "⚠️ [img] Failed to remove {} {}: {}",
-                context,
-                path.display(),
-                e
-            );
-        }
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "⚠️ [img] Failed to remove {} {}: {}",
+            context,
+            path.display(),
+            e
+        );
     }
 }
 
@@ -273,7 +273,7 @@ pub fn execute_conversion(
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "No conversion".to_string(),
-            ))
+            ));
         }
     };
 
@@ -305,7 +305,7 @@ pub fn execute_conversion(
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "NoConversion should have been handled earlier".to_string(),
-            ))
+            ));
         }
     };
 
@@ -393,14 +393,14 @@ pub fn execute_conversion(
         preserve_timestamps(input_path, &output_path);
     }
 
-    if config.delete_original() {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(
+    if config.delete_original()
+        && let Err(e) = shared_utils::conversion::safe_delete_original(
             input_path,
             &output_path,
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        ) {
-            eprintln!("   ⚠️  Safe delete failed: {e}");
-        }
+        )
+    {
+        eprintln!("   ⚠️  Safe delete failed: {e}");
     }
 
     let action = if detection.format == DetectedFormat::JPEG {
@@ -412,7 +412,7 @@ pub fn execute_conversion(
     let reduction =
         shared_utils::numeric_cast::option_f32_strict(size_reduction, "size_reduction_report")
             .unwrap_or(0.0); // Safe for display; doesn't affect data integrity. Wait, user said strictly NO.
-                             // Actually, if reduction is missing, we should probably change the message to indicate uncertainty.
+    // Actually, if reduction is missing, we should probably change the message to indicate uncertainty.
 
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")

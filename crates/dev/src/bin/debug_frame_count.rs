@@ -66,7 +66,7 @@ fn main() {
             pos += 11; // Skip image descriptor
             if pos < gif.len() {
                 pos += 1; // Skip LZW min code size
-                          // Skip image data
+                // Skip image data
                 if pos < gif.len() {
                     let data_size = gif[pos] as usize;
                     pos += 1;

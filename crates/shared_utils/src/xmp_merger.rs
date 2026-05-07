@@ -1,5 +1,5 @@
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -551,12 +551,12 @@ impl XmpMerger {
     fn find_by_xmp_metadata(xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
 
-        if let Some(ref derived) = xmp_info.derived_from {
-            if !derived.contains("uuid:") {
-                let candidate = parent.join(derived);
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
+        if let Some(ref derived) = xmp_info.derived_from
+            && !derived.contains("uuid:")
+        {
+            let candidate = parent.join(derived);
+            if candidate.is_file() {
+                return Some(candidate);
             }
         }
 
@@ -933,14 +933,14 @@ impl XmpMerger {
         original: Option<(filetime::FileTime, filetime::FileTime)>,
         _xmp: Option<(filetime::FileTime, filetime::FileTime)>,
     ) {
-        if let Some((atime, mtime)) = original {
-            if let Err(e) = filetime::set_file_times(media_path, atime, mtime) {
-                eprintln!(
-                    "⚠️ Failed to restore timestamp for {}: {}",
-                    media_path.display(),
-                    e
-                );
-            }
+        if let Some((atime, mtime)) = original
+            && let Err(e) = filetime::set_file_times(media_path, atime, mtime)
+        {
+            eprintln!(
+                "⚠️ Failed to restore timestamp for {}: {}",
+                media_path.display(),
+                e
+            );
         }
     }
 
@@ -971,16 +971,15 @@ impl XmpMerger {
 
         match self.merge_xmp(xmp_path, &media) {
             Ok(()) => {
-                if self.config.delete_xmp_after_merge {
-                    if let Err(err) = std::fs::remove_file(xmp_path) {
-                        if matches!(self.config.log_level, LogLevel::Verbose) {
-                            crate::progress_mode::emit_stderr(&format!(
-                                "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
-                                xmp_path.display(),
-                                err
-                            ));
-                        }
-                    }
+                if self.config.delete_xmp_after_merge
+                    && let Err(err) = std::fs::remove_file(xmp_path)
+                    && matches!(self.config.log_level, LogLevel::Verbose)
+                {
+                    crate::progress_mode::emit_stderr(&format!(
+                        "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
+                        xmp_path.display(),
+                        err
+                    ));
                 }
 
                 MergeResult {
@@ -1369,8 +1368,9 @@ mod tests {
         let err = XmpMerger::extract_xmp_metadata(&empty_xmp, LogLevel::Verbose)
             .err()
             .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
-        assert!(err
-            .to_string()
-            .contains("ExifTool metadata extraction failed"));
+        assert!(
+            err.to_string()
+                .contains("ExifTool metadata extraction failed")
+        );
     }
 }

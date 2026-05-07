@@ -193,10 +193,10 @@ fn calculate_confidence(
     chroma_estimate: Option<&QualityEstimate>,
 ) -> f64 {
     if luma_estimate.is_exact_match {
-        if let Some(chroma) = chroma_estimate {
-            if chroma.is_exact_match {
-                return 1.0;
-            }
+        if let Some(chroma) = chroma_estimate
+            && chroma.is_exact_match
+        {
+            return 1.0;
         }
         return 0.98;
     }
@@ -247,10 +247,11 @@ fn detect_encoder(
         return Some("Adobe Photoshop".to_string());
     }
 
-    if let Some(c_sse) = chroma_sse {
-        if (200.0_f64..400.0_f64).contains(&luma_sse) && (10.0_f64..50.0_f64).contains(&c_sse) {
-            return Some("Android Camera".to_string());
-        }
+    if let Some(c_sse) = chroma_sse
+        && (200.0_f64..400.0_f64).contains(&luma_sse)
+        && (10.0_f64..50.0_f64).contains(&c_sse)
+    {
+        return Some("Android Camera".to_string());
     }
 
     if (500.0_f64..700.0_f64).contains(&luma_sse) {
@@ -318,7 +319,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         }
 
         let Some(length_high) = data.get(pos).copied() else {
-            warn!("☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte");
+            warn!(
+                "☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte"
+            );
             return Err("Failed to read segment length high byte".to_string());
         };
         let Some(length_low) = data.get(pos + 1).copied() else {
@@ -609,7 +612,10 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
             && payload.len() > 29
         {
-            let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[]));
+            let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
+                warn!("☢️ [ANOMALY] APP1 XMP payload truncated before namespace offset");
+                &[]
+            }));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
             }
@@ -660,11 +666,21 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
                 continue;
             }
 
-            let payload = data.get(pos + 4..pos + 2 + seg_len).unwrap_or(&[]);
+            let payload = data.get(pos + 4..pos + 2 + seg_len).unwrap_or_else(|| {
+                warn!(
+                    "☢️ [ANOMALY] JPEG segment payload truncated at position {}",
+                    pos + 4
+                );
+                &[]
+            });
 
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[])).to_string();
+                let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
+                    warn!("☢️ [ANOMALY] APP1 XMP standard payload truncated");
+                    &[]
+                }))
+                .to_string();
                 xmp_blocks.push(xmp);
             }
             // APP1 (0xE1): XMP Extended
@@ -672,7 +688,11 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
                 && payload.len() > 35 + 32 + 8
             {
                 let xmp =
-                    String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or(&[])).to_string();
+                    String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or_else(|| {
+                        warn!("☢️ [ANOMALY] APP1 XMP extended payload truncated");
+                        &[]
+                    }))
+                    .to_string();
                 xmp_blocks.push(xmp);
             }
             pos += 2 + seg_len;
@@ -990,7 +1010,13 @@ fn candidate_gainmap_bytes(
         _ => return None,
     };
 
-    let mut candidate = jpeg_data.get(start..end).unwrap_or(&[]).to_vec();
+    let mut candidate = jpeg_data
+        .get(start..end)
+        .unwrap_or_else(|| {
+            tracing::warn!("☢️ [ANOMALY] Gainmap candidate slice out of bounds");
+            &[]
+        })
+        .to_vec();
     let repaired_eoi = !candidate.ends_with(&JPEG_EOI_BYTES);
     if repaired_eoi {
         candidate.extend_from_slice(&JPEG_EOI_BYTES);
@@ -1003,11 +1029,20 @@ fn decode_gainmap_dimensions(candidate: &[u8]) -> Option<(u32, u32)> {
     use image::ImageReader;
     use std::io::Cursor;
 
-    let decoded = ImageReader::new(Cursor::new(candidate))
-        .with_guessed_format()
-        .ok()?
-        .decode()
-        .ok()?;
+    let reader = match ImageReader::new(Cursor::new(candidate)).with_guessed_format() {
+        Ok(r) => r,
+        Err(e) => {
+            debug!("Gainmap candidate format detection failed: {}", e);
+            return None;
+        }
+    };
+    let decoded = match reader.decode() {
+        Ok(d) => d,
+        Err(e) => {
+            debug!("Gainmap candidate decoding failed: {}", e);
+            return None;
+        }
+    };
 
     Some(decoded.dimensions())
 }
@@ -1234,10 +1269,10 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             format!("Failed to extract APP2 payload at position {}", pos + 2)
         })?;
 
-        if marker == 0xE2 {
-            if let Some(mpf_payload) = strip_mpf_identifier(payload) {
-                return Ok(mpf_payload.to_vec());
-            }
+        if marker == 0xE2
+            && let Some(mpf_payload) = strip_mpf_identifier(payload)
+        {
+            return Ok(mpf_payload.to_vec());
         }
 
         pos += seg_len;
@@ -1484,7 +1519,7 @@ fn extract_gainmap_from_mpf(
         return Err("Gainmap length is 0. Invalid MPF structure.".to_string());
     }
 
-    if gainmap_length > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX) {
+    if (gainmap_length as usize) > jpeg_data.len() {
         warn!(
             gainmap_length,
             jpeg_len = jpeg_data.len(),
@@ -1817,9 +1852,11 @@ mod tests {
         let empty_data: &[u8] = &[];
         let result = extract_gainmap_from_jpeg(empty_data);
         assert!(result.is_err());
-        assert!(result
-            .err()
-            .is_some_and(|e| e.contains("Invalid JPEG signature")));
+        assert!(
+            result
+                .err()
+                .is_some_and(|e| e.contains("Invalid JPEG signature"))
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::media_index::{now_unix, MediaIndex};
+use dev::media_index::{MediaIndex, now_unix};
 use shared_utils::blake3::Hasher;
-use shared_utils::image_detection::{detect_image, ImageType};
+use shared_utils::image_detection::{ImageType, detect_image};
 use shared_utils::media_index_types::MediaIndexRow;
 use shared_utils::video_detection::detect_video;
 use std::io::Read;

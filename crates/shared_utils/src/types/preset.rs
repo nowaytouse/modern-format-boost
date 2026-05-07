@@ -72,7 +72,7 @@ pub fn sanitize_hevc_preset_name(preset: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_hevc_preset_name, EncoderPreset};
+    use super::{EncoderPreset, sanitize_hevc_preset_name};
 
     #[test]
     fn test_hevc_preset_sanitizer_clamps_to_allowed_window() {

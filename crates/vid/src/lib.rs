@@ -23,9 +23,9 @@ pub use conversion_api::{
     auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat,
 };
 pub use detection_api::{
-    detect_video, ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult,
+    ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult, detect_video,
 };
-pub use ffprobe::{probe_video, FFprobeResult};
+pub use ffprobe::{FFprobeResult, probe_video};
 pub use shared_utils::conversion_types::{
     ConfigFlags, ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };

@@ -108,7 +108,9 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
 
     let [major_str, minor_str, patch_str] = parts[..] else {
-        unreachable!("FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'");
+        unreachable!(
+            "FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'"
+        );
     };
 
     let major: u32 = major_str

@@ -1,7 +1,7 @@
-use crate::batch::{disk_full_pause_reason, BatchPauseController, BatchResult};
+use crate::batch::{BatchPauseController, BatchResult, disk_full_pause_reason};
 use crate::common_utils::has_extension;
 use crate::file_copier::{
-    copy_unsupported_files, verify_output_completeness, SUPPORTED_VIDEO_EXTENSIONS,
+    SUPPORTED_VIDEO_EXTENSIONS, copy_unsupported_files, verify_output_completeness,
 };
 use crate::report::print_summary_report;
 use crate::smart_file_copier::fix_extension_if_mismatch;
@@ -119,20 +119,20 @@ where
     if let Err(e) = crate::safety::check_apple_photos_library(input) {
         anyhow::bail!("{e}");
     }
-    if config.protect_destructive_dirs {
-        if let Err(e) = crate::safety::check_dangerous_directory(input) {
-            anyhow::bail!("{e}");
-        }
+    if config.protect_destructive_dirs
+        && let Err(e) = crate::safety::check_dangerous_directory(input)
+    {
+        anyhow::bail!("{e}");
     }
 
     if let Some(ref out_dir) = config.output {
         if let Err(e) = crate::safety::check_apple_photos_library(out_dir) {
             anyhow::bail!("{e}");
         }
-        if config.protect_destructive_dirs {
-            if let Err(e) = crate::safety::check_dangerous_directory(out_dir) {
-                anyhow::bail!("{e}");
-            }
+        if config.protect_destructive_dirs
+            && let Err(e) = crate::safety::check_dangerous_directory(out_dir)
+        {
+            anyhow::bail!("{e}");
         }
     }
 
@@ -154,7 +154,9 @@ where
     }
 
     info!("Found {} video files to process", files.len());
-    info!("Strategy: deeper paths -> lighter workload -> shorter duration -> smaller files -> lower resolution");
+    info!(
+        "Strategy: deeper paths -> lighter workload -> shorter duration -> smaller files -> lower resolution"
+    );
 
     // Reset global session stats to zero at the start of each directory processing run.
     // This ensures that progressive UI stats (X: 12v, etc.) reflect the current task.
@@ -348,25 +350,25 @@ where
                 return;
             }
 
-            if let Some(cp) = checkpoint.as_ref() {
-                if cp.is_completed(&fixed) {
-                    if crate::progress_mode::is_verbose_mode() {
-                        info!(
-                            "   SKIP: {} (Already recorded as completed in checkpoint)",
-                            fixed.file_name().unwrap_or_default().to_string_lossy()
-                        );
-                    }
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    crate::progress_mode::write_progress_line_to_run_log(
-                        start_time.elapsed().as_secs(),
-                        crate::numeric_cast::usize_to_u64(current),
-                        crate::numeric_cast::usize_to_u64(total_files),
-                        &fixed.file_name().unwrap_or_default().to_string_lossy(),
+            if let Some(cp) = checkpoint.as_ref()
+                && cp.is_completed(&fixed)
+            {
+                if crate::progress_mode::is_verbose_mode() {
+                    info!(
+                        "   SKIP: {} (Already recorded as completed in checkpoint)",
+                        fixed.file_name().unwrap_or_default().to_string_lossy()
                     );
-                    progress_bar.set(crate::numeric_cast::usize_to_u64(current));
-                    return;
                 }
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                crate::progress_mode::write_progress_line_to_run_log(
+                    start_time.elapsed().as_secs(),
+                    crate::numeric_cast::usize_to_u64(current),
+                    crate::numeric_cast::usize_to_u64(total_files),
+                    &fixed.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                progress_bar.set(crate::numeric_cast::usize_to_u64(current));
+                return;
             }
 
             match converter(fixed.as_path()) {
@@ -400,14 +402,14 @@ where
                             result.message(),
                         );
 
-                        if let Some(cp) = checkpoint.as_ref() {
-                            if let Err(err) = cp.mark_completed(&fixed) {
-                                warn!(
-                                    "⚠️ Failed to mark checkpoint complete for {}: {}",
-                                    fixed.display(),
-                                    err
-                                );
-                            }
+                        if let Some(cp) = checkpoint.as_ref()
+                            && let Err(err) = cp.mark_completed(&fixed)
+                        {
+                            warn!(
+                                "⚠️ Failed to mark checkpoint complete for {}: {}",
+                                fixed.display(),
+                                err
+                            );
                         }
                     } else {
                         if let Some(reason) = disk_full_pause_reason(result.message()) {
@@ -586,10 +588,10 @@ where
         anyhow::bail!("{e}");
     }
 
-    if let Some(ref out_dir) = config.output {
-        if let Err(e) = crate::safety::check_apple_photos_library(out_dir) {
-            anyhow::bail!("{e}");
-        }
+    if let Some(ref out_dir) = config.output
+        && let Err(e) = crate::safety::check_apple_photos_library(out_dir)
+    {
+        anyhow::bail!("{e}");
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).

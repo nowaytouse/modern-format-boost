@@ -24,16 +24,20 @@ fn common_even_metric_dimensions(
 }
 
 fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32, u32)> {
-    let (input_width, input_height) = crate::conversion::get_input_dimensions(input)
-        .map_err(|err| {
+    let (input_width, input_height) = match crate::conversion::get_input_dimensions(input) {
+        Ok(d) => d,
+        Err(err) => {
             eprintln!("      ❌ Failed to read reference dimensions for quality metric: {err}");
-        })
-        .ok()?;
-    let (output_width, output_height) = crate::conversion::get_input_dimensions(output)
-        .map_err(|err| {
+            return None;
+        }
+    };
+    let (output_width, output_height) = match crate::conversion::get_input_dimensions(output) {
+        Ok(d) => d,
+        Err(err) => {
             eprintln!("      ❌ Failed to read distorted dimensions for quality metric: {err}");
-        })
-        .ok()?;
+            return None;
+        }
+    };
 
     let (target_width, target_height) =
         common_even_metric_dimensions(input_width, input_height, output_width, output_height)?;
@@ -56,13 +60,13 @@ pub fn calculate_ms_ssim_yuv(
     use chrono::Local;
     use std::thread;
 
-    if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-        if matches!(ext.to_lowercase().as_str(), "gif") {
-            eprintln!(
-                "   ℹ️  GIF format: skipping MS-SSIM (libvmaf incompatible), caller will use SSIM-All."
-            );
-            return None;
-        }
+    if let Some(ext) = input.extension().and_then(|e| e.to_str())
+        && matches!(ext.to_lowercase().as_str(), "gif")
+    {
+        eprintln!(
+            "   ℹ️  GIF format: skipping MS-SSIM (libvmaf incompatible), caller will use SSIM-All."
+        );
+        return None;
     }
 
     let duration = super::stream_analysis::get_video_duration(input).unwrap_or_else(|| {
@@ -206,13 +210,11 @@ fn calculate_ms_ssim_channel_sampled(
     target_width: u32,
     target_height: u32,
 ) -> Option<f64> {
-    if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-        if matches!(ext.to_lowercase().as_str(), "gif") {
-            eprintln!(
-                "      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)"
-            );
-            return None;
-        }
+    if let Some(ext) = input.extension().and_then(|e| e.to_str())
+        && matches!(ext.to_lowercase().as_str(), "gif")
+    {
+        eprintln!("      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)");
+        return None;
     }
 
     // For chroma channels (U/V) in YUV 4:2:0, the extracted plane is half the
@@ -222,7 +224,9 @@ fn calculate_ms_ssim_channel_sampled(
     if matches!(channel, "u" | "v") && (target_width < 256 || target_height < 256) {
         eprintln!(
             "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min 256x256), skipping",
-            channel.to_uppercase(), target_width, target_height
+            channel.to_uppercase(),
+            target_width,
+            target_height
         );
         return None;
     }
@@ -308,14 +312,14 @@ fn calculate_ms_ssim_channel_sampled(
 
 #[must_use]
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
-    if let Ok(info) = crate::ffprobe::probe_video(input) {
-        if info.width < 64 || info.height < 64 {
-            eprintln!(
-                "   ⚠️  Skipping MS-SSIM: Image too small ({}x{}) for multi-scale analysis",
-                info.width, info.height
-            );
-            return None;
-        }
+    if let Ok(info) = crate::ffprobe::probe_video(input)
+        && (info.width < 64 || info.height < 64)
+    {
+        eprintln!(
+            "   ⚠️  Skipping MS-SSIM: Image too small ({}x{}) for multi-scale analysis",
+            info.width, info.height
+        );
+        return None;
     }
 
     eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
@@ -407,7 +411,17 @@ fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
                         .find(|c: char| !c.is_numeric() && c != '.')
                         .unwrap_or(after_colon.len());
                     if end > 0 {
-                        return after_colon[..end].parse::<f64>().ok();
+                        match after_colon[..end].parse::<f64>() {
+                            Ok(f) => return Some(f),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to parse float_ms_ssim value '{}': {}",
+                                    &after_colon[..end],
+                                    e
+                                );
+                                return None;
+                            }
+                        }
                     }
                 }
             }
@@ -420,14 +434,23 @@ fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
     for line in stderr.lines() {
         if (line.contains("MS-SSIM") || line.contains("ms_ssim") || line.contains("float_ms_ssim"))
             && line.contains("score:")
+            && let Some(score_pos) = line.find("score:")
         {
-            if let Some(score_pos) = line.find("score:") {
-                let after_score = &line[score_pos + 6..].trim_start();
-                let end = after_score
-                    .find(|c: char| !c.is_numeric() && c != '.')
-                    .unwrap_or(after_score.len());
-                if end > 0 {
-                    return after_score[..end].parse::<f64>().ok();
+            let after_score = &line[score_pos + 6..].trim_start();
+            let end = after_score
+                .find(|c: char| !c.is_numeric() && c != '.')
+                .unwrap_or(after_score.len());
+            if end > 0 {
+                match after_score[..end].parse::<f64>() {
+                    Ok(f) => return Some(f),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse legacy ms_ssim value '{}': {}",
+                            &after_score[..end],
+                            e
+                        );
+                        return None;
+                    }
                 }
             }
         }
@@ -516,7 +539,13 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     let n_threads = num_cpus_capped();
 
-    let log_file = tempfile::Builder::new().suffix(".json").tempfile().ok()?;
+    let log_file = match tempfile::Builder::new().suffix(".json").tempfile() {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("Failed to create temp file for CAMBI calculation: {}", e);
+            return None;
+        }
+    };
     let log_path = log_file.path().to_path_buf();
 
     // libvmaf filter requires TWO inputs (main + reference).
@@ -544,7 +573,17 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     match result {
         Ok(out) if out.status.success() => {
             // Read JSON from the temp log file
-            let json = std::fs::read_to_string(&log_path).ok()?;
+            let json = match std::fs::read_to_string(&log_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read CAMBI log file at {}: {}",
+                        log_path.display(),
+                        e
+                    );
+                    return None;
+                }
+            };
             parse_cambi_mean_from_json(&json)
         }
         Ok(out) => {
@@ -688,12 +727,12 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
                 let end = after
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(after.len());
-                if end > 0 {
-                    if let Ok(v) = after[..end].parse::<f64>() {
-                        if v.is_finite() && v > 0.0_f64 {
-                            return Some(v);
-                        }
-                    }
+                if end > 0
+                    && let Ok(v) = after[..end].parse::<f64>()
+                    && v.is_finite()
+                    && v > 0.0_f64
+                {
+                    return Some(v);
                 }
             }
             // Fallback: "average:" field
@@ -705,12 +744,12 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
                 let end = after
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(after.len());
-                if end > 0 {
-                    if let Ok(v) = after[..end].parse::<f64>() {
-                        if v.is_finite() && v > 0.0_f64 {
-                            return Some(v);
-                        }
-                    }
+                if end > 0
+                    && let Ok(v) = after[..end].parse::<f64>()
+                    && v.is_finite()
+                    && v > 0.0_f64
+                {
+                    return Some(v);
                 }
             }
         }
@@ -732,7 +771,17 @@ fn parse_vmaf_mean_from_json(stdout: &str) -> Option<f64> {
                         .find(|c: char| !c.is_numeric() && c != '.')
                         .unwrap_or(after_colon.len());
                     if end > 0 {
-                        return after_colon[..end].parse::<f64>().ok();
+                        match after_colon[..end].parse::<f64>() {
+                            Ok(f) => return Some(f),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to parse vmaf mean value '{}': {}",
+                                    &after_colon[..end],
+                                    e
+                                );
+                                return None;
+                            }
+                        }
                     }
                 }
             }
@@ -755,7 +804,17 @@ fn parse_cambi_mean_from_json(stdout: &str) -> Option<f64> {
                         .find(|c: char| !c.is_numeric() && c != '.')
                         .unwrap_or(after_colon.len());
                     if end > 0 {
-                        return after_colon[..end].parse::<f64>().ok();
+                        match after_colon[..end].parse::<f64>() {
+                            Ok(f) => return Some(f),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to parse cambi mean value '{}': {}",
+                                    &after_colon[..end],
+                                    e
+                                );
+                                return None;
+                            }
+                        }
                     }
                 }
             }
@@ -883,8 +942,7 @@ mod tests {
     #[test]
     fn test_parse_psnr_standard_ffmpeg_line() {
         // Standard ffmpeg psnr filter summary line
-        let stderr =
-            "[Parsed_psnr_4 @ 0x123] PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567\n";
+        let stderr = "[Parsed_psnr_4 @ 0x123] PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567\n";
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some(), "Should parse PSNR from standard line");
         let v = result.unwrap_or_else(|| panic!("missing value"));

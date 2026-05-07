@@ -2,7 +2,7 @@
 //!
 //! Tests normal processing flows for images, videos, and animations to prevent regressions
 
-use shared_utils::loop_intent::{evaluate_loop_tree, LoopMeta};
+use shared_utils::loop_intent::{LoopMeta, evaluate_loop_tree};
 use shared_utils::media_meta_utils::scan_gif_headers;
 use shared_utils::quality_matcher::SourceCodec;
 use std::io::Write;
@@ -89,7 +89,7 @@ fn create_test_animated_gif() -> Vec<u8> {
     gif.extend_from_slice(&[0x80, 0x00]); // Global color table flag + 2 colors
     gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
     gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
-                                          // Global color table (2 colors)
+    // Global color table (2 colors)
     gif.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // White
     gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Black
 

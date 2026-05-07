@@ -15,16 +15,31 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
         return None;
     }
 
-    let temp_icc = tempfile::Builder::new().suffix(".icc").tempfile().ok()?;
-    let output = crate::image_builders::ExiftoolBuilder::new()
+    let temp_icc = match tempfile::Builder::new().suffix(".icc").tempfile() {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(path = %src.display(), error = %e, "Failed to create temporary file for ICC extraction");
+            return None;
+        }
+    };
+    let output = match crate::image_builders::ExiftoolBuilder::new()
         .input(src)
         .extract_icc_profile()
         .build()
         .output()
-        .ok()?;
+    {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(path = %src.display(), error = %e, "Failed to execute ExifTool for ICC extraction");
+            return None;
+        }
+    };
 
     if output.status.success() && !output.stdout.is_empty() {
-        std::fs::write(temp_icc.path(), &output.stdout).ok()?;
+        if let Err(e) = std::fs::write(temp_icc.path(), &output.stdout) {
+            tracing::warn!(path = %src.display(), error = %e, "Failed to write extracted ICC profile to temp file");
+            return None;
+        }
         Some(temp_icc)
     } else {
         None
@@ -101,14 +116,14 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
             .build()
             .output();
 
-        if let Ok(output) = result {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "JXL health check failed (jxlinfo): {}",
-                    stderr.trim()
-                ));
-            }
+        if let Ok(output) = result
+            && !output.status.success()
+        {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "JXL health check failed (jxlinfo): {}",
+                stderr.trim()
+            ));
         }
     }
 
@@ -183,12 +198,22 @@ fn is_cjxl_signal_killed(stderr: &str) -> bool {
 #[must_use]
 pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
+    let mut f = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to open PNG for bit depth detection");
+            return None;
+        }
+    };
     let mut buf = [0u8; 25];
-    f.read_exact(&mut buf).ok()?;
+    if let Err(e) = f.read_exact(&mut buf) {
+        tracing::warn!(path = %path.display(), error = %e, "Failed to read PNG header for bit depth detection");
+        return None;
+    }
     // PNG signature is 8 bytes; IHDR: 4 len + 4 type + 13 data bytes.
     // Bit depth is the first byte of IHDR data, at offset 8+4+4+8 = 24.
     if &buf[0..8] != b"\x89PNG\r\n\x1a\n" {
+        tracing::warn!(path = %path.display(), "Invalid PNG signature during bit depth detection");
         return None;
     }
     Some(buf[24])

@@ -12,8 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn classify_animated_webp_even_without_vp8x_in_first_64_bytes(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn classify_animated_webp_even_without_vp8x_in_first_64_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
     let bytes = synth_webp::build_synthetic_animated_webp_without_vp8x_in_header();
 
     // Header-only classifier should see RIFF/WEBP but NOT VP8X => initial WebpStatic.

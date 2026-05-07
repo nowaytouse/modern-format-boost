@@ -89,33 +89,30 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                             break;
                         };
                         let block_size = block_size as usize;
-                        if block_size == 11 && pos + 3 + block_size <= buf.len() {
-                            if let Some(vendor_bytes) = buf.get(pos + 3..pos + 3 + block_size) {
-                                if let Ok(vendor) = std::str::from_utf8(vendor_bytes) {
-                                    if !vendor.is_empty() {
-                                        app_extensions.push(vendor.to_owned());
-                                        if vendor == "NETSCAPE2.0" {
-                                            let sub_pos = pos + 3 + block_size;
-                                            if sub_pos + 3 < buf.len() {
-                                                let Some(&sub_size) = buf.get(sub_pos) else {
-                                                    break;
-                                                };
-                                                let Some(&sub1) = buf.get(sub_pos + 1) else {
-                                                    break;
-                                                };
-                                                if sub_size >= 3 && sub1 == 0x01 {
-                                                    let Some(&lo) = buf.get(sub_pos + 2) else {
-                                                        break;
-                                                    };
-                                                    let Some(&hi) = buf.get(sub_pos + 3) else {
-                                                        break;
-                                                    };
-                                                    loop_count = Some(
-                                                        u16::from(lo) | (u16::from(hi) << 8_i32),
-                                                    );
-                                                }
-                                            }
-                                        }
+                        if block_size == 11
+                            && pos + 3 + block_size <= buf.len()
+                            && let Some(vendor_bytes) = buf.get(pos + 3..pos + 3 + block_size)
+                            && let Ok(vendor) = std::str::from_utf8(vendor_bytes)
+                            && !vendor.is_empty()
+                        {
+                            app_extensions.push(vendor.to_owned());
+                            if vendor == "NETSCAPE2.0" {
+                                let sub_pos = pos + 3 + block_size;
+                                if sub_pos + 3 < buf.len() {
+                                    let Some(&sub_size) = buf.get(sub_pos) else {
+                                        break;
+                                    };
+                                    let Some(&sub1) = buf.get(sub_pos + 1) else {
+                                        break;
+                                    };
+                                    if sub_size >= 3 && sub1 == 0x01 {
+                                        let Some(&lo) = buf.get(sub_pos + 2) else {
+                                            break;
+                                        };
+                                        let Some(&hi) = buf.get(sub_pos + 3) else {
+                                            break;
+                                        };
+                                        loop_count = Some(u16::from(lo) | (u16::from(hi) << 8_i32));
                                     }
                                 }
                             }

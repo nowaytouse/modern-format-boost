@@ -5,8 +5,8 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
-use crate::types::ssim::Ssim;
 use crate::Rational;
+use crate::types::ssim::Ssim;
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
@@ -78,7 +78,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
             // Convert to Integer only after summing to avoid heap allocs in loop.
             let mse_sum_int = Integer::from(
                 crate::numeric_cast::f64_to_i64_strict(mse_sum.round(), "mse_sum_rounded")
-                    .unwrap_or(0),
+                    .expect("mse_sum easily fits in i64 bounds"),
             );
             let pixel_count_int = Integer::from(orig_pixels.len());
             let three_int = Integer::from(3);
@@ -93,7 +93,10 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         mse_sum / (3.0 * pixel_count)
     };
 
-    if mse < 1e-10_f64 {
+    if crate::numeric_cast::is_effectively_zero(
+        mse,
+        crate::numeric_cast::FloatContext::Accumulation,
+    ) {
         return Some(f64::INFINITY);
     }
 
@@ -138,11 +141,9 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
         return None;
     }
     let count = crate::numeric_cast::usize_to_f64(positions.len());
-    Some(
-        (Rational::from_f64(ssim_sum).unwrap_or_else(|| Rational::from(0))
-            / Rational::from_f64(count).unwrap_or_else(|| Rational::from(1)))
-        .to_f64(),
-    )
+    let count_r = Rational::from_f64(count).expect("positions.len() is always positive and finite");
+    let ssim_sum_r = Rational::from_f64(ssim_sum)?;
+    Some((ssim_sum_r / count_r).to_f64())
 }
 
 fn calculate_window_ssim(
@@ -162,15 +163,15 @@ fn calculate_window_ssim(
             // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
             let pixel_x = crate::numeric_cast::usize_to_u32_sat(px);
             let pixel_y = crate::numeric_cast::usize_to_u32_sat(py);
-            if let Some(r) = buf_x.get_mut(i) {
-                if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(orig.get_pixel(pixel_x, pixel_y)[0]);
-                }
+            if let Some(r) = buf_x.get_mut(i)
+                && let Some(c) = r.get_mut(j)
+            {
+                *c = f64::from(orig.get_pixel(pixel_x, pixel_y)[0]);
             }
-            if let Some(r) = buf_y.get_mut(i) {
-                if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(conv.get_pixel(pixel_x, pixel_y)[0]);
-                }
+            if let Some(r) = buf_y.get_mut(i)
+                && let Some(c) = r.get_mut(j)
+            {
+                *c = f64::from(conv.get_pixel(pixel_x, pixel_y)[0]);
             }
         }
     }
@@ -255,17 +256,15 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         let var_y = (yy_sq_sum - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
         let cov_xy = (xy_cross_sum - (n * mean_x.clone() * mean_y.clone())) / n1;
 
-        let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
-        let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
+        let c1_rat = Rational::from_f64(C1).expect("C1 = (K1*L)^2 is always finite");
+        let c2_rat = Rational::from_f64(C2).expect("C2 = (K2*L)^2 is always finite");
 
         let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
             * (Rational::from(2) * cov_xy + c2_rat.clone());
         let denominator =
             (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
 
-        if denominator.clone().abs()
-            < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0))
-        {
+        if denominator == 0 {
             return Some(1.0);
         }
         Some((numerator / denominator).to_f64())
@@ -282,7 +281,10 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
         let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
 
-        if denominator.abs() < 1e-10 {
+        if crate::numeric_cast::is_effectively_zero(
+            denominator,
+            crate::numeric_cast::FloatContext::Accumulation,
+        ) {
             return Some(1.0);
         }
         Some(numerator / denominator)
@@ -407,9 +409,10 @@ mod tests {
         let img2 = img1.clone();
 
         let psnr = calculate_psnr(&img1, &img2);
-        assert!(psnr
-            .unwrap_or_else(|| panic!("missing metric value"))
-            .is_infinite());
+        assert!(
+            psnr.unwrap_or_else(|| panic!("missing metric value"))
+                .is_infinite()
+        );
 
         let ssim = calculate_ssim(&img1, &img2);
         assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01_f64);

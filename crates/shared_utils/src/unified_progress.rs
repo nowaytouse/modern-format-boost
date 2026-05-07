@@ -3,8 +3,8 @@
 //! Provides a consistent experience for both batch processing and video exploration.
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub mod templates {
     pub const BATCH: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} • {msg}";

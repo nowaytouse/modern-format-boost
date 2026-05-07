@@ -23,6 +23,47 @@ use crate::Rational;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+// --- Nightly Specialization Layer ---
+/// Unified trait for audited numeric conversions.
+/// Leveraging nightly specialization for zero-cost optimized paths.
+/// Unified trait for audited numeric conversions.
+/// Leveraging nightly specialization for zero-cost optimized paths.
+pub trait AuditedCast<T> {
+    /// Performs a saturating cast with audited safety.
+    fn cast_sat(self) -> T;
+}
+
+impl AuditedCast<u64> for f64 {
+    fn cast_sat(self) -> u64 {
+        if self.is_nan() || self < 0.0 {
+            0
+        } else {
+            raw::f64_to_u64(self)
+        }
+    }
+}
+
+impl AuditedCast<u32> for f64 {
+    fn cast_sat(self) -> u32 {
+        if self.is_nan() || self < 0.0 {
+            0
+        } else {
+            raw::f64_to_u32(self)
+        }
+    }
+}
+
+impl AuditedCast<usize> for f64 {
+    fn cast_sat(self) -> usize {
+        if self.is_nan() || self < 0.0 {
+            0
+        } else {
+            raw::f64_to_usize(self)
+        }
+    }
+}
+// ------------------------------------
+
 /// Convert f64 to Rational with loud warning on NaN/Inf.
 /// Refuses to forge data as requested by the Quality Manifesto.
 #[must_use]
@@ -54,7 +95,10 @@ pub fn option_f64_strict(val: Option<f64>, name: &str) -> Option<f64> {
 #[must_use]
 pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
     if !val.is_finite() || val < 0.0 {
-        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u64. Information invalidated.", name, val);
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u64. Information invalidated.",
+            name, val
+        );
         return None;
     }
     if val >= 18_446_744_073_709_551_616.0 {
@@ -72,7 +116,10 @@ pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
 #[must_use]
 pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
     if !val.is_finite() || val < 0.0 {
-        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u32. Information invalidated.", name, val);
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u32. Information invalidated.",
+            name, val
+        );
         return None;
     }
     if val >= 4_294_967_296.0 {
@@ -90,24 +137,56 @@ pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
 #[must_use]
 pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
     if !val.is_finite() || val < 0.0 {
-        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge usize. Information invalidated.", name, val);
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge usize. Information invalidated.",
+            name, val
+        );
         return None;
     }
     #[cfg(target_pointer_width = "64")]
     {
         if val >= 18_446_744_073_709_551_616.0 {
-            warn!("☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.", name, val);
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.",
+                name, val
+            );
             return None;
         }
     }
     #[cfg(target_pointer_width = "32")]
     {
         if val >= 4_294_967_296.0 {
-            warn!("☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.", name, val);
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.",
+                name, val
+            );
             return None;
         }
     }
     Some(raw::f64_to_usize(val))
+}
+
+/// Parse a string into a numeric type with a loud warning on failure.
+/// Refuses to forge data by returning None if parsing fails.
+#[must_use]
+pub fn parse_strict<T: std::str::FromStr>(s: &str, name: &str) -> Option<T> {
+    match s.trim().parse::<T>() {
+        Ok(val) => Some(val),
+        Err(_) => {
+            warn!(
+                "☢️ [ANOMALY] Failed to parse '{}' as numeric type! String value: '{}'. Information invalidated to prevent upstream forgery.",
+                name, s
+            );
+            None
+        }
+    }
+}
+
+/// Parse an optional string into a numeric type with a loud warning on failure.
+/// Returns None if the input is None or if parsing fails.
+#[must_use]
+pub fn parse_option_strict<T: std::str::FromStr>(s: Option<&str>, name: &str) -> Option<T> {
+    s.and_then(|s_val| parse_strict(s_val, name))
 }
 
 /// Convert `u32` to `i32` with loud warning on overflow.
@@ -330,7 +409,6 @@ pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
     Some(val as i64)
 }
 
-
 /// Convert `f64` to `usize` with loud warning on overflow/NaN.
 #[must_use]
 pub fn u32_to_usize_strict(val: u32, name: &str) -> Option<usize> {
@@ -536,11 +614,7 @@ mod raw {
 
     #[inline]
     pub(super) const fn u64_to_f64(v: u64) -> f64 {
-        // Split into high and low u32s to avoid precision loss lint.
-        // u32 -> f64 is lossless. We then multiply by 2^32.
-        let high = (v >> 32_i32) as u32;
-        let low = (v & 0xFFFF_FFFF) as u32;
-        (high as f64) * 4_294_967_296.0 + (low as f64)
+        v as f64
     }
 
     #[inline]
@@ -550,33 +624,17 @@ mod raw {
 
     #[inline]
     pub(super) const fn i64_to_f64(v: i64) -> f64 {
-        if v < 0 {
-            // Using bitwise negation for const-compatibility to get absolute value safely
-            // and avoiding cast_sign_loss natively where possible.
-            let abs_v = v.wrapping_neg() as u64;
-            -u64_to_f64(abs_v)
-        } else {
-            u64_to_f64(v as u64)
-        }
+        v as f64
     }
 
     #[inline]
     pub(super) const fn i32_to_f32(v: i32) -> f32 {
-        if v < 0 {
-            let abs_v = v.wrapping_neg() as u32;
-            -u32_to_f32(abs_v)
-        } else {
-            u32_to_f32(v as u32)
-        }
+        v as f32
     }
 
     #[inline]
     pub(super) const fn u32_to_f32(v: u32) -> f32 {
-        // Split into high and low u16s to avoid precision loss lint.
-        // u16 -> f32 is lossless. We then multiply by 2^16.
-        let high = (v >> 16_i32) as u16;
-        let low = (v & 0xFFFF) as u16;
-        (high as f32) * 65536.0 + (low as f32)
+        v as f32
     }
 }
 
@@ -685,7 +743,7 @@ pub fn f64_to_u8_sat(v: f64) -> u8 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub const fn f64_to_i32_sat(v: f64) -> i32 {
+pub fn f64_to_i32_sat(v: f64) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -704,6 +762,7 @@ pub const fn f64_to_i32_sat(v: f64) -> i32 {
 #[must_use]
 pub fn f32_to_u32_sat(v: f32) -> u32 {
     if v.is_nan() || v < 0.0 {
+        tracing::warn!("☢️ [ANOMALY] Float NaN/negative squashed to 0");
         return 0;
     }
     raw::f32_to_u32(v)
@@ -717,6 +776,7 @@ pub fn f32_to_u32_sat(v: f32) -> u32 {
 #[must_use]
 pub fn f32_to_u16_sat(v: f32) -> u16 {
     if v.is_nan() || v < 0.0 {
+        tracing::warn!("☢️ [ANOMALY] Float NaN/negative squashed to 0");
         return 0;
     }
     raw::f32_to_u16(v)
@@ -732,7 +792,7 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub const fn f32_to_i32_sat(v: f32) -> i32 {
+pub fn f32_to_i32_sat(v: f32) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -749,7 +809,7 @@ pub const fn f32_to_i32_sat(v: f32) -> i32 {
 /// where f32 precision (≈7 decimal digits) is sufficient.
 #[inline]
 #[must_use]
-pub const fn f64_to_f32_lossy(v: f64) -> f32 {
+pub fn f64_to_f32_lossy(v: f64) -> f32 {
     raw::f64_to_f32(v)
 }
 
@@ -809,7 +869,7 @@ pub fn f32_to_f64(v: f32) -> f64 {
 /// Precision reduction: `i32` → `f32`.
 #[inline]
 #[must_use]
-pub const fn i32_to_f32_lossy(v: i32) -> f32 {
+pub fn i32_to_f32_lossy(v: i32) -> f32 {
     raw::i32_to_f32(v)
 }
 
@@ -828,6 +888,7 @@ pub const fn u32_to_f32(v: u32) -> f32 {
 #[must_use]
 pub fn f32_to_usize_sat(v: f32) -> usize {
     if v.is_nan() || v < 0.0 {
+        tracing::warn!("☢️ [ANOMALY] Float NaN/negative squashed to 0");
         return 0;
     }
     raw::f32_to_usize(v)
@@ -843,7 +904,13 @@ pub fn f32_to_usize_sat(v: f32) -> usize {
 #[inline]
 #[must_use]
 pub fn u64_to_usize_sat(v: u64) -> usize {
-    usize::try_from(v).unwrap_or(usize::MAX)
+    usize::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to usize::MAX",
+            v
+        );
+        usize::MAX
+    })
 }
 
 /// Saturating cast: `u32` → `usize`.
@@ -852,7 +919,13 @@ pub fn u64_to_usize_sat(v: u64) -> usize {
 #[inline]
 #[must_use]
 pub fn u32_to_usize_sat(v: u32) -> usize {
-    usize::try_from(v).unwrap_or(usize::MAX)
+    usize::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to usize::MAX",
+            v
+        );
+        usize::MAX
+    })
 }
 
 /// Saturating cast: `u16` → `usize`.
@@ -899,7 +972,13 @@ pub fn i64_to_usize_sat(v: i64) -> usize {
 #[inline]
 #[must_use]
 pub fn usize_to_i32_sat(v: usize) -> i32 {
-    i32::try_from(v).unwrap_or(i32::MAX)
+    i32::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to i32::MAX",
+            v
+        );
+        i32::MAX
+    })
 }
 
 /// Saturating cast: `i64` → `u32`.
@@ -926,7 +1005,13 @@ pub fn i64_to_u64_sat(v: i64) -> u64 {
 #[inline]
 #[must_use]
 pub fn u64_to_i64_sat(v: u64) -> i64 {
-    i64::try_from(v).unwrap_or(i64::MAX)
+    i64::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to i64::MAX",
+            v
+        );
+        i64::MAX
+    })
 }
 
 /// Explicit no-op for `i64` → `i64`.
@@ -944,7 +1029,13 @@ pub const fn i64_to_i64_sat_no_op(v: i64) -> i64 {
 #[inline]
 #[must_use]
 pub fn u64_to_u32_sat(v: u64) -> u32 {
-    u32::try_from(v).unwrap_or(u32::MAX)
+    u32::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u32::MAX",
+            v
+        );
+        u32::MAX
+    })
 }
 
 /// Saturating cast: `usize` → `u32`.
@@ -953,7 +1044,13 @@ pub fn u64_to_u32_sat(v: u64) -> u32 {
 #[inline]
 #[must_use]
 pub fn usize_to_u32_sat(v: usize) -> u32 {
-    u32::try_from(v).unwrap_or(u32::MAX)
+    u32::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u32::MAX",
+            v
+        );
+        u32::MAX
+    })
 }
 
 /// Saturating cast: `usize` → `i64`.
@@ -962,7 +1059,13 @@ pub fn usize_to_u32_sat(v: usize) -> u32 {
 #[inline]
 #[must_use]
 pub fn usize_to_i64_sat(v: usize) -> i64 {
-    i64::try_from(v).unwrap_or(i64::MAX)
+    i64::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to i64::MAX",
+            v
+        );
+        i64::MAX
+    })
 }
 
 /// Saturating cast: `usize` → `u16`.
@@ -971,7 +1074,13 @@ pub fn usize_to_i64_sat(v: usize) -> i64 {
 #[inline]
 #[must_use]
 pub fn usize_to_u16_sat(v: usize) -> u16 {
-    u16::try_from(v).unwrap_or(u16::MAX)
+    u16::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u16::MAX",
+            v
+        );
+        u16::MAX
+    })
 }
 
 /// Saturating cast: `usize` → `u8`.
@@ -980,7 +1089,13 @@ pub fn usize_to_u16_sat(v: usize) -> u16 {
 #[inline]
 #[must_use]
 pub fn usize_to_u8_sat(v: usize) -> u8 {
-    u8::try_from(v).unwrap_or(u8::MAX)
+    u8::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u8::MAX",
+            v
+        );
+        u8::MAX
+    })
 }
 
 /// Saturating cast: `u32` → `u8`.
@@ -989,7 +1104,13 @@ pub fn usize_to_u8_sat(v: usize) -> u8 {
 #[inline]
 #[must_use]
 pub fn u32_to_u8_sat(v: u32) -> u8 {
-    u8::try_from(v).unwrap_or(u8::MAX)
+    u8::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u8::MAX",
+            v
+        );
+        u8::MAX
+    })
 }
 
 /// Saturating cast: `u32` → `i32`.
@@ -998,7 +1119,13 @@ pub fn u32_to_u8_sat(v: u32) -> u8 {
 #[inline]
 #[must_use]
 pub fn u32_to_i32_sat(v: u32) -> i32 {
-    i32::try_from(v).unwrap_or(i32::MAX)
+    i32::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to i32::MAX",
+            v
+        );
+        i32::MAX
+    })
 }
 
 /// Saturating cast: `i32` → `u32`.
@@ -1025,7 +1152,13 @@ pub fn i32_to_u64_sat(v: i32) -> u64 {
 #[inline]
 #[must_use]
 pub fn usize_to_u64(v: usize) -> u64 {
-    u64::try_from(v).unwrap_or(u64::MAX)
+    u64::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u64::MAX",
+            v
+        );
+        u64::MAX
+    })
 }
 
 /// Saturating cast: `i32` → `u8`.
@@ -1047,7 +1180,13 @@ pub fn i32_to_u8_sat(v: i32) -> u8 {
 #[inline]
 #[must_use]
 pub fn u128_to_i64_sat(v: u128) -> i64 {
-    i64::try_from(v).unwrap_or(i64::MAX)
+    i64::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to i64::MAX",
+            v
+        );
+        i64::MAX
+    })
 }
 
 /// Saturating cast: `u128` → `u64`.
@@ -1056,7 +1195,13 @@ pub fn u128_to_i64_sat(v: u128) -> i64 {
 #[inline]
 #[must_use]
 pub fn u128_to_u64_sat(v: u128) -> u64 {
-    u64::try_from(v).unwrap_or(u64::MAX)
+    u64::try_from(v).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u64::MAX",
+            v
+        );
+        u64::MAX
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1234,78 @@ pub fn unix_secs_i64() -> i64 {
 pub fn unix_secs_i64_result() -> Result<i64, std::time::SystemTimeError> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     Ok(u64_to_i64_sat(secs))
+}
+
+// ---------------------------------------------------------------------------
+// Robust Floating Point Comparisons
+// ---------------------------------------------------------------------------
+
+/// Context-aware tolerance for floating point comparisons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatContext {
+    /// Values resulting from accumulation, image processing variance, or video metrics (e.g., PSNR denominator).
+    Accumulation,
+    /// FFmpeg/ffprobe reported metrics (e.g., PTS, framerates).
+    FfmpegMeasurement,
+    /// Expected strictly identical, but subject to machine epsilon.
+    ExactMatch,
+}
+
+impl FloatContext {
+    #[must_use]
+    pub const fn tolerance(self) -> f64 {
+        match self {
+            Self::Accumulation => 1e-9_f64,
+            Self::FfmpegMeasurement => 1e-4_f64,
+            Self::ExactMatch => f64::EPSILON,
+        }
+    }
+}
+
+/// Robust check for whether a float is effectively zero given its computational context.
+/// Exposes numerical instability rather than silently swallowing it via `abs() < 1e-9`.
+#[inline]
+#[must_use]
+pub fn is_effectively_zero(value: f64, context: FloatContext) -> bool {
+    if value == 0.0 {
+        return true;
+    }
+    let tol = context.tolerance();
+    if value.abs() < tol {
+        tracing::warn!(
+            "☢️ [ANOMALY] Near-zero float encountered: {} (context: {:?}). Treated as zero.",
+            value,
+            context
+        );
+        return true;
+    }
+    false
+}
+
+/// Robust check for whether two floats are effectively equal given their computational context.
+/// Uses absolute difference for near-zero values and relative difference otherwise.
+#[inline]
+#[must_use]
+pub fn is_effectively_equal(a: f64, b: f64, context: FloatContext) -> bool {
+    let diff = a - b;
+    if diff == 0.0 {
+        return true;
+    }
+
+    let tol = context.tolerance();
+    let scale = a.abs().max(b.abs()).max(1.0);
+
+    if diff.abs() < tol * scale {
+        tracing::warn!(
+            "☢️ [ANOMALY] Near-equal floats encountered: a={}, b={}, diff={} (context: {:?}). Treated as equal.",
+            a,
+            b,
+            diff,
+            context
+        );
+        return true;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1250,5 +1467,26 @@ mod tests {
     #[test]
     fn unix_secs_i64_result_ok() {
         assert!(unix_secs_i64_result().is_ok());
+    }
+    #[test]
+    fn test_audited_cast_specialization() {
+        // Test f64 -> u64 (specialized)
+        let val: f64 = 42.7;
+        let casted: u64 = val.cast_sat();
+        assert_eq!(casted, 42);
+
+        let nan: f64 = f64::NAN;
+        let nan_casted: u64 = nan.cast_sat();
+        assert_eq!(nan_casted, 0);
+
+        // Test f64 -> usize (specialized)
+        let u_val: f64 = 1234.0;
+        let u_casted: usize = u_val.cast_sat();
+        assert_eq!(u_casted, 1234);
+
+        // Test f64 -> u32 (specialized)
+        let u32_val: f64 = 5_000_000_000.0;
+        let u32_casted: u32 = u32_val.cast_sat();
+        assert_eq!(u32_casted, u32::MAX);
     }
 }

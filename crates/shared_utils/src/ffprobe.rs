@@ -292,7 +292,7 @@ fn run_ffprobe_json(path: &Path) -> Result<serde_json::Value, FFprobeError> {
 /// # Returns
 /// Parsed u64 value, or None if parsing fails
 fn parse_u64_string_field(value: &serde_json::Value) -> Option<u64> {
-    value.as_str().and_then(|s| s.parse::<u64>().ok())
+    crate::numeric_cast::parse_option_strict(value.as_str(), "u64_field")
 }
 
 /// Parses a string field from JSON as f64.
@@ -303,7 +303,7 @@ fn parse_u64_string_field(value: &serde_json::Value) -> Option<u64> {
 /// # Returns
 /// Parsed f64 value, or None if parsing fails
 fn parse_f64_string_field(value: &serde_json::Value) -> Option<f64> {
-    value.as_str().and_then(|s| s.parse::<f64>().ok())
+    crate::numeric_cast::parse_option_strict(value.as_str(), "f64_field")
 }
 
 /// Parses a string field from JSON, filtering out empty and "unknown" values.
@@ -437,7 +437,7 @@ fn select_video_stream<'a>(
 
     let actual_index = stream["index"]
         .as_u64()
-        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| crate::numeric_cast::u64_to_usize_strict(index, "stream_index"))
         .unwrap_or(fallback_index);
 
     Ok((actual_index, stream))
@@ -478,14 +478,14 @@ fn resolve_probe_duration(
 
     // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
     // Loop-intent logic requires a real duration; derive it from ANMF frame durations.
-    if duration <= 0.0_f64 && format_name.contains("webp") {
-        if let Ok(data) = std::fs::read(path) {
-            if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
-                let native_dur = f64::from(native_dur);
-                if native_dur > 0.0_f64 {
-                    duration = native_dur;
-                }
-            }
+    if duration <= 0.0_f64
+        && format_name.contains("webp")
+        && let Ok(data) = std::fs::read(path)
+        && let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data)
+    {
+        let native_dur = f64::from(native_dur);
+        if native_dur > 0.0_f64 {
+            duration = native_dur;
         }
     }
 
@@ -555,11 +555,11 @@ fn parse_video_stream_fields(
         .to_string();
     let mut width = parse_required_u32_field(video_stream, "width")?;
     let mut height = parse_required_u32_field(video_stream, "height")?;
-    if width == 0 || height == 0 {
-        if let Ok((fallback_w, fallback_h)) = image::image_dimensions(path) {
-            width = fallback_w;
-            height = fallback_h;
-        }
+    if (width == 0 || height == 0)
+        && let Ok((fallback_w, fallback_h)) = image::image_dimensions(path)
+    {
+        width = fallback_w;
+        height = fallback_h;
     }
     if width == 0 || height == 0 {
         return Err(FFprobeError::ParseError(format!(
@@ -579,30 +579,26 @@ fn parse_video_stream_fields(
     // Root fix for Safari-style animated WebP: ffprobe often reports invalid frame metadata
     // (e.g. nb_frames missing/absurd, image data not found) even when ANMF frames exist.
     // If the container is animated per native markers, trust native frame counting.
-    if format_name.contains("webp") {
-        if let Ok(data) = std::fs::read(path) {
-            if crate::image_formats::webp::is_animated_from_bytes(&data) {
-                let native_frames =
-                    u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
-                if native_frames > 1 {
-                    frame_count = Some(native_frames);
-                }
-                if duration <= 0.0_f64 {
-                    if let Some(duration_secs) =
-                        crate::image_formats::webp::duration_secs_from_bytes(&data)
-                    {
-                        let duration_secs = f64::from(duration_secs);
-                        if duration_secs > 0.0_f64 {
-                            avg_frame_rate = frame_count.map_or_else(
-                                || {
-                                    tracing::warn!("Missing frame count for FPS calculation");
-                                    0.0
-                                },
-                                |fc| crate::numeric_cast::u64_to_f64(fc) / duration_secs,
-                            );
-                        }
-                    }
-                }
+    if format_name.contains("webp")
+        && let Ok(data) = std::fs::read(path)
+        && crate::image_formats::webp::is_animated_from_bytes(&data)
+    {
+        let native_frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
+        if native_frames > 1 {
+            frame_count = Some(native_frames);
+        }
+        if duration <= 0.0_f64
+            && let Some(duration_secs) = crate::image_formats::webp::duration_secs_from_bytes(&data)
+        {
+            let duration_secs = f64::from(duration_secs);
+            if duration_secs > 0.0_f64 {
+                avg_frame_rate = frame_count.map_or_else(
+                    || {
+                        tracing::warn!("Missing frame count for FPS calculation");
+                        0.0
+                    },
+                    |fc| crate::numeric_cast::u64_to_f64(fc) / duration_secs,
+                );
             }
         }
     }
@@ -662,7 +658,7 @@ fn parse_video_stream_fields(
         video_bit_rate: parse_u64_string_field(&video_stream["bit_rate"]),
         refs: video_stream["refs"]
             .as_u64()
-            .and_then(|refs| u32::try_from(refs).ok()),
+            .and_then(|refs| crate::numeric_cast::u64_to_u32_strict(refs, "refs")),
         is_variable_frame_rate,
     })
 }
@@ -689,11 +685,12 @@ fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> FFprobeAudioInf
         present: true,
         codec: audio_stream["codec_name"].as_str().map(str::to_string),
         bit_rate: parse_u64_string_field(&audio_stream["bit_rate"]),
-        sample_rate: parse_u64_string_field(&audio_stream["sample_rate"])
-            .and_then(|sample_rate| u32::try_from(sample_rate).ok()),
+        sample_rate: parse_u64_string_field(&audio_stream["sample_rate"]).and_then(|sample_rate| {
+            crate::numeric_cast::u64_to_u32_strict(sample_rate, "sample_rate")
+        }),
         channels: audio_stream["channels"]
             .as_u64()
-            .and_then(|channels| u32::try_from(channels).ok()),
+            .and_then(|channels| crate::numeric_cast::u64_to_u32_strict(channels, "channels")),
     }
 }
 
@@ -795,26 +792,21 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     // ── Penetrating Content Verification ──
     // Verify critical metadata by decoding actual content
-    if result.audio.present {
-        if let crate::media_penetration::PenetrationResult::Verified(is_silent) =
+    if result.audio.present
+        && let crate::media_penetration::PenetrationResult::Verified(is_silent) =
             crate::media_penetration::detect_audio_silence(path)
-        {
-            if is_silent {
-                result.audio.present = false;
-            }
-        }
+        && is_silent
+    {
+        result.audio.present = false;
     }
 
-    if let Some(fc_val) = result.frame_count {
-        if fc_val <= 1 || fc_val > 50000 {
-            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-                crate::media_penetration::detect_real_frame_count(path, fc_val)
-            {
-                if real_count > 0 {
-                    result.frame_count = Some(fc_val.max(real_count));
-                }
-            }
-        }
+    if let Some(fc_val) = result.frame_count
+        && (fc_val <= 1 || fc_val > 50000)
+        && let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, fc_val)
+        && real_count > 0
+    {
+        result.frame_count = Some(fc_val.max(real_count));
     }
 
     Ok(result)
@@ -822,12 +814,11 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
 /// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or `LoopCount`)
 fn extract_loop_count(format: &serde_json::Value) -> Option<u16> {
-    if let Some(tags) = format["tags"].as_object() {
-        if let Some(val) = tags.get("loop_count").or_else(|| tags.get("loop")) {
-            if let Some(s) = val.as_str() {
-                return s.parse::<u16>().ok();
-            }
-        }
+    if let Some(tags) = format["tags"].as_object()
+        && let Some(val) = tags.get("loop_count").or_else(|| tags.get("loop"))
+        && let Some(s) = val.as_str()
+    {
+        return s.parse::<u16>().ok();
     }
     None
 }
@@ -846,10 +837,10 @@ fn extract_frame_types(json: &serde_json::Value) -> Vec<char> {
     let mut types = Vec::new();
     if let Some(frames) = json["frames"].as_array() {
         for frame in frames {
-            if let Some(pict_type) = frame["pict_type"].as_str() {
-                if let Some(first_char) = pict_type.chars().next() {
-                    types.push(first_char);
-                }
+            if let Some(pict_type) = frame["pict_type"].as_str()
+                && let Some(first_char) = pict_type.chars().next()
+            {
+                types.push(first_char);
             }
         }
     }
@@ -871,13 +862,13 @@ fn extract_pts_deltas(json: &serde_json::Value) -> Vec<f64> {
     let mut last_pts: Option<f64> = None;
     if let Some(frames) = json["frames"].as_array() {
         for frame in frames {
-            if let Some(pts_str) = frame["pkt_pts_time"].as_str() {
-                if let Ok(pts) = pts_str.parse::<f64>() {
-                    if let Some(last) = last_pts {
-                        deltas.push((pts - last).abs());
-                    }
-                    last_pts = Some(pts);
+            if let Some(pts_str) = frame["pkt_pts_time"].as_str()
+                && let Ok(pts) = pts_str.parse::<f64>()
+            {
+                if let Some(last) = last_pts {
+                    deltas.push((pts - last).abs());
                 }
+                last_pts = Some(pts);
             }
         }
     }
@@ -898,10 +889,10 @@ fn extract_pkt_sizes(json: &serde_json::Value) -> Vec<u64> {
     let mut sizes = Vec::new();
     if let Some(frames) = json["frames"].as_array() {
         for frame in frames {
-            if let Some(size_str) = frame["pkt_size"].as_str() {
-                if let Ok(size) = size_str.parse::<u64>() {
-                    sizes.push(size);
-                }
+            if let Some(size_str) = frame["pkt_size"].as_str()
+                && let Ok(size) = size_str.parse::<u64>()
+            {
+                sizes.push(size);
             }
         }
     }
@@ -977,17 +968,17 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
         }
 
         // Mastering display: parse colour primaries + luminance into ffmpeg format
-        if sd_type.contains("mastering display") {
-            if let Some(md_str) = build_mastering_display_string(sd) {
-                result.mastering_display = Some(md_str);
-            }
+        if sd_type.contains("mastering display")
+            && let Some(md_str) = build_mastering_display_string(sd)
+        {
+            result.mastering_display = Some(md_str);
         }
 
         // Content light level
-        if sd_type.contains("content light level") {
-            if let Some(cll_str) = build_max_cll_string(sd) {
-                result.max_cll = Some(cll_str);
-            }
+        if sd_type.contains("content light level")
+            && let Some(cll_str) = build_max_cll_string(sd)
+        {
+            result.max_cll = Some(cll_str);
         }
     }
 
@@ -998,8 +989,8 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
 /// ffmpeg expects values multiplied by 50000 for chromaticity coordinates.
 fn parse_rational_to_50k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
-        let n: f64 = num.trim().parse().ok()?;
-        let d: f64 = den.trim().parse().ok()?;
+        let n: f64 = crate::numeric_cast::parse_strict(num.trim(), "hdr_num")?;
+        let d: f64 = crate::numeric_cast::parse_strict(den.trim(), "hdr_den")?;
         if d == 0.0 {
             return None;
         }
@@ -1008,7 +999,7 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
         Some(val)
     } else {
         // plain float
-        let v: f64 = s.trim().parse().ok()?;
+        let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
         // Already normalised value (some ffprobe versions give 0.265 style)
         if v <= 1.0 {
             let val = crate::numeric_cast::f64_to_u64_sat(v * 50000.0);
@@ -1024,15 +1015,15 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
 /// Convert a rational luminance string to 10000-unit integer (cd/m² × 10000).
 fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
-        let n: f64 = num.trim().parse().ok()?;
-        let d: f64 = den.trim().parse().ok()?;
+        let n: f64 = crate::numeric_cast::parse_strict(num.trim(), "hdr_num")?;
+        let d: f64 = crate::numeric_cast::parse_strict(den.trim(), "hdr_den")?;
         if d == 0.0 {
             return None;
         }
         let val = crate::numeric_cast::f64_to_u64_sat((n / d) * 10000.0);
         Some(val)
     } else {
-        let v: f64 = s.trim().parse().ok()?;
+        let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
         if v <= 10000.0 {
             let val = crate::numeric_cast::f64_to_u64_sat(v * 10000.0);
             Some(val)
@@ -1425,10 +1416,12 @@ mod tests {
         });
         let result = parse_probe_format(&format);
         assert!(result.is_ok());
-        assert!(result
-            .expect("parse_probe_format should succeed in test")
-            .bit_rate
-            .is_none());
+        assert!(
+            result
+                .expect("parse_probe_format should succeed in test")
+                .bit_rate
+                .is_none()
+        );
     }
 
     /// Missing `duration` must return `Err`, not panic or use a bogus default.

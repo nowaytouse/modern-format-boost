@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use shared_utils::{
-    loop_intent::{evaluate_loop_tree, LoopMeta},
+    loop_intent::{LoopMeta, evaluate_loop_tree},
     media_meta_utils::scan_gif_headers,
     quality_matcher::SourceCodec,
 };
@@ -129,12 +129,12 @@ mod test_utils {
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // flags (animation)
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // width
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // height
-                                                           // ANIM chunk
+        // ANIM chunk
         webp.extend_from_slice(b"ANIM");
         webp.extend_from_slice(&[0x06, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // background color
         webp.extend_from_slice(&[0x00, 0x00]); // loop count
-                                               // ANMF chunk (first frame)
+        // ANMF chunk (first frame)
         webp.extend_from_slice(b"ANMF");
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // frame X
@@ -154,7 +154,7 @@ mod test_utils {
         mp4.extend_from_slice(b"isom"); // major brand
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minor version
         mp4.extend_from_slice(b"isomiso2avc1mp41"); // compatible brands
-                                                    // mdat box (minimal)
+        // mdat box (minimal)
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x08]); // box size
         mp4.extend_from_slice(b"mdat");
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minimal data
@@ -432,7 +432,10 @@ fn test_complete_media_processing_workflow() -> Result<()> {
 
         // Special format processing
         match filename {
-            name if std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) => {
+            name if std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) =>
+            {
                 let scan_result = scan_gif_headers(&file_path);
                 if scan_result.is_ok() {
                     let _headers = scan_result?;
@@ -445,7 +448,10 @@ fn test_complete_media_processing_workflow() -> Result<()> {
                 }
                 processed_count += 1;
             }
-            name if std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("webp")) => {
+            name if std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("webp")) =>
+            {
                 // WebP animation detection handled via other mechanisms, counting here
                 processed_count += 1;
             }
@@ -524,8 +530,8 @@ fn test_performance_and_memory_safety() -> Result<()> {
     );
 
     // 2. Test batch file processing
-    let temp_dir = std::env::temp_dir().join("media_flow_test_perf");
-    fs::create_dir_all(&temp_dir)?;
+    let temp_dir_guard = tempfile::tempdir()?;
+    let temp_dir = temp_dir_guard.path();
 
     for i in 0..100 {
         let filename = format!("test_{i}.jpg");
@@ -537,9 +543,12 @@ fn test_performance_and_memory_safety() -> Result<()> {
     let entries: Vec<_> = fs::read_dir(&temp_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with("test_") && std::path::Path::new(n).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jpg")))
+            e.file_name().to_str().is_some_and(|n| {
+                n.starts_with("test_")
+                    && std::path::Path::new(n)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+            })
         })
         .collect();
     assert!(entries.len() >= 99, "Should create at least 99 files");
@@ -554,9 +563,7 @@ fn test_performance_and_memory_safety() -> Result<()> {
         );
     }
 
-    // Cleanup test files
-    fs::remove_dir_all(&temp_dir)?;
-
+    // Cleanup is handled by temp_dir_guard drop
     println!("✅ Performance and memory safety test passed");
     println!("   📊 Processed file count: 100");
     println!("   💾 Memory usage: Normal");

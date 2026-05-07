@@ -172,11 +172,13 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         if pixi_data.is_empty() {
                             None
                         } else {
-                            let num_ch = crate::numeric_cast::u8_to_usize_strict(
+                            let Some(num_ch) = crate::numeric_cast::u8_to_usize_strict(
                                 *pixi_data.first()?,
                                 "heic_pixi_num_ch",
-                            )
-                            .unwrap_or(0);
+                            ) else {
+                                crate::progress_mode::emit_stderr("☢️ [ANOMALY] HEIC pixi num_ch overflow! Refusing to forge data.");
+                                return None;
+                            };
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 Some(pixi_data.get(1..=num_ch)?.iter().copied().max()?)
                             } else {
@@ -215,15 +217,16 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 }
                 return Err(ImgQualityError::AnalysisError(format!(
                     "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot determine — {}",
-                    chroma_format_idc, path.display()
+                    chroma_format_idc,
+                    path.display()
                 )));
             }
 
             // Dimension 5: Parse SPS NAL units to check transquant_bypass_enabled_flag
-            if let Some(is_lossless) = detect_heic_lossless_via_mp4parse_data(data) {
-                if is_lossless {
-                    return Ok(true);
-                }
+            if let Some(is_lossless) = detect_heic_lossless_via_mp4parse_data(data)
+                && is_lossless
+            {
+                return Ok(true);
             }
 
             // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
@@ -249,7 +252,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
         return None;
     }
     let num_nalu_arrays = if let Some(b) = hvcc_data.get(24) {
-        crate::numeric_cast::u8_to_usize_strict(*b, "heic_num_nalu").unwrap_or(0)
+        crate::numeric_cast::u8_to_usize_sat(*b)
     } else {
         warn!("☢️ [CORRUPTION] hvcC box too short to read num_nalu_arrays");
         return None;
@@ -286,11 +289,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
             );
             return None;
         };
-        let num_nalus = crate::numeric_cast::u16_to_usize_strict(
-            u16::from_be_bytes([b1, b2]),
-            "heic_num_nalus",
-        )
-        .unwrap_or(0);
+        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
         pos += 3;
         if nal_unit_type == 33 {
             for _ in 0..num_nalus {
@@ -299,11 +298,15 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 }
                 let b1 = *hvcc_data.get(pos)?;
                 let b2 = *hvcc_data.get(pos + 1)?;
-                let nal_unit_length = crate::numeric_cast::u16_to_usize_strict(
+                let Some(nal_unit_length) = crate::numeric_cast::u16_to_usize_strict(
                     u16::from_be_bytes([b1, b2]),
                     "heic_nal_len",
-                )
-                .unwrap_or(0);
+                ) else {
+                    crate::progress_mode::emit_stderr(
+                        "☢️ [ANOMALY] HEIC NAL unit length overflow! Refusing to forge data.",
+                    );
+                    return None;
+                };
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
@@ -322,11 +325,8 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 }
                 let b1 = *hvcc_data.get(pos)?;
                 let b2 = *hvcc_data.get(pos + 1)?;
-                let nal_unit_length = crate::numeric_cast::u16_to_usize_strict(
-                    u16::from_be_bytes([b1, b2]),
-                    "heic_nal_len",
-                )
-                .unwrap_or(0);
+                let nal_unit_length =
+                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
                 pos += 2 + nal_unit_length;
             }
         }
@@ -369,10 +369,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 leading_zeros += 1;
             }
             let info = if leading_zeros > 0 {
-                self.read_bits(
-                    crate::numeric_cast::u32_to_usize_strict(leading_zeros, "heic_ue_zeros")
-                        .unwrap_or(0),
-                )?
+                self.read_bits(crate::numeric_cast::u32_to_usize_sat(leading_zeros))?
             } else {
                 0
             };
@@ -487,18 +484,18 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
             // Fallback: Scan for 'ftyp' manually if NoFtypBox error
             if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
                 // Fallback 1: Try to find ftyp box manually
-                if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
-                    if pos >= 4 {
-                        let Some(sliced_data) = data.get(pos - 4..) else {
-                            warn!(
-                                "☢️ [ANOMALY] HEIC data truncated before 'ftyp' box at position {}",
-                                pos
-                            );
-                            return Err(e);
-                        };
-                        if matches!(ctx.read_bytes(sliced_data), Ok(())) {
-                            return Ok(());
-                        }
+                if let Some(pos) = data.windows(4).position(|w| w == b"ftyp")
+                    && pos >= 4
+                {
+                    let Some(sliced_data) = data.get(pos - 4..) else {
+                        warn!(
+                            "☢️ [ANOMALY] HEIC data truncated before 'ftyp' box at position {}",
+                            pos
+                        );
+                        return Err(e);
+                    };
+                    if matches!(ctx.read_bytes(sliced_data), Ok(())) {
+                        return Ok(());
                     }
                 }
 
@@ -554,13 +551,14 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let mut is_dolby_vision = false;
 
     // Quick scan for HDR/DV boxes in the already read data
-    if let Some(colr_data) = find_box_data_recursive(&data, *b"colr") {
-        if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-            let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
-            let transfer = u16::from_be_bytes([colr_data[6], colr_data[7]]);
-            if primaries == 9 && (transfer == 16 || transfer == 18) {
-                is_hdr = true;
-            }
+    if let Some(colr_data) = find_box_data_recursive(&data, *b"colr")
+        && colr_data.len() >= 11
+        && colr_data.get(0..4) == Some(b"nclx")
+    {
+        let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
+        let transfer = u16::from_be_bytes([colr_data[6], colr_data[7]]);
+        if primaries == 9 && (transfer == 16 || transfer == 18) {
+            is_hdr = true;
         }
     }
     if find_box_data_recursive(&data, *b"dvcC").is_some()
@@ -695,25 +693,29 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
 /// This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
 /// that `find_box_data_recursive` may not handle correctly.
 fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
-    if let Some(pos) = data.windows(4).position(|w| w == box_type) {
-        if pos >= 4 {
-            let mut size_bytes = [0u8; 4];
-            for (i, byte) in size_bytes.iter_mut().enumerate() {
-                *byte = if let Some(b) = data.get(pos - 4 + i) {
-                    *b
-                } else {
-                    warn!("☢️ [CORRUPTION] Truncated box size before type at {}", pos);
-                    return None;
-                };
-            }
-            let size = crate::numeric_cast::u32_to_usize_strict(
-                u32::from_be_bytes(size_bytes),
-                "heic_box_size",
-            )
-            .unwrap_or(0);
-            if size >= 8 && pos + size - 4 <= data.len() {
-                return data.get(pos + 4..pos - 4 + size);
-            }
+    if let Some(pos) = data.windows(4).position(|w| w == box_type)
+        && pos >= 4
+    {
+        let mut size_bytes = [0u8; 4];
+        for (i, byte) in size_bytes.iter_mut().enumerate() {
+            *byte = if let Some(b) = data.get(pos - 4 + i) {
+                *b
+            } else {
+                warn!("☢️ [CORRUPTION] Truncated box size before type at {}", pos);
+                return None;
+            };
+        }
+        let Some(size) = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_be_bytes(size_bytes),
+            "heic_box_size",
+        ) else {
+            crate::progress_mode::emit_stderr(
+                "☢️ [ANOMALY] HEIC box size overflow! Refusing to forge data.",
+            );
+            return None;
+        };
+        if size >= 8 && pos + size - 4 <= data.len() {
+            return data.get(pos + 4..pos - 4 + size);
         }
     }
     None

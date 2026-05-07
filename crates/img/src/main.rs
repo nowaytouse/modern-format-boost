@@ -7,15 +7,15 @@ use img::Rational;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 use img::{
-    calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
-    ConfigFlags, ConvertFlags,
+    ConfigFlags, ConvertFlags, calculate_psnr, calculate_ssim, psnr_quality_description,
+    ssim_quality_description,
 };
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
-    check_dangerous_directory, disk_full_pause_reason, print_summary_report, BatchPauseController,
-    BatchResult,
+    BatchPauseController, BatchResult, check_dangerous_directory, disk_full_pause_reason,
+    print_summary_report,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -165,10 +165,10 @@ fn main() -> anyhow::Result<()> {
         })
         .ok();
 
-    if let Some(ref cache) = cache {
-        if let Err(e) = cache.cleanup_old_records(30 * 24 * 3600) {
-            shared_utils::log_eprintln!("⚠️ [Cache] Failed to cleanup old records: {}", e);
-        }
+    if let Some(ref cache) = cache
+        && let Err(e) = cache.cleanup_old_records(30 * 24 * 3600)
+    {
+        shared_utils::log_eprintln!("⚠️ [Cache] Failed to cleanup old records: {}", e);
     }
 
     let cli = Cli::parse();
@@ -249,7 +249,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             if selected_codec == SelectedCodec::Av1 && apple_compat {
-                shared_utils::log_eprintln!("❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively.");
+                shared_utils::log_eprintln!(
+                    "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
+                );
                 std::process::exit(1);
             }
 
@@ -291,7 +293,10 @@ fn main() -> anyhow::Result<()> {
                     flag_mode.description_en(),
                     selected_codec.as_str().to_uppercase()
                 ));
-                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.001)", symbols::IMAGE));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.001)",
+                    symbols::IMAGE
+                ));
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr(&format!(
@@ -300,7 +305,7 @@ fn main() -> anyhow::Result<()> {
                     colors::BOLD,
                     colors::RESET
                 ));
-                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+                unsafe { std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1") };
             }
 
             if in_place {
@@ -480,7 +485,9 @@ fn main() -> anyhow::Result<()> {
 
                             let stale = stats.stale_records();
                             if stale > 0 {
-                                println!("\n⚠️  {stale} stale records detected (will be auto-invalidated on next run)");
+                                println!(
+                                    "\n⚠️  {stale} stale records detected (will be auto-invalidated on next run)"
+                                );
                             }
                         }
 
@@ -788,11 +795,11 @@ fn auto_convert_single_file(
         std::process::exit(1);
     }
 
-    if let Some(ref out_dir) = config.output_dir {
-        if let Err(e) = shared_utils::check_apple_photos_library(out_dir) {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
+    if let Some(ref out_dir) = config.output_dir
+        && let Err(e) = shared_utils::check_apple_photos_library(out_dir)
+    {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
@@ -1031,33 +1038,32 @@ fn dispatch_static_conversion(
         shared_utils::lookup_image_quality(analysis)
     };
 
-    if let Some(ref q) = quality {
-        if config.verbose() {
-            if let Some(reason) = q.fallback_reason.as_deref() {
-                println!(
-                    "   🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
-                    q.score
-                );
-            } else {
-                println!(
-                    "   🔭 Quality Score: {:.2} (KNN, conf={:.2})",
-                    q.score, q.confidence
-                );
-            }
+    if let Some(ref q) = quality
+        && config.verbose()
+    {
+        if let Some(reason) = q.fallback_reason.as_deref() {
+            println!(
+                "   🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
+                q.score
+            );
+        } else {
+            println!(
+                "   🔭 Quality Score: {:.2} (KNN, conf={:.2})",
+                q.score, q.confidence
+            );
         }
     }
 
     Ok(match (format, is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
-            if format == "HEIC" || format == "HEIF" {
-                if let Some(h) = &analysis.heic_analysis {
-                    if h.hdr.has_gainmap {
-                        println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
-                        return Ok(img::lossless_converter::convert_heic_gainmap_to_jxl(
-                            input, options,
-                        )?);
-                    }
-                }
+            if (format == "HEIC" || format == "HEIF")
+                && let Some(h) = &analysis.heic_analysis
+                && h.hdr.has_gainmap
+            {
+                println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
+                return Ok(img::lossless_converter::convert_heic_gainmap_to_jxl(
+                    input, options,
+                )?);
             }
             if config.verbose() {
                 println!("🔄 Modern Lossless→JXL: {}", input.display());
@@ -1121,18 +1127,18 @@ fn auto_convert_directory(
         std::process::exit(1);
     }
 
-    if let Some(ref out_dir) = config.output_dir {
-        if let Err(e) = shared_utils::check_apple_photos_library(out_dir) {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
+    if let Some(ref out_dir) = config.output_dir
+        && let Err(e) = shared_utils::check_apple_photos_library(out_dir)
+    {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 
-    if config.delete_original() || config.in_place() {
-        if let Err(e) = check_dangerous_directory(input) {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
+    if (config.delete_original() || config.in_place())
+        && let Err(e) = check_dangerous_directory(input)
+    {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 
     let mut config_with_base = config.clone();
@@ -1173,10 +1179,10 @@ fn auto_convert_directory(
     if total == 0 {
         println!("📂 No image files found in {}", input.display());
 
-        if let Some(output_dir) = config.output_dir.as_ref() {
-            if let Some(ref base_dir) = config.base_dir {
-                shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
-            }
+        if let Some(output_dir) = config.output_dir.as_ref()
+            && let Some(ref base_dir) = config.base_dir
+        {
+            shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
         }
 
         return Ok(());
@@ -1335,8 +1341,8 @@ fn auto_convert_directory(
                     progress_bar.set_message(&path.file_name().unwrap_or_default().to_string_lossy());
 
                     // Check if already completed (thread-safe)
-                    if let Some(cp) = checkpoint.as_ref() {
-                        if cp.is_completed(path) {
+                    if let Some(cp) = checkpoint.as_ref()
+                        && cp.is_completed(path) {
                             skipped.fetch_add(1, Ordering::Relaxed);
                             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                             shared_utils::progress_mode::write_progress_line_to_run_log(
@@ -1348,7 +1354,6 @@ fn auto_convert_directory(
                             progress_bar.set(shared_utils::numeric_cast::usize_to_u64(current));
                             continue;
                         }
-                    }
 
                     match auto_convert_single_file(path, config) {
                         Ok(result) => {
@@ -1364,15 +1369,14 @@ fn auto_convert_directory(
                                     actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
                                 }
                                 // Mark as completed in checkpoint manager on success (thread-safe)
-                                if let Some(cp) = checkpoint.as_ref() {
-                                    if let Err(e) = cp.mark_completed(path) {
+                                if let Some(cp) = checkpoint.as_ref()
+                                    && let Err(e) = cp.mark_completed(path) {
                                         shared_utils::log_eprintln!(
                                             "⚠️ [img] Failed to mark completed {}: {}",
                                             path.display(),
                                             e
                                         );
                                     }
-                                }
                             }
                         }
                         Err(e) => {
@@ -1412,8 +1416,8 @@ fn auto_convert_directory(
                             shared_utils::progress_mode::image_processed_failure();
 
                             // Copy original file to output directory to prevent data loss
-                            if let Some(ref output_dir) = config.output_dir {
-                                if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
+                            if let Some(ref output_dir) = config.output_dir
+                                && let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
                                     path,
                                     Some(output_dir),
                                     config.base_dir.as_deref(),
@@ -1425,7 +1429,6 @@ fn auto_convert_directory(
                                         copy_err
                                     );
                                 }
-                            }
                         }
                     }
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1477,49 +1480,47 @@ fn auto_convert_directory(
         "Image Conversion",
     );
 
-    if !result.paused {
-        if let Some(ref output_dir) = config.output_dir {
-            shared_utils::log_eprintln!("\n📦 Copying unsupported files...");
-            let copy_result = shared_utils::copy_unsupported_files(
-                config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
-                output_dir,
-                recursive,
-            );
-            if copy_result.copied > 0 {
-                shared_utils::log_eprintln!("📦 Copied {} unsupported files", copy_result.copied);
-            }
-            if copy_result.failed > 0 {
-                shared_utils::log_eprintln!("❌ Failed to copy {} files", copy_result.failed);
-            }
+    if !result.paused
+        && let Some(ref output_dir) = config.output_dir
+    {
+        shared_utils::log_eprintln!("\n📦 Copying unsupported files...");
+        let copy_result = shared_utils::copy_unsupported_files(
+            config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
+            output_dir,
+            recursive,
+        );
+        if copy_result.copied > 0 {
+            shared_utils::log_eprintln!("📦 Copied {} unsupported files", copy_result.copied);
+        }
+        if copy_result.failed > 0 {
+            shared_utils::log_eprintln!("❌ Failed to copy {} files", copy_result.failed);
+        }
 
-            shared_utils::log_eprintln!("\n🔍 Verifying output completeness...");
-            let verify = shared_utils::verify_output_completeness(
-                config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
-                output_dir,
-                recursive,
-            );
-            shared_utils::log_eprintln!("{}", verify.message);
-            if !verify.passed {
-                shared_utils::log_eprintln!("⚠️  Some files may be missing from output!");
-            }
+        shared_utils::log_eprintln!("\n🔍 Verifying output completeness...");
+        let verify = shared_utils::verify_output_completeness(
+            config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
+            output_dir,
+            recursive,
+        );
+        shared_utils::log_eprintln!("{}", verify.message);
+        if !verify.passed {
+            shared_utils::log_eprintln!("⚠️  Some files may be missing from output!");
         }
     }
 
-    if !result.paused {
-        if let Some(ref output_dir) = config.output_dir {
-            if let Some(ref base_dir) = config.base_dir {
-                shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
-            }
-        }
+    if !result.paused
+        && let Some(ref output_dir) = config.output_dir
+        && let Some(ref base_dir) = config.base_dir
+    {
+        shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
     }
 
     if let Some(ref saved) = saved_dir_timestamps {
-        if !result.paused {
-            if let Some(ref output_dir) = config.output_dir {
-                if let Some(ref base_dir) = config.base_dir {
-                    shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
-                }
-            }
+        if !result.paused
+            && let Some(ref output_dir) = config.output_dir
+            && let Some(ref base_dir) = config.base_dir
+        {
+            shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
         }
         shared_utils::restore_directory_timestamps(saved);
         shared_utils::log_eprintln!("✅ Directory timestamps restored");

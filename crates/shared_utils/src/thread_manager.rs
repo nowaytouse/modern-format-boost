@@ -6,8 +6,8 @@
 //! - Reduces parallelism when system memory is low (avoids OOM kills)
 //! - Allows environment-based configuration (`MFB_LOW_MEMORY`, `MFB_MULTI_INSTANCE`)
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::x265_params::X265MemoryProfile;
 

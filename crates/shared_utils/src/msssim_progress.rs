@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 pub struct MsssimProgressMonitor {
@@ -34,21 +34,21 @@ impl MsssimProgressMonitor {
     }
 
     pub fn update_from_line(&self, line: &str) -> Option<u32> {
-        if let Some(val) = line.strip_prefix("out_time_us=") {
-            if let Ok(time_us) = val.parse::<u64>() {
-                self.current_time_us.store(time_us, Ordering::Relaxed);
+        if let Some(val) = line.strip_prefix("out_time_us=")
+            && let Ok(time_us) = val.parse::<u64>()
+        {
+            self.current_time_us.store(time_us, Ordering::Relaxed);
 
-                let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
-                let progress_pct = if self.duration_secs > 0.0_f64 {
-                    crate::numeric_cast::f64_to_u32_sat(
-                        (current_secs / self.duration_secs * 100.0).min(100.0),
-                    )
-                } else {
-                    0
-                };
+            let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
+            let progress_pct = if self.duration_secs > 0.0_f64 {
+                crate::numeric_cast::f64_to_u32_sat(
+                    (current_secs / self.duration_secs * 100.0).min(100.0),
+                )
+            } else {
+                0
+            };
 
-                return Some(progress_pct);
-            }
+            return Some(progress_pct);
         }
 
         None
@@ -82,7 +82,12 @@ impl MsssimProgressMonitor {
     }
 
     pub fn get_channel_score(&self, channel: &str) -> Option<f64> {
-        let scores = self.channel_scores.lock().ok()?;
+        let Ok(scores) = self.channel_scores.lock() else {
+            eprintln!(
+                "☢️ [ANOMALY] Failed to acquire lock for channel scores (poisoned)! Result data may be lost."
+            );
+            return None;
+        };
         scores.get(channel).copied()
     }
 
@@ -134,11 +139,11 @@ impl MsssimProgressMonitor {
         for line in reader.lines() {
             let line = line.map_err(|e| format!("❌ Failed to read ffmpeg output: {e}"))?;
 
-            if let Some(progress_pct) = self.update_from_line(&line) {
-                if progress_pct >= last_printed_pct + 10 || progress_pct == 100 {
-                    self.print_progress(channel, progress_pct);
-                    last_printed_pct = progress_pct;
-                }
+            if let Some(progress_pct) = self.update_from_line(&line)
+                && (progress_pct >= last_printed_pct + 10 || progress_pct == 100)
+            {
+                self.print_progress(channel, progress_pct);
+                last_printed_pct = progress_pct;
             }
         }
 

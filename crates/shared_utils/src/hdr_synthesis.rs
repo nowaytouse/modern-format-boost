@@ -13,12 +13,12 @@
 //! - Extracts depth maps from HEIC auxiliary images
 //! - Embeds depth as JXL Extra Channel via jpegxl-rs FFI
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use quick_xml::XmlVersion;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
@@ -175,7 +175,8 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     };
 
     // 4. Parse XMP parameters
-    let params = parse_gainmap_params(&handle).unwrap_or_default();
+    let params = parse_gainmap_params(&handle)
+        .ok_or_else(|| anyhow!("Failed to parse gainmap parameters from HEIC XMP metadata"))?;
 
     // 5. Perform Synthesis
     tracing::debug!(
@@ -584,13 +585,14 @@ fn is_display_p3(data: &[u8]) -> bool {
     use crate::common_utils::find_box_data_recursive;
 
     // 1. Check colr/nclx box (Common in HEIC/AVIF/JXL containers)
-    if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
-        if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-            // flavour: nclx
-            // colour_primaries: bytes 8-9 (u16 BE)
-            let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-            return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
-        }
+    if let Some(colr_data) = find_box_data_recursive(data, *b"colr")
+        && colr_data.len() >= 11
+        && colr_data.get(0..4) == Some(b"nclx")
+    {
+        // flavour: nclx
+        // colour_primaries: bytes 8-9 (u16 BE)
+        let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+        return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
     }
 
     // 2. Fallback: Search for "Display P3" or "P3" in raw data (Heuristic for ICC)
@@ -616,7 +618,16 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
         return None;
     }
 
-    let xmp_data = handle.metadata(ids[0]).ok()?;
+    let xmp_data = match handle.metadata(ids[0]) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to extract XMP metadata block for gainmap parsing: {}",
+                e
+            );
+            return None;
+        }
+    };
     parse_gainmap_from_xmp(&xmp_data)
 }
 
@@ -639,29 +650,29 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                     let local_name = attr.key.local_name();
 
                     // Zero-copy attribute parsing
-                    if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::Explicit1_0) {
-                        if let Ok(f) = attr_val_cow.parse::<f32>() {
-                            let name_bytes = local_name.as_ref();
-                            if name_bytes.windows(10).any(|w| w == b"GainMapMax") {
-                                params.gain_map_max = f;
-                                found_any = true;
-                            } else if name_bytes.windows(10).any(|w| w == b"GainMapMin") {
-                                params.gain_map_min = f;
-                                found_any = true;
-                            } else if name_bytes.windows(5).any(|w| w == b"Gamma") {
-                                params.gamma = f;
-                                found_any = true;
-                            } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR")
-                                || name_bytes.windows(9).any(|w| w == b"OffsetSdr")
-                            {
-                                params.offset_sdr = f;
-                                found_any = true;
-                            } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR")
-                                || name_bytes.windows(9).any(|w| w == b"OffsetHdr")
-                            {
-                                params.offset_hdr = f;
-                                found_any = true;
-                            }
+                    if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::Explicit1_0)
+                        && let Ok(f) = attr_val_cow.parse::<f32>()
+                    {
+                        let name_bytes = local_name.as_ref();
+                        if name_bytes.windows(10).any(|w| w == b"GainMapMax") {
+                            params.gain_map_max = f;
+                            found_any = true;
+                        } else if name_bytes.windows(10).any(|w| w == b"GainMapMin") {
+                            params.gain_map_min = f;
+                            found_any = true;
+                        } else if name_bytes.windows(5).any(|w| w == b"Gamma") {
+                            params.gamma = f;
+                            found_any = true;
+                        } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR")
+                            || name_bytes.windows(9).any(|w| w == b"OffsetSdr")
+                        {
+                            params.offset_sdr = f;
+                            found_any = true;
+                        } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR")
+                            || name_bytes.windows(9).any(|w| w == b"OffsetHdr")
+                        {
+                            params.offset_hdr = f;
+                            found_any = true;
                         }
                     }
                 }
@@ -671,54 +682,48 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                 let name_ref = name_bytes.as_ref();
 
                 if name_ref.windows(10).any(|w| w == b"GainMapMax") {
-                    if let Ok(val) = reader.read_text(name_bytes) {
-                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
-                            if let Ok(f) = text_cow.parse::<f32>() {
-                                params.gain_map_max = f;
-                                found_any = true;
-                            }
-                        }
+                    if let Ok(val) = reader.read_text(name_bytes)
+                        && let Ok(text_cow) = reader.decoder().decode(val.as_ref())
+                        && let Ok(f) = text_cow.parse::<f32>()
+                    {
+                        params.gain_map_max = f;
+                        found_any = true;
                     }
                 } else if name_ref.windows(10).any(|w| w == b"GainMapMin") {
-                    if let Ok(val) = reader.read_text(name_bytes) {
-                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
-                            if let Ok(f) = text_cow.parse::<f32>() {
-                                params.gain_map_min = f;
-                                found_any = true;
-                            }
-                        }
+                    if let Ok(val) = reader.read_text(name_bytes)
+                        && let Ok(text_cow) = reader.decoder().decode(val.as_ref())
+                        && let Ok(f) = text_cow.parse::<f32>()
+                    {
+                        params.gain_map_min = f;
+                        found_any = true;
                     }
                 } else if name_ref.windows(9).any(|w| w == b"OffsetSDR")
                     || name_ref.windows(9).any(|w| w == b"OffsetSdr")
                 {
-                    if let Ok(val) = reader.read_text(name_bytes) {
-                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
-                            if let Ok(f) = text_cow.parse::<f32>() {
-                                params.offset_sdr = f;
-                                found_any = true;
-                            }
-                        }
+                    if let Ok(val) = reader.read_text(name_bytes)
+                        && let Ok(text_cow) = reader.decoder().decode(val.as_ref())
+                        && let Ok(f) = text_cow.parse::<f32>()
+                    {
+                        params.offset_sdr = f;
+                        found_any = true;
                     }
                 } else if name_ref.windows(9).any(|w| w == b"OffsetHDR")
                     || name_ref.windows(9).any(|w| w == b"OffsetHdr")
                 {
-                    if let Ok(val) = reader.read_text(name_bytes) {
-                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
-                            if let Ok(f) = text_cow.parse::<f32>() {
-                                params.offset_hdr = f;
-                                found_any = true;
-                            }
-                        }
+                    if let Ok(val) = reader.read_text(name_bytes)
+                        && let Ok(text_cow) = reader.decoder().decode(val.as_ref())
+                        && let Ok(f) = text_cow.parse::<f32>()
+                    {
+                        params.offset_hdr = f;
+                        found_any = true;
                     }
-                } else if name_ref.windows(5).any(|w| w == b"Gamma") {
-                    if let Ok(val) = reader.read_text(name_bytes) {
-                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
-                            if let Ok(f) = text_cow.parse::<f32>() {
-                                params.gamma = f;
-                                found_any = true;
-                            }
-                        }
-                    }
+                } else if name_ref.windows(5).any(|w| w == b"Gamma")
+                    && let Ok(val) = reader.read_text(name_bytes)
+                    && let Ok(text_cow) = reader.decoder().decode(val.as_ref())
+                    && let Ok(f) = text_cow.parse::<f32>()
+                {
+                    params.gamma = f;
+                    found_any = true;
                 }
             }
             Err(_) | Ok(Event::Eof) => break,
@@ -727,11 +732,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
         buf.clear();
     }
 
-    if found_any {
-        Some(params)
-    } else {
-        None
-    }
+    if found_any { Some(params) } else { None }
 }
 
 /// Performs the HDR synthesis calculation using the provided `GainMap`.
@@ -1057,6 +1058,15 @@ fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()>
     let height_usize =
         usize::try_from(height).map_err(|_| anyhow!("Height too large: {height}"))?;
 
+    let expected_len = width_usize.saturating_mul(height_usize).saturating_mul(3);
+    if pixels.len() < expected_len {
+        tracing::warn!(
+            "☢️ [ANOMALY] EXR Pixel buffer truncated: got {}, expected {}",
+            pixels.len(),
+            expected_len
+        );
+    }
+
     write_rgb_file(path, width_usize, height_usize, |x, y| {
         let idx = y
             .checked_mul(width_usize)
@@ -1181,13 +1191,16 @@ mod tests {
     #[serial]
     fn test_resolve_intensity_target_env_override() {
         let prev = env::var("MFB_JXL_INTENSITY_TARGET").ok();
-        env::set_var("MFB_JXL_INTENSITY_TARGET", "5000");
+        // SAFETY: Test context.
+        unsafe { env::set_var("MFB_JXL_INTENSITY_TARGET", "5000") };
         let got = resolve_intensity_target(100.0);
         assert_eq!(got, Some(5000));
         if let Some(v) = prev {
-            env::set_var("MFB_JXL_INTENSITY_TARGET", v);
+            // SAFETY: Test context.
+            unsafe { env::set_var("MFB_JXL_INTENSITY_TARGET", v) };
         } else {
-            env::remove_var("MFB_JXL_INTENSITY_TARGET");
+            // SAFETY: Test context.
+            unsafe { env::remove_var("MFB_JXL_INTENSITY_TARGET") };
         }
     }
 
@@ -1195,20 +1208,24 @@ mod tests {
     #[serial]
     fn test_resolve_intensity_target_env_clamp() {
         let prev = env::var("MFB_JXL_INTENSITY_TARGET").ok();
-        env::set_var("MFB_JXL_INTENSITY_TARGET", "2000000");
+        // SAFETY: Test context.
+        unsafe { env::set_var("MFB_JXL_INTENSITY_TARGET", "2000000") };
         let got = resolve_intensity_target(100.0);
         assert_eq!(got, Some(1_000_000));
         if let Some(v) = prev {
-            env::set_var("MFB_JXL_INTENSITY_TARGET", v);
+            // SAFETY: Test context.
+            unsafe { env::set_var("MFB_JXL_INTENSITY_TARGET", v) };
         } else {
-            env::remove_var("MFB_JXL_INTENSITY_TARGET");
+            // SAFETY: Test context.
+            unsafe { env::remove_var("MFB_JXL_INTENSITY_TARGET") };
         }
     }
 
     #[test]
     fn test_resolve_intensity_target_derived_invalid() {
         // Clear environment variable to ensure clean test
-        std::env::remove_var("MFB_JXL_INTENSITY_TARGET");
+        // SAFETY: Test context.
+        unsafe { std::env::remove_var("MFB_JXL_INTENSITY_TARGET") };
 
         // Negative derived value should be rejected
         let got = resolve_intensity_target(-1.0);
