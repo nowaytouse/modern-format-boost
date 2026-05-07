@@ -437,7 +437,10 @@ impl ConversionResult {
             success: true,
             input_path: input.display().to_string(),
             output_path: None,
-            input_size: fs::metadata(input).map_or(0, |m| m.len()),
+            input_size: fs::metadata(input).map_or_else(|e| {
+                tracing::warn!("Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}", input.display());
+                0
+            }, |m| m.len()),
             output_size: None,
             size_reduction: None,
             message: "Skipped: Already processed".to_string(),
@@ -450,7 +453,16 @@ impl ConversionResult {
 
     #[must_use]
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
-        let input_size = fs::metadata(input).map_or(0, |m| m.len());
+        let input_size = fs::metadata(input).map_or_else(
+            |e| {
+                tracing::warn!(
+                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                    input.display()
+                );
+                0
+            },
+            |m| m.len(),
+        );
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -546,7 +558,16 @@ impl ConversionResult {
         reason: String,
         skip_reason_id: String,
     ) -> Self {
-        let input_size = fs::metadata(input).map_or(0, |m| m.len());
+        let input_size = fs::metadata(input).map_or_else(
+            |e| {
+                tracing::warn!(
+                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                    input.display()
+                );
+                0
+            },
+            |m| m.len(),
+        );
         let copied_dest = Self::copy_original_for_fallback(input, options, "skip");
         crate::conversion::mark_as_processed(input);
 
@@ -593,7 +614,16 @@ impl ConversionResult {
         reason: String,
         skip_reason_id: String,
     ) -> Self {
-        let input_size = fs::metadata(input).map_or(0, |m| m.len());
+        let input_size = fs::metadata(input).map_or_else(
+            |e| {
+                tracing::warn!(
+                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                    input.display()
+                );
+                0
+            },
+            |m| m.len(),
+        );
         let copied_dest = Self::copy_original_for_fallback(input, options, "failure");
         crate::conversion::mark_as_processed(input);
 
@@ -1286,6 +1316,7 @@ pub fn commit_temp_to_output_with_metadata(
 /// then `ImageMagick identify` (covers HEIC/HEIF/JXL/JP2/PSD/EXR and other formats the
 /// `image` crate does not support natively). Use this from inside ffprobe parsing to
 /// avoid recursion; external callers should prefer [`get_input_dimensions`].
+#[must_use]
 pub fn dimensions_without_ffprobe(input: &Path) -> Option<(u32, u32)> {
     if let Ok((w, h)) = image::image_dimensions(input)
         && w > 0

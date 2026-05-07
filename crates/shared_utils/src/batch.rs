@@ -510,7 +510,16 @@ fn path_modified_unix_secs(path: &Path) -> u64 {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_secs())
+        .map_or_else(
+            || {
+                tracing::warn!(
+                    "Failed to determine modification time for {}; defaulting to 0",
+                    path.display()
+                );
+                0
+            },
+            |duration| duration.as_secs(),
+        )
 }
 
 /// Calculates the relative depth of a path from the root directory.
@@ -552,7 +561,7 @@ fn format_priority_for_image(path: &Path) -> u8 {
 
 /// Total pixel count (width × height) for sorting.
 ///
-/// Uses the shared ffprobe → `image` crate → ImageMagick `identify` fallback
+/// Uses the shared ffprobe → `image` crate → `ImageMagick` `identify` fallback
 /// chain so modern formats (HEIC/HEIF/AVIF/JXL) are handled uniformly.
 fn image_pixel_count(path: &Path) -> Option<u64> {
     match crate::conversion::get_input_dimensions(path) {

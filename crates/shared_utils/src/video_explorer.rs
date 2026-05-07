@@ -2866,7 +2866,9 @@ impl VideoExplorer {
                             "progress_time_millis",
                         )
                         .unwrap_or_else(|| {
-                            tracing::warn!("Failed to convert progress time");
+                            tracing::warn!(
+                                "Video Explorer: Failed to convert progress time from float to integer; defaulting to 0 for progress reporting (ETA may be inaccurate)"
+                            );
                             0
                         });
                         f64::from(millis) / 1_000.0
@@ -4147,7 +4149,9 @@ mod tests {
             "coarse_iterations",
         )
         .unwrap_or_else(|| {
-            tracing::warn!("Failed to calculate coarse iterations");
+            tracing::warn!(
+                "Video Explorer: Failed to calculate coarse iterations (possible overflow); defaulting to 0 (search will skip coarse phase)"
+            );
             0
         });
         let fine_iterations = crate::numeric_cast::f32_to_u32_strict(
@@ -4155,7 +4159,9 @@ mod tests {
             "fine_iterations",
         )
         .unwrap_or_else(|| {
-            tracing::warn!("Failed to calculate fine iterations");
+            tracing::warn!(
+                "Video Explorer: Failed to calculate fine iterations (possible overflow); defaulting to 0 (search will skip fine phase)"
+            );
             0
         });
         let total = coarse_iterations + fine_iterations;

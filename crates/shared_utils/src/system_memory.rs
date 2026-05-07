@@ -103,7 +103,9 @@ fn get_memory_macos() -> (u64, u64) {
     let available = match crate::tool_builders::VmstatBuilder::new().build().output() {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
             Ok(stdout) => parse_vm_stat_available(&stdout).unwrap_or_else(|| {
-                warn!("Failed to parse macOS available memory from vm_stat");
+                warn!(
+                    "System Memory: Failed to parse macOS available memory from vm_stat; defaulting to 0 bytes (memory-based optimizations will be disabled)"
+                );
                 0
             }),
             Err(err) => {
@@ -218,11 +220,15 @@ fn get_memory_linux() -> (u64, u64) {
     // If either field was missing after the warn! above, return (0, 0) so callers
     // see `total_mb == 0` and degrade gracefully (memory_pressure_level returns None).
     let available = mem_available.unwrap_or_else(|| {
-        warn!("MemAvailable missing from /proc/meminfo; reporting 0 MB available");
+        warn!(
+            "System Memory: 'MemAvailable' missing from /proc/meminfo; defaulting to 0 MB (memory-based optimizations will be disabled)"
+        );
         0
     });
     let total = mem_total.unwrap_or_else(|| {
-        warn!("MemTotal missing from /proc/meminfo; reporting 0 MB total");
+        warn!(
+            "System Memory: 'MemTotal' missing from /proc/meminfo; defaulting to 0 MB (memory statistics will be inaccurate)"
+        );
         0
     });
     (available, total)

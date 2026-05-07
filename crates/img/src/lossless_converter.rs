@@ -971,7 +971,16 @@ fn commit_jpeg_to_jxl_success(
         cleanup_temp_output(temp_output, input);
         return Err(e);
     }
-    let output_size = fs::metadata(temp_output).map_or(0, |m| m.len());
+    let output_size = fs::metadata(temp_output).map_or_else(
+        |e| {
+            tracing::warn!(
+                "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                temp_output.display()
+            );
+            0
+        },
+        |m| m.len(),
+    );
     finalize_with_size_check(
         input,
         temp_output,
@@ -2096,7 +2105,7 @@ fn prepare_input_for_cjxl(
         if ext_lower == "exr" || ext_lower == "hdr" {
             is_float = true;
             if options.verbose() {
-                tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
+                tracing::warn!(input = %input.display(), "Metadata: ffprobe failed to detect floating-point pixels; forcing high-dynamic-range (HDR) path based on file extension (.exr/.hdr)");
             }
         }
     }
@@ -2114,7 +2123,7 @@ fn prepare_input_for_cjxl(
         if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
             bit_depth = Some(16); // Safe assumption for these pro formats
             if options.verbose() {
-                tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
+                tracing::warn!(input = %input.display(), "Metadata: ffprobe failed to detect bit depth; assuming 16-bit professional format based on file extension (.tif/.dng)");
             }
         }
     }

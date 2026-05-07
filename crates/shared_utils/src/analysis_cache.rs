@@ -337,7 +337,10 @@ impl AnalysisCache {
                     && calculate_checksum(&data)
                         != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                 {
-                    warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
+                    warn!(
+                        "Cache: Data corruption detected for {}; checksum mismatch (path index)",
+                        path.display()
+                    );
                     return Ok(None);
                 }
 
@@ -362,7 +365,10 @@ impl AnalysisCache {
                     != u32::try_from(stored_checksum)
                         .expect("Failed to parse integer or missing required value")
             {
-                warn!("⚠️  [Cache] Quality checksum mismatch (Hash).");
+                warn!(
+                    "Cache: Data corruption detected for {}; checksum mismatch (hash index)",
+                    path.display()
+                );
                 return Ok(None);
             }
 
@@ -491,7 +497,10 @@ impl AnalysisCache {
                     && calculate_checksum(&data)
                         != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                 {
-                    warn!("⚠️  [Cache] Video checksum mismatch (Path).");
+                    warn!(
+                        "Cache: Data corruption detected for {}; video checksum mismatch (path index)",
+                        path.display()
+                    );
                     return Ok(None);
                 }
 
@@ -516,7 +525,10 @@ impl AnalysisCache {
                     != u32::try_from(stored_checksum)
                         .expect("Failed to parse integer or missing required value")
             {
-                warn!("⚠️  [Cache] Video checksum mismatch (Hash).");
+                warn!(
+                    "Cache: Data corruption detected for {}; video checksum mismatch (hash index)",
+                    path.display()
+                );
                 return Ok(None);
             }
 

@@ -64,7 +64,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .build()
         .output()
         .map_err(|e| {
-            warn!(path = %input.display(), error = %e, "ffprobe failed to start for duration check");
+            warn!(path = %input.display(), error = %e, "ffprobe: Subprocess failed to start for duration check; verify ffprobe is in PATH");
             e
         })
         .ok()?;
@@ -73,7 +73,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         warn!(
             path = %input.display(),
             stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "ffprobe failed to read video duration"
+            "ffprobe: Failed to read video duration (non-zero exit status); container may be malformed"
         );
         return None;
     }
@@ -87,7 +87,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
                 path = %input.display(),
                 output = %trimmed,
                 error = %err,
-                "Failed to parse ffprobe duration output"
+                "ffprobe: Failed to parse duration output as float"
             );
             None
         }
@@ -137,7 +137,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         {
             Ok(o) => o,
             Err(e) => {
-                warn!(path = %path.display(), error = %e, "Failed to execute ffprobe for frame count");
+                warn!(path = %path.display(), error = %e, "ffprobe: Subprocess failed to start for frame count; verify ffprobe is in PATH");
                 return None;
             }
         };
@@ -146,7 +146,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
             warn!(
                 path = %path.display(),
                 stderr = %String::from_utf8_lossy(&out.stderr).trim(),
-                "ffprobe frame count failed"
+                "ffprobe: Failed to count frames (non-zero exit status)"
             );
             return None;
         }
@@ -156,7 +156,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         match trimmed.parse::<u64>() {
             Ok(count) => Some(count),
             Err(e) => {
-                warn!(path = %path.display(), output = %trimmed, error = %e, "Failed to parse ffprobe frame count");
+                warn!(path = %path.display(), output = %trimmed, error = %e, "ffprobe: Failed to parse frame count output as integer");
                 None
             }
         }

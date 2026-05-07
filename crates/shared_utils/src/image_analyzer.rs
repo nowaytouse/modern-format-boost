@@ -399,7 +399,10 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     let color_depth = detect_color_depth(&img);
     let color_space = detect_color_space(&img);
 
-    let is_animated = is_animated_format(path, format).unwrap_or(false);
+    let is_animated = is_animated_format(path, format).unwrap_or_else(|_| {
+        tracing::debug!("Missing animation info; defaulting to false");
+        false
+    });
 
     let is_lossless =
         detect_lossless(format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
@@ -1357,7 +1360,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or_else(|| {
-                        tracing::warn!("ffprobe output missing nb_read_frames; using 0");
+                        tracing::warn!("ffprobe: 'nb_read_frames' missing from output; defaulting to 0 for frame count analysis");
                         0
                     });
 
@@ -1943,10 +1946,20 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             if let (Some(w_part), Some(h_part)) = (parts.first(), parts.get(1)) {
                 let w_str: String = w_part.chars().filter(char::is_ascii_digit).collect();
                 let h_str: String = h_part.chars().filter(char::is_ascii_digit).collect();
-                width =
-                    crate::numeric_cast::parse_strict::<u32>(&w_str, "jxlinfo_width").unwrap_or(0);
-                height =
-                    crate::numeric_cast::parse_strict::<u32>(&h_str, "jxlinfo_height").unwrap_or(0);
+                width = crate::numeric_cast::parse_strict::<u32>(&w_str, "jxlinfo_width")
+                    .unwrap_or_else(|| {
+                        tracing::warn!(
+                            "Failed to parse width from jxlinfo output; defaulting to 0"
+                        );
+                        0
+                    });
+                height = crate::numeric_cast::parse_strict::<u32>(&h_str, "jxlinfo_height")
+                    .unwrap_or_else(|| {
+                        tracing::warn!(
+                            "Failed to parse height from jxlinfo output; defaulting to 0"
+                        );
+                        0
+                    });
             }
         }
 

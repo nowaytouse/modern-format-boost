@@ -544,7 +544,10 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
         eprintln!("   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}");
     }
-    let is_lossless = is_lossless_result.unwrap_or(false);
+    let is_lossless = is_lossless_result.unwrap_or_else(|_| {
+        tracing::debug!("Missing HEIC lossless info; defaulting to false");
+        false
+    });
 
     // Detect HDR and Dolby Vision
     let mut is_hdr = false;

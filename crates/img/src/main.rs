@@ -825,7 +825,16 @@ fn auto_convert_single_file(
         let reason =
             "Live Photo detected - img strictly processes static images only (handled by vid)";
         shared_utils::progress_mode::image_ignored(reason);
-        let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or(0, |m| m.len());
+        let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or_else(
+            |e| {
+                tracing::warn!(
+                    "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                    input.display()
+                );
+                0
+            },
+            |m| m.len(),
+        );
         // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),

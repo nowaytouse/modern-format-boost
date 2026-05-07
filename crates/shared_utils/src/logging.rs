@@ -288,7 +288,7 @@ pub fn strip_ansi_str(s: &str) -> String {
                 let b = *bytes.get(i).unwrap_or_else(|| {
                     // This path is technically unreachable due to the loop condition,
                     // but we use a loud non-blocking fallback for absolute safety.
-                    warn!("Required metadata byte missing (out of bounds) in strip_ansi_str");
+                    warn!("Logging: Required metadata byte missing (out of bounds) in strip_ansi_str; defaulting to 0 to prevent panic");
                     &0
                 });
                 i += 1;

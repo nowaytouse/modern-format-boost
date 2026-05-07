@@ -437,6 +437,7 @@ pub use media_passthrough::{audio_args_for_container, subtitle_args_for_containe
 
 /// Shared database interface for quality matching.
 pub mod database;
+pub mod database_vector;
 /// Depth map extraction and embedding.
 #[cfg(feature = "jpegxl-ffi")]
 pub mod depth_channel;

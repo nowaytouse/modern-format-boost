@@ -1730,7 +1730,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let audio_bitrate = probe_info
                 .and_then(|info| info.audio.bit_rate)
                 .unwrap_or_else(|| {
-                    tracing::warn!("Failed to detect audio bitrate, assuming 128kbps");
+                    tracing::warn!("GPU Coarse Search: Failed to detect audio bitrate; defaulting to 128kbps for size estimation");
                     128_000
                 });
 
@@ -4400,7 +4400,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         total_file_compressed && ssim_ok
     };
 
-    let ssim_val = crate::numeric_cast::option_f64_strict(ssim, "final_ssim").unwrap_or(0.0);
+    let ssim_val =
+        crate::numeric_cast::option_f64_strict(ssim, "final_ssim").unwrap_or_else(|| {
+            tracing::debug!("Missing final_ssim; defaulting to 0.0");
+            0.0
+        });
 
     let sampling_coverage = 1.0_f64;
 

@@ -293,13 +293,13 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                     && !stderr_lower.contains("invalid data")
                     && !stderr_lower.is_empty()
                 {
-                    warn!(input = %input_str, stderr = %stderr.trim(), "FFPROBE FAILED: non-zero exit");
+                    warn!(input = %input_str, stderr = %stderr.trim(), "ffprobe: Execution failed with non-zero exit status; verify ffprobe installation and input file accessibility");
                 }
                 return ColorInfo::default();
             }
         }
         Err(e) => {
-            warn!(error = %e, input = %input_str, "FFPROBE ERROR");
+            warn!(error = %e, input = %input_str, "ffprobe: Critical failure launching subprocess; check system resources and permissions");
             return ColorInfo::default();
         }
     };
@@ -307,7 +307,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let json_str = match String::from_utf8(output.stdout) {
         Ok(s) => s,
         Err(e) => {
-            warn!(error = %e, "FFPROBE UTF8 ERROR");
+            warn!(error = %e, "ffprobe: Output contained invalid UTF-8 sequences; cannot process metadata");
             return ColorInfo::default();
         }
     };
@@ -315,13 +315,13 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let parsed: FfprobeOutput = match serde_json::from_str(&json_str) {
         Ok(p) => p,
         Err(e) => {
-            warn!(error = %e, "FFPROBE JSON PARSE ERROR");
+            warn!(error = %e, "ffprobe: Failed to parse JSON output; response might be truncated or malformed");
             return ColorInfo::default();
         }
     };
 
     let Some(stream) = parsed.streams.first() else {
-        warn!(input = %input_str, "FFPROBE JSON contained no video streams");
+        warn!(input = %input_str, "ffprobe: JSON output contains no valid video streams; file may be a static image or unsupported container");
         return ColorInfo::default();
     };
 

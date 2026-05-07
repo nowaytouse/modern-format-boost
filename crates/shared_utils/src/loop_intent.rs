@@ -494,10 +494,16 @@ impl LoopMeta {
         });
 
         let mut meta = Self {
-            duration_secs: scan.duration_secs.unwrap_or(0.0_f64),
-            duration_tier: Some(DurationTier::from_secs(
-                scan.duration_secs.unwrap_or(0.0_f64),
-            )),
+            duration_secs: scan.duration_secs.unwrap_or_else(|| {
+                tracing::debug!("Intent: Missing 'duration_secs' from GIF scan; defaulting to 0.0");
+                0.0_f64
+            }),
+            duration_tier: Some(DurationTier::from_secs(scan.duration_secs.unwrap_or_else(
+                || {
+                    tracing::debug!("Intent: Missing 'duration_secs' for tier; defaulting to 0.0");
+                    0.0_f64
+                },
+            ))),
             width,
             height,
             fps,
@@ -641,7 +647,10 @@ impl DerivedLoopSignals {
         } else {
             0.5_f64 // neutral when no frame type data
         };
-        let bytes_per_frame = meta.frame_count.map_or(0.0_f64, |fc| {
+        let bytes_per_frame = meta.frame_count.map_or_else(|| {
+            tracing::debug!("Intent: Missing 'frame_count' for bytes_per_frame calculation; defaulting to 0.0");
+            0.0_f64
+        }, |fc| {
             if fc > 0 {
                 crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
                     / crate::numeric_cast::u64_to_f64(fc)
@@ -660,7 +669,11 @@ impl DerivedLoopSignals {
             scene_cut: detect_scene_cut(&meta.pkt_sizes),
             localized_motion: meta.mv_magnitudes.len() >= 10 && zero_motion_ratio > 0.70,
             zero_motion_ratio,
-            has_audible_audio: meta.has_audio && !meta.audio_is_silent.unwrap_or(false),
+            has_audible_audio: meta.has_audio
+                && !meta.audio_is_silent.unwrap_or_else(|| {
+                    tracing::debug!("Intent: Missing 'audio_is_silent'; defaulting to false");
+                    false
+                }),
             iframe_ratio,
             bytes_per_frame,
             is_portrait,
@@ -1140,10 +1153,19 @@ fn apply_structural_signals(
     if derived.iframe_ratio >= 0.85_f64 {
         pro_loop_count += 1;
     }
-    if meta.loop_closure_score.unwrap_or(0.0_f64) >= 0.82_f64 && is_short_tier {
+    if meta.loop_closure_score.unwrap_or_else(|| {
+        tracing::debug!("Intent: Missing 'loop_closure_score' for bonus; defaulting to 0.0");
+        0.0_f64
+    }) >= 0.82_f64
+        && is_short_tier
+    {
         pro_loop_count += 1;
     }
-    if meta.motion_periodicity.unwrap_or(0.0_f64) >= 0.72_f64 {
+    if meta.motion_periodicity.unwrap_or_else(|| {
+        tracing::debug!("Intent: Missing 'motion_periodicity' for bonus; defaulting to 0.0");
+        0.0_f64
+    }) >= 0.72_f64
+    {
         pro_loop_count += 1;
     }
     // Convergence bonus: 3+ independent pro-loop signals → additional bonus
@@ -1270,8 +1292,18 @@ fn apply_weak_heuristics(
         let z = thresholds.motion_gini_z(motion_gini);
         let loop_support = meta
             .loop_closure_score
-            .unwrap_or(0.5_f64)
-            .max(meta.motion_periodicity.unwrap_or(0.5_f64));
+            .unwrap_or_else(|| {
+                tracing::debug!(
+                    "Intent: Missing 'loop_closure_score' for gini evaluation; defaulting to 0.5"
+                );
+                0.5_f64
+            })
+            .max(meta.motion_periodicity.unwrap_or_else(|| {
+                tracing::debug!(
+                    "Intent: Missing 'motion_periodicity' for gini evaluation; defaulting to 0.5"
+                );
+                0.5_f64
+            }));
         let support_relief = if z.is_sign_negative() && loop_support >= 0.80_f64 {
             0.35_f64
         } else if (z.is_sign_negative() && short_silent_asset)
@@ -2053,7 +2085,12 @@ fn layer6_directional_arbitration(
     }
 
     if let Some(knn_keep) = keep_prob {
-        let conf = confidence.unwrap_or(0.55_f64).clamp(0.35, 1.0);
+        let conf = confidence
+            .unwrap_or_else(|| {
+                tracing::debug!("Intent: Missing 'confidence' from KNN; defaulting to 0.55");
+                0.55_f64
+            })
+            .clamp(0.35, 1.0);
         if knn_keep >= 0.65_f64 {
             let delta = (((knn_keep - 0.5) * 0.90) * conf).clamp(0.08, 0.28);
             arbitration.add_keep(delta, format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"));
@@ -2064,7 +2101,12 @@ fn layer6_directional_arbitration(
     }
 
     if let Some(score) = fusion_score {
-        let conf = confidence.unwrap_or(0.55_f64).clamp(0.35, 1.0);
+        let conf = confidence
+            .unwrap_or_else(|| {
+                tracing::debug!("Intent: Missing 'confidence' from KNN; defaulting to 0.55");
+                0.55_f64
+            })
+            .clamp(0.35, 1.0);
         if score >= 0.55_f64 {
             let delta = (((score - 0.5) * 0.95) * conf).clamp(0.06, 0.24);
             arbitration.add_keep(delta, format!("fusion score {score:.2}"));
@@ -2154,7 +2196,11 @@ fn layer6_directional_arbitration(
     // Convert-side signals missing from original implementation — added for symmetry:
     // Audible audio is the single strongest real-world video indicator and was completely
     // absent from Layer 6. High frame counts (>500) are extremely rare in animated images.
-    let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+    let has_audible_audio = meta.has_audio
+        && !meta.audio_is_silent.unwrap_or_else(|| {
+            tracing::debug!("Intent: Missing 'audio_is_silent'; defaulting to false");
+            false
+        });
     if has_audible_audio {
         let audio_weight = if short_silent_asset {
             0.08_f64
@@ -2167,20 +2213,18 @@ fn layer6_directional_arbitration(
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
     if meta.frame_count.is_some_and(|fc| fc > 500) && meta.duration_secs > 0.01_f64 {
-        let fps =
-            crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0)) / meta.duration_secs;
+        let fallback_fc = meta.frame_count.unwrap_or_else(|| {
+            tracing::debug!("Intent: Missing 'frame_count'; defaulting to 0");
+            0
+        });
+        let fps = crate::numeric_cast::u64_to_f64(fallback_fc) / meta.duration_secs;
         if fps < 24.0_f64 {
-            let weight = (crate::numeric_cast::u64_to_f64(
-                meta.frame_count.unwrap_or(0).saturating_sub(500),
-            ) / 2000.0)
+            let weight = (crate::numeric_cast::u64_to_f64(fallback_fc.saturating_sub(500))
+                / 2000.0)
                 .clamp(0.04, 0.14);
             arbitration.add_convert(
                 weight,
-                format!(
-                    "high frame count {} @ {:.0}fps",
-                    meta.frame_count.unwrap_or(0),
-                    fps
-                ),
+                format!("high frame count {fallback_fc} @ {fps:.0}fps"),
             );
         }
     }
@@ -2404,7 +2448,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             .frame_count
             .is_none_or(|fc| fc <= 1 || fc > 50000)
         {
-            let fc_for_detection = mutable_meta.frame_count.unwrap_or(0);
+            let fc_for_detection = mutable_meta.frame_count.unwrap_or_else(|| {
+                tracing::debug!("Intent: Missing 'frame_count' for detection; defaulting to 0");
+                0
+            });
             match detect_real_frame_count(p, fc_for_detection) {
                 crate::media_penetration::PenetrationResult::Verified(real_count) => {
                     mutable_meta.real_frame_count = Some(real_count);
@@ -3019,7 +3066,10 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: Option<u64>) -> f64
     if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc == 0) {
         return 0.5;
     }
-    let fc = frame_count.unwrap_or(0);
+    let fc = frame_count.unwrap_or_else(|| {
+        tracing::debug!("Intent: Missing 'frame_count' in frequency scoring; defaulting to 0");
+        0
+    });
     let loops_per_minute = 60.0_f64 / duration_secs;
     let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs;
 
@@ -3054,7 +3104,10 @@ pub fn score_sparse_cadence(duration_secs: f64, frame_count: Option<u64>) -> f64
     if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc <= 1) {
         return 0.5;
     }
-    let fc = frame_count.unwrap_or(0);
+    let fc = frame_count.unwrap_or_else(|| {
+        tracing::debug!("Intent: Missing 'frame_count' in cadence scoring; defaulting to 0");
+        0
+    });
     let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs.max(0.01);
     let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(fc);
 

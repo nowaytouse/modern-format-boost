@@ -411,15 +411,20 @@ pub fn execute_conversion(
 
     let reduction =
         shared_utils::numeric_cast::option_f32_strict(size_reduction, "size_reduction_report")
-            .unwrap_or(0.0); // Safe for display; doesn't affect data integrity. Wait, user said strictly NO.
-    // Actually, if reduction is missing, we should probably change the message to indicate uncertainty.
+            .unwrap_or_else(|| {
+                tracing::warn!("Missing size reduction report; defaulting to 0.0");
+                0.0
+            });
 
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
         let out_val = i128::from(
             shared_utils::numeric_cast::option_u64_strict(output_size, "output_size_report")
-                .unwrap_or(0),
+                .unwrap_or_else(|| {
+                    tracing::warn!("Missing output size report; defaulting to 0");
+                    0
+                }),
         );
         let src_val = i128::from(detection.file_size);
         let diff_bytes = out_val - src_val;

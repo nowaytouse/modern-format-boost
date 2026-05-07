@@ -148,7 +148,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Failed to open file for extension detection");
+            tracing::warn!(path = %path.display(), error = %e, "Format Detection: Failed to open file for magic-byte analysis");
             return None;
         }
     };
@@ -156,7 +156,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     let bytes_read = match file.read(&mut buffer) {
         Ok(n) => n,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Failed to read header for extension detection");
+            tracing::warn!(path = %path.display(), error = %e, "Format Detection: Failed to read file header for magic-byte analysis");
             return None;
         }
     };
@@ -299,7 +299,7 @@ pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     match s.parse::<f64>() {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(input = s, error = %e, "Failed to parse float; admitting unknown input via default value {}", default);
+            tracing::warn!(input = s, error = %e, "Numerical Parsing: Failed to parse float from string; using fallback value {}", default);
             default
         }
     }

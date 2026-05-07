@@ -257,11 +257,11 @@ pub fn analyze_directory(
 /// File date information with the best available date and metadata
 fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> FileDateInfo {
     let filename = item.file_name.clone().unwrap_or_else(|| {
-        tracing::warn!("☢️ [ANOMALY] Missing FileName in exiftool output");
+        tracing::warn!("☢️ [ANOMALY] Missing 'FileName' in exiftool output; defaulting to empty string (may cause matching failures)");
         String::new()
     });
     let path = item.source_file.clone().unwrap_or_else(|| {
-        tracing::warn!("☢️ [ANOMALY] Missing SourceFile in exiftool output");
+        tracing::warn!("☢️ [ANOMALY] Missing 'SourceFile' in exiftool output; defaulting to empty string (may cause path resolution issues)");
         String::new()
     });
 

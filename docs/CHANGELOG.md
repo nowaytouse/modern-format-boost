@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
 
+- **"Loud and Honest" Error Reporting Architecture**:
+  - **Descriptive Fallback Warnings**: Systematically replaced silent defaults (e.g., `.unwrap_or(0)`) with explicit `tracing::warn!` logs across `shared_utils`, `img`, and `video_explorer`. 
+  - **Module-Specific Context**: Standardized warning messages with module prefixes (e.g., `Database:`, `Video Explorer:`, `ffprobe:`) to clarify the source and impact of errors (e.g., "clamping to 0 for storage", "ETA may be inaccurate").
+  - **Overflow & Parsing Audits**: Hardened numeric casting and parsing logic to log specific failures (e.g., float-to-int conversion, frame count parsing) while maintaining graceful degradation.
+
+- **KNN Database & Vector Encoding Modularization**:
+  - **Extracted Vector Logic**: Moved the 31-dimensional feature encoding logic from `database.rs` to a new dedicated module `crates/shared_utils/src/database_vector.rs`.
+  - **Improved Feature Ingestion**: Refactored database ingestion and stat refreshing to skip entries with missing critical features, preventing statistical skew and ensuring higher data integrity for KNN operations.
+  - **Strict Feature Extraction**: Implemented explicit `None` handling for missing features in vector computation, ensuring that only fully-qualified samples are used for pgvector indexing.
+
+- **Process Reliability & Diagnostics**:
+  - **Enhanced FFprobe Diagnostics**: Improved error reporting for `ffprobe` subprocess failures, including explicit warnings for missing binaries in PATH and detection of malformed media containers.
+  - **System Memory Transparency**: Added detailed warnings for macOS/Linux memory parsing failures, documenting when memory-based optimizations are disabled due to missing system stats.
+
 - **Comprehensive Nightly Audit & Lint Resolution**:
   - **Zero-Warning Workspace (Pass 2)**: Achieved a perfectly clean `cargo clippy --all-targets -- -D warnings` build on the latest nightly toolchain across all workspace crates.
   - **Improved Build Precision**: Enhanced `smart_build.py` with an expanded source tracking algorithm that recursively monitors the entire workspace and multiple file extensions (`.sql`, `.c`, etc.), eliminating stale binary edge cases.

@@ -93,7 +93,10 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
 pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> PenetrationResult<bool> {
     // Phase 1: Stratified Sampling (fast check)
     // Sample up to 3 points in time to catch most cases efficiently.
-    let duration_val = duration.unwrap_or(1.0_f64);
+    let duration_val = duration.unwrap_or_else(|| {
+        tracing::warn!("Penetration: Missing duration; defaulting to 1.0s for transparency check");
+        1.0_f64
+    });
     let sample_points = if duration_val <= 1.0_f64 {
         vec![0.0_f64]
     } else if duration_val <= 5.0_f64 {

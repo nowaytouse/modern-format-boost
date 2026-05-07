@@ -981,20 +981,22 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                     palette_size,
                     "palette_size for ratio component",
                 )
-                .unwrap_or_else(|| {
-                    tracing::warn!("Failed to convert palette size for ratio, using 0");
-                    0
-                }),
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG Analysis: 'palette_size' conversion failed".to_string(),
+                    )
+                })?,
             );
             let den = Rational::from(
                 crate::numeric_cast::u64_to_u32_strict(
                     pixel_count as u64,
                     "pixel_count for ratio component",
                 )
-                .unwrap_or_else(|| {
-                    tracing::warn!("Failed to convert pixel count for ratio, using 1");
-                    1
-                }),
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG Analysis: 'pixel_count' conversion failed".to_string(),
+                    )
+                })?,
             ) / Rational::from(1_000_000_i32);
             if den == 0 {
                 1000.0
@@ -1012,20 +1014,22 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                     palette_size,
                     "palette_size for ratio component",
                 )
-                .unwrap_or_else(|| {
-                    tracing::warn!("Failed to convert palette size for density, using 0");
-                    0
-                }),
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG Analysis: 'palette_size' conversion failed".to_string(),
+                    )
+                })?,
             );
             let den_f = f64::from(
                 crate::numeric_cast::u64_to_u32_strict(
                     pixel_count as u64,
                     "pixel_count for ratio component",
                 )
-                .unwrap_or_else(|| {
-                    tracing::warn!("Failed to convert pixel count for density, using 1");
-                    1
-                }),
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG Analysis: 'pixel_count' conversion failed".to_string(),
+                    )
+                })?,
             )
             .sqrt();
 

@@ -613,7 +613,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.len() > 29
         {
             let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
-                warn!("☢️ [ANOMALY] APP1 XMP payload truncated before namespace offset");
+                warn!("☢️ [ANOMALY] APP1 XMP payload truncated before namespace offset; defaulting to empty slice (XMP metadata will be lost)");
                 &[]
             }));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
@@ -677,7 +677,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
-                    warn!("☢️ [ANOMALY] APP1 XMP standard payload truncated");
+                    warn!("☢️ [ANOMALY] APP1 XMP standard payload truncated; defaulting to empty slice (standard XMP metadata will be lost)");
                     &[]
                 }))
                 .to_string();
@@ -689,7 +689,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             {
                 let xmp =
                     String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or_else(|| {
-                        warn!("☢️ [ANOMALY] APP1 XMP extended payload truncated");
+                        warn!("☢️ [ANOMALY] APP1 XMP extended payload truncated; defaulting to empty slice (extended XMP metadata will be lost)");
                         &[]
                     }))
                     .to_string();
@@ -1013,7 +1013,7 @@ fn candidate_gainmap_bytes(
     let mut candidate = jpeg_data
         .get(start..end)
         .unwrap_or_else(|| {
-            tracing::warn!("☢️ [ANOMALY] Gainmap candidate slice out of bounds");
+            tracing::warn!("☢️ [ANOMALY] Gainmap candidate slice out of bounds; defaulting to empty slice (HDR gainmap detection will fail)");
             &[]
         })
         .to_vec();

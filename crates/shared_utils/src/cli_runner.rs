@@ -175,7 +175,9 @@ where
                 // Detect when user deleted the output directory to start fresh:
                 // clear old checkpoint state so all files get reprocessed.
                 if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
-                    warn!("⚠️  Failed to check output root for checkpoint reset: {e}");
+                    warn!(
+                        "Checkpoint: Output directory missing; failed to reset session state: {e}"
+                    );
                 }
 
                 if cp.is_resume_mode() {
@@ -189,7 +191,7 @@ where
                 Some(cp)
             }
             Err(e) => {
-                warn!("⚠️  Could not initialize checkpoint manager: {e}");
+                warn!("Checkpoint: Initialization failed (resume mode disabled): {e}");
                 None
             }
         }
@@ -204,7 +206,7 @@ where
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
                     warn!(
-                        "Failed to read file metadata during disk-space precheck ({}): {}",
+                        "Disk Check: Failed to retrieve metadata for {}; skipping in total size estimation: {}",
                         f.display(),
                         err
                     );
@@ -224,8 +226,8 @@ where
                 anyhow::bail!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\
-                     💾 Required:  {required_gb:.2} GB (input size + 1 GB headroom)\n\
-                     💡 Free up space or choose a different output location."
+                     💾 Required:  {required_gb:.2} GB (estimated input size + 1 GB safety headroom)\n\
+                     💡 Free up space or specify a different output volume via --output."
                 );
             }
             info!(
@@ -281,13 +283,13 @@ where
         Ok(pool) => pool,
         Err(err) => {
             warn!(
-                "⚠️ Failed to create {parallel_tasks}-thread video pool: {err}. Falling back to 1 thread."
+                "Thread Manager: Failed to initialize {parallel_tasks}-thread video pool: {err}. Falling back to sequential execution (1 thread)."
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
                 .build()
                 .map_err(|fallback_err| {
-                    anyhow::anyhow!("Failed to create fallback video thread pool: {fallback_err}")
+                    anyhow::anyhow!("Thread Manager: Critical failure creating fallback thread pool: {fallback_err}")
                 })?
         }
     };
@@ -406,7 +408,7 @@ where
                             && let Err(err) = cp.mark_completed(&fixed)
                         {
                             warn!(
-                                "⚠️ Failed to mark checkpoint complete for {}: {}",
+                                "Checkpoint: Integrity failure marking file as completed (path={}): {}",
                                 fixed.display(),
                                 err
                             );
@@ -526,14 +528,16 @@ where
     if let Some(cp) = checkpoint {
         if batch_result.paused {
             if let Err(err) = cp.release_lock() {
-                warn!("⚠️ Failed to release checkpoint lock after pause: {err}");
+                warn!("Checkpoint: Failed to release file lock during batch pause: {err}");
             }
         } else if batch_result.failed == 0 {
             if let Err(err) = cp.cleanup() {
-                warn!("⚠️ Failed to clean up checkpoint state: {err}");
+                warn!(
+                    "Checkpoint: 100% success reached, but failed to purge completed-list state: {err}"
+                );
             }
         } else if let Err(err) = cp.release_lock() {
-            warn!("⚠️ Failed to release checkpoint lock after failure: {err}");
+            warn!("Checkpoint: Failed to release file lock after batch failure: {err}");
         }
     }
 
@@ -556,20 +560,25 @@ where
             info!("📦 Copied {} unsupported files", copy_result.copied);
         }
         if copy_result.failed > 0 {
-            error!("❌ Failed to copy {} files", copy_result.failed);
+            error!(
+                "IO Error: Failed to copy {} files to output directory",
+                copy_result.failed
+            );
         }
 
         info!("\n🔍 Verifying output completeness...");
         let verify = verify_output_completeness(input, output_dir, recursive);
         info!("{}", verify.message);
         if !verify.passed {
-            warn!("⚠️  Some files may be missing from output!");
+            warn!(
+                "Verification: File count mismatch between input and output directories; some files may have been lost"
+            );
         }
 
         if let Some(ref base_dir) = config.base_dir {
             info!("\n📁 Preserving directory metadata...");
             if let Err(e) = crate::metadata::preserve_directory_metadata(base_dir, output_dir) {
-                error!("⚠️ Failed to preserve directory metadata: {e}");
+                error!("Metadata: Failed to sync directory timestamps/permissions: {e}");
             } else {
                 info!("✅ Directory metadata preserved");
             }
@@ -616,7 +625,7 @@ where
                 config.base_dir.as_deref(),
                 true,
             ) {
-                error!("❌ Failed to copy to output: {copy_err}");
+                error!("IO Error: Failed to copy non-video file to output directory: {copy_err}");
             } else {
                 info!(
                     "📋 Copied to output (not a video after content check): {}",
@@ -645,7 +654,9 @@ where
                     config.base_dir.as_deref(),
                     true,
                 ) {
-                    error!("❌ Failed to copy original to output dir: {copy_err}");
+                    error!(
+                        "IO Error: Conversion failed AND failed to copy original source to output: {copy_err}"
+                    );
                 } else {
                     info!(
                         "📋 Copied original to output (conversion failed): {}",

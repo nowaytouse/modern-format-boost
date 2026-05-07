@@ -362,9 +362,9 @@ pub mod webp {
                         .checked_div(127)
                         .unwrap_or_else(|| {
                             tracing::warn!(
-                                "Division failed in WebP quality calculation, using max quality"
+                                "WebP Analysis: Division by 127 failed in quality calculation; defaulting to max quality (100) to prevent panic"
                             );
-                            100 // Default to max quality if division fails
+                            100
                         })
                         .min(100),
                 );
@@ -699,8 +699,10 @@ pub mod avif {
                         .get(1..=num_ch)
                         .and_then(|slice| slice.iter().copied().max())
                         .unwrap_or_else(|| {
-                            tracing::warn!("Failed to find max depth in pixi data, using default");
-                            8 // Default bit depth
+                            tracing::warn!(
+                                "AVIF Analysis: Failed to find max depth in pixi data; defaulting to 8-bit depth (lossless detection may be inaccurate)"
+                            );
+                            8
                         });
                     if max_depth >= 12 {
                         return Ok(true);

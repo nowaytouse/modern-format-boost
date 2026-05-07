@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -363,13 +363,15 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     // `bit_rate` is absent for many image containers (WebP, AVIF) — treat as optional.
     let bit_rate = parse_u64_string_field(&format["bit_rate"]);
     if bit_rate.is_none() {
-        warn!("ffprobe format section has no bit_rate (normal for image containers)");
+        debug!(
+            "ffprobe: 'bit_rate' metadata missing from format section (expected for static image containers like WebP/AVIF)"
+        );
     }
 
     // `duration` is required; without it frame-count and loop-intent are undefined.
     let duration = parse_f64_string_field(&format["duration"]).ok_or_else(|| {
         let msg = "Missing or unparseable 'duration' in ffprobe format section".to_string();
-        warn!(%msg, "ffprobe data integrity failure");
+        info!(error = %msg, "ffprobe: 'duration' metadata missing or malformed; animation/looping properties cannot be reliably determined");
         FFprobeError::ParseError(msg)
     })?;
 
@@ -420,8 +422,8 @@ fn select_video_stream<'a>(
                 // `nb_frames` absent → treat as 0 (lowest sort priority); this is
                 // intentional: a stream with unknown frame count loses to one with known count.
                 let nb = parse_u64_string_field(&stream["nb_frames"]).unwrap_or_else(|| {
-                    warn!(
-                        "ffprobe stream missing nb_frames; using 0 for stream selection priority"
+                    debug!(
+                        "ffprobe: 'nb_frames' (total frames) not reported by stream; defaulting to 0 for stream selection"
                     );
                     0
                 });
@@ -469,9 +471,9 @@ fn resolve_probe_duration(
     } else if let Some(d) = parse_f64_string_field(&video_stream["duration"]) {
         d
     } else {
-        warn!(
+        info!(
             path = %path.display(),
-            "Neither format nor stream reports a valid duration; using 0.0"
+            "ffprobe: Could not resolve a valid duration from format or stream sections; defaulting to 0.0s (animation/looping metadata may be incomplete)"
         );
         0.0_f64
     };
@@ -613,7 +615,7 @@ fn parse_video_stream_fields(
     let max_b_frames_raw = video_stream["has_b_frames"].as_i64();
     let max_b_frames = max_b_frames_raw.map_or_else(
         || {
-            warn!("ffprobe stream missing has_b_frames; treating as 0");
+            warn!("ffprobe: 'has_b_frames' metadata missing from stream; assuming 0 (no B-frames) for this codec/container");
             0_u8
         },
         |v| {
