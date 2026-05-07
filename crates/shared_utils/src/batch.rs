@@ -561,7 +561,12 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
     match image::image_dimensions(path) {
         Ok((width, height)) => Some(u64::from(width).saturating_mul(u64::from(height))),
         Err(e) => {
-            warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
+            let ext = crate::common_utils::get_extension_lowercase(path);
+            if matches!(ext.as_str(), "heic" | "heif" | "avif" | "jxl") {
+                debug!(path = %path.display(), error = %e, "Image dimensions unavailable for sorting (format not natively supported)");
+            } else {
+                warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
+            }
             None
         }
     }
