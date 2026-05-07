@@ -457,9 +457,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         limits.set_max_children_per_box(50000);
 
         // Increase other limits for complex HEIC files
-        limits.set_max_items(500_000);
-        limits.set_max_components(50_000);
-        limits.set_max_iloc_extents_per_item(50_000);
+        limits.set_max_items(crate::constants::HEIC_MAX_ITEMS);
+        limits.set_max_components(crate::constants::HEIC_MAX_COMPONENTS);
+        limits.set_max_iloc_extents_per_item(crate::constants::HEIC_MAX_EXTENTS);
     }
 
     let data = std::fs::read(path)?;

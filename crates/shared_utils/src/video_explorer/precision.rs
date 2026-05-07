@@ -4,13 +4,10 @@ use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
 
 pub const CRF_PRECISION: f32 = 0.25;
 
-pub const COARSE_STEP: f32 = 2.0;
-
-pub const FINE_STEP: f32 = 0.5;
-
-pub const ULTRA_FINE_STEP: f32 = 0.25;
-
-pub const CPU_FINEST_STEP: f32 = 0.1;
+pub const SEARCH_STEP_COARSE: f32 = crate::constants::SEARCH_STEP_COARSE;
+pub const SEARCH_STEP_FINE: f32 = crate::constants::SEARCH_STEP_FINE;
+pub const SEARCH_STEP_ULTRA_FINE: f32 = crate::constants::SEARCH_STEP_ULTRA_FINE;
+pub const SEARCH_STEP_CPU_FINEST: f32 = crate::constants::SEARCH_STEP_CPU_FINEST;
 
 /// Same as `crf_constants::CRF_CACHE_KEY_MULTIPLIER` so cache keys match `CrfCache` / `Crf::to_cache_key`.
 pub const CACHE_KEY_MULTIPLIER: f64 = CRF_CACHE_KEY_MULTIPLIER;
@@ -57,11 +54,11 @@ impl SearchPhase {
     #[must_use]
     pub const fn step_size(&self) -> f32 {
         match self {
-            Self::GpuCoarse => 4.0,
-            Self::GpuMedium => 1.0,
-            Self::GpuFine => FINE_STEP,
-            Self::GpuUltraFine => ULTRA_FINE_STEP,
-            Self::CpuFinest => CPU_FINEST_STEP,
+            SearchPhase::GpuCoarse => crate::constants::SEARCH_STEP_GPU_COARSE,
+            SearchPhase::GpuMedium => crate::constants::SEARCH_STEP_GPU_MEDIUM,
+            SearchPhase::GpuFine => SEARCH_STEP_FINE,
+            SearchPhase::GpuUltraFine => SEARCH_STEP_ULTRA_FINE,
+            SearchPhase::CpuFinest => SEARCH_STEP_CPU_FINEST,
         }
     }
 
@@ -98,11 +95,11 @@ pub struct ThreePhaseSearch {
 impl Default for ThreePhaseSearch {
     fn default() -> Self {
         Self {
-            gpu_coarse_step: 4.0,
-            gpu_medium_step: 1.0,
-            gpu_fine_step: FINE_STEP,
-            gpu_ultra_fine_step: ULTRA_FINE_STEP,
-            cpu_finest_step: CPU_FINEST_STEP,
+            gpu_coarse_step: crate::constants::SEARCH_STEP_GPU_COARSE,
+            gpu_medium_step: crate::constants::SEARCH_STEP_GPU_MEDIUM,
+            gpu_fine_step: SEARCH_STEP_FINE,
+            gpu_ultra_fine_step: SEARCH_STEP_ULTRA_FINE,
+            cpu_finest_step: SEARCH_STEP_CPU_FINEST,
         }
     }
 }
@@ -120,23 +117,15 @@ impl ThreePhaseSearch {
     }
 }
 
-pub const SSIM_DISPLAY_PRECISION: u32 = 4;
-
+pub const SSIM_DISPLAY_PRECISION: u32 = crate::constants::SSIM_DISPLAY_PRECISION;
 pub const SSIM_COMPARE_EPSILON: f64 = crate::types::SSIM_EPSILON;
-
-pub const DEFAULT_MIN_SSIM: f64 = 0.95;
-
-pub const HIGH_QUALITY_MIN_SSIM: f64 = 0.98;
-
-pub const ACCEPTABLE_MIN_SSIM: f64 = 0.90;
-
-pub const MIN_ACCEPTABLE_SSIM: f64 = 0.85;
-
-pub const PSNR_DISPLAY_PRECISION: u32 = 2;
-
-pub const DEFAULT_MIN_PSNR: f64 = 35.0;
-
-pub const HIGH_QUALITY_MIN_PSNR: f64 = 40.0;
+pub const DEFAULT_MIN_SSIM: f64 = crate::constants::DEFAULT_MIN_SSIM;
+pub const HIGH_QUALITY_MIN_SSIM: f64 = crate::constants::HIGH_QUALITY_MIN_SSIM;
+pub const ACCEPTABLE_MIN_SSIM: f64 = crate::constants::ACCEPTABLE_MIN_SSIM;
+pub const MIN_ACCEPTABLE_SSIM: f64 = crate::constants::MIN_ACCEPTABLE_SSIM;
+pub const PSNR_DISPLAY_PRECISION: u32 = crate::constants::PSNR_DISPLAY_PRECISION;
+pub const DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
+pub const HIGH_QUALITY_MIN_PSNR: f64 = crate::constants::HIGH_QUALITY_MIN_PSNR;
 
 /// Returns binary-search iteration count for CRF range. Requires `max_crf >= min_crf` (otherwise saturates to 0 range).
 #[must_use]
@@ -210,11 +199,9 @@ pub fn format_psnr(psnr: f64) -> String {
     }
 }
 
-pub const DEFAULT_MIN_MS_SSIM: f64 = 0.90;
-
-pub const HIGH_QUALITY_MIN_MS_SSIM: f64 = 0.95;
-
-pub const ACCEPTABLE_MIN_MS_SSIM: f64 = 0.85;
+pub const DEFAULT_MIN_MS_SSIM: f64 = crate::constants::DEFAULT_MIN_MS_SSIM;
+pub const HIGH_QUALITY_MIN_MS_SSIM: f64 = crate::constants::HIGH_QUALITY_MIN_MS_SSIM;
+pub const ACCEPTABLE_MIN_MS_SSIM: f64 = crate::constants::ACCEPTABLE_MIN_MS_SSIM;
 
 #[must_use]
 pub fn is_valid_ms_ssim(ms_ssim: f64) -> bool {

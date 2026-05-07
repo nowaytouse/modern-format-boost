@@ -15,7 +15,7 @@ use tracing::debug;
 
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 /// Shorter animations are skipped (no conversion to video).
-pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
+pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
 
 /// Opens an image reader with magic bytes detection to handle non-standard extensions.
 /// Falls back to extension-based detection if magic bytes detection fails.
@@ -948,7 +948,7 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(0.5, 45.0),
+        95..=100 => (f64::from(quality) - 95.0).mul_add(0.5, crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE),
         85..=94 => (f64::from(quality) - 85.0).mul_add(0.7, 38.0),
         75..=84 => (f64::from(quality) - 75.0).mul_add(0.6, 32.0),
         60..=74 => (f64::from(quality) - 60.0).mul_add(0.27, 28.0),
@@ -958,7 +958,7 @@ fn estimate_psnr_from_quality(quality: u8) -> f64 {
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(0.004, 0.98),
+        95..=100 => (f64::from(quality) - 95.0).mul_add(0.004, crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE),
         85..=94 => (f64::from(quality) - 85.0).mul_add(0.003, 0.95),
         75..=84 => (f64::from(quality) - 75.0).mul_add(0.005, 0.90),
         60..=74 => (f64::from(quality) - 60.0).mul_add(0.0067, 0.80),
@@ -1247,7 +1247,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         // If the duration is suspiciously short (e.g., < 0.25s) but not already 0, we run an exact packet count.
         // A duration of 0.04s is exactly 1 frame at 25fps.
         if d > 0.0
-            && d < 0.25
+            && d < crate::constants::DURATION_THRESHOLD_SUSPICIOUS
             && let Some(frame_count) = try_get_frame_count(path)
             && frame_count <= 1
         {
@@ -1274,7 +1274,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
         // For a valid animated GIF without explicit duration metadata,
         // we fallback to 10fps (0.1s per frame) as a rough estimate
-        return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1_f32);
+        return Some(crate::numeric_cast::u32_to_f32(frame_count) / crate::constants::FALLBACK_FPS);
     }
 
     None

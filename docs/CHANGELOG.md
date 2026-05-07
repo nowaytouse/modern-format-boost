@@ -7,11 +7,13 @@ All notable changes to this project will be documented in this file.
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
 
 - **"Loud and Honest" Error Reporting Architecture**:
-  - **Descriptive Fallback Warnings**: Systematically replaced silent defaults (e.g., `.unwrap_or(0)`) with explicit `tracing::warn!` logs across `shared_utils`, `img`, and `video_explorer`.
-  - **Mandatory Metadata Enforcement**: Hardened `ssim_calculator.rs` and `image_analyzer.rs` to skip calculations (duration/MS-SSIM) when critical metadata is missing, rather than using silent numeric fallbacks like `0` or `60.0`.
+  - **Data Integrity Hardening**: Systematically eliminated silent numeric fallbacks in `database_vector.rs`, `loop_intent.rs`, and `image_detection.rs`. Missing feature statistics (weights/stds) and structural scores (loop closure/periodicity) now lead to explicit `Option` propagation rather than assuming neutral defaults like `1.0` or `0.5`.
+  - **Honest Vector Computation**: Refactored KNN vector calculation to return `None` when required normalization stats are missing, preventing statistical forgery in HNSW matching.
+  - **Descriptive Fallback Warnings**: Systematically replaced silent defaults with explicit `tracing::warn!` logs across the pipeline.
+  - **Mandated Animation Precision**: Animation duration calculations now return `None` with a warning if frame count or FPS is missing, rather than defaulting to 1-frame durations.
   - **Numeric Cast Simplification & Atomic Refactoring**: 
     - Streamlined atomic progress and database stat retrieval by removing redundant overflow checks.
-    - **Atomic Type Optimization**: Refactored `current_crf` and `best_crf` in `progress.rs` from `AtomicU64` to `AtomicU32`, aligning storage with the 32-bit nature of `f32` and eliminating unnecessary type casts.
+    - **Atomic Type Optimization**: Refactored `current_crf` and `best_crf` in `progress.rs` from `AtomicU64` to `AtomicU32`, aligning storage with the 32-bit nature of `f32`.
   - **Standardized Logging**: Unified "N/A" reporting for missing fusion scores and standardized module-specific context prefixes in warnings.
 
 - **KNN Database & Vector Encoding Modularization**:

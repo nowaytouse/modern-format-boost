@@ -7,21 +7,8 @@ pub(crate) fn calculate_continuous_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .map_or(1.0_f64, |s| s.std_dev)
-            .max(1e-6)
-    };
-    let get_w = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .and_then(|s| s.weight)
-            .unwrap_or(1.0_f64)
-            .max(0.01)
-    };
+    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
     let fc = sample.frame_count?;
@@ -29,15 +16,15 @@ pub(crate) fn calculate_continuous_features(
     let sample_frame_gap = sample.duration_secs / crate::numeric_cast::u64_to_f64(fc.max(1));
 
     Some((
-        sample_pixels / get_std("pixels") * get_w("pixels").sqrt(),
-        sample.duration_secs / get_std("duration") * get_w("duration").sqrt(),
-        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count") * get_w("frame_count").sqrt(),
-        crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")
-            * get_w("file_size_bytes").sqrt(),
-        sample_frame_density / get_std("density") * get_w("density").sqrt(),
-        sample_frame_gap / get_std("gap") * get_w("gap").sqrt(),
-        sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt(),
-        sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt(),
+        sample_pixels / get_std("pixels")? * get_w("pixels")?.sqrt(),
+        sample.duration_secs / get_std("duration")? * get_w("duration")?.sqrt(),
+        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")? * get_w("frame_count")?.sqrt(),
+        crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")?
+            * get_w("file_size_bytes")?.sqrt(),
+        sample_frame_density / get_std("density")? * get_w("density")?.sqrt(),
+        sample_frame_gap / get_std("gap")? * get_w("gap")?.sqrt(),
+        sample.temporal_bpp / get_std("temporal_bpp")? * get_w("temporal_bpp")?.sqrt(),
+        sample.spatial_bpp / get_std("spatial_bpp")? * get_w("spatial_bpp")?.sqrt(),
     ))
 }
 
@@ -45,47 +32,34 @@ pub(crate) fn calculate_discrete_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .map_or(1.0_f64, |s| s.std_dev)
-            .max(1e-6)
-    };
-    let get_w = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .and_then(|s| s.weight)
-            .unwrap_or(1.0_f64)
-            .max(0.01)
-    };
+    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
 
     let sample_webp_ratio =
         crate::numeric_cast::option_f64_strict(sample.webp_compression_ratio, "sample_webp_ratio")?;
-    let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
+    let v_wratio = sample_webp_ratio / get_std("webp_ratio")? * get_w("webp_ratio")?.sqrt();
 
     let v_lfreq =
         crate::numeric_cast::option_f64_strict(sample.loop_frequency, "sample_loop_freq")?
-            / get_std("loop_freq")
-            * get_w("loop_freq").sqrt();
+            / get_std("loop_freq")?
+            * get_w("loop_freq")?.sqrt();
     let v_cadence = crate::numeric_cast::option_f64_strict(sample.cadence_score, "sample_cadence")?
-        / get_std("cadence")
-        * get_w("cadence").sqrt();
+        / get_std("cadence")?
+        * get_w("cadence")?.sqrt();
     let v_payload = crate::numeric_cast::option_f64_strict(
         sample.frame_payload_variation,
         "sample_payload_var",
-    )? / get_std("payload_var")
-        * get_w("payload_var").sqrt();
+    )? / get_std("payload_var")?
+        * get_w("payload_var")?.sqrt();
     let v_delay =
         crate::numeric_cast::option_f64_strict(sample.frame_delay_variation, "sample_delay_var")?
-            / get_std("delay_var")
-            * get_w("delay_var").sqrt();
+            / get_std("delay_var")?
+            * get_w("delay_var")?.sqrt();
 
     let v_aspect = crate::numeric_cast::option_f64_strict(sample.aspect_ratio, "sample_aspect")?
-        / get_std("aspect")
-        * get_w("aspect").sqrt();
-    let v_pal = (sample.palette_size.map(f64::from)? / 256.0_f64) * get_w("p_depth").sqrt();
+        / get_std("aspect")?
+        * get_w("aspect")?.sqrt();
+    let v_pal = (sample.palette_size.map(f64::from)? / 256.0_f64) * get_w("p_depth")?.sqrt();
 
     Some((
         v_wratio, v_lfreq, v_cadence, v_payload, v_delay, v_aspect, v_pal,
@@ -118,21 +92,8 @@ pub(crate) fn calculate_extended_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .map_or(1.0_f64, |s| s.std_dev)
-            .max(1e-6)
-    };
-    let get_w = |f: &str| {
-        stats_map
-            .stats
-            .get(f)
-            .and_then(|s| s.weight)
-            .unwrap_or(1.0_f64)
-            .max(0.01)
-    };
+    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
 
     let sample_audio_score = if sample.is_native_gif {
         1.0_f64
@@ -156,17 +117,17 @@ pub(crate) fn calculate_extended_features(
         )
         .clamp(0.0, 1.0);
 
-    let v_laffin = sample_loop_affinity / get_std("loop_affin") * get_w("loop_affin").sqrt();
+    let v_laffin = sample_loop_affinity / get_std("loop_affin")? * get_w("loop_affin")?.sqrt();
 
-    let v_pdepth = sample.palette_depth? / get_std("p_depth") * get_w("p_depth").sqrt();
-    let v_mgini = sample.motion_gini? / get_std("m_gini") * get_w("m_gini").sqrt();
-    let v_bskew = sample.block_skew? / get_std("b_skew") * get_w("b_skew").sqrt();
-    let v_tflat = sample.temporal_flatness? / get_std("t_flat") * get_w("t_flat").sqrt();
-    let v_lclose = sample.loop_closure_score? / get_std("l_close") * get_w("l_close").sqrt();
-    let v_mperiod = sample.motion_periodicity? / get_std("m_period") * get_w("m_period").sqrt();
-    let v_tjitter = sample.temporal_jitter? / get_std("t_jitter") * get_w("t_jitter").sqrt();
+    let v_pdepth = sample.palette_depth? / get_std("p_depth")? * get_w("p_depth")?.sqrt();
+    let v_mgini = sample.motion_gini? / get_std("m_gini")? * get_w("m_gini")?.sqrt();
+    let v_bskew = sample.block_skew? / get_std("b_skew")? * get_w("b_skew")?.sqrt();
+    let v_tflat = sample.temporal_flatness? / get_std("t_flat")? * get_w("t_flat")?.sqrt();
+    let v_lclose = sample.loop_closure_score? / get_std("l_close")? * get_w("l_close")?.sqrt();
+    let v_mperiod = sample.motion_periodicity? / get_std("m_period")? * get_w("m_period")?.sqrt();
+    let v_tjitter = sample.temporal_jitter? / get_std("t_jitter")? * get_w("t_jitter")?.sqrt();
 
-    let v_directory_meme = sample.directory_loop_intent_score? * get_w("dir_meme").sqrt();
+    let v_directory_meme = sample.directory_loop_intent_score? * get_w("dir_meme")?.sqrt();
 
     Some((
         v_laffin,

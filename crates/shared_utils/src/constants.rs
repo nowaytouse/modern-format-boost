@@ -42,6 +42,9 @@ pub const MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS: f64 = 60.0;
 pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 =
     ANIMATION_CLIP_THRESHOLD_SECS;
 
+/// Minimum duration (seconds) for converting animated images to HEVC video.
+pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
+
 /// Fraction of total duration per segment (start / mid / end) for animated exploration sampling.
 pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION: f64 = 0.15;
 /// Ultimate mode: wider segments.
@@ -294,6 +297,10 @@ pub const LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS: f64 = 0.26;
 
 /// Empirical: 16:9 aspect ratio target.
 pub const ASPECT_RATIO_WIDESCREEN: f64 = 16.0 / 9.0;
+
+/// Sampling dimension for WebP ratio estimation.
+pub const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
+
 /// Empirical: tolerance for near-16:9 check.
 pub const ASPECT_RATIO_TOLERANCE_NEAR: f64 = 0.05;
 
@@ -428,6 +435,20 @@ pub const VIDEO_CONFIDENCE_FRAMES_BONUS: f64 = 0.05;
 pub const VIDEO_CONFIDENCE_DURATION_THRESHOLD: f64 = 10.0;
 pub const VIDEO_CONFIDENCE_FRAMES_THRESHOLD: u64 = 100;
 
+pub const SSIM_DISPLAY_PRECISION: u32 = 4;
+pub const DEFAULT_MIN_SSIM: f64 = 0.95;
+pub const HIGH_QUALITY_MIN_SSIM: f64 = 0.98;
+pub const ACCEPTABLE_MIN_SSIM: f64 = 0.90;
+pub const MIN_ACCEPTABLE_SSIM: f64 = 0.85;
+
+pub const PSNR_DISPLAY_PRECISION: u32 = 2;
+pub const DEFAULT_MIN_PSNR: f64 = 35.0;
+pub const HIGH_QUALITY_MIN_PSNR: f64 = 40.0;
+
+pub const DEFAULT_MIN_MS_SSIM: f64 = 0.90;
+pub const HIGH_QUALITY_MIN_MS_SSIM: f64 = 0.95;
+pub const ACCEPTABLE_MIN_MS_SSIM: f64 = 0.85;
+
 /// Empirical: codec efficiency factors for CRF estimation.
 pub const MODERN_EFFICIENT_CODEC_FACTOR: f64 = 0.5;
 pub const INTERMEDIATE_CODEC_FACTOR: f64 = 0.7;
@@ -506,6 +527,11 @@ pub const PNG_QUANT_THRESHOLD_HIGH: f64 = 0.58;
 pub const ABSOLUTE_MIN_CRF: f32 = 0.0;
 pub const ABSOLUTE_MAX_CRF: f32 = 51.0;
 
+pub const SEARCH_STEP_COARSE: f32 = 2.0;
+pub const SEARCH_STEP_FINE: f32 = 0.5;
+pub const SEARCH_STEP_ULTRA_FINE: f32 = 0.25;
+pub const SEARCH_STEP_CPU_FINEST: f32 = 0.1;
+
 pub const STAGE_B1_MAX_ITERATIONS: u32 = 20;
 pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
 pub const STAGE_B_BIDIRECTIONAL_MAX_ITERATIONS: u32 = 18;
@@ -521,6 +547,11 @@ pub const METADATA_MARGIN_MIN_BYTES: u64 = 2048;
 pub const METADATA_MARGIN_MAX_BYTES: u64 = 102_400;
 /// Target metadata overhead percentage (0.5%).
 pub const METADATA_MARGIN_RATIO: f64 = 0.005;
+
+pub const MOV_OVERHEAD_PERCENT: f64 = 0.005;
+pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
+pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
+pub const DEFAULT_OVERHEAD_PERCENT: f64 = 0.002;
 
 pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 100;
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
@@ -734,6 +765,130 @@ pub const NORMAL_MIN_GAINS: u32 = 3;
 
 /// Default SSIM fallback value when measurement fails (0.0 = Minimum).
 pub const DEFAULT_SSIM_PRIOR: f64 = 0.0;
+
+pub const IMAGE_CONFIDENCE_MIN_EDGE_DENSITY: f64 = 0.01;
+pub const IMAGE_CONFIDENCE_MAX_EDGE_DENSITY: f64 = 0.90;
+pub const IMAGE_CONFIDENCE_MIN_COLOR_DIVERSITY: f64 = 0.01;
+pub const IMAGE_CONFIDENCE_MAX_COLOR_DIVERSITY: f64 = 0.99;
+
+pub const IMAGE_SAMPLING_PIXELS_ULTRA_LARGE: u64 = 4_000_000;
+pub const IMAGE_SAMPLING_STEP_ULTRA_LARGE: usize = 4;
+pub const IMAGE_SAMPLING_STEP_LARGE: usize = 2;
+pub const IMAGE_SAMPLING_STEP_NORMAL: usize = 1;
+
+pub const SHARPNESS_SAMPLING_PIXELS_LARGE: u64 = 1_000_000;
+pub const SHARPNESS_SAMPLING_STEP_LARGE: usize = 10;
+pub const SHARPNESS_SAMPLING_STEP_MEDIUM: usize = 5;
+pub const SHARPNESS_SAMPLING_STEP_NORMAL: usize = 1;
+
+pub const CONTRAST_SAMPLING_STEP_LARGE: usize = 20;
+pub const CONTRAST_SAMPLING_STEP_MEDIUM: usize = 10;
+pub const CONTRAST_SAMPLING_STEP_NORMAL: usize = 1;
+
+pub const MEMORY_PRESSURE_LOW_RATIO: f64 = 0.30;
+pub const MEMORY_PRESSURE_LOW_MIN_MB: u64 = 3072;
+pub const MEMORY_PRESSURE_NORMAL_RATIO: f64 = 0.15;
+pub const MEMORY_PRESSURE_NORMAL_MIN_MB: u64 = 1536;
+
+pub const INTERLACE_DETECTION_MIN_DURATION_SECS: f64 = 4.0;
+pub const INTERLACE_DETECTION_MAX_DURATION_SECS: f64 = 18.0;
+
+pub const HDR_TRANSFER_PQ: &str = "smpte2084";
+pub const HDR_TRANSFER_HLG: &str = "arib-std-b67";
+
+pub const SEARCH_STEP_GPU_COARSE: f32 = 4.0;
+pub const SEARCH_STEP_GPU_MEDIUM: f32 = 1.0;
+
+pub const IMAGE_SIZE_THRESHOLD_LARGE: u64 = 100_000;
+pub const IMAGE_SIZE_THRESHOLD_MEDIUM: u64 = 10_000;
+pub const IMAGE_SIZE_THRESHOLD_SMALL: u64 = 5_000;
+
+pub const PNG_ALPHA_INDEXED_FACTOR_HIGH: f64 = 0.98;
+pub const PNG_ALPHA_INDEXED_FACTOR_MEDIUM: f64 = 0.75;
+pub const PNG_ALPHA_INDEXED_FACTOR_LOW: f64 = 0.45;
+pub const PNG_ALPHA_INDEXED_FACTOR_MIN: f64 = 0.15;
+
+pub const PNG_PALETTE_FACTOR_NEAR_MAX: f64 = 0.95;
+pub const PNG_PALETTE_FACTOR_LARGE: f64 = 0.85;
+pub const PNG_PALETTE_FACTOR_MEDIUM: f64 = 0.80;
+pub const PNG_PALETTE_FACTOR_SMALL: f64 = 0.60;
+pub const PNG_PALETTE_FACTOR_MIN: f64 = 0.50;
+
+pub const PNG_ENTROPY_RATIO_THRESHOLD_HIGH: f64 = 0.6;
+pub const PNG_ENTROPY_RATIO_THRESHOLD_LOW: f64 = 0.5;
+
+pub const PNG_COLORS_PER_MP_THRESHOLD: f64 = 50.0;
+
+pub const EXPLORE_CONFIDENCE_HIGH: f64 = 0.85;
+pub const EXPLORE_CONFIDENCE_NORMAL: f64 = 0.75;
+pub const EXPLORE_CONFIDENCE_MEDIUM: f64 = 0.7;
+pub const EXPLORE_CONFIDENCE_LOW: f64 = 0.6;
+
+pub const HEIC_MAX_ITEMS: u32 = 500_000;
+pub const HEIC_MAX_COMPONENTS: u32 = 50_000;
+pub const HEIC_MAX_EXTENTS: u32 = 50_000;
+
+pub const BPP_THRESHOLD_ULTRA: f64 = 5.0;
+pub const BPP_THRESHOLD_VERY_HIGH: f64 = 1.0;
+pub const BPP_THRESHOLD_HIGH: f64 = 0.5;
+pub const BPP_THRESHOLD_MEDIUM: f64 = 0.3;
+pub const BPP_THRESHOLD_LOW: f64 = 0.1;
+pub const BPP_THRESHOLD_VERY_LOW: f64 = 0.05;
+
+pub const BPP_FACTOR_MODERN: f64 = 0.6;
+pub const BPP_FACTOR_INEFFICIENT: f64 = 2.0;
+
+pub const CHROMA_FACTOR_YUV420: f64 = 1.0;
+pub const CHROMA_FACTOR_YUV422: f64 = 1.05;
+pub const CHROMA_FACTOR_YUV444: f64 = 1.15;
+pub const CHROMA_FACTOR_RGB: f64 = 1.20;
+
+pub const JPEG_IJG_LUMINANCE_BASE: [[u16; 8]; 8] = [
+    [16, 11, 10, 16, 24, 40, 51, 61],
+    [12, 12, 14, 19, 26, 58, 60, 55],
+    [14, 13, 16, 24, 40, 57, 69, 56],
+    [14, 17, 22, 29, 51, 87, 80, 62],
+    [18, 22, 37, 56, 68, 109, 103, 77],
+    [24, 35, 55, 64, 81, 104, 113, 92],
+    [49, 64, 78, 87, 103, 121, 120, 101],
+    [72, 92, 95, 98, 112, 100, 103, 99],
+];
+
+pub const JPEG_IJG_CHROMINANCE_BASE: [[u16; 8]; 8] = [
+    [17, 18, 24, 47, 99, 99, 99, 99],
+    [18, 21, 26, 66, 99, 99, 99, 99],
+    [24, 26, 56, 99, 99, 99, 99, 99],
+    [47, 66, 99, 99, 99, 99, 99, 99],
+    [99, 99, 99, 99, 99, 99, 99, 99],
+    [99, 99, 99, 99, 99, 99, 99, 99],
+    [99, 99, 99, 99, 99, 99, 99, 99],
+    [99, 99, 99, 99, 99, 99, 99, 99],
+];
+
+pub const JPEG_SSE_WEIGHTS: [[f64; 8]; 8] = [
+    [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3],
+    [0.9, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25],
+    [0.8, 0.75, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2],
+    [0.7, 0.65, 0.6, 0.5, 0.4, 0.3, 0.2, 0.15],
+    [0.6, 0.55, 0.5, 0.4, 0.3, 0.2, 0.15, 0.1],
+    [0.5, 0.45, 0.4, 0.3, 0.2, 0.15, 0.1, 0.08],
+    [0.4, 0.35, 0.3, 0.2, 0.15, 0.1, 0.08, 0.05],
+    [0.3, 0.25, 0.2, 0.15, 0.1, 0.08, 0.05, 0.03],
+];
+
+pub const MICROSECONDS_PER_SECOND: f64 = 1_000_000.0;
+pub const MSSSIM_PROGRESS_PRINT_STEP: u32 = 10;
+
+pub const DURATION_THRESHOLD_SUSPICIOUS: f64 = 0.25;
+pub const DURATION_THRESHOLD_MIN: f64 = 0.01;
+pub const FALLBACK_FPS: f32 = 10.0;
+
+pub const JPEG_QUALITY_MAPPING_V1_PSNR_BASE: f64 = 45.0;
+pub const F64_EPSILON: f64 = 1e-6;
+pub const F32_EPSILON: f32 = 1e-4;
+pub const SSIM_EPSILON: f64 = 1e-4;
+pub const CRF_EPSILON: f32 = 0.01;
+pub const PSNR_EPSILON: f64 = 0.1;
 
 #[cfg(test)]
 mod tests {

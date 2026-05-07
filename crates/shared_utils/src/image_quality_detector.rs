@@ -248,14 +248,14 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 4_000_000 {
-        4
+    let step = if crate::numeric_cast::usize_to_u64(pixels) > crate::constants::IMAGE_SAMPLING_PIXELS_ULTRA_LARGE {
+        crate::constants::IMAGE_SAMPLING_STEP_ULTRA_LARGE
     } else if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
-        2
+        crate::constants::IMAGE_SAMPLING_STEP_LARGE
     } else {
-        1
+        crate::constants::IMAGE_SAMPLING_STEP_NORMAL
     };
 
     let mut edge_count = 0usize;
@@ -317,7 +317,7 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         20
-    } else if pixels > 100_000 {
+    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
         10
     } else {
         1
@@ -369,7 +369,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         10
-    } else if pixels > 100_000 {
+    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
         5
     } else {
         2
@@ -440,10 +440,10 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         10
-    } else if pixels > 100_000 {
+    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
         5
     } else {
-        1
+        crate::constants::IMAGE_SAMPLING_STEP_NORMAL
     };
 
     let mut diff_sum = 0.0_f64;
@@ -503,13 +503,13 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if crate::numeric_cast::usize_to_u64(pixels)
-        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+        > crate::constants::SHARPNESS_SAMPLING_PIXELS_LARGE
     {
-        10
-    } else if pixels > 100_000 {
-        5
+        crate::constants::SHARPNESS_SAMPLING_STEP_LARGE
+    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+        crate::constants::SHARPNESS_SAMPLING_STEP_MEDIUM
     } else {
-        1
+        crate::constants::SHARPNESS_SAMPLING_STEP_NORMAL
     };
 
     let mut laplacian_sum = 0.0_f64;
@@ -565,11 +565,11 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
-        20
-    } else if pixels > 100_000 {
-        10
+        crate::constants::CONTRAST_SAMPLING_STEP_LARGE
+    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+        crate::constants::CONTRAST_SAMPLING_STEP_MEDIUM
     } else {
-        1
+        crate::constants::CONTRAST_SAMPLING_STEP_NORMAL
     };
 
     let mut sum = 0u64;
@@ -811,10 +811,14 @@ pub(crate) fn calculate_analysis_confidence(
     {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
-    if edge_density > 0.01_f64 && edge_density < 0.9_f64 {
+    if edge_density > crate::constants::IMAGE_CONFIDENCE_MIN_EDGE_DENSITY
+        && edge_density < crate::constants::IMAGE_CONFIDENCE_MAX_EDGE_DENSITY
+    {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
-    if color_diversity > 0.01_f64 && color_diversity < 0.99_f64 {
+    if color_diversity > crate::constants::IMAGE_CONFIDENCE_MIN_COLOR_DIVERSITY
+        && color_diversity < crate::constants::IMAGE_CONFIDENCE_MAX_COLOR_DIVERSITY
+    {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
 

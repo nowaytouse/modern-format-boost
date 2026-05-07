@@ -711,7 +711,7 @@ impl ExploreStrategy for SizeOnlyStrategy {
             } else {
                 CheckResult::Failed("Total file size not compressed".into())
             },
-            0.7_f64,
+            crate::constants::EXPLORE_CONFIDENCE_MEDIUM,
         ))
     }
 
@@ -757,7 +757,7 @@ impl ExploreStrategy for QualityMatchStrategy {
             } else {
                 CheckResult::Failed("SSIM below target".into())
             },
-            0.6_f64,
+            crate::constants::EXPLORE_CONFIDENCE_LOW,
         ))
     }
 
@@ -797,7 +797,7 @@ impl ExploreStrategy for PreciseQualityMatchStrategy {
             } else {
                 CheckResult::Failed("No CRF meeting quality target found".into())
             },
-            0.85,
+            crate::constants::EXPLORE_CONFIDENCE_HIGH,
         ))
     }
 
@@ -833,7 +833,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
                 None,
                 ctx.config.max_iterations / 2 + 1,
                 CheckResult::Failed("No compressing CRF found".into()),
-                0.85,
+                crate::constants::EXPLORE_CONFIDENCE_HIGH,
             ));
         };
 
@@ -879,7 +879,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
             } else {
                 CheckResult::Failed("No CRF meeting quality target found".into())
             },
-            0.85,
+            crate::constants::EXPLORE_CONFIDENCE_HIGH,
         ))
     }
 

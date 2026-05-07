@@ -3,9 +3,8 @@
 //! Provides unified floating-point comparison utilities with consistent epsilon values.
 //! Unified floating-point comparison tools to avoid bugs caused by precision issues.
 
-pub const F64_EPSILON: f64 = 1e-6;
-
-pub const F32_EPSILON: f32 = 1e-4;
+pub const F64_EPSILON: f64 = crate::constants::F64_EPSILON;
+pub const F32_EPSILON: f32 = crate::constants::F32_EPSILON;
 
 #[inline]
 #[must_use]
@@ -97,11 +96,9 @@ pub fn approx_ge_f64(a: f64, b: f64) -> bool {
     a > b - F64_EPSILON
 }
 
-pub const SSIM_EPSILON: f64 = 1e-4;
-
-pub const CRF_EPSILON: f32 = 0.01;
-
-pub const PSNR_EPSILON: f64 = 0.1;
+pub const SSIM_EPSILON: f64 = crate::constants::SSIM_EPSILON;
+pub const CRF_EPSILON: f32 = crate::constants::CRF_EPSILON;
+pub const PSNR_EPSILON: f64 = crate::constants::PSNR_EPSILON;
 
 #[inline]
 #[must_use]

@@ -953,27 +953,31 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
     if png_info.color_type == 3 {
         let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
-        let is_large_image = pixel_count > 100_000;
-        let is_medium_image = pixel_count > 10_000;
+        let is_large_image = pixel_count > crate::constants::IMAGE_SIZE_THRESHOLD_LARGE;
+        let is_medium_image = pixel_count > crate::constants::IMAGE_SIZE_THRESHOLD_MEDIUM;
 
         if png_info.has_trns {
-            factors.indexed_with_alpha = 0.98_f64;
+            factors.indexed_with_alpha = crate::constants::PNG_ALPHA_INDEXED_FACTOR_HIGH;
             explanations.push("Indexed PNG with alpha (tRNS) - definite quantization".to_string());
         } else if is_large_image {
-            factors.indexed_with_alpha = 0.75_f64;
+            factors.indexed_with_alpha = crate::constants::PNG_ALPHA_INDEXED_FACTOR_MEDIUM;
             explanations.push(format!(
                 "Large indexed PNG ({}x{}) - likely quantized",
                 png_info.width, png_info.height
             ));
         } else {
-            factors.indexed_with_alpha = if is_medium_image { 0.45_f64 } else { 0.15_f64 };
+            factors.indexed_with_alpha = if is_medium_image {
+                crate::constants::PNG_ALPHA_INDEXED_FACTOR_LOW
+            } else {
+                crate::constants::PNG_ALPHA_INDEXED_FACTOR_MIN
+            };
         }
     }
 
     if let Some(palette_size) = png_info.palette_size {
         let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
-        let is_large_image = pixel_count > 100_000;
-        let is_medium_image = pixel_count > 10_000;
+        let is_large_image = pixel_count > crate::constants::IMAGE_SIZE_THRESHOLD_LARGE;
+        let is_medium_image = pixel_count > crate::constants::IMAGE_SIZE_THRESHOLD_MEDIUM;
 
         let colors_per_megapixel = {
             let num = Rational::from(
@@ -1046,28 +1050,28 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         };
 
         if palette_size > 240 {
-            factors.large_palette = 0.95_f64;
+            factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_NEAR_MAX;
             explanations.push(format!(
                 "Near-max palette ({palette_size} colors) - definitely quantized"
             ));
         } else if palette_size > 200 {
-            factors.large_palette = 0.85_f64;
+            factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_LARGE;
             explanations.push(format!(
                 "Large palette ({palette_size} colors) - likely quantized"
             ));
         } else if is_large_image && palette_size > 64 {
-            factors.large_palette = 0.80_f64;
+            factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_MEDIUM;
             explanations.push(format!(
                 "Large image ({}x{}) with limited palette ({} colors) - quantization indicator",
                 png_info.width, png_info.height, palette_size
             ));
         } else if is_large_image && palette_size > 32 {
-            factors.large_palette = 0.60_f64;
+            factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_SMALL;
             explanations.push(format!(
                 "Large image with small palette ({palette_size} colors)"
             ));
         } else if is_medium_image && palette_size > 128 {
-            factors.large_palette = 0.50_f64;
+            factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_MIN;
         } else if palette_size <= 16 && palette_density > 0.5_f64 {
             // Small palette on small image — likely intentional (pixel art, icon)
             factors.large_palette = 0.0_f64;
@@ -1081,8 +1085,8 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             };
         }
 
-        if is_large_image && colors_per_megapixel < 50.0_f64 {
-            factors.large_palette = factors.large_palette.max(0.70);
+        if is_large_image && colors_per_megapixel < crate::constants::PNG_COLORS_PER_MP_THRESHOLD {
+            factors.large_palette = factors.large_palette.max(crate::constants::EXPLORE_CONFIDENCE_MEDIUM);
             if !explanations.iter().any(|e| e.contains("colors/MP")) {
                 explanations.push(format!(
                     "Low color density ({colors_per_megapixel:.1} colors/MP)"
@@ -1176,39 +1180,39 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             ));
         }
 
-        let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
-            || {
-                let e = calculate_rgb_entropy(&img);
-                let ps = 256.0f64;
-                let me = ps.log2();
-                let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
-                (e, me, ratio)
-            },
-            |p_size| {
-                let pe = calculate_palette_index_entropy(&img, p_size);
-                (pe.0, pe.1, pe.2)
-            },
-        );
-        let palette_size = crate::numeric_cast::usize_to_f64(png_info.palette_size.unwrap_or(256));
-        if palette_size >= 64.0_f64 && entropy_ratio < 0.6_f64 && pixel_count > 10_000 {
-            factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
-            factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
-            if factors.entropy_anomaly > 0.4_f64 {
-                explanations.push(format!(
-                    "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
-                    entropy_ratio, 1.0_f64
-                ));
+        let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
+            let pe = calculate_palette_index_entropy(&img, p_size);
+            (pe.0, pe.1, pe.2)
+        } else {
+            let e = calculate_rgb_entropy(&img);
+            let ps = 256.0f64; // Max possible for indexed PNG
+            let me = ps.log2();
+            let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
+            (e, me, ratio)
+        };
+
+        if let Some(p_size) = png_info.palette_size {
+            let palette_size_f = crate::numeric_cast::usize_to_f64(p_size);
+            if palette_size_f >= 64.0_f64 && entropy_ratio < crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH && pixel_count > 10_000 {
+                factors.entropy_anomaly = (crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH - entropy_ratio).mul_add(0.5, 0.5);
+                factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
+                if factors.entropy_anomaly > 0.4_f64 {
+                    explanations.push(format!(
+                        "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
+                        entropy_ratio, 1.0_f64
+                    ));
+                }
+            } else if palette_size_f >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
+                factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
+                factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
+                if factors.entropy_anomaly > 0.4_f64 {
+                    explanations.push(format!(
+                        "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
+                    ));
+                }
+            } else if palette_size_f >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
+                factors.entropy_anomaly = 0.35_f64;
             }
-        } else if palette_size >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
-            factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
-            factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
-            if factors.entropy_anomaly > 0.4_f64 {
-                explanations.push(format!(
-                    "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
-                ));
-            }
-        } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
-            factors.entropy_anomaly = 0.35_f64;
         }
     }
 
@@ -2435,7 +2439,16 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     }
 
     let duration = if is_animated {
-        fps.map(|f| crate::numeric_cast::f64_to_f32_lossy(f64::from(frame_count.unwrap_or(1))) / f)
+        match (frame_count, fps) {
+            (Some(fc), Some(f)) => Some(crate::numeric_cast::f64_to_f32_lossy(f64::from(fc)) / f),
+            _ => {
+                tracing::warn!(
+                    "☢️ [ANOMALY] Animated image missing frame_count/fps for duration! Skipping duration calculation to prevent forgery. Path: {}",
+                    path.display()
+                );
+                None
+            }
+        }
     } else {
         None
     };

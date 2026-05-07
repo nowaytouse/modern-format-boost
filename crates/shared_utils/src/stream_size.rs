@@ -97,10 +97,10 @@ struct FfprobeFullOutput {
     format: FfprobeFormatInfo,
 }
 
-pub const MOV_OVERHEAD_PERCENT: f64 = 0.005;
-pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
-pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
-pub const DEFAULT_OVERHEAD_PERCENT: f64 = 0.002;
+pub const MOV_OVERHEAD_PERCENT: f64 = crate::constants::MOV_OVERHEAD_PERCENT;
+pub const MP4_OVERHEAD_PERCENT: f64 = crate::constants::MP4_OVERHEAD_PERCENT;
+pub const MKV_OVERHEAD_PERCENT: f64 = crate::constants::MKV_OVERHEAD_PERCENT;
+pub const DEFAULT_OVERHEAD_PERCENT: f64 = crate::constants::DEFAULT_OVERHEAD_PERCENT;
 
 #[must_use]
 pub fn get_container_overhead_percent(path: &Path) -> f64 {

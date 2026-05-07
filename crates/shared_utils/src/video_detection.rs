@@ -267,7 +267,7 @@ impl VideoDetectionResult {
             || self.max_cll.is_some()
             || matches!(
                 self.color_transfer.as_deref(),
-                Some("smpte2084" | "arib-std-b67")
+                Some(crate::constants::HDR_TRANSFER_PQ | crate::constants::HDR_TRANSFER_HLG)
             )
     }
 
@@ -607,8 +607,8 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
     // where loop intent might be ambiguous, and only if it's not a native gif/webp.
-    if result.duration_secs >= 4.0_f64
-        && result.duration_secs <= 18.0_f64
+    if result.duration_secs >= crate::constants::INTERLACE_DETECTION_MIN_DURATION_SECS
+        && result.duration_secs <= crate::constants::INTERLACE_DETECTION_MAX_DURATION_SECS
         && result.format != "gif"
         && result.format != "webp"
         && let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =

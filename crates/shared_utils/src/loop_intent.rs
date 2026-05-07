@@ -29,7 +29,7 @@ use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
+const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = crate::constants::WEBP_RATIO_SAMPLE_MAX_DIM;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilenameKind {
@@ -1108,8 +1108,8 @@ fn apply_structural_signals(
     if is_video
         && !short_silent_asset
         && !meta.has_transparency
-        && meta.loop_closure_score.unwrap_or(0.5_f64) < 0.45_f64
-        && meta.motion_periodicity.unwrap_or(0.5_f64) < 0.45_f64
+        && meta.loop_closure_score.is_some_and(|c| c < 0.45_f64)
+        && meta.motion_periodicity.is_some_and(|p| p < 0.45_f64)
     {
         log_odds.add(-0.08);
     }
@@ -1290,27 +1290,24 @@ fn apply_weak_heuristics(
     }
     if let Some(motion_gini) = meta.motion_gini {
         let z = thresholds.motion_gini_z(motion_gini);
-        let loop_support = meta
-            .loop_closure_score
-            .unwrap_or_else(|| {
-                tracing::debug!(
-                    "Intent: Missing 'loop_closure_score' for gini evaluation; defaulting to 0.5"
-                );
-                0.5_f64
-            })
-            .max(meta.motion_periodicity.unwrap_or_else(|| {
-                tracing::debug!(
-                    "Intent: Missing 'motion_periodicity' for gini evaluation; defaulting to 0.5"
-                );
-                0.5_f64
-            }));
-        let support_relief = if z.is_sign_negative() && loop_support >= 0.80_f64 {
-            0.35_f64
+        let loop_support = meta.loop_closure_score.or(meta.motion_periodicity);
+        let support_relief = if let Some(support) = loop_support {
+            if z.is_sign_negative() && support >= 0.80_f64 {
+                0.35_f64
+            } else if (z.is_sign_negative() && short_silent_asset)
+                || (z.is_sign_positive()
+                    && !(short_silent_asset || is_image || derived.localized_motion))
+            {
+                0.55_f64
+            } else {
+                1.0_f64
+            }
         } else if (z.is_sign_negative() && short_silent_asset)
             || (z.is_sign_positive()
                 && !(short_silent_asset || is_image || derived.localized_motion))
         {
-            0.55_f64
+            // Default relief when no support data is available
+            0.65_f64
         } else {
             1.0_f64
         };

@@ -11,7 +11,7 @@
 use std::path::Path;
 use tracing::{info, warn};
 
-pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
+pub const LONG_VIDEO_THRESHOLD: f32 = crate::constants::LONG_VIDEO_THRESHOLD_SECS;
 
 #[derive(Debug, Clone, Default)]
 pub struct QualityValidationFlags {

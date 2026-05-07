@@ -39,7 +39,7 @@ impl MsssimProgressMonitor {
         {
             self.current_time_us.store(time_us, Ordering::Relaxed);
 
-            let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
+            let current_secs = crate::numeric_cast::u64_to_f64(time_us) / crate::constants::MICROSECONDS_PER_SECOND;
             let progress_pct = if self.duration_secs > 0.0_f64 {
                 crate::numeric_cast::f64_to_u32_sat(
                     (current_secs / self.duration_secs * 100.0).min(100.0),
@@ -140,7 +140,7 @@ impl MsssimProgressMonitor {
             let line = line.map_err(|e| format!("❌ Failed to read ffmpeg output: {e}"))?;
 
             if let Some(progress_pct) = self.update_from_line(&line)
-                && (progress_pct >= last_printed_pct + 10 || progress_pct == 100)
+                && (progress_pct >= last_printed_pct + crate::constants::MSSSIM_PROGRESS_PRINT_STEP || progress_pct == 100)
             {
                 self.print_progress(channel, progress_pct);
                 last_printed_pct = progress_pct;

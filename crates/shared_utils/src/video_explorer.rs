@@ -1590,7 +1590,7 @@ impl VideoExplorer {
         let mut best_crf: Option<f32> = None;
         let mut best_size: Option<u64> = None;
 
-        while high - low > precision::FINE_STEP && iterations < self.config.max_iterations {
+        while high - low > precision::SEARCH_STEP_FINE && iterations < self.config.max_iterations {
             let mid = (f32::midpoint(low, high) * 2.0).round() / 2.0;
 
             let size = encode_cached(mid, &mut cache, self)?;
@@ -1699,7 +1699,7 @@ impl VideoExplorer {
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
 
-        while high - low > precision::COARSE_STEP / 2.0 && iterations < self.config.max_iterations {
+        while high - low > precision::SEARCH_STEP_COARSE / 2.0 && iterations < self.config.max_iterations {
             let mid = f32::midpoint(low, high).round();
 
             log_realtime!("   🔄 Testing CRF {:.0}...", mid);

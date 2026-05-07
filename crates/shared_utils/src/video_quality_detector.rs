@@ -130,10 +130,10 @@ impl ChromaSubsampling {
     #[must_use]
     pub const fn quality_factor(&self) -> f64 {
         match self {
-            Self::Yuv420 | Self::Unknown => 1.0,
-            Self::Yuv422 => 1.05,
-            Self::Yuv444 => 1.15,
-            Self::Rgb => 1.20,
+            ChromaSubsampling::Yuv420 | ChromaSubsampling::Unknown => crate::constants::CHROMA_FACTOR_YUV420,
+            ChromaSubsampling::Yuv422 => crate::constants::CHROMA_FACTOR_YUV422,
+            ChromaSubsampling::Yuv444 => crate::constants::CHROMA_FACTOR_YUV444,
+            ChromaSubsampling::Rgb => crate::constants::CHROMA_FACTOR_RGB,
         }
     }
 }
@@ -207,8 +207,8 @@ impl CompressionLevel {
         }
 
         let efficiency = match codec_type {
-            VideoCodecType::ModernEfficient => 0.6_f64,
-            VideoCodecType::Inefficient => 2.0_f64,
+            VideoCodecType::ModernEfficient => crate::constants::BPP_FACTOR_MODERN,
+            VideoCodecType::Inefficient => crate::constants::BPP_FACTOR_INEFFICIENT,
             _ => 1.0_f64,
         };
 
@@ -226,11 +226,11 @@ impl CompressionLevel {
         };
         let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
-        if adjusted_bpp > 1.0 {
+        if adjusted_bpp > crate::constants::BPP_THRESHOLD_VERY_HIGH {
             Self::VisuallyLossless
-        } else if adjusted_bpp > 0.3 {
+        } else if adjusted_bpp > crate::constants::BPP_THRESHOLD_HIGH {
             Self::HighQuality
-        } else if adjusted_bpp > 0.1 {
+        } else if adjusted_bpp > crate::constants::BPP_THRESHOLD_MEDIUM {
             Self::Standard
         } else {
             Self::LowQuality
