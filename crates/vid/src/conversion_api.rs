@@ -1108,7 +1108,7 @@ pub fn auto_convert_with_cache(
                     config.codec.as_str().to_uppercase(),
                     hint
                 );
-                Some(hint)
+                Some(shared_utils::numeric_cast::f64_to_f32_lossy(hint))
             } else {
                 None
             };
@@ -1346,10 +1346,10 @@ pub fn auto_convert_with_cache(
     if cache_exact_hint && final_crf > 0.0 {
         match config.codec {
             SelectedCodec::Hevc => {
-                shared_utils::crf_constants::update_global_last_hit_crf_hevc(final_crf);
+                shared_utils::crf_constants::update_global_last_hit_crf_hevc(f64::from(final_crf));
             }
             SelectedCodec::Av1 => {
-                shared_utils::crf_constants::update_global_last_hit_crf_av1(final_crf);
+                shared_utils::crf_constants::update_global_last_hit_crf_av1(f64::from(final_crf));
             }
             SelectedCodec::Av2 | SelectedCodec::Vvc => {
                 // No global CRF hints for experimental codecs yet

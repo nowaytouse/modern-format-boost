@@ -165,7 +165,9 @@ impl<E: EncoderBounds> Crf<E> {
     #[inline]
     #[must_use]
     pub fn to_cache_key(&self) -> u32 {
-        crate::numeric_cast::f32_to_u32_sat((self.value * CRF_CACHE_KEY_MULTIPLIER).round())
+        crate::numeric_cast::f64_to_u32_sat(
+            (f64::from(self.value) * CRF_CACHE_KEY_MULTIPLIER).round(),
+        )
     }
 
     /// Create a CRF value from a cache key.
@@ -173,7 +175,8 @@ impl<E: EncoderBounds> Crf<E> {
     /// # Errors
     /// Returns an error if the key is invalid.
     pub fn from_cache_key(key: u32) -> Result<Self, CrfError> {
-        let value = crate::numeric_cast::u32_to_f32(key) / CRF_CACHE_KEY_MULTIPLIER;
+        let value_f64 = crate::numeric_cast::u32_to_f64(key) / CRF_CACHE_KEY_MULTIPLIER;
+        let value = crate::numeric_cast::f64_to_f32_lossy(value_f64);
         Self::new(value).map_err(|_| CrfError::InvalidCacheKey {
             key,
             encoder: E::NAME,

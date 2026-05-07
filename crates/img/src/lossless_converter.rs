@@ -863,8 +863,8 @@ pub fn convert_to_jxl(
             let mut final_output_size = output_size;
             let mut extra_info = None;
 
-            if is_extreme_explore {
-                if let Some(explore_result) = try_explore_ultimate_jxl_distance(
+            if is_extreme_explore
+                && let Some(explore_result) = try_explore_ultimate_jxl_distance(
                     input,
                     &actual_input,
                     &temp_output,
@@ -874,15 +874,15 @@ pub fn convert_to_jxl(
                     options,
                     icc_path,
                     hdr_info,
-                )? {
-                    final_output_size = explore_result.output_size;
-                    extra_info = Some(format!(
-                        "(screened e7, finalized e10 d={})",
-                        shared_utils::jxl_explorer::format_distance_for_log(
-                            explore_result.accepted_distance
-                        )
-                    ));
-                }
+                )?
+            {
+                final_output_size = explore_result.output_size;
+                extra_info = Some(format!(
+                    "(screened e7, finalized e10 d={})",
+                    shared_utils::jxl_explorer::format_distance_for_log(
+                        explore_result.accepted_distance
+                    )
+                ));
             }
 
             finalize_with_size_check(

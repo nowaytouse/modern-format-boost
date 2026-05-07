@@ -1271,7 +1271,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
         // For a valid animated GIF without explicit duration metadata,
         // we fallback to 10fps (0.1s per frame) as a rough estimate
-        return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1);
+        return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1_f32);
     }
 
     None

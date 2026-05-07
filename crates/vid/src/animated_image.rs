@@ -1368,7 +1368,7 @@ pub fn convert_to_mp4_matched(
         if options.verbose() {
             eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
-        actual_initial_crf = hint;
+        actual_initial_crf = shared_utils::numeric_cast::f64_to_f32_lossy(hint);
     }
 
     if options.verbose() {
@@ -1596,12 +1596,12 @@ pub fn convert_to_mp4_matched(
         match options.codec {
             shared_utils::conversion_types::SelectedCodec::Hevc => {
                 shared_utils::crf_constants::update_global_last_hit_crf_hevc(
-                    explore_result.optimal_crf,
+                    f64::from(explore_result.optimal_crf),
                 );
             }
             shared_utils::conversion_types::SelectedCodec::Av1 => {
                 shared_utils::crf_constants::update_global_last_hit_crf_av1(
-                    explore_result.optimal_crf,
+                    f64::from(explore_result.optimal_crf),
                 );
             }
             shared_utils::conversion_types::SelectedCodec::Av2

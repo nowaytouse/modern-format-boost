@@ -125,7 +125,7 @@ impl Default for ProgressConfig {
 use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
 use std::collections::HashMap;
 
-const CRF_CACHE_MULTIPLIER: f32 = CRF_CACHE_KEY_MULTIPLIER;
+const CRF_CACHE_MULTIPLIER: f64 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[derive(Clone)]
 pub struct CrfCache<T> {
@@ -158,12 +158,12 @@ impl<T> CrfCache<T> {
             eprintln!("⚠️ CRF_CACHE: Invalid CRF (NaN/Inf) rejected");
             return None;
         }
-        if crf > CRF_CACHE_MAX_VALID {
+        if f64::from(crf) > CRF_CACHE_MAX_VALID {
             eprintln!("⚠️ CRF_CACHE: CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected");
             return None;
         }
-        Some(crate::numeric_cast::f32_to_u32_sat(
-            (crf * CRF_CACHE_MULTIPLIER).round(),
+        Some(crate::numeric_cast::f64_to_u32_sat(
+            (f64::from(crf) * CRF_CACHE_MULTIPLIER).round(),
         ))
     }
 

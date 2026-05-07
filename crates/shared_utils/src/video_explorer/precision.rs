@@ -13,7 +13,7 @@ pub const ULTRA_FINE_STEP: f32 = 0.25;
 pub const CPU_FINEST_STEP: f32 = 0.1;
 
 /// Same as `crf_constants::CRF_CACHE_KEY_MULTIPLIER` so cache keys match `CrfCache` / `Crf::to_cache_key`.
-pub const CACHE_KEY_MULTIPLIER: f32 = CRF_CACHE_KEY_MULTIPLIER;
+pub const CACHE_KEY_MULTIPLIER: f64 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[inline]
 #[must_use]
@@ -21,13 +21,13 @@ pub fn crf_to_cache_key(crf: f32) -> i32 {
     if !crf.is_finite() || crf < 0.0 {
         return 0;
     }
-    let capped = crf.min(CRF_CACHE_MAX_VALID);
+    let capped = f64::from(crf).min(CRF_CACHE_MAX_VALID);
     let normalized = (capped * CACHE_KEY_MULTIPLIER).round();
-    let key = crate::numeric_cast::f32_to_i32_sat(normalized);
+    let key = crate::numeric_cast::f64_to_i32_sat(normalized);
     debug_assert!(
         key >= 0_i32
             && key
-                <= crate::numeric_cast::f32_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
+                <= crate::numeric_cast::f64_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
         "Cache key {key} out of expected range for CRF {crf}"
     );
     key
@@ -39,7 +39,9 @@ pub fn cache_key_to_crf(key: i32) -> f32 {
     if key <= 0_i32 {
         return 0.0;
     }
-    crate::numeric_cast::i32_to_f32_lossy(key) / CACHE_KEY_MULTIPLIER
+    crate::numeric_cast::f64_to_f32_lossy(
+        crate::numeric_cast::i32_to_f64(key) / CACHE_KEY_MULTIPLIER,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
