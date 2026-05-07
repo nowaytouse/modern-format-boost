@@ -1765,11 +1765,8 @@ def main():
 
     try:
         drain_stdin()
-        # Standard CLI wait (removed legacy AppleScript GUI dialogs)
-        try:
-            input(f"\n{DIM}Task finished. Press Enter to exit...{RESET}")
-        except EOFError:
-            pass
+        # Auto-exit (removed manual wait)
+        print(f"\n   {GREEN}✅ Task finished. Auto-exiting...{RESET}")
     except (EOFError, KeyboardInterrupt):
         pass
 

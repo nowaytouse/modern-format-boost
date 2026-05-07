@@ -24,8 +24,8 @@ All notable changes to this project will be documented in this file.
   - **Specialization Preservation**: Explicitly allowed `incomplete_features` in `shared_utils` to maintain the high-performance `specialization`-based numeric casting architecture while meeting strict Clippy audit requirements.
 
 - **UI & UX De-bloating**:
-  - **Removed Intrusive Popups**: Eliminated all AppleScript-based GUI exit confirmation dialogs from both the Rust and Python components. The application now uses a non-intrusive, standard terminal-based wait (`Press Enter to exit`) across all platforms.
-  - **Signal Safety Hardening**: Cleaned up legacy signal handlers in the Python processor that were previously tied to GUI guards, resulting in a leaner and more robust process termination model.
+  - **Auto-Exit Implementation**: Converted the exit confirmation process to a fully automated flow. The application now prints a completion message and exits immediately without requiring manual interaction (`Enter` key or GUI dialog).
+  - **Removed Intrusive Popups**: Eliminated all AppleScript-based GUI exit confirmation dialogs and the redundant `terminal_exit_guard.py` script.
 
 - **CI/CD Pipeline Stabilization & Fuzz Build Hardening**:
   - **Resolved Workflow Queueing**: Removed non-standard environment variables (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`) that were potentially causing GitHub Actions jobs to remain in the "queued" state.
