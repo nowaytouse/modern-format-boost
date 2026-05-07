@@ -2110,60 +2110,75 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     )?;
 
     for sample in samples {
-        let palette_size_i32 = sample.palette_size.map(|s| {
-            crate::numeric_cast::u32_to_i32_strict(s, "db_pal_size").unwrap_or_else(|| {
+        let palette_size_i32 = if let Some(s) = sample.palette_size {
+            let Some(res) = crate::numeric_cast::u32_to_i32_strict(s, "db_pal_size") else {
                 tracing::warn!(
-                    "Database: 'palette_size' ({s}) out of i32 range; clamping to 0 for storage"
+                    "Database: 'palette_size' ({s}) out of i32 range; skipping sample {}",
+                    sample.file_hash
                 );
-                0
-            })
-        });
-        let total_pixels_i64 =
+                continue;
+            };
+            Some(res)
+        } else {
+            None
+        };
+
+        let Some(total_pixels_i64) =
             crate::numeric_cast::u64_to_i64_strict(sample.total_pixels, "db_total_pixels")
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "Database: 'total_pixels' out of i64 range; clamping to 0 for storage"
-                    );
-                    0
-                });
-        let frame_count_i64 = sample.frame_count.map_or_else(
-            || {
-                tracing::warn!("Database: 'frame_count' metadata missing for sample; using 0");
-                0
-            },
-            |fc| {
-                crate::numeric_cast::u64_to_i64_strict(fc, "db_frame_count").unwrap_or_else(|| {
-                    tracing::warn!(
-                        "Database: 'frame_count' ({fc}) out of i64 range; clamping to 0 for storage"
-                    );
-                    0
-                })
-            },
-        );
-        let file_size_i64 =
+        else {
+            tracing::warn!(
+                "Database: 'total_pixels' out of i64 range; skipping sample {}",
+                sample.file_hash
+            );
+            continue;
+        };
+
+        let frame_count_i64 = if let Some(fc) = sample.frame_count {
+            let Some(res) = crate::numeric_cast::u64_to_i64_strict(fc, "db_frame_count") else {
+                tracing::warn!(
+                    "Database: 'frame_count' ({fc}) out of i64 range; skipping sample {}",
+                    sample.file_hash
+                );
+                continue;
+            };
+            res
+        } else {
+            tracing::warn!(
+                "Database: 'frame_count' metadata missing for sample {}; skipping",
+                sample.file_hash
+            );
+            continue;
+        };
+
+        let Some(file_size_i64) =
             crate::numeric_cast::u64_to_i64_strict(sample.file_size_bytes, "db_file_size")
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "Database: 'file_size' out of i64 range; clamping to 0 for storage"
-                    );
-                    0
-                });
-        let width_i32 = crate::numeric_cast::u32_to_i32_strict(sample.width, "db_width")
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    "Database: 'width' ({}) out of i32 range; clamping to 0 for storage",
-                    sample.width
-                );
-                0
-            });
-        let height_i32 = crate::numeric_cast::u32_to_i32_strict(sample.height, "db_height")
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    "Database: 'height' ({}) out of i32 range; clamping to 0 for storage",
-                    sample.height
-                );
-                0
-            });
+        else {
+            tracing::warn!(
+                "Database: 'file_size' out of i64 range; skipping sample {}",
+                sample.file_hash
+            );
+            continue;
+        };
+
+        let Some(width_i32) = crate::numeric_cast::u32_to_i32_strict(sample.width, "db_width")
+        else {
+            tracing::warn!(
+                "Database: 'width' ({}) out of i32 range; skipping sample {}",
+                sample.width,
+                sample.file_hash
+            );
+            continue;
+        };
+
+        let Some(height_i32) = crate::numeric_cast::u32_to_i32_strict(sample.height, "db_height")
+        else {
+            tracing::warn!(
+                "Database: 'height' ({}) out of i32 range; skipping sample {}",
+                sample.height,
+                sample.file_hash
+            );
+            continue;
+        };
 
         let sample_row = SampleRow::from(sample.clone());
         let Some(vec_data) =
