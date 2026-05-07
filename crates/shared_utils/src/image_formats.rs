@@ -54,16 +54,14 @@ pub mod tiff {
             })
         };
         let read_u32 = |off: usize| -> Option<u32> {
-            if let Some(bytes) = data.get(off..off + 4) {
+            data.get(off..off + 4).map(|bytes| {
                 let arr = [bytes[0], bytes[1], bytes[2], bytes[3]];
-                Some(if is_little_endian {
+                if is_little_endian {
                     u32::from_le_bytes(arr)
                 } else {
                     u32::from_be_bytes(arr)
-                })
-            } else {
-                None
-            }
+                }
+            })
         };
         let read_u64 = |off: usize| -> Option<u64> {
             if off + 8 > data.len() {
@@ -211,8 +209,8 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if let Some(&0xFF) = buffer.get(i)
-                        && let Some(&0xDB) = buffer.get(i + 1)
+                    if buffer.get(i) == Some(&0xFF)
+                        && buffer.get(i + 1) == Some(&0xDB)
                         && let Some(&q_byte) = buffer.get(i + 5)
                     {
                         let q_value = u32::from(q_byte);

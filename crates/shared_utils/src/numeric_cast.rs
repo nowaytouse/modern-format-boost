@@ -25,8 +25,7 @@ use tracing::warn;
 
 // --- Nightly Specialization Layer ---
 /// Unified trait for audited numeric conversions.
-/// Leveraging nightly specialization for zero-cost optimized paths.
-/// Unified trait for audited numeric conversions.
+///
 /// Leveraging nightly specialization for zero-cost optimized paths.
 pub trait AuditedCast<T> {
     /// Performs a saturating cast with audited safety.
@@ -170,16 +169,16 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
 /// Refuses to forge data by returning None if parsing fails.
 #[must_use]
 pub fn parse_strict<T: std::str::FromStr>(s: &str, name: &str) -> Option<T> {
-    match s.trim().parse::<T>() {
-        Ok(val) => Some(val),
-        Err(_) => {
+    s.trim().parse::<T>().map_or_else(
+        |_| {
             warn!(
                 "☢️ [ANOMALY] Failed to parse '{}' as numeric type! String value: '{}'. Information invalidated to prevent upstream forgery.",
                 name, s
             );
             None
-        }
-    }
+        },
+        Some,
+    )
 }
 
 /// Parse an optional string into a numeric type with a loud warning on failure.
@@ -743,7 +742,7 @@ pub fn f64_to_u8_sat(v: f64) -> u8 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub fn f64_to_i32_sat(v: f64) -> i32 {
+pub const fn f64_to_i32_sat(v: f64) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -792,7 +791,7 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub fn f32_to_i32_sat(v: f32) -> i32 {
+pub const fn f32_to_i32_sat(v: f32) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -809,7 +808,7 @@ pub fn f32_to_i32_sat(v: f32) -> i32 {
 /// where f32 precision (≈7 decimal digits) is sufficient.
 #[inline]
 #[must_use]
-pub fn f64_to_f32_lossy(v: f64) -> f32 {
+pub const fn f64_to_f32_lossy(v: f64) -> f32 {
     raw::f64_to_f32(v)
 }
 
@@ -869,7 +868,7 @@ pub fn f32_to_f64(v: f32) -> f64 {
 /// Precision reduction: `i32` → `f32`.
 #[inline]
 #[must_use]
-pub fn i32_to_f32_lossy(v: i32) -> f32 {
+pub const fn i32_to_f32_lossy(v: i32) -> f32 {
     raw::i32_to_f32(v)
 }
 

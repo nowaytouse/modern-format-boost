@@ -64,6 +64,7 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1100: Unified Production Consolidation (v0.11.0)
 /// - v1101: Sprint acceleration fix + cjxl signal-kill retry (v0.11.1)
 /// - v1102: Granular Cache Cleanup & Selective Build (v0.11.2)
+/// - v1103: Hardened Numeric Casts & Strict Clippy Compliance (v0.11.3)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
@@ -177,6 +178,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
+        assert_eq!(parse_version_to_code("0.11.3", "Test"), 1_103_i32);
         assert_eq!(parse_version_to_code("0.11.2", "Test"), 1_102_i32);
         assert_eq!(parse_version_to_code("0.11.1", "Test"), 1_101_i32);
         assert_eq!(parse_version_to_code("0.11.0", "Test"), 1_100_i32);

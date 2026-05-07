@@ -11,9 +11,9 @@
     <key>CFBundleDisplayName</key>
     <string>Modern Format Boost</string>
     <key>CFBundleVersion</key>
-    <string>1120</string>
+    <string>1130</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.11.2</string>
+    <string>0.11.3</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>

@@ -312,6 +312,9 @@ pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
+/// # Panics
+///
+/// Panics if the internal epsilon constants are non-finite during similarity calculation.
 pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Animated assets are handled by the GIF/Video pipeline, not this DB.
     if analysis.is_animated {

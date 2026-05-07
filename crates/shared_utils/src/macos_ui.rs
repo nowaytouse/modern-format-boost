@@ -1,4 +1,4 @@
-//! macOS-specific UI enhancements (legacy AppleScript dialogs removed).
+//! macOS-specific UI enhancements (legacy `AppleScript` dialogs removed).
 //!
 //! Provides non-intrusive terminal interaction helpers.
 

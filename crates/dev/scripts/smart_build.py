@@ -30,7 +30,7 @@ os.chdir(PROJECT_ROOT)
 
 def print_header():
     print()
-    print(f"{CYAN}{BOLD}Smart Build System v0.11.2 (Python Edition){NC}")
+    print(f"{CYAN}{BOLD}Smart Build System v0.11.3 (Python Edition){NC}")
     print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
 
 
@@ -212,7 +212,7 @@ def decide_build_action(project_dir, binary_name, args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Smart Build System v0.11.2 (Python Edition)"
+        description="Smart Build System v0.11.3 (Python Edition)"
     )
     parser.add_argument(
         "--force", "-f", action="store_true", help="Force rebuild all selected projects"

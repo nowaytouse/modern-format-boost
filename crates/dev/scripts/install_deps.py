@@ -121,7 +121,7 @@ def run_cmd(cmd, check=True, capture_output=False):
 
 
 def main():
-    print_c(BLUE, "🚀 Modern Format Boost - Dependency Installer v0.11.2")
+    print_c(BLUE, "🚀 Modern Format Boost - Dependency Installer v0.11.3")
     print("--------------------------------------------------------")
     print_c(
         DIM,

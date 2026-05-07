@@ -637,14 +637,14 @@ fn build_cached_image_entry(
     root: &Path,
     path: &Path,
     metadata: &fs::Metadata,
-) -> Option<CachedImageSortEntry> {
-    Some(CachedImageSortEntry {
+) -> CachedImageSortEntry {
+    CachedImageSortEntry {
         path: path.to_path_buf(),
         size: metadata.len(),
         relative_depth: relative_depth_from_root(root, path),
         format_priority: format_priority_for_image(path),
         pixel_count: image_pixel_count(path),
-    })
+    }
 }
 
 /// Gets or creates the project cache directory for path trees.
@@ -957,9 +957,8 @@ fn scan_image_tree_snapshot(
                                 continue;
                             }
                         };
-                        if let Some(file_entry) = build_cached_image_entry(&root, path, &metadata) {
-                            files.push(file_entry);
-                        }
+                        let file_entry = build_cached_image_entry(&root, path, &metadata);
+                        files.push(file_entry);
                     }
                 }
             }

@@ -1392,16 +1392,16 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                         "Truecolor quantization detected (freq={freq_signal:.2}, entropy={entropy_signal:.2}, band={banding_signal:.2})"
                     ),
                 });
-            } else {
-                return Ok(PngQuantizationAnalysis {
-                    is_quantized: false,
-                    confidence: 0.65,
-                    factor_scores: factors,
-                    detected_tool: None,
-                    explanation: "Truecolor PNG — weak quantization signal, treating as lossless"
-                        .to_string(),
-                });
             }
+
+            return Ok(PngQuantizationAnalysis {
+                is_quantized: false,
+                confidence: 0.65,
+                factor_scores: factors,
+                detected_tool: None,
+                explanation: "Truecolor PNG — weak quantization signal, treating as lossless"
+                    .to_string(),
+            });
         }
         return Ok(PngQuantizationAnalysis {
             is_quantized: false,
@@ -2299,6 +2299,12 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 /// # Errors
 /// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Detects the media type and characteristics of an image file.
+///
+/// # Panics
+///
+/// Panics if the frame count logic encounters an internal consistency error or
+/// if certain numeric conversions fail unexpectedly during metadata extraction.
 #[allow(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."

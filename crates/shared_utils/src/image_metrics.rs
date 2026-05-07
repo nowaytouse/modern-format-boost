@@ -43,6 +43,9 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
 }
 
 #[must_use]
+/// # Panics
+///
+/// Panics if the MSE calculation encounters an invalid state (NaN/Inf) during rounding.
 pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -105,6 +108,9 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
 }
 
 #[must_use]
+/// # Panics
+///
+/// Panics if the coordinate mapping or pixel accumulation results in a non-finite rational value.
 pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();

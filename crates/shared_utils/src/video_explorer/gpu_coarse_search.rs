@@ -710,7 +710,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 };
 
                 if let Some(ceiling_crf) = gpu_result.quality_ceiling_crf {
-                    if ceiling_crf == gpu_crf {
+                    if (ceiling_crf - gpu_crf).abs() < f32::EPSILON {
                         crate::verbose_eprintln!(
                             "GPU Boundary = Quality Ceiling: CRF {:.2}",
                             gpu_crf

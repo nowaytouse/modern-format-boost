@@ -540,7 +540,7 @@ fn test_performance_and_memory_safety() -> Result<()> {
     }
 
     // Verify all files created correctly
-    let entries: Vec<_> = fs::read_dir(&temp_dir)?
+    let entries: Vec<_> = fs::read_dir(temp_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.file_name().to_str().is_some_and(|n| {

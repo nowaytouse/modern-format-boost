@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "dev"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "img"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -2237,7 +2237,7 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -2782,7 +2782,7 @@ checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "vid"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "clap",
