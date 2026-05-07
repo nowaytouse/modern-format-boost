@@ -556,7 +556,7 @@ fn parse_video_stream_fields(
     let mut width = parse_required_u32_field(video_stream, "width")?;
     let mut height = parse_required_u32_field(video_stream, "height")?;
     if (width == 0 || height == 0)
-        && let Ok((fallback_w, fallback_h)) = image::image_dimensions(path)
+        && let Some((fallback_w, fallback_h)) = crate::conversion::dimensions_without_ffprobe(path)
     {
         width = fallback_w;
         height = fallback_h;

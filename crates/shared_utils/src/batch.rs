@@ -550,23 +550,15 @@ fn format_priority_for_image(path: &Path) -> u8 {
     }
 }
 
-/// Gets the pixel count (width × height) of an image file.
+/// Total pixel count (width × height) for sorting.
 ///
-/// # Arguments
-/// * `path` - The image file path
-///
-/// # Returns
-/// Total pixel count, or None if the image cannot be read
+/// Uses the shared ffprobe → `image` crate → ImageMagick `identify` fallback
+/// chain so modern formats (HEIC/HEIF/AVIF/JXL) are handled uniformly.
 fn image_pixel_count(path: &Path) -> Option<u64> {
-    match image::image_dimensions(path) {
+    match crate::conversion::get_input_dimensions(path) {
         Ok((width, height)) => Some(u64::from(width).saturating_mul(u64::from(height))),
         Err(e) => {
-            let ext = crate::common_utils::get_extension_lowercase(path);
-            if matches!(ext.as_str(), "heic" | "heif" | "avif" | "jxl") {
-                debug!(path = %path.display(), error = %e, "Image dimensions unavailable for sorting (format not natively supported)");
-            } else {
-                warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
-            }
+            warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
             None
         }
     }

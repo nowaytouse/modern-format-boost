@@ -1280,15 +1280,58 @@ pub fn commit_temp_to_output_with_metadata(
     Ok(true)
 }
 
-/// Get image/video dimensions using ffprobe → image crate → `ImageMagick` fallback chain.
+/// Dimension fallback chain that does NOT invoke ffprobe.
 ///
-/// Returns (width, height) or an error if all methods fail.
-/// Get dimensions of an input video file using ffprobe.
+/// Tries the `image` crate first (fast, in-process; covers PNG/JPEG/WebP/GIF/TIFF/BMP/AVIF…),
+/// then `ImageMagick identify` (covers HEIC/HEIF/JXL/JP2/PSD/EXR and other formats the
+/// `image` crate does not support natively). Use this from inside ffprobe parsing to
+/// avoid recursion; external callers should prefer [`get_input_dimensions`].
+pub fn dimensions_without_ffprobe(input: &Path) -> Option<(u32, u32)> {
+    if let Ok((w, h)) = image::image_dimensions(input)
+        && w > 0
+        && h > 0
+    {
+        return Some((w, h));
+    }
+
+    let output = crate::image_builders::IdentifyBuilder::new()
+        .use_magick(true)
+        .format("%w %h\n")
+        .input(input)
+        .build()
+        .output()
+        .or_else(|_| {
+            crate::image_builders::IdentifyBuilder::new()
+                .use_magick(false)
+                .format("%w %h\n")
+                .input(input)
+                .build()
+                .output()
+        });
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if let Some(line) = s.lines().next() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2
+                && let (Some(p0), Some(p1)) = (parts.first(), parts.get(1))
+                && let (Ok(w), Ok(h)) = (p0.parse::<u32>(), p1.parse::<u32>())
+                && w > 0
+                && h > 0
+            {
+                return Some((w, h));
+            }
+        }
+    }
+    None
+}
+
+/// Get image/video dimensions using ffprobe → `image` crate → `ImageMagick` fallback chain.
 ///
 /// # Errors
-/// Returns an error message if ffprobe fails.
+/// Returns an error message if every method fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
-    // Method 1: ffprobe
     if let Ok(probe) = crate::probe_video(input)
         && probe.width > 0
         && probe.height > 0
@@ -1296,43 +1339,8 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
         return Ok((probe.width, probe.height));
     }
 
-    // Method 2: image crate
-    if let Ok((w, h)) = image::image_dimensions(input) {
+    if let Some((w, h)) = dimensions_without_ffprobe(input) {
         return Ok((w, h));
-    }
-
-    // Method 3: ImageMagick identify
-    {
-        let output = crate::image_builders::IdentifyBuilder::new()
-            .use_magick(true)
-            .format("%w %h\n")
-            .input(input)
-            .build()
-            .output()
-            .or_else(|_| {
-                crate::image_builders::IdentifyBuilder::new()
-                    .use_magick(false)
-                    .format("%w %h\n")
-                    .input(input)
-                    .build()
-                    .output()
-            });
-        if let Ok(out) = output
-            && out.status.success()
-        {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = s.lines().next() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2
-                    && let (Some(p0), Some(p1)) = (parts.first(), parts.get(1))
-                    && let (Ok(w), Ok(h)) = (p0.parse::<u32>(), p1.parse::<u32>())
-                    && w > 0
-                    && h > 0
-                {
-                    return Ok((w, h));
-                }
-            }
-        }
     }
 
     Err(format!(
