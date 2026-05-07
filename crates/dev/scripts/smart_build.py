@@ -86,11 +86,17 @@ def clean_with_kondo():
 
 
 def get_newest_source_mtime(project_dir):
+    """
+    Find the most recent modification time among all source files that
+    could affect the build of the given project.
+    """
     newest = 0.0
+    # Common extensions that affect the build
+    src_extensions = {".rs", ".sql", ".c", ".h", ".cpp", ".cc", ".proto", ".py", ".sh"}
 
     def check_file(p):
         nonlocal newest
-        if p.exists():
+        if p.is_file():
             try:
                 mtime = p.stat().st_mtime
                 if mtime > newest:
@@ -98,20 +104,27 @@ def get_newest_source_mtime(project_dir):
             except OSError:
                 pass
 
-    src_dir = PROJECT_ROOT / project_dir / "src"
-    if src_dir.exists():
-        for f in src_dir.rglob("*.rs"):
-            check_file(f)
+    # 1. Scan the project's own directory
+    proj_path = PROJECT_ROOT / project_dir
+    if proj_path.exists():
+        for f in proj_path.rglob("*"):
+            if f.suffix in src_extensions:
+                check_file(f)
+        check_file(proj_path / "Cargo.toml")
 
-    check_file(PROJECT_ROOT / project_dir / "Cargo.toml")
+    # 2. Scan shared_utils (global dependency)
+    shared_path = PROJECT_ROOT / "crates/shared_utils"
+    if shared_path.exists() and project_dir != "crates/shared_utils":
+        for f in shared_path.rglob("*"):
+            if f.suffix in src_extensions:
+                check_file(f)
+        check_file(shared_path / "Cargo.toml")
 
-    shared_src = PROJECT_ROOT / "crates/shared_utils/src"
-    if shared_src.exists():
-        for f in shared_src.rglob("*.rs"):
-            check_file(f)
-
-    check_file(PROJECT_ROOT / "crates/shared_utils/Cargo.toml")
+    # 3. Scan workspace-level configuration
+    check_file(PROJECT_ROOT / "Cargo.toml")
     check_file(PROJECT_ROOT / "Cargo.lock")
+    check_file(PROJECT_ROOT / "rust-toolchain.toml")
+    check_file(PROJECT_ROOT / "crates/dev/scripts/smart_build.py")  # Self-tracking
 
     return newest
 

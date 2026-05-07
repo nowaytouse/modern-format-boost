@@ -12,40 +12,10 @@ import shutil
 import threading
 import datetime
 import pty
-import signal
 from pathlib import Path
 
 
 # Signal handlers removed to avoid intrusive GUI popups
-# (Code preserved here for future reference)
-"""
-def window_close_handler(signum, _frame):
-    if sys.platform != "darwin" or os.environ.get("FROM_APP") != "1":
-        return
-    if getattr(window_close_handler, "active", False):
-        return
-    window_close_handler.active = True
-    msg = "⚠️ A processing task is currently active.\n\nAre you sure you want to close this window and interrupt the process?"
-    script = f'''
-    tell application "System Events"
-        activate
-        set theResponse to button returned of (display dialog "{msg}" buttons {{"❌ Cancel", "✅ Exit Anyway"}} default button "❌ Cancel" with icon caution with title "Modern Format Boost")
-        return theResponse
-    end tell
-    '''
-    try:
-        proc = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=30)
-        if proc.returncode == 0 and "✅ Exit Anyway" in proc.stdout:
-            os._exit(0)
-    except Exception:
-        pass
-    finally:
-        window_close_handler.active = False
-
-# signal.signal(signal.SIGHUP, window_close_handler)
-# signal.signal(signal.SIGTERM, window_close_handler)
-"""
-
 
 
 class ReturnToHomeException(Exception):
@@ -1793,11 +1763,8 @@ def main():
 
     try:
         drain_stdin()
-        # Terminal wait restored (GUI dialog remains disabled)
-        try:
-            input(f"\n{DIM}Task finished. Press Enter to exit...{RESET}")
-        except EOFError:
-            pass
+        # Auto-exit (removed manual wait)
+        print(f"\n   {GREEN}✅ Task finished. Auto-exiting...{RESET}")
     except (EOFError, KeyboardInterrupt):
         pass
 

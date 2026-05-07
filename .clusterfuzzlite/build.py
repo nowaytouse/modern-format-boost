@@ -57,9 +57,13 @@ def find_and_copy_targets(out_dir: Path) -> None:
                     if binary.is_file() and os.access(binary, os.X_OK):
                         # Avoid matching things like "incremental" or "build" subdirs if possible
                         binary_str = str(binary)
-                        if "incremental" in binary_str or "/build/" in binary_str or "/.fingerprint/" in binary_str:
+                        if (
+                            "incremental" in binary_str
+                            or "/build/" in binary_str
+                            or "/.fingerprint/" in binary_str
+                        ):
                             continue
-                        
+
                         # Ensure it's not a directory with the same name
                         if binary.is_dir():
                             continue
@@ -74,7 +78,10 @@ def find_and_copy_targets(out_dir: Path) -> None:
                 break
 
         if not found_any:
-            print(f"  ❌ Warning: {target_name} not found in any search path", file=sys.stderr)
+            print(
+                f"  ❌ Warning: {target_name} not found in any search path",
+                file=sys.stderr,
+            )
 
     # List what was copied
     print(f"\nFinal Fuzz targets in {out_dir}:")
