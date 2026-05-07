@@ -69,10 +69,10 @@ pub fn calculate_ms_ssim_yuv(
         return None;
     }
 
-    let duration = super::stream_analysis::get_video_duration(input).unwrap_or_else(|| {
-        eprintln!("   ⚠️  Cannot determine video duration, using full calculation");
-        60.0_f64
-    });
+    let Some(duration) = super::stream_analysis::get_video_duration(input) else {
+        eprintln!("   ❌ Cannot determine video duration, skipping MS-SSIM");
+        return None;
+    };
     let duration_min = duration / 60.0_f64;
 
     // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
@@ -98,10 +98,7 @@ pub fn calculate_ms_ssim_yuv(
     eprintln!("   📹 Video: {duration:.1}s ({duration_min:.1}min)");
 
     if sample_rate > 1 {
-        let sample_rate_u32 = u32::try_from(sample_rate).unwrap_or_else(|_| {
-            tracing::warn!("Invalid sample rate {}, using default", sample_rate);
-            1
-        });
+        let sample_rate_u32 = crate::numeric_cast::usize_to_u32_sat(sample_rate);
         let estimated_time =
             crate::numeric_cast::f64_to_u64_sat(duration / f64::from(sample_rate_u32) * 3.0);
         eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");

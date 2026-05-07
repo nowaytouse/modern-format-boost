@@ -1269,14 +1269,11 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
             match (ms_ssim_avg, ssim_all_val) {
                 (Some(ms), Some(ss)) => {
-                    crate::log_eprintln!(
-                        "   FUSION SCORE: {:.4}",
-                        crate::numeric_cast::option_f64_strict(
-                            evaluation.fusion_score,
-                            "fusion_score_logging"
-                        )
-                        .unwrap_or(0.0)
-                    );
+                    let score_str = evaluation
+                        .fusion_score
+                        .map(|s| format!("{s:.4}"))
+                        .unwrap_or_else(|| "N/A".to_string());
+                    crate::log_eprintln!("   FUSION SCORE: {}", score_str);
                     crate::log_eprintln!(
                         "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
                         MS_SSIM_WEIGHT,

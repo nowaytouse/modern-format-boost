@@ -234,18 +234,18 @@ pub struct GlobalCollectionStats {
     pub bitrate_max: f64,
 
     /// Minimum width in pixels.
-    pub width_min: u32,
+    pub width_min: f64,
     /// Average width in pixels.
     pub width_avg: f64,
     /// Maximum width in pixels.
-    pub width_max: u32,
+    pub width_max: f64,
 
     /// Minimum height in pixels.
-    pub height_min: u32,
+    pub height_min: f64,
     /// Average height in pixels.
     pub height_avg: f64,
     /// Maximum height in pixels.
-    pub height_max: u32,
+    pub height_max: f64,
 
     /// Minimum aspect ratio (width/height).
     pub aspect_min: f64,
@@ -314,13 +314,13 @@ impl Default for GlobalCollectionStats {
             bitrate_avg: 500_000.0,
             bitrate_max: 2_000_000.0,
 
-            width_min: 32,
+            width_min: 32.0,
             width_avg: 512.0,
-            width_max: 1280,
+            width_max: 1280.0,
 
-            height_min: 32,
+            height_min: 32.0,
             height_avg: 512.0,
-            height_max: 1280,
+            height_max: 1280.0,
 
             aspect_min: 0.5,
             aspect_avg: 1.0,
@@ -2432,9 +2432,8 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     for (idx, name) in names.iter().enumerate() {
         let values: Vec<f64> = all_data
             .iter()
-            .map(|v| {
+            .filter_map(|v| {
                 crate::numeric_cast::option_f64_strict(v.get(idx).copied(), "feature_matrix_entry")
-                    .unwrap_or(0.0)
             })
             .collect();
         feature_map
@@ -2537,29 +2536,12 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         bitrate_avg: bitrate_row.get(1),
         bitrate_max: bitrate_row.get(2),
 
-        width_min: crate::numeric_cast::i32_to_u32_strict(w_min_i32, "db_min_width")
-            .unwrap_or_else(|| {
-                tracing::warn!("Database: Global 'min_width' out of u32 range; defaulting to 0 for collection summary");
-                0
-            }),
+        width_min: f64::from(w_min_i32),
         width_avg: w_avg,
-        width_max: crate::numeric_cast::i32_to_u32_strict(w_max_i32, "db_max_width")
-            .unwrap_or_else(|| {
-                tracing::warn!("Database: Global 'max_width' out of u32 range; defaulting to 0 for collection summary");
-                0
-            }),
-
-        height_min: crate::numeric_cast::i32_to_u32_strict(h_min_i32, "db_min_height")
-            .unwrap_or_else(|| {
-                tracing::warn!("Database: Global 'min_height' out of u32 range; defaulting to 0 for collection summary");
-                0
-            }),
+        width_max: f64::from(w_max_i32),
+        height_min: f64::from(h_min_i32),
         height_avg: h_avg,
-        height_max: crate::numeric_cast::i32_to_u32_strict(h_max_i32, "db_max_height")
-            .unwrap_or_else(|| {
-                tracing::warn!("Database: Global 'max_height' out of u32 range; defaulting to 0 for collection summary");
-                0
-            }),
+        height_max: f64::from(h_max_i32),
 
         aspect_min,
         aspect_avg,
@@ -2892,11 +2874,7 @@ pub fn query_feature_discriminative_power(
             feature_name: row.get(0),
             mean_loop_strong: row.get(1),
             mean_loop_weak: row.get(2),
-            discriminative_power: crate::numeric_cast::option_f64_strict(
-                row.get::<_, Option<f64>>(3),
-                "discriminative_power",
-            )
-            .unwrap_or(0.0),
+            discriminative_power: row.get::<_, Option<f64>>(3).unwrap_or(0.0),
             sample_count: row.get(4),
         })
         .collect())

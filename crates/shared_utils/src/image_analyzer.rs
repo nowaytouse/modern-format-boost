@@ -1355,14 +1355,16 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                 .and_then(|s| s.as_array())
                 .and_then(|s| s.first())
             {
-                let nb_frames = stream
+                let Some(nb_frames) = stream
                     .get("nb_read_frames")
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or_else(|| {
-                        tracing::warn!("ffprobe: 'nb_read_frames' missing from output; defaulting to 0 for frame count analysis");
-                        0
-                    });
+                else {
+                    tracing::warn!(
+                        "ffprobe: 'nb_read_frames' missing from output; skipping duration calculation"
+                    );
+                    return None;
+                };
 
                 let r_frame_rate = stream
                     .get("r_frame_rate")

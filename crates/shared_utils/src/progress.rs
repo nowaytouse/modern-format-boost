@@ -18,7 +18,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
-use tracing::warn;
 
 static PROGRESS_STDERR_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
@@ -643,12 +642,7 @@ impl DetailedCoarseProgressBar {
 
         let ssim_str = ssim.map_or_else(String::new, |s| format!("SSIM {s:.4}"));
 
-        let best_crf = f32::from_bits(
-            u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or_else(|_| {
-                warn!("☢️ [ANOMALY] Progress position overflowed usize; using 0");
-                0
-            }),
-        );
+        let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
         } else {
@@ -712,12 +706,7 @@ impl DetailedCoarseProgressBar {
         eprintln!("{msg}");
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
-        let crf = f32::from_bits(
-            u32::try_from(self.current_crf.load(Ordering::Relaxed)).unwrap_or_else(|_| {
-                warn!("☢️ [ANOMALY] Progress total overflowed usize; using 0");
-                0
-            }),
-        );
+        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {
             Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))

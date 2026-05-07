@@ -7,9 +7,10 @@ All notable changes to this project will be documented in this file.
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
 
 - **"Loud and Honest" Error Reporting Architecture**:
-  - **Descriptive Fallback Warnings**: Systematically replaced silent defaults (e.g., `.unwrap_or(0)`) with explicit `tracing::warn!` logs across `shared_utils`, `img`, and `video_explorer`. 
-  - **Module-Specific Context**: Standardized warning messages with module prefixes (e.g., `Database:`, `Video Explorer:`, `ffprobe:`) to clarify the source and impact of errors (e.g., "clamping to 0 for storage", "ETA may be inaccurate").
-  - **Overflow & Parsing Audits**: Hardened numeric casting and parsing logic to log specific failures (e.g., float-to-int conversion, frame count parsing) while maintaining graceful degradation.
+  - **Descriptive Fallback Warnings**: Systematically replaced silent defaults (e.g., `.unwrap_or(0)`) with explicit `tracing::warn!` logs across `shared_utils`, `img`, and `video_explorer`.
+  - **Mandatory Metadata Enforcement**: Hardened `ssim_calculator.rs` and `image_analyzer.rs` to skip calculations (duration/MS-SSIM) when critical metadata is missing, rather than using silent numeric fallbacks like `0` or `60.0`.
+  - **Numeric Cast Simplification**: Streamlined atomic progress and database stat retrieval by removing redundant overflow checks where safety is architecturally guaranteed, improving readability and performance.
+  - **Standardized Logging**: Unified "N/A" reporting for missing fusion scores and standardized module-specific context prefixes in warnings.
 
 - **KNN Database & Vector Encoding Modularization**:
   - **Extracted Vector Logic**: Moved the 31-dimensional feature encoding logic from `database.rs` to a new dedicated module `crates/shared_utils/src/database_vector.rs`.
