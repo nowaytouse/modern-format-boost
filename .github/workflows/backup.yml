@@ -99,4 +99,4 @@ jobs:
 
       - name: Check workflow syntax
         run: |
-          find .github/workflows -name "*.yml" -o -name "*.yaml" | xargs -I {} sh -c 'echo "Checking {}" && yamllint {} || true'
+          find .github/workflows -name "*.yml" -o -name "*.yaml" | xargs -I {} sh -c 'echo "Checking {}" && yamllint {}'
