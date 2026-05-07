@@ -1073,7 +1073,7 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
     // compression session" when the GPU is briefly contended.  We therefore
     // try once without software fallback, and on failure retry with
     // `-allow_sw 1` before giving up.
-    let mut attempts = vec![false];
+    let attempts = vec![false];
     #[cfg(target_os = "macos")]
     {
         if encoder.gpu_type == GpuType::Apple {
