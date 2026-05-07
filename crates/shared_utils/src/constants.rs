@@ -830,10 +830,10 @@ pub const HEIC_MAX_EXTENTS: u32 = 50_000;
 
 pub const BPP_THRESHOLD_ULTRA: f64 = 5.0;
 pub const BPP_THRESHOLD_VERY_HIGH: f64 = 1.0;
-pub const BPP_THRESHOLD_HIGH: f64 = 0.5;
-pub const BPP_THRESHOLD_MEDIUM: f64 = 0.3;
-pub const BPP_THRESHOLD_LOW: f64 = 0.1;
-pub const BPP_THRESHOLD_VERY_LOW: f64 = 0.05;
+pub const BPP_THRESHOLD_HIGH: f64 = 0.3;
+pub const BPP_THRESHOLD_MEDIUM: f64 = 0.1;
+pub const BPP_THRESHOLD_LOW: f64 = 0.05;
+pub const BPP_THRESHOLD_VERY_LOW: f64 = 0.02;
 
 pub const BPP_FACTOR_MODERN: f64 = 0.6;
 pub const BPP_FACTOR_INEFFICIENT: f64 = 2.0;
@@ -879,11 +879,12 @@ pub const JPEG_SSE_WEIGHTS: [[f64; 8]; 8] = [
 pub const MICROSECONDS_PER_SECOND: f64 = 1_000_000.0;
 pub const MSSSIM_PROGRESS_PRINT_STEP: u32 = 10;
 
-pub const DURATION_THRESHOLD_SUSPICIOUS: f64 = 0.25;
-pub const DURATION_THRESHOLD_MIN: f64 = 0.01;
+pub const DURATION_THRESHOLD_SUSPICIOUS: f32 = 0.25;
+pub const DURATION_THRESHOLD_MIN: f32 = 0.01;
 pub const FALLBACK_FPS: f32 = 10.0;
 
 pub const JPEG_QUALITY_MAPPING_V1_PSNR_BASE: f64 = 45.0;
+pub const JPEG_QUALITY_MAPPING_V1_SSIM_BASE: f64 = 0.98;
 pub const F64_EPSILON: f64 = 1e-6;
 pub const F32_EPSILON: f32 = 1e-4;
 pub const SSIM_EPSILON: f64 = 1e-4;

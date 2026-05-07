@@ -54,6 +54,55 @@ pub(crate) struct FeatureMap {
     pub(crate) top_keywords: Vec<String>,
 }
 
+#[cfg(test)]
+impl FeatureMap {
+    pub(crate) fn mock() -> Self {
+        let mut stats = std::collections::HashMap::new();
+        let features = [
+            "pixels",
+            "duration",
+            "frame_count",
+            "file_size_bytes",
+            "density",
+            "gap",
+            "temporal_bpp",
+            "spatial_bpp",
+            "webp_ratio",
+            "loop_freq",
+            "cadence",
+            "payload_var",
+            "delay_var",
+            "aspect",
+            "p_depth",
+            "loop_affin",
+            "m_gini",
+            "b_skew",
+            "t_flat",
+            "l_close",
+            "m_period",
+            "t_jitter",
+            "dir_meme",
+        ];
+
+        for f in features {
+            stats.insert(
+                f.to_string(),
+                FeatureStats {
+                    mean: 1.0,
+                    std_dev: 1.0,
+                    weight: Some(1.0),
+                    ..Default::default()
+                },
+            );
+        }
+
+        Self {
+            stats,
+            top_keywords: Vec::new(),
+        }
+    }
+}
+
 /// Statistical summary of a feature distribution across the training dataset.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DistributionStats {
@@ -3277,7 +3326,7 @@ mod tests {
         };
         let (tbpp, sbpp) = bpp_from_meta(&meta);
 
-        let stats = FeatureMap::default();
+        let stats = FeatureMap::mock();
 
         assert!(
             sample_distance(&meta, &near, tbpp, sbpp, &stats)

@@ -4145,7 +4145,7 @@ mod tests {
     fn test_binary_search_precision_proof() {
         let range = 28.0 - 10.0;
         let coarse_iterations = crate::numeric_cast::f32_to_u32_strict(
-            (range / COARSE_STEP).ceil(),
+            (range / precision::SEARCH_STEP_COARSE).ceil(),
             "coarse_iterations",
         )
         .unwrap_or_else(|| {
@@ -4155,7 +4155,7 @@ mod tests {
             0
         });
         let fine_iterations = crate::numeric_cast::f32_to_u32_strict(
-            (COARSE_STEP / FINE_STEP).ceil(),
+            (precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil(),
             "fine_iterations",
         )
         .unwrap_or_else(|| {
@@ -4180,8 +4180,8 @@ mod tests {
 
     fn test_binary_search_worst_case() {
         let range = 51.0 - 0.0;
-        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / COARSE_STEP).ceil());
-        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil());
+        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / precision::SEARCH_STEP_COARSE).ceil());
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil());
         let total = coarse_iterations + fine_iterations;
 
         assert!(
@@ -4285,12 +4285,12 @@ mod tests {
             "CRF precision should be ±0.25"
         );
         assert!(
-            (COARSE_STEP - 2.0).abs() < 0.01,
+            (precision::SEARCH_STEP_COARSE - 2.0).abs() < 0.01,
             "Coarse step should be 2.0"
         );
-        assert!((FINE_STEP - 0.5).abs() < 0.01, "Fine step should be 0.5");
+        assert!((precision::SEARCH_STEP_FINE - 0.5).abs() < 0.01, "Fine step should be 0.5");
         assert!(
-            (ULTRA_FINE_STEP - 0.25).abs() < 0.01,
+            (precision::SEARCH_STEP_ULTRA_FINE - 0.25).abs() < 0.01,
             "Ultra fine step should be 0.25"
         );
         assert_eq!(SSIM_DISPLAY_PRECISION, 4);
@@ -4397,12 +4397,12 @@ mod tests {
         let max_crf = 30.0_f32;
 
         let coarse_up =
-            crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / COARSE_STEP).ceil());
+            crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / precision::SEARCH_STEP_COARSE).ceil());
         assert_eq!(coarse_up, 5, "Coarse search up should be 5 iterations");
 
         let boundary_range = 4.0_f32;
         let fine_iterations =
-            crate::numeric_cast::f32_to_u32_sat((boundary_range / FINE_STEP).ceil());
+            crate::numeric_cast::f32_to_u32_sat((boundary_range / precision::SEARCH_STEP_FINE).ceil());
         assert_eq!(fine_iterations, 8, "Fine search should be 8 iterations");
 
         let total = 1 + coarse_up + fine_iterations + 1;
@@ -4429,7 +4429,7 @@ mod tests {
 
     fn test_boundary_refinement_logic() {
         let best_crf = 24.0_f32;
-        let next_crf = best_crf + FINE_STEP;
+        let next_crf = best_crf + precision::SEARCH_STEP_FINE;
         let max_crf = 30.0_f32;
 
         assert!(next_crf <= max_crf, "Next CRF should be within max");
@@ -4460,8 +4460,8 @@ mod tests {
         let config = ExploreConfig::default();
 
         let worst_range = 30.0_f32;
-        let worst_coarse = crate::numeric_cast::f32_to_u32_sat((worst_range / COARSE_STEP).ceil());
-        let worst_fine = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil()) * 2;
+        let worst_coarse = crate::numeric_cast::f32_to_u32_sat((worst_range / precision::SEARCH_STEP_COARSE).ceil());
+        let worst_fine = crate::numeric_cast::f32_to_u32_sat((precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil()) * 2;
         let worst_total = 1 + worst_coarse + worst_fine + 1;
 
         assert!(
@@ -5009,11 +5009,11 @@ mod tests {
         }
 
         assert!(
-            (precision::ULTRA_FINE_STEP - 0.25).abs() < 1e-6,
+            (precision::SEARCH_STEP_ULTRA_FINE - 0.25).abs() < 1e-6,
             "ULTRA_FINE_STEP should be 0.25"
         );
         assert!(
-            (precision::FINE_STEP - 0.5).abs() < 1e-6,
+            (precision::SEARCH_STEP_FINE - 0.5).abs() < 1e-6,
             "FINE_STEP should be 0.5"
         );
     }
