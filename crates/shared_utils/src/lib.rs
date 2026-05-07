@@ -38,7 +38,7 @@ pub use rug::Rational;
 extern crate self as rug;
 
 #[cfg(not(feature = "high-precision"))]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rational(f64);
 
 #[cfg(not(feature = "high-precision"))]
@@ -51,6 +51,11 @@ impl Rational {
     #[must_use]
     pub const fn to_f64(self) -> f64 {
         self.0
+    }
+
+    #[must_use]
+    pub fn is_finite(self) -> bool {
+        self.0.is_finite()
     }
 
     #[must_use]
@@ -124,6 +129,54 @@ impl_rational_from_pair!((u64, u64), (u32, u32), (usize, usize), (i32, i32));
 impl_rational_from_int_lossless!(i64, u64, i32, u32, usize, u8);
 
 #[cfg(not(feature = "high-precision"))]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Integer(i64);
+
+#[cfg(not(feature = "high-precision"))]
+impl Integer {
+    #[must_use]
+    pub fn from_f64(v: f64) -> Self {
+        Self(v as i64)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl From<u64> for Integer {
+    fn from(v: u64) -> Self {
+        Self(v as i64)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl From<i32> for Integer {
+    fn from(v: i32) -> Self {
+        Self(v as i64)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl From<usize> for Integer {
+    fn from(v: usize) -> Self {
+        Self(v as i64)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl From<Integer> for Rational {
+    fn from(v: Integer) -> Self {
+        Self(v.0 as f64)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl std::ops::Mul<Integer> for Integer {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Self(self.0 * other.0)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_op {
     ($trait:ident, $method:ident, $op:tt) => {
         impl std::ops::$trait for Rational {
@@ -144,6 +197,41 @@ impl_rational_op!(Sub, sub, -);
 impl_rational_op!(Mul, mul, *);
 #[cfg(not(feature = "high-precision"))]
 impl_rational_op!(Div, div, /);
+
+#[cfg(not(feature = "high-precision"))]
+impl PartialEq<i32> for Rational {
+    fn eq(&self, other: &i32) -> bool {
+        (self.0 - f64::from(*other)).abs() < f64::EPSILON
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl PartialOrd<i32> for Rational {
+    fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&f64::from(*other))
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl PartialEq<f64> for Rational {
+    fn eq(&self, other: &f64) -> bool {
+        (self.0 - *other).abs() < f64::EPSILON
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl PartialOrd<f64> for Rational {
+    fn partial_cmp(&self, other: &f64) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl PartialOrd for Rational {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
 
 #[cfg(not(feature = "high-precision"))]
 impl std::ops::AddAssign for Rational {

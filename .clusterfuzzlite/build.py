@@ -31,10 +31,15 @@ def find_and_copy_targets(out_dir: Path) -> None:
     print(f"Copying fuzz targets to {out_dir}...")
 
     # In a workspace, the target directory might be at the root or local to the fuzz crate
+    # We add common CI target locations and absolute paths to be robust
     search_paths = [
         Path("target"),
         Path("../../../target"),
+        Path(os.environ.get("SRC", "/src")) / "modern-format-boost" / "target",
+        Path(os.environ.get("SRC", "/src")) / "target",
     ]
+
+    print(f"  Search paths: {[str(p) for p in search_paths]}")
 
     for target_name in targets:
         found_any = False
@@ -42,6 +47,7 @@ def find_and_copy_targets(out_dir: Path) -> None:
             if not target_dir.exists():
                 continue
 
+            print(f"  Searching in {target_dir} for {target_name}...")
             # Search for the binary in target directory
             # cargo-fuzz often puts things in target/<triple>/release/
             found = list(target_dir.rglob(target_name))
@@ -50,27 +56,35 @@ def find_and_copy_targets(out_dir: Path) -> None:
                     # Filter out non-files or things in build directories
                     if binary.is_file() and os.access(binary, os.X_OK):
                         # Avoid matching things like "incremental" or "build" subdirs if possible
-                        if "incremental" in str(binary) or "build" in str(binary):
+                        binary_str = str(binary)
+                        if "incremental" in binary_str or "/build/" in binary_str or "/.fingerprint/" in binary_str:
+                            continue
+                        
+                        # Ensure it's not a directory with the same name
+                        if binary.is_dir():
                             continue
 
                         dest = out_dir / target_name
                         dest.write_bytes(binary.read_bytes())
                         dest.chmod(0o755)
-                        print(f"  Copied {target_name} from {binary}")
+                        print(f"  ✅ Copied {target_name} from {binary}")
                         found_any = True
                         break
             if found_any:
                 break
 
         if not found_any:
-            print(f"  Warning: {target_name} not found", file=sys.stderr)
+            print(f"  ❌ Warning: {target_name} not found in any search path", file=sys.stderr)
 
     # List what was copied
-    print(f"\nFuzz targets in {out_dir}:")
-    for item in out_dir.iterdir():
-        if item.is_file() and os.access(item, os.X_OK):
-            size = item.stat().st_size
-            print(f"  {item.name} ({size:,} bytes)")
+    print(f"\nFinal Fuzz targets in {out_dir}:")
+    if out_dir.exists():
+        for item in out_dir.iterdir():
+            if item.is_file() and os.access(item, os.X_OK):
+                size = item.stat().st_size
+                print(f"  {item.name} ({size:,} bytes)")
+    else:
+        print(f"  Error: {out_dir} does not exist!")
 
 
 def main() -> int:

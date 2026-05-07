@@ -23,6 +23,14 @@ All notable changes to this project will be documented in this file.
 - **Precision Performance Maintenance**:
   - **Specialization Preservation**: Explicitly allowed `incomplete_features` in `shared_utils` to maintain the high-performance `specialization`-based numeric casting architecture while meeting strict Clippy audit requirements.
 
+- **CI/CD Pipeline Stabilization & Fuzz Build Hardening**:
+  - **Resolved Workflow Queueing**: Removed non-standard environment variables (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`) that were potentially causing GitHub Actions jobs to remain in the "queued" state.
+  - **Optimized macOS Runners**: Explicitly pinned macOS runners to `macos-14` in the nightly release workflow to ensure consistent environment selection and faster job pickup.
+  - **Hardened Fuzz Target Discovery**: Significantly improved the robustness of the ClusterFuzzLite `build.py` script by expanding target search paths to include absolute source directories and multi-level workspace structures.
+  - **Fixed Non-High-Precision Compilation**: Resolved multiple "mismatched types" errors in `shared_utils` that occurred when the `high-precision` feature was disabled. This was a critical blocker for fuzzers and static builds.
+  - **Enhanced Dummy Rational Type**: Implemented essential comparison traits (`PartialEq`, `PartialOrd`) for the lightweight `Rational` wrapper used in standard CI environments.
+  - **Rug-Alias Compatibility**: Added a dummy `Integer` type to `shared_utils` to satisfy path requirements in common media processing hot paths when the full `rug` crate is not linked.
+
 
 ## 🛡️ Ultra-Strict Clippy Compliance & App Shell Hardening (2026-05-06)
 

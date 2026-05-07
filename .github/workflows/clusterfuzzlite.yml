@@ -14,7 +14,7 @@ permissions:
   pull-requests: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Standard environment variables
 
 jobs:
   PR:
@@ -45,8 +45,8 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Use stable Rust for better compatibility
-          RUST_TOOLCHAIN: stable
+          # Use nightly Rust for specialization/SIMD support
+          RUST_TOOLCHAIN: nightly
       - name: Copy fuzz targets to both directories
         run: |
           # Copy from build-out to out directory
@@ -98,8 +98,8 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Use stable Rust for better compatibility
-          RUST_TOOLCHAIN: stable
+          # Use nightly Rust for specialization/SIMD support
+          RUST_TOOLCHAIN: nightly
       - name: Copy fuzz targets to both directories
         run: |
           # Copy from build-out to out directory
