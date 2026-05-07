@@ -1595,14 +1595,14 @@ pub fn convert_to_mp4_matched(
     if explore_result.quality_passed.is_passed() && explore_result.optimal_crf > 0.0 {
         match options.codec {
             shared_utils::conversion_types::SelectedCodec::Hevc => {
-                shared_utils::crf_constants::update_global_last_hit_crf_hevc(
-                    f64::from(explore_result.optimal_crf),
-                );
+                shared_utils::crf_constants::update_global_last_hit_crf_hevc(f64::from(
+                    explore_result.optimal_crf,
+                ));
             }
             shared_utils::conversion_types::SelectedCodec::Av1 => {
-                shared_utils::crf_constants::update_global_last_hit_crf_av1(
-                    f64::from(explore_result.optimal_crf),
-                );
+                shared_utils::crf_constants::update_global_last_hit_crf_av1(f64::from(
+                    explore_result.optimal_crf,
+                ));
             }
             shared_utils::conversion_types::SelectedCodec::Av2
             | shared_utils::conversion_types::SelectedCodec::Vvc => {

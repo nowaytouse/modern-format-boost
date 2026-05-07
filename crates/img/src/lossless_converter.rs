@@ -871,8 +871,7 @@ pub fn convert_to_jxl(
                     options,
                     icc_path,
                     hdr_info,
-                )?
-            {
+                )? {
                 (
                     explore_result.output_size,
                     Some(format!(

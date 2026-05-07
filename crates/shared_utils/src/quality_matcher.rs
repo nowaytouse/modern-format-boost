@@ -299,7 +299,7 @@ impl SourceCodec {
     /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
     #[must_use]
     #[allow(clippy::too_many_lines)]
-pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
+    pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).map_err(|e| {
             warn!(
