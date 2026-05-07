@@ -13,9 +13,6 @@ permissions:
   security-events: write
   pull-requests: write
 
-env:
-  # Standard environment variables
-
 jobs:
   PR:
     runs-on: ubuntu-latest
