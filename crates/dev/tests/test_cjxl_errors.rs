@@ -1,16 +1,35 @@
 use img::lossless_converter::{ConvertOptions, convert_to_jxl};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
-fn main() {
-    println!("Running test...");
+#[test]
+fn cjxl_grayscale_icc_fallback_suite() {
+    for tool in ["magick", "cjxl", "jxlinfo"] {
+        if !tool_available(tool) {
+            eprintln!("Skipping cjxl grayscale ICC fallback test: {tool} is unavailable");
+            return;
+        }
+    }
+
     test_cjxl_grayscale_icc_fallback();
-    println!("✅ Test completed!");
+}
+
+fn tool_available(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn test_cjxl_grayscale_icc_fallback() {
     // Use a temporary directory to avoid conflicts
     let tmp_dir = tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
+    let mfb_home = tmp_dir.path().join("mfb_home");
+    unsafe { std::env::set_var("MFB_HOME_ROOT", &mfb_home) };
+    shared_utils::init_ghost_mode().unwrap_or_else(|e| panic!("failed to init ghost mode: {e:?}"));
+
     let input = tmp_dir.path().join("test_grayscale_icc.png");
     let output = tmp_dir.path().join("test_grayscale_icc.jxl");
 

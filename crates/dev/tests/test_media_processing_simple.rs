@@ -1,10 +1,6 @@
-fn main() {
-    println!("Running simple media processing test...");
-
-    // Simple test to verify basic functionality
+#[test]
+fn basic_format_detection_suite() {
     test_basic_format_detection();
-
-    println!("✅ Simple media processing test completed!");
 }
 
 fn test_basic_format_detection() {

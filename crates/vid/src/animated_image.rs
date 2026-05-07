@@ -1266,7 +1266,10 @@ pub fn convert_to_mp4_matched(
                             "   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)",
                             input_ext.to_uppercase(),
                             probe.stream_index,
-                            probe.frame_count.unwrap_or(0)
+                            probe
+                                .frame_count
+                                .map(|count| count.to_string())
+                                .unwrap_or_else(|| "unknown".to_string())
                         );
                     }
 

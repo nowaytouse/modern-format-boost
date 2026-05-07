@@ -2434,13 +2434,30 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     };
 
     if estimated_quality.is_none() && compression == CompressionType::Lossy {
+        let quality_frame_count = if is_animated {
+            match frame_count {
+                Some(count) => count,
+                None => {
+                    warn!(
+                        "☢️ [ANOMALY] Lossy animated image is missing frame_count; refusing to estimate quality from a forged frame count. Path: {}",
+                        path.display()
+                    );
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "Cannot estimate quality for lossy animated {}: missing frame count",
+                        format.as_str()
+                    )));
+                }
+            }
+        } else {
+            1
+        };
         estimated_quality = Some(estimate_lossy_quality_fallback(
             path,
             &format,
             width,
             height,
             file_size,
-            frame_count.unwrap_or(1),
+            quality_frame_count,
             entropy,
         )?);
     }
@@ -2498,13 +2515,19 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     // Verify frame count for animated images
     if is_animated {
-        let current_count = frame_count.unwrap_or(1);
-        if (current_count <= 1 || current_count > 50000)
+        let claimed_count = frame_count.map(u64::from).unwrap_or_else(|| {
+            warn!(
+                "☢️ [ANOMALY] Animated image missing frame_count before penetration check; using claim=0 only to force real decoding. Path: {}",
+                path.display()
+            );
+            0
+        });
+        if (claimed_count <= 1 || claimed_count > 50000)
             && let crate::media_penetration::PenetrationResult::Verified(real_count) =
-                crate::media_penetration::detect_real_frame_count(path, u64::from(current_count))
+                crate::media_penetration::detect_real_frame_count(path, claimed_count)
         {
             let real_u32 = u32::try_from(real_count).expect("real frame count fits in u32");
-            if real_u32 != current_count {
+            if Some(real_u32) != frame_count {
                 crate::progress_mode::emit_stderr(&format!(
                     "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
                     path.file_name()
@@ -2516,7 +2539,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                             );
                             "?"
                         }),
-                    current_count,
+                    frame_count
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
                     real_u32
                 ));
                 result.frame_count = Some(real_u32);

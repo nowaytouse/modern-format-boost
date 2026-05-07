@@ -1,298 +1,174 @@
-//! Real silent fallback detection tests
-//!
-//! This test scans actual code to detect real silent fallback modes
-
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-fn main() {
-    println!("Running real silent fallback detection tests...");
-    test_detect_real_unwrap_or_patterns();
-    test_detect_expect_patterns();
-    test_detect_panic_patterns();
-    test_code_quality_metrics();
-    println!("✅ Real silent fallback detection tests passed!");
+use walkdir::WalkDir;
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("failed to resolve workspace root: {err:?}"))
 }
 
-fn test_detect_real_unwrap_or_patterns() {
-    let src_dir = Path::new("src");
-    let mut found_silent_fallbacks = Vec::new();
+fn production_rust_files(root: &Path) -> Vec<PathBuf> {
+    [
+        "crates/shared_utils/src",
+        "crates/img/src",
+        "crates/vid/src",
+    ]
+    .into_iter()
+    .flat_map(|dir| {
+        WalkDir::new(root.join(dir))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == std::ffi::OsStr::new("rs"))
+            })
+            .map(|entry| entry.path().to_path_buf())
+    })
+    .collect()
+}
 
-    // Recursively scan all Rust files
-    for entry in walkdir::WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
-        if !entry.file_type().is_file()
-            || entry.path().extension() != Some(std::ffi::OsStr::new("rs"))
-        {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-
-        let lines: Vec<&str> = content.lines().collect();
-
-        for (line_num, line) in lines.iter().enumerate() {
-            // Detect silent fallback to 0 pattern
-            if line.contains("unwrap_or(0)") || line.contains("unwrap_or(0.0)") {
-                found_silent_fallbacks.push(format!(
-                    "{}:{}: Silent fallback to 0 - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
-            }
-
-            // Detect silent fallback to 1 pattern
-            if line.contains("unwrap_or(1)") {
-                found_silent_fallbacks.push(format!(
-                    "{}:{}: Silent fallback to 1 - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
-            }
-
-            // Detect silent fallback to small number pattern
-            if line.contains("unwrap_or(")
-                && (line.contains("unwrap_or(2)")
-                    || line.contains("unwrap_or(3)")
-                    || line.contains("unwrap_or(4)")
-                    || line.contains("unwrap_or(5)")
-                    || line.contains("unwrap_or(10)")
-                    || line.contains("unwrap_or(100)"))
-            {
-                found_silent_fallbacks.push(format!(
-                    "{}:{}: Silent fallback to small number - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
-            }
-
-            // Detect silent fallback to default string pattern
-            if line.contains("unwrap_or(\"") {
-                found_silent_fallbacks.push(format!(
-                    "{}:{}: Silent fallback to default string - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
+fn offending_lines(root: &Path, files: &[PathBuf], patterns: &[&str]) -> Vec<String> {
+    let mut offenders = Vec::new();
+    for file in files {
+        let content = fs::read_to_string(file)
+            .unwrap_or_else(|err| panic!("read {}: {err:?}", file.display()));
+        for (idx, line) in content.lines().enumerate() {
+            if patterns.iter().any(|pattern| line.contains(pattern)) {
+                let rel = file.strip_prefix(root).unwrap_or(file);
+                offenders.push(format!("{}:{}: {}", rel.display(), idx + 1, line.trim()));
             }
         }
     }
+    offenders
+}
 
-    // Output results
-    if found_silent_fallbacks.is_empty() {
-        println!("✅ No silent fallback patterns found");
-    } else {
-        println!(
-            "\n🚨 Found {} silent fallback instances:",
-            found_silent_fallbacks.len()
+#[test]
+fn production_code_has_no_numeric_forgery_fallbacks() {
+    let root = workspace_root();
+    let files = production_rust_files(&root);
+    let offenders = offending_lines(
+        &root,
+        &files,
+        &["unwrap_or(0)", "unwrap_or(0.0)", "unwrap_or(1)"],
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "numeric metadata must not be forged with 0/1 defaults:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn release_workflow_does_not_publish_partial_artifacts() {
+    let root = workspace_root();
+    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("release workflow must be readable");
+
+    for forbidden in [
+        "continue-on-error: ${{ matrix.optional == true }}",
+        "if: always() && !cancelled()",
+        "fail_on_unmatched_files: false",
+    ] {
+        assert!(
+            !release.contains(forbidden),
+            "release workflow still contains partial-success pattern: {forbidden}"
         );
-        for fallback in &found_silent_fallbacks {
-            println!("  {fallback}");
-        }
-        println!("\n⚠️  These silent fallbacks should be replaced with explicit error handling");
     }
-
-    // This test always passes but reports issues
-    println!("Silent fallback detection completed, check output for details");
 }
 
-fn test_detect_expect_patterns() {
-    let src_dir = Path::new("src");
-    let mut found_vague_expects = Vec::new();
-
-    for entry in walkdir::WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
-        if !entry.file_type().is_file()
-            || entry.path().extension() != Some(std::ffi::OsStr::new("rs"))
-        {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-
-        let lines: Vec<&str> = content.lines().collect();
-
-        for (line_num, line) in lines.iter().enumerate() {
-            // Detect vague expect messages
-            if line.contains(".expect(\"") {
-                let expect_msg = extract_expect_message(line);
-                if is_vague_expect_message(&expect_msg) {
-                    found_vague_expects.push(format!(
-                        "{}:{}: Vague expect message - {}",
-                        entry.path().display(),
-                        line_num + 1,
-                        line.trim()
-                    ));
-                }
-            }
-        }
-    }
-
-    if found_vague_expects.is_empty() {
-        println!("✅ No vague expect messages found");
-    } else {
-        println!(
-            "\n🚨 Found {} vague expect messages:",
-            found_vague_expects.len()
+#[test]
+fn dependency_installation_is_not_silenced_in_release_workflows() {
+    let root = workspace_root();
+    for workflow in [
+        ".github/workflows/release.yml",
+        ".github/workflows/nightly-release.yml",
+    ] {
+        let content = fs::read_to_string(root.join(workflow))
+            .unwrap_or_else(|err| panic!("read {workflow}: {err:?}"));
+        let offenders: Vec<_> = content
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("brew install") && line.contains("|| true"))
+            .map(|(idx, line)| format!("{workflow}:{}: {}", idx + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "release dependency installation must fail loudly:\n{}",
+            offenders.join("\n")
         );
-        for expect_msg in &found_vague_expects {
-            println!("  {expect_msg}");
-        }
-        println!("\n⚠️  These expect messages should be more specific");
     }
-
-    println!("expect message detection completed, check output for details");
 }
 
-fn extract_expect_message(line: &str) -> String {
-    if let Some(start) = line.find(".expect(\"")
-        && let Some(end) = line[start + 9..].find('"')
-    {
-        return line[start + 9..start + 9 + end].to_string();
+#[test]
+fn obsolete_blocking_exit_guard_is_not_present() {
+    let root = workspace_root();
+    assert!(
+        !root.join("scripts/terminal_exit_guard.py").exists(),
+        "terminal_exit_guard.py reintroduces blocking GUI exit confirmation"
+    );
+    assert!(
+        !root.join(".tmp_lib/libstdc++.tbd").exists(),
+        "tracked .tmp_lib stubs are CI scratch artifacts, not source"
+    );
+}
+
+#[test]
+fn audit_tests_are_real_harness_tests() {
+    let root = workspace_root();
+    for audit_file in [
+        "crates/dev/tests/test_real_silent_fallbacks.rs",
+        "crates/dev/tests/test_silent_numeric_fallbacks.rs",
+    ] {
+        let content = fs::read_to_string(root.join(audit_file))
+            .unwrap_or_else(|err| panic!("read {audit_file}: {err:?}"));
+        assert!(
+            content.contains("#[test]"),
+            "{audit_file} must contain real Cargo test functions"
+        );
+        let old_always_passes_phrase = ["always", " passes"].concat();
+        let old_report_only_phrase = ["check output", " for details"].concat();
+        assert!(
+            !content.contains(&old_always_passes_phrase)
+                && !content.contains(&old_report_only_phrase),
+            "{audit_file} must not be a report-only pseudo-test"
+        );
     }
-    String::new()
 }
 
-fn is_vague_expect_message(msg: &str) -> bool {
-    let vague_patterns = vec![
-        "required",
-        "missing",
-        "failed",
-        "error",
-        "invalid",
-        "none",
-        "empty",
-        "null",
-        "not found",
-        "unable",
-        "cannot",
-    ];
+#[test]
+fn dev_test_targets_are_not_zero_test_placeholders() {
+    let root = workspace_root();
+    let test_dir = root.join("crates/dev/tests");
+    let mut offenders = Vec::new();
 
-    let msg_lower = msg.to_lowercase();
-    vague_patterns
-        .iter()
-        .any(|pattern| msg_lower.contains(pattern))
-}
-
-fn test_detect_panic_patterns() {
-    let src_dir = Path::new("src");
-    let mut found_panics = Vec::new();
-
-    for entry in walkdir::WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
-        if !entry.file_type().is_file()
-            || entry.path().extension() != Some(std::ffi::OsStr::new("rs"))
+    for entry in fs::read_dir(&test_dir).expect("dev tests directory must be readable") {
+        let entry = entry.expect("dev test directory entry must be readable");
+        let path = entry.path();
+        if path
+            .extension()
+            .is_none_or(|ext| ext != std::ffi::OsStr::new("rs"))
         {
             continue;
         }
 
-        let Ok(content) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-
-        let lines: Vec<&str> = content.lines().collect();
-
-        for (line_num, line) in lines.iter().enumerate() {
-            // Detect panic! macros
-            if line.contains("panic!(") {
-                found_panics.push(format!(
-                    "{}:{}: panic! macro - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
-            }
-
-            // Detect unwrap()
-            if line.contains(".unwrap()")
-                && !line.contains("unwrap_or")
-                && !line.contains("unwrap_or_else")
-            {
-                found_panics.push(format!(
-                    "{}:{}: Direct unwrap() - {}",
-                    entry.path().display(),
-                    line_num + 1,
-                    line.trim()
-                ));
-            }
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err:?}", path.display()));
+        if !content.contains("#[test]") && !content.contains("proptest!") {
+            let rel = path.strip_prefix(&root).unwrap_or(&path);
+            offenders.push(rel.display().to_string());
         }
     }
 
-    if found_panics.is_empty() {
-        println!("✅ No panic/unwrap patterns found");
-    } else {
-        println!("\n🚨 Found {} panic/unwrap instances:", found_panics.len());
-        for panic in &found_panics {
-            println!("  {panic}");
-        }
-        println!("\n⚠️  These panic/unwrap should be replaced with error handling");
-    }
-
-    println!("panic pattern detection completed, check output for details");
-}
-
-fn test_code_quality_metrics() {
-    let src_dir = Path::new("src");
-    let mut total_lines = 0;
-    let mut unwrap_or_count = 0;
-    let mut expect_count = 0;
-    let mut unwrap_count = 0;
-    let mut panic_count = 0;
-
-    for entry in walkdir::WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
-        if !entry.file_type().is_file()
-            || entry.path().extension() != Some(std::ffi::OsStr::new("rs"))
-        {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-
-        total_lines += content.lines().count();
-        unwrap_or_count += content.matches("unwrap_or(").count();
-        expect_count += content.matches(".expect(\"").count();
-        unwrap_count += content.matches(".unwrap()").count();
-        panic_count += content.matches("panic!(").count();
-    }
-
-    println!("\n📊 Code Quality Metrics:");
-    println!("  Total lines: {total_lines}");
-    println!("  unwrap_or instances: {unwrap_or_count}");
-    println!("  expect instances: {expect_count}");
-    println!("  Direct unwrap instances: {unwrap_count}");
-    println!("  panic! instances: {panic_count}");
-
-    #[allow(clippy::cast_precision_loss)]
-    let density = (unwrap_or_count + expect_count + unwrap_count + panic_count) as f64
-        / total_lines as f64
-        * 1000.0;
-    println!("  Issue density: {density:.2} issues / 1000 lines of code");
-
-    if density > 5.0 {
-        println!("⚠️  High issue density, needs improvement");
-    } else if density > 2.0 {
-        println!("🟡 Medium issue density, could be improved");
-    } else {
-        println!("✅ Low issue density");
-    }
-
-    println!("Code quality metrics calculation completed");
+    assert!(
+        offenders.is_empty(),
+        "dev integration test targets must contain real tests or move to src/bin:\n{}",
+        offenders.join("\n")
+    );
 }

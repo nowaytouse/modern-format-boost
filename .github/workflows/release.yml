@@ -16,7 +16,7 @@ jobs:
   build:
     name: Build ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +36,6 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: windows-x64
-            optional: true
 
     steps:
       - name: Checkout
@@ -108,7 +107,7 @@ jobs:
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
           brew update
-          brew install libheif dav1d jpeg-xl gmp mpfr libmpc || true
+          brew install libheif dav1d jpeg-xl gmp mpfr libmpc
           BREW_PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CPATH=${BREW_PREFIX}/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
@@ -130,7 +129,7 @@ jobs:
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
           fi
           /usr/local/bin/brew update
-          /usr/local/bin/brew install libheif dav1d jpeg-xl gmp mpfr libmpc || true
+          /usr/local/bin/brew install libheif dav1d jpeg-xl gmp mpfr libmpc
           # Point pkg-config to x86_64 libs
           echo "PKG_CONFIG_PATH=/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CPATH=/usr/local/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
@@ -213,7 +212,8 @@ jobs:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
-    if: always() && !cancelled()
+    timeout-minutes: 30
+    if: needs.build.result == 'success'
     steps:
       - name: Checkout (for CHANGELOG)
         uses: actions/checkout@v4.1.7
@@ -253,5 +253,5 @@ jobs:
           name: ${{ github.ref_name }}
           body_path: /tmp/release_notes.md
           files: release-assets/*.zip
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           token: ${{ secrets.GITHUB_TOKEN }}

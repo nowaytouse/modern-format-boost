@@ -1,16 +1,19 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-fn main() {
-    println!("Running headless GIF regression tests...");
+#[test]
+fn headless_gif_regression_suite() {
     test_headless_gif_regression_frame_count_and_loop_intent();
-    println!("✅ Headless GIF regression tests passed!");
 }
 
 fn test_headless_gif_regression_frame_count_and_loop_intent() {
-    let dev_asset_path = Path::new("crates/dev/tests/edge/gifs/simulated_headless_sticker.gif");
+    let dev_asset_path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("edge")
+        .join("gifs")
+        .join("simulated_headless_sticker.gif");
 
     // 1. Verify the fallback logic in GifHeaderScan correctly catches payload size
-    let scan = shared_utils::media_meta_utils::scan_gif_headers(dev_asset_path)
+    let scan = shared_utils::media_meta_utils::scan_gif_headers(&dev_asset_path)
         .unwrap_or_else(|e| panic!("Failed to scan headless GIF: {e:?}"));
 
     // There were 7 images inside the standard_7f.gif
@@ -28,7 +31,7 @@ fn test_headless_gif_regression_frame_count_and_loop_intent() {
     // 3. Complete LoopMeta Pipeline checks
     // If the fast path executes, we expect it is parsed successfully and is considered a loop
     let meta =
-        shared_utils::loop_intent::LoopMeta::from_gif_path(dev_asset_path).unwrap_or_else(|| {
+        shared_utils::loop_intent::LoopMeta::from_gif_path(&dev_asset_path).unwrap_or_else(|| {
             panic!("LoopMeta from_gif_path must succeed for valid GIF without delays")
         });
 

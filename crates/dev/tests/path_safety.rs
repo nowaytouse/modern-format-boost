@@ -1,11 +1,10 @@
 use shared_utils::path_safety::{exiftool_path_arg, magick_safe_path};
 use std::path::Path;
 
-fn main() {
-    println!("Running test...");
+#[test]
+fn path_safety_suite() {
     test_sers_truncation_defense();
     test_exiftool_argument_injection_defense();
-    println!("✅ Test completed!");
 }
 
 fn test_sers_truncation_defense() {

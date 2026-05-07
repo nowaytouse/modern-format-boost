@@ -9,6 +9,7 @@ Cargo.lock
 *.dll
 *.exe
 dist/
+.tmp_lib/
 
 # IDE
 .vscode/

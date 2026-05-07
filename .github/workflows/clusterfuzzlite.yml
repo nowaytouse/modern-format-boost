@@ -13,9 +13,13 @@ permissions:
   security-events: write
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   PR:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
       cancel-in-progress: true
@@ -69,6 +73,7 @@ jobs:
   Batch:
     if: github.event_name == 'push' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     concurrency:
       group: ${{ github.workflow }}-batch-${{ github.sha }}
       cancel-in-progress: false

@@ -1,17 +1,14 @@
 use insta::assert_debug_snapshot;
 use shared_utils::loop_intent::{LoopMeta, assess_loop_intent_from_meta};
 
-fn main() {
-    println!("Running classification snapshot tests...");
-
+#[test]
+fn classification_snapshot_suite() {
     test_prores_debug_verdict_snapshot();
     test_definitively_long_verdict_snapshot();
     test_meme_verdict_snapshot();
     test_sticker_verdict_snapshot();
     test_long_clip_verdict_snapshot();
     test_silent_technical_verdict_snapshot();
-
-    println!("✅ All classification snapshot tests passed!");
 }
 
 fn test_prores_debug_verdict_snapshot() {

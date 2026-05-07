@@ -2923,7 +2923,7 @@ pub fn query_feature_discriminative_power(
             feature_name: row.get(0),
             mean_loop_strong: row.get(1),
             mean_loop_weak: row.get(2),
-            discriminative_power: row.get::<_, Option<f64>>(3).unwrap_or(0.0),
+            discriminative_power: row.get::<_, f64>(3),
             sample_count: row.get(4),
         })
         .collect())

@@ -1,10 +1,9 @@
 #[path = "edge/gifs/synth_webp.rs"]
 mod synth_webp;
 
-fn main() {
-    println!("Running WebP duration parser tests...");
+#[test]
+fn webp_duration_parser_suite() {
     parse_duration_from_synthetic_animated_webp_anmf_payloads();
-    println!("✅ WebP duration parser tests passed!");
 }
 
 fn parse_duration_from_synthetic_animated_webp_anmf_payloads() {

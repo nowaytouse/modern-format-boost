@@ -12,8 +12,8 @@ use shared_utils::tool_builders::{
 
 use std::path::Path;
 
-fn main() {
-    println!("Running test...");
+#[test]
+fn builder_argument_parity_suite() {
     test_ffmpeg_flag_order_parity();
     test_ffprobe_flag_order_parity();
     test_cjxl_flag_order_parity();
@@ -56,8 +56,6 @@ fn main() {
     test_identify_verbose_hardening();
     test_gifski_performance_controls();
     test_avifenc_quality_refinement();
-
-    println!("✅ Test completed!");
 }
 
 fn get_arg(args: &[String], idx: usize) -> &str {

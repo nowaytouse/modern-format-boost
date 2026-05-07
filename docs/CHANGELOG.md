@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
 
+- **Post-Hardening Fixes & Compilation Stability**:
+  - **Constant Refinement**: Resolved compilation errors by supplementing missing `JPEG_QUALITY_MAPPING_V1_SSIM_BASE` and `DURATION_THRESHOLD_SUSPICIOUS` constants.
+  - **BPP Threshold Calibration**: Restored BPP quality detection accuracy by reverting `BPP_THRESHOLD_HIGH` to `0.3` and `BPP_THRESHOLD_MEDIUM` to `0.1`, ensuring alignment with legacy "Standard" and "High" quality grades.
+  - **Video Explorer Symbol Unification**: Unified search step naming in `video_explorer.rs` to use `precision::SEARCH_STEP_...` variants, resolving symbol undefined errors across test harnesses.
+  - **Syntax & Integrity Guard**: Cleaned up accidental code fragments in `video_explorer.rs` and achieved 100% Green status across all 912 workspace tests.
+
+- **Test Infrastructure Hardening**:
+  - **FeatureMap Mocking**: Implemented `FeatureMap::mock()` to provide unit-valued normalization statistics during unit testing. This resolved `unwrap()` panics in vector distance tests caused by the new strict "Honest Vector" data requirements.
+
+- **Git & CI/CD Robustness**:
+  - **Explicit Refspec Pushes**: Switched to explicit `refs/heads/nightly:refs/heads/nightly` push specifications to resolve branch-vs-tag ambiguity for the `nightly` target.
+
 - **"Loud and Honest" Error Reporting Architecture**:
   - **Data Integrity Hardening**: Systematically eliminated silent numeric fallbacks in `database_vector.rs`, `loop_intent.rs`, and `image_detection.rs`. Missing feature statistics (weights/stds) and structural scores (loop closure/periodicity) now lead to explicit `Option` propagation rather than assuming neutral defaults like `1.0` or `0.5`.
   - **Honest Vector Computation**: Refactored KNN vector calculation to return `None` when required normalization stats are missing, preventing statistical forgery in HNSW matching.

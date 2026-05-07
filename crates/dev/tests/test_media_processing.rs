@@ -124,9 +124,8 @@ fn create_test_animated_gif() -> Vec<u8> {
     gif
 }
 
-fn main() {
-    println!("Running media processing tests...");
-
+#[test]
+fn media_processing_suite() {
     test_jpeg_processing_normal_flow();
     test_png_processing_normal_flow();
     test_webp_processing_normal_flow();
@@ -137,8 +136,6 @@ fn main() {
     test_duration_handling();
     test_frame_count_consistency();
     test_silent_behavior_elimination();
-
-    println!("All tests passed! ✅");
 }
 
 fn test_jpeg_processing_normal_flow() {
@@ -346,7 +343,7 @@ fn test_error_handling_clarity() {
 fn test_silent_behavior_elimination() {
     // Test elimination of silent behavior
 
-    // Test Option handling instead of unwrap_or(0)
+    // Test Option handling instead of numeric defaulting
     let optional_frame_count: Option<u64> = Some(5);
     let is_multi_frame = optional_frame_count.is_some_and(|fc| fc > 1);
     assert!(is_multi_frame, "Should use explicit Option handling");
@@ -412,7 +409,9 @@ fn test_frame_count_consistency() {
 
     assert_eq!(
         u64::from(scan.frame_count),
-        loop_meta.frame_count.unwrap_or(0),
+        loop_meta
+            .frame_count
+            .expect("LoopMeta frame count should be present"),
         "Scanner and LoopMeta frame count should be consistent"
     );
 }

@@ -788,24 +788,52 @@ pub fn auto_convert_with_cache(
         && shared_utils::quality_matcher::SourceCodec::identify_by_content(input)
             .is_some_and(|codec| codec.can_be_animated())
         && let Ok(image_det) = shared_utils::image_detection::detect_image(input)
-        && (matches!(
+    {
+        let image_is_animated = matches!(
             image_det.image_type,
             shared_utils::image_detection::ImageType::Animated
-        ) || image_det.frame_count.unwrap_or(0) > 1)
-    {
-        let corrected = u64::from(image_det.frame_count.unwrap_or(0).max(2));
-        tracing::warn!(
-            file = %input.display(),
-            vid_frame_count = detection.frame_count.unwrap_or(0), // Log 0 for None in context
-            image_frame_count = corrected,
-            "Animated-image reconciliation corrected frame_count before vid static isolation"
         );
-        detection.frame_count = Some(corrected);
-        if detection.duration_secs <= 0.0_f64
-            && let Some(dur) = image_det.duration
-            && dur > 0.0
+        let decoded_frame_count = if image_is_animated
+            && image_det.frame_count.is_none_or(|count| count <= 1)
         {
-            detection.duration_secs = f64::from(dur);
+            match shared_utils::media_penetration::detect_real_frame_count(
+                input,
+                image_det.frame_count.map_or(0, u64::from),
+            ) {
+                shared_utils::media_penetration::PenetrationResult::Verified(count) => Some(count),
+                shared_utils::media_penetration::PenetrationResult::Failed
+                | shared_utils::media_penetration::PenetrationResult::Skipped => None,
+            }
+        } else {
+            image_det.frame_count.map(u64::from)
+        };
+
+        if let Some(corrected) = decoded_frame_count.filter(|count| *count > 1) {
+            tracing::warn!(
+                file = %input.display(),
+                vid_frame_count = detection
+                    .frame_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                image_frame_count = corrected,
+                "Animated-image reconciliation corrected frame_count before vid static isolation"
+            );
+            detection.frame_count = Some(corrected);
+            if detection.duration_secs <= 0.0_f64
+                && let Some(dur) = image_det.duration
+                && dur > 0.0
+            {
+                detection.duration_secs = f64::from(dur);
+            }
+        } else if image_is_animated {
+            tracing::warn!(
+                file = %input.display(),
+                vid_frame_count = detection
+                    .frame_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                "Animated-image reconciliation saw animated image evidence but could not verify a real frame count; leaving vid metadata unchanged"
+            );
         }
     }
 

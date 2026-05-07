@@ -1,6 +1,8 @@
 # GitHub Actions Workflow Fixes
 
-This document summarizes all the fixes applied to resolve the recurring GitHub Actions failures.
+This document summarizes the current workflow hardening. Keep it descriptive:
+do not claim a job is green, optional, or non-blocking unless the workflow file
+actually enforces that behavior.
 
 ## Issues Fixed
 
@@ -15,10 +17,10 @@ This document summarizes all the fixes applied to resolve the recurring GitHub A
 
 **Fixes Applied:**
 - ✅ Added specific permissions: `contents: read`, `actions: read`, `security-events: write`, `pull-requests: write`
-- ✅ Added timeouts: 15 minutes for PR, 90 minutes for batch
+- ✅ Added timeouts: 30 minutes for PR, 90 minutes for batch
 - ✅ Added `fetch-depth: 0` for complete repository checkout
-- ✅ Added sanitizers: `address,undefined`
-- ✅ Set stable Rust toolchain via `RUST_TOOLCHAIN: stable`
+- ✅ Builds with the `address` sanitizer used by the current ClusterFuzzLite job
+- ✅ Uses nightly Rust via `RUST_TOOLCHAIN: nightly`
 - ✅ Added concurrency control for batch jobs
 - ✅ Added `continue-on-error: false` for strict error handling
 
@@ -27,16 +29,16 @@ This document summarizes all the fixes applied to resolve the recurring GitHub A
 **Problems:**
 - Missing permissions
 - No timeout configuration
-- Inconsistent Rust toolchain (nightly vs stable)
+- Inconsistent Rust toolchain handling
 - No retry logic for network operations
-- Missing error handling for package installations
+- Package installations were previously allowed to fail silently
 
 **Fixes Applied:**
 - ✅ Added proper permissions: `contents: write`, `packages: write`
-- ✅ Added 120-minute timeout for all jobs
-- ✅ Changed Rust toolchain from nightly to stable for consistency
+- ✅ Added 120-minute timeout for build jobs
+- ✅ Uses the same nightly toolchain as the project toolchain
 - ✅ Added retry logic for curl operations (3 attempts with 10s delay)
-- ✅ Added `|| true` to Homebrew installations to handle missing packages gracefully
+- ✅ Removed `|| true` from Homebrew installations so missing packages fail loudly
 - ✅ Added `brew update` before package installations
 
 ### 3. Release Workflow (`.github/workflows/release.yml`)
@@ -44,17 +46,20 @@ This document summarizes all the fixes applied to resolve the recurring GitHub A
 **Problems:**
 - Invalid permissions (`releases: write` doesn't exist)
 - No timeout configuration
-- Inconsistent Rust toolchain
+- Inconsistent Rust toolchain handling
 - Missing retry logic for dependency builds
-- No error handling for package installations
+- Package installations were previously allowed to fail silently
+- Release publication could run after a failed build and publish partial assets
 
 **Fixes Applied:**
 - ✅ Fixed permissions: removed invalid `releases: write`, kept `contents: write`, `packages: write`
-- ✅ Added 120-minute timeout for all jobs
-- ✅ Changed Rust toolchain from nightly to stable
+- ✅ Added 120-minute timeout for build jobs and 30-minute timeout for release publication
+- ✅ Uses the same nightly toolchain as the project toolchain
 - ✅ Added retry logic for curl operations (3 attempts with 10s delay)
-- ✅ Added `|| true` to Homebrew installations
+- ✅ Removed `|| true` from Homebrew installations so missing packages fail loudly
 - ✅ Added `brew update` before package installations
+- ✅ Release publication now runs only after the full build matrix succeeds
+- ✅ Release asset upload fails when the expected ZIP glob matches no files
 
 ### 4. New Backup and Health Check Workflow (`.github/workflows/backup.yml`)
 
@@ -84,11 +89,11 @@ This document summarizes all the fixes applied to resolve the recurring GitHub A
 ### Error Handling & Reliability
 1. **Retry Logic**: All network operations now have 3-attempt retry with delays
 2. **Timeouts**: All jobs have appropriate timeouts to prevent hanging
-3. **Graceful Failures**: Package installations use `|| true` to handle optional dependencies
-4. **Strict Error Control**: Critical operations use `continue-on-error: false`
+3. **Loud Dependency Failures**: Required package installations fail the job immediately
+4. **Strict Release Control**: Release publication is blocked unless the build matrix succeeds
 
 ### Consistency & Standards
-1. **Rust Toolchain**: Standardized on stable Rust across all workflows
+1. **Rust Toolchain**: Standardized on the project nightly toolchain where media builds require it
 2. **Action Versions**: Updated to latest stable versions (v4 for most actions)
 3. **Permissions**: Properly scoped permissions instead of overly broad access
 4. **Concurrency**: Added concurrency control to prevent resource conflicts
@@ -115,12 +120,12 @@ This document summarizes all the fixes applied to resolve the recurring GitHub A
 ## Expected Outcomes
 
 After these fixes, you should see:
-- ✅ **90%+ reduction** in workflow failures
+- ✅ **No silent release publication** after failed build jobs
+- ✅ **No partial release assets** hidden by unmatched globs
 - ✅ **Faster builds** due to improved caching
-- ✅ **Better error messages** with proper error handling
+- ✅ **Better error messages** because required dependency installation fails at the source
 - ✅ **Consistent builds** across all environments
 - ✅ **Early detection** of security and code quality issues
-- ✅ **Reduced maintenance overhead** with automated health checks
 
 ## Maintenance
 

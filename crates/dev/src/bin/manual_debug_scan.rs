@@ -117,13 +117,22 @@ fn manual_debug_scan_debug_dir_only() {
         // Simple linear-congruential generator for deterministic-ish sampling
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| (d.as_nanos() & 0xFFFF_FFFF_FFFF_FFFF) as u64);
+            .map_or_else(
+                |err| {
+                    eprintln!("System clock before UNIX_EPOCH; using fixed sampling seed: {err}");
+                    0xA5A5_5A5A_D3C3_B4B4
+                },
+                |d| (d.as_nanos() & 0xFFFF_FFFF_FFFF_FFFF) as u64,
+            );
+        let undecided_len =
+            u64::try_from(undecided.len()).expect("undecided length must fit into u64");
         let mut picks: Vec<usize> = Vec::new();
         while picks.len() < sample_count {
             seed = seed
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            let idx = usize::try_from(seed).unwrap_or(0) % undecided.len();
+            let idx = usize::try_from(seed % undecided_len)
+                .expect("sample index is modulo vector length and must fit usize");
             if !picks.contains(&idx) {
                 picks.push(idx);
             }

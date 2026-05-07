@@ -40,8 +40,17 @@ check_workflow_syntax() {
             else
                 print_status $GREEN "✅ $file syntax OK"
             fi
+        elif command -v ruby >/dev/null 2>&1; then
+            if ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$file" >/dev/null 2>&1; then
+                print_status $GREEN "✅ $file syntax OK (ruby YAML fallback)"
+            else
+                print_status $RED "❌ YAML syntax error in $file"
+                ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$file"
+                ((syntax_errors++))
+            fi
         else
-            print_status $YELLOW "⚠️  yamllint not installed, skipping YAML syntax check"
+            print_status $RED "❌ yamllint not installed and ruby YAML fallback unavailable"
+            ((syntax_errors++))
         fi
     done
     
@@ -147,9 +156,10 @@ check_anti_patterns() {
             ((anti_patterns++))
         fi
         
-        # Check for missing error handling
-        if grep -q "curl\|wget\|download" "$file" && ! grep -q "|| true\|&&\|continue-on-error" "$file"; then
-            print_status $YELLOW "⚠️  Network operations in $file may need error handling"
+        # Check for network operations without explicit fail-fast or retry behavior.
+        # Do not treat `|| true` as healthy here: it hides dependency failures.
+        if grep -q "curl\|wget\|download" "$file" && ! grep -q "set -e\|for i in\|--retry\|continue-on-error: false" "$file"; then
+            print_status $YELLOW "⚠️  Network operations in $file may need fail-fast retry handling"
             ((anti_patterns++))
         fi
     done
@@ -207,25 +217,21 @@ main() {
     
     local total_issues=0
     
-    check_workflow_syntax
-    ((total_issues += $?))
-    echo
-    
-    check_action_versions
-    ((total_issues += $?))
-    echo
-    
-    check_permissions
-    ((total_issues += $?))
-    echo
-    
-    check_anti_patterns
-    ((total_issues += $?))
-    echo
-    
-    check_rust_specific
-    ((total_issues += $?))
-    echo
+    run_check() {
+        local status
+        set +e
+        "$@"
+        status=$?
+        set -e
+        total_issues=$((total_issues + status))
+        echo
+    }
+
+    run_check check_workflow_syntax
+    run_check check_action_versions
+    run_check check_permissions
+    run_check check_anti_patterns
+    run_check check_rust_specific
     
     # Summary
     if [[ $total_issues -eq 0 ]]; then

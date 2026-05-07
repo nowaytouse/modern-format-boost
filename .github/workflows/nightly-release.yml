@@ -11,11 +11,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-macos:
     name: Build (macOS ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +39,7 @@ jobs:
       - name: Install dependencies (Homebrew)
         run: |
           brew update
-          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp mpfr libmpc || true
+          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp mpfr libmpc
           BREW_PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CPATH=${BREW_PREFIX}/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
@@ -75,6 +77,7 @@ jobs:
   build-linux:
     name: Build (Linux x86_64)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4.1.7
       - name: Install Rust toolchain
