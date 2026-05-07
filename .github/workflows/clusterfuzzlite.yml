@@ -43,11 +43,14 @@ jobs:
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
           sanitizer: address
+          dry-run: false
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
           # Use nightly Rust for specialization/SIMD support
           RUST_TOOLCHAIN: nightly
+          # Keep all fuzz targets regardless of diff
+          CFL_KEEP_ALL_FUZZERS: "true"
       - name: Copy fuzz targets to both directories
         run: |
           # Copy from build-out to out directory
@@ -97,11 +100,14 @@ jobs:
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
           sanitizer: address
+          dry-run: false
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
           # Use nightly Rust for specialization/SIMD support
           RUST_TOOLCHAIN: nightly
+          # Keep all fuzz targets regardless of diff
+          CFL_KEEP_ALL_FUZZERS: "true"
       - name: Copy fuzz targets to both directories
         run: |
           # Copy from build-out to out directory
