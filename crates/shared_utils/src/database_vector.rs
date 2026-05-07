@@ -8,7 +8,13 @@ pub(crate) fn calculate_continuous_features(
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
     let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
-    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .map(|w| w.max(0.01))
+    };
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
     let fc = sample.frame_count?;
@@ -18,7 +24,8 @@ pub(crate) fn calculate_continuous_features(
     Some((
         sample_pixels / get_std("pixels")? * get_w("pixels")?.sqrt(),
         sample.duration_secs / get_std("duration")? * get_w("duration")?.sqrt(),
-        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")? * get_w("frame_count")?.sqrt(),
+        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")?
+            * get_w("frame_count")?.sqrt(),
         crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")?
             * get_w("file_size_bytes")?.sqrt(),
         sample_frame_density / get_std("density")? * get_w("density")?.sqrt(),
@@ -33,7 +40,13 @@ pub(crate) fn calculate_discrete_features(
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64)> {
     let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
-    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .map(|w| w.max(0.01))
+    };
 
     let sample_webp_ratio =
         crate::numeric_cast::option_f64_strict(sample.webp_compression_ratio, "sample_webp_ratio")?;
@@ -93,7 +106,13 @@ pub(crate) fn calculate_extended_features(
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64, f64)> {
     let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
-    let get_w = |f: &str| stats_map.stats.get(f).and_then(|s| s.weight).map(|w| w.max(0.01));
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .map(|w| w.max(0.01))
+    };
 
     let sample_audio_score = if sample.is_native_gif {
         1.0_f64

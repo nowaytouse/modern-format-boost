@@ -248,7 +248,9 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if crate::numeric_cast::usize_to_u64(pixels) > crate::constants::IMAGE_SAMPLING_PIXELS_ULTRA_LARGE {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_SAMPLING_PIXELS_ULTRA_LARGE
+    {
         crate::constants::IMAGE_SAMPLING_STEP_ULTRA_LARGE
     } else if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
@@ -317,7 +319,9 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         20
-    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+    } else if pixels
+        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    {
         10
     } else {
         1
@@ -369,7 +373,9 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         10
-    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+    } else if pixels
+        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    {
         5
     } else {
         2
@@ -440,7 +446,9 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         10
-    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+    } else if pixels
+        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    {
         5
     } else {
         crate::constants::IMAGE_SAMPLING_STEP_NORMAL
@@ -506,7 +514,9 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::SHARPNESS_SAMPLING_PIXELS_LARGE
     {
         crate::constants::SHARPNESS_SAMPLING_STEP_LARGE
-    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+    } else if pixels
+        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    {
         crate::constants::SHARPNESS_SAMPLING_STEP_MEDIUM
     } else {
         crate::constants::SHARPNESS_SAMPLING_STEP_NORMAL
@@ -566,7 +576,9 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         crate::constants::CONTRAST_SAMPLING_STEP_LARGE
-    } else if pixels > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE) {
+    } else if pixels
+        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    {
         crate::constants::CONTRAST_SAMPLING_STEP_MEDIUM
     } else {
         crate::constants::CONTRAST_SAMPLING_STEP_NORMAL

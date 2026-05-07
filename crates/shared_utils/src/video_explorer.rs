@@ -1699,7 +1699,9 @@ impl VideoExplorer {
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
 
-        while high - low > precision::SEARCH_STEP_COARSE / 2.0 && iterations < self.config.max_iterations {
+        while high - low > precision::SEARCH_STEP_COARSE / 2.0
+            && iterations < self.config.max_iterations
+        {
             let mid = f32::midpoint(low, high).round();
 
             log_realtime!("   🔄 Testing CRF {:.0}...", mid);
@@ -4180,8 +4182,11 @@ mod tests {
 
     fn test_binary_search_worst_case() {
         let range = 51.0 - 0.0;
-        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / precision::SEARCH_STEP_COARSE).ceil());
-        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil());
+        let coarse_iterations =
+            crate::numeric_cast::f32_to_u32_sat((range / precision::SEARCH_STEP_COARSE).ceil());
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat(
+            (precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil(),
+        );
         let total = coarse_iterations + fine_iterations;
 
         assert!(
@@ -4288,7 +4293,10 @@ mod tests {
             (precision::SEARCH_STEP_COARSE - 2.0).abs() < 0.01,
             "Coarse step should be 2.0"
         );
-        assert!((precision::SEARCH_STEP_FINE - 0.5).abs() < 0.01, "Fine step should be 0.5");
+        assert!(
+            (precision::SEARCH_STEP_FINE - 0.5).abs() < 0.01,
+            "Fine step should be 0.5"
+        );
         assert!(
             (precision::SEARCH_STEP_ULTRA_FINE - 0.25).abs() < 0.01,
             "Ultra fine step should be 0.25"
@@ -4396,13 +4404,15 @@ mod tests {
         let initial = 20.0_f32;
         let max_crf = 30.0_f32;
 
-        let coarse_up =
-            crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / precision::SEARCH_STEP_COARSE).ceil());
+        let coarse_up = crate::numeric_cast::f32_to_u32_sat(
+            ((max_crf - initial) / precision::SEARCH_STEP_COARSE).ceil(),
+        );
         assert_eq!(coarse_up, 5, "Coarse search up should be 5 iterations");
 
         let boundary_range = 4.0_f32;
-        let fine_iterations =
-            crate::numeric_cast::f32_to_u32_sat((boundary_range / precision::SEARCH_STEP_FINE).ceil());
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat(
+            (boundary_range / precision::SEARCH_STEP_FINE).ceil(),
+        );
         assert_eq!(fine_iterations, 8, "Fine search should be 8 iterations");
 
         let total = 1 + coarse_up + fine_iterations + 1;
@@ -4460,8 +4470,12 @@ mod tests {
         let config = ExploreConfig::default();
 
         let worst_range = 30.0_f32;
-        let worst_coarse = crate::numeric_cast::f32_to_u32_sat((worst_range / precision::SEARCH_STEP_COARSE).ceil());
-        let worst_fine = crate::numeric_cast::f32_to_u32_sat((precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil()) * 2;
+        let worst_coarse = crate::numeric_cast::f32_to_u32_sat(
+            (worst_range / precision::SEARCH_STEP_COARSE).ceil(),
+        );
+        let worst_fine = crate::numeric_cast::f32_to_u32_sat(
+            (precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil(),
+        ) * 2;
         let worst_total = 1 + worst_coarse + worst_fine + 1;
 
         assert!(

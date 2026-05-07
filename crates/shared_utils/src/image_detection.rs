@@ -1086,7 +1086,9 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         }
 
         if is_large_image && colors_per_megapixel < crate::constants::PNG_COLORS_PER_MP_THRESHOLD {
-            factors.large_palette = factors.large_palette.max(crate::constants::EXPLORE_CONFIDENCE_MEDIUM);
+            factors.large_palette = factors
+                .large_palette
+                .max(crate::constants::EXPLORE_CONFIDENCE_MEDIUM);
             if !explanations.iter().any(|e| e.contains("colors/MP")) {
                 explanations.push(format!(
                     "Low color density ({colors_per_megapixel:.1} colors/MP)"
@@ -1193,8 +1195,13 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         if let Some(p_size) = png_info.palette_size {
             let palette_size_f = crate::numeric_cast::usize_to_f64(p_size);
-            if palette_size_f >= 64.0_f64 && entropy_ratio < crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH && pixel_count > 10_000 {
-                factors.entropy_anomaly = (crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH - entropy_ratio).mul_add(0.5, 0.5);
+            if palette_size_f >= 64.0_f64
+                && entropy_ratio < crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH
+                && pixel_count > 10_000
+            {
+                factors.entropy_anomaly = (crate::constants::PNG_ENTROPY_RATIO_THRESHOLD_HIGH
+                    - entropy_ratio)
+                    .mul_add(0.5, 0.5);
                 factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
                 if factors.entropy_anomaly > 0.4_f64 {
                     explanations.push(format!(

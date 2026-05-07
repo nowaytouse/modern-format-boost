@@ -20,18 +20,27 @@ pub mod tiff {
     /// # Panics
     /// Panics if the file is fundamentally corrupted in a way that prevents basic header reading.
     pub fn is_lossless(path: &Path) -> Result<bool> {
-        crate::common_utils::validate_file_size_limit(path, crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE)
-            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+        crate::common_utils::validate_file_size_limit(
+            path,
+            crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+        )
+        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
         let data = fs::read(path)?;
         if data.len() < 8 {
-            tracing::warn!("☢️ [INTEGRITY] TIFF file too small (< 8 bytes) for header parsing; defaulting to lossless for safety: {}", path.display());
+            tracing::warn!(
+                "☢️ [INTEGRITY] TIFF file too small (< 8 bytes) for header parsing; defaulting to lossless for safety: {}",
+                path.display()
+            );
             return Ok(true);
         }
 
         let is_little_endian = data.get(0..2) == Some(b"II");
         if data.get(0..2) != Some(b"II") && data.get(0..2) != Some(b"MM") {
-            tracing::warn!("☢️ [INTEGRITY] Invalid TIFF byte order marker; defaulting to lossless for safety: {}", path.display());
+            tracing::warn!(
+                "☢️ [INTEGRITY] Invalid TIFF byte order marker; defaulting to lossless for safety: {}",
+                path.display()
+            );
             return Ok(true);
         }
 
@@ -126,7 +135,12 @@ pub mod tiff {
             let mut entries_scanned = 0;
             for _ in 0..num_entries {
                 if pos + entry_size > data.len() {
-                    tracing::warn!("☢️ [ANOMALY] TIFF IFD truncated: only scanned {}/{} entries for {}", entries_scanned, num_entries, path.display());
+                    tracing::warn!(
+                        "☢️ [ANOMALY] TIFF IFD truncated: only scanned {}/{} entries for {}",
+                        entries_scanned,
+                        num_entries,
+                        path.display()
+                    );
                     break;
                 }
                 entries_scanned += 1;

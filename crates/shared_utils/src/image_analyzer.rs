@@ -15,7 +15,8 @@ use tracing::debug;
 
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 /// Shorter animations are skipped (no conversion to video).
-pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
+pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 =
+    crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
 
 /// Opens an image reader with magic bytes detection to handle non-standard extensions.
 /// Falls back to extension-based detection if magic bytes detection fails.
@@ -948,7 +949,8 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(0.5, crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE),
+        95..=100 => (f64::from(quality) - 95.0)
+            .mul_add(0.5, crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE),
         85..=94 => (f64::from(quality) - 85.0).mul_add(0.7, 38.0),
         75..=84 => (f64::from(quality) - 75.0).mul_add(0.6, 32.0),
         60..=74 => (f64::from(quality) - 60.0).mul_add(0.27, 28.0),
@@ -958,7 +960,8 @@ fn estimate_psnr_from_quality(quality: u8) -> f64 {
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(0.004, crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE),
+        95..=100 => (f64::from(quality) - 95.0)
+            .mul_add(0.004, crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE),
         85..=94 => (f64::from(quality) - 85.0).mul_add(0.003, 0.95),
         75..=84 => (f64::from(quality) - 75.0).mul_add(0.005, 0.90),
         60..=74 => (f64::from(quality) - 60.0).mul_add(0.0067, 0.80),
