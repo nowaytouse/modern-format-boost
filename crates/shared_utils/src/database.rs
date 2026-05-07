@@ -387,9 +387,9 @@ impl Default for LoopReferenceProfile {
     )]
     fn default() -> Self {
         let collection = GlobalCollectionStats::default();
-        let pixels_min = f64::from(collection.width_min) * f64::from(collection.height_min);
+        let pixels_min = collection.width_min * collection.height_min;
         let pixels_avg = collection.width_avg * collection.height_avg;
-        let pixels_max = f64::from(collection.width_max) * f64::from(collection.height_max);
+        let pixels_max = collection.width_max * collection.height_max;
 
         Self {
             duration: DistributionStats {

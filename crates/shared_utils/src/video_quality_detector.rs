@@ -130,12 +130,10 @@ impl ChromaSubsampling {
     #[must_use]
     pub const fn quality_factor(&self) -> f64 {
         match self {
-            ChromaSubsampling::Yuv420 | ChromaSubsampling::Unknown => {
-                crate::constants::CHROMA_FACTOR_YUV420
-            }
-            ChromaSubsampling::Yuv422 => crate::constants::CHROMA_FACTOR_YUV422,
-            ChromaSubsampling::Yuv444 => crate::constants::CHROMA_FACTOR_YUV444,
-            ChromaSubsampling::Rgb => crate::constants::CHROMA_FACTOR_RGB,
+            Self::Yuv420 | Self::Unknown => crate::constants::CHROMA_FACTOR_YUV420,
+            Self::Yuv422 => crate::constants::CHROMA_FACTOR_YUV422,
+            Self::Yuv444 => crate::constants::CHROMA_FACTOR_YUV444,
+            Self::Rgb => crate::constants::CHROMA_FACTOR_RGB,
         }
     }
 }

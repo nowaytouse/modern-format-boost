@@ -132,8 +132,7 @@ pub mod tiff {
             };
 
             let mut pos = entries_start;
-            let mut entries_scanned = 0;
-            for _ in 0..num_entries {
+            for entries_scanned in 0..num_entries {
                 if pos + entry_size > data.len() {
                     tracing::warn!(
                         "☢️ [ANOMALY] TIFF IFD truncated: only scanned {}/{} entries for {}",
@@ -143,7 +142,6 @@ pub mod tiff {
                     );
                     break;
                 }
-                entries_scanned += 1;
                 if let Some(tag) = read_u16(pos)
                     && tag == 259
                 {

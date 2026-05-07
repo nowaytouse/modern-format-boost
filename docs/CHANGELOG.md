@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (2026-05-07)
+## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (v0.11.3) (2026-05-07)
 
 - **Post-Hardening Fixes & Compilation Stability**:
   - **Constant Refinement**: Resolved compilation errors by supplementing missing `JPEG_QUALITY_MAPPING_V1_SSIM_BASE` and `DURATION_THRESHOLD_SUSPICIOUS` constants.

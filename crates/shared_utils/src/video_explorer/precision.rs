@@ -54,11 +54,11 @@ impl SearchPhase {
     #[must_use]
     pub const fn step_size(&self) -> f32 {
         match self {
-            SearchPhase::GpuCoarse => crate::constants::SEARCH_STEP_GPU_COARSE,
-            SearchPhase::GpuMedium => crate::constants::SEARCH_STEP_GPU_MEDIUM,
-            SearchPhase::GpuFine => SEARCH_STEP_FINE,
-            SearchPhase::GpuUltraFine => SEARCH_STEP_ULTRA_FINE,
-            SearchPhase::CpuFinest => SEARCH_STEP_CPU_FINEST,
+            Self::GpuCoarse => crate::constants::SEARCH_STEP_GPU_COARSE,
+            Self::GpuMedium => crate::constants::SEARCH_STEP_GPU_MEDIUM,
+            Self::GpuFine => SEARCH_STEP_FINE,
+            Self::GpuUltraFine => SEARCH_STEP_ULTRA_FINE,
+            Self::CpuFinest => SEARCH_STEP_CPU_FINEST,
         }
     }
 

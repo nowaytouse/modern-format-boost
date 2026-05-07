@@ -1291,26 +1291,31 @@ fn apply_weak_heuristics(
     if let Some(motion_gini) = meta.motion_gini {
         let z = thresholds.motion_gini_z(motion_gini);
         let loop_support = meta.loop_closure_score.or(meta.motion_periodicity);
-        let support_relief = if let Some(support) = loop_support {
-            if z.is_sign_negative() && support >= 0.80_f64 {
-                0.35_f64
-            } else if (z.is_sign_negative() && short_silent_asset)
-                || (z.is_sign_positive()
-                    && !(short_silent_asset || is_image || derived.localized_motion))
-            {
-                0.55_f64
-            } else {
-                1.0_f64
-            }
-        } else if (z.is_sign_negative() && short_silent_asset)
-            || (z.is_sign_positive()
-                && !(short_silent_asset || is_image || derived.localized_motion))
-        {
-            // Default relief when no support data is available
-            0.65_f64
-        } else {
-            1.0_f64
-        };
+        let support_relief = loop_support.map_or_else(
+            || {
+                if (z.is_sign_negative() && short_silent_asset)
+                    || (z.is_sign_positive()
+                        && !(short_silent_asset || is_image || derived.localized_motion))
+                {
+                    // Default relief when no support data is available
+                    0.65_f64
+                } else {
+                    1.0_f64
+                }
+            },
+            |support| {
+                if z.is_sign_negative() && support >= 0.80_f64 {
+                    0.35_f64
+                } else if (z.is_sign_negative() && short_silent_asset)
+                    || (z.is_sign_positive()
+                        && !(short_silent_asset || is_image || derived.localized_motion))
+                {
+                    0.55_f64
+                } else {
+                    1.0_f64
+                }
+            },
+        );
         log_odds.add(
             z * crate::constants::FEATURE_WEIGHT_MOTION_GINI
                 * support_relief

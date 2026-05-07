@@ -1268,8 +1268,7 @@ pub fn convert_to_mp4_matched(
                             probe.stream_index,
                             probe
                                 .frame_count
-                                .map(|count| count.to_string())
-                                .unwrap_or_else(|| "unknown".to_string())
+                                .map_or_else(|| "unknown".to_string(), |count| count.to_string())
                         );
                     }
 

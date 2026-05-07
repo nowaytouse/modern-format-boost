@@ -812,9 +812,7 @@ pub fn auto_convert_with_cache(
             tracing::warn!(
                 file = %input.display(),
                 vid_frame_count = detection
-                    .frame_count
-                    .map(|count| count.to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
+                    .frame_count.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
                 image_frame_count = corrected,
                 "Animated-image reconciliation corrected frame_count before vid static isolation"
             );
@@ -829,9 +827,7 @@ pub fn auto_convert_with_cache(
             tracing::warn!(
                 file = %input.display(),
                 vid_frame_count = detection
-                    .frame_count
-                    .map(|count| count.to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
+                    .frame_count.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
                 "Animated-image reconciliation saw animated image evidence but could not verify a real frame count; leaving vid metadata unchanged"
             );
         }

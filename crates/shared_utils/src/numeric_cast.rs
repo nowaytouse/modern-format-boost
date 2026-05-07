@@ -612,6 +612,7 @@ mod raw {
     }
 
     #[inline]
+    #[allow(clippy::cast_precision_loss)]
     pub(super) const fn u64_to_f64(v: u64) -> f64 {
         v as f64
     }
@@ -622,16 +623,19 @@ mod raw {
     }
 
     #[inline]
+    #[allow(clippy::cast_precision_loss)]
     pub(super) const fn i64_to_f64(v: i64) -> f64 {
         v as f64
     }
 
     #[inline]
+    #[allow(clippy::cast_precision_loss)]
     pub(super) const fn i32_to_f32(v: i32) -> f32 {
         v as f32
     }
 
     #[inline]
+    #[allow(clippy::cast_precision_loss)]
     pub(super) const fn u32_to_f32(v: u32) -> f32 {
         v as f32
     }

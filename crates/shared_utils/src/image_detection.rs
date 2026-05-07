@@ -1182,16 +1182,19 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             ));
         }
 
-        let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
-            let pe = calculate_palette_index_entropy(&img, p_size);
-            (pe.0, pe.1, pe.2)
-        } else {
-            let e = calculate_rgb_entropy(&img);
-            let ps = 256.0f64; // Max possible for indexed PNG
-            let me = ps.log2();
-            let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
-            (e, me, ratio)
-        };
+        let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
+            || {
+                let e = calculate_rgb_entropy(&img);
+                let ps = 256.0f64; // Max possible for indexed PNG
+                let me = ps.log2();
+                let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
+                (e, me, ratio)
+            },
+            |p_size| {
+                let pe = calculate_palette_index_entropy(&img, p_size);
+                (pe.0, pe.1, pe.2)
+            },
+        );
 
         if let Some(p_size) = png_info.palette_size {
             let palette_size_f = crate::numeric_cast::usize_to_f64(p_size);
@@ -2435,18 +2438,17 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     if estimated_quality.is_none() && compression == CompressionType::Lossy {
         let quality_frame_count = if is_animated {
-            match frame_count {
-                Some(count) => count,
-                None => {
-                    warn!(
-                        "☢️ [ANOMALY] Lossy animated image is missing frame_count; refusing to estimate quality from a forged frame count. Path: {}",
-                        path.display()
-                    );
-                    return Err(ImgQualityError::AnalysisError(format!(
-                        "Cannot estimate quality for lossy animated {}: missing frame count",
-                        format.as_str()
-                    )));
-                }
+            if let Some(count) = frame_count {
+                count
+            } else {
+                warn!(
+                    "☢️ [ANOMALY] Lossy animated image is missing frame_count; refusing to estimate quality from a forged frame count. Path: {}",
+                    path.display()
+                );
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Cannot estimate quality for lossy animated {}: missing frame count",
+                    format.as_str()
+                )));
             }
         } else {
             1
@@ -2463,15 +2465,14 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     }
 
     let duration = if is_animated {
-        match (frame_count, fps) {
-            (Some(fc), Some(f)) => Some(crate::numeric_cast::f64_to_f32_lossy(f64::from(fc)) / f),
-            _ => {
-                tracing::warn!(
-                    "☢️ [ANOMALY] Animated image missing frame_count/fps for duration! Skipping duration calculation to prevent forgery. Path: {}",
-                    path.display()
-                );
-                None
-            }
+        if let (Some(fc), Some(f)) = (frame_count, fps) {
+            Some(crate::numeric_cast::f64_to_f32_lossy(f64::from(fc)) / f)
+        } else {
+            tracing::warn!(
+                "☢️ [ANOMALY] Animated image missing frame_count/fps for duration! Skipping duration calculation to prevent forgery. Path: {}",
+                path.display()
+            );
+            None
         }
     } else {
         None
@@ -2515,13 +2516,13 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     // Verify frame count for animated images
     if is_animated {
-        let claimed_count = frame_count.map(u64::from).unwrap_or_else(|| {
+        let claimed_count = frame_count.map_or_else(|| {
             warn!(
                 "☢️ [ANOMALY] Animated image missing frame_count before penetration check; using claim=0 only to force real decoding. Path: {}",
                 path.display()
             );
             0
-        });
+        }, u64::from);
         if (claimed_count <= 1 || claimed_count > 50000)
             && let crate::media_penetration::PenetrationResult::Verified(real_count) =
                 crate::media_penetration::detect_real_frame_count(path, claimed_count)
@@ -2539,9 +2540,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                             );
                             "?"
                         }),
-                    frame_count
-                        .map(|count| count.to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
+                    frame_count.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
                     real_u32
                 ));
                 result.frame_count = Some(real_u32);
