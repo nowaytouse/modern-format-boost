@@ -15,7 +15,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{self, Write};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -552,12 +552,12 @@ pub struct DetailedCoarseProgressBar {
     total_iterations: u64,
     current_iteration: AtomicU64,
     input_size: u64,
-    current_crf: AtomicU64,
+    current_crf: AtomicU32,
     current_size: AtomicU64,
     /// SSIM bits; meaning depends on `has_ssim` (0.0 is a valid value).
     current_ssim: AtomicU64,
     has_ssim: AtomicBool,
-    best_crf: AtomicU64,
+    best_crf: AtomicU32,
     start_time: Instant,
     last_render: Arc<Mutex<Instant>>,
     is_finished: AtomicBool,
@@ -574,11 +574,11 @@ impl DetailedCoarseProgressBar {
             total_iterations,
             current_iteration: AtomicU64::new(0),
             input_size,
-            current_crf: AtomicU64::new(0),
+            current_crf: AtomicU32::new(0),
             current_size: AtomicU64::new(0),
             current_ssim: AtomicU64::new(0),
             has_ssim: AtomicBool::new(false),
-            best_crf: AtomicU64::new(0),
+            best_crf: AtomicU32::new(0),
             start_time: Instant::now(),
             last_render: Arc::new(Mutex::new(Instant::now())),
             is_finished: AtomicBool::new(false),
@@ -588,8 +588,7 @@ impl DetailedCoarseProgressBar {
     pub fn inc_iteration(&self, crf: f32, size: u64, ssim: Option<f64>) {
         let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
 
-        self.current_crf
-            .store(u64::from(crf.to_bits()), Ordering::Relaxed);
+        self.current_crf.store(crf.to_bits(), Ordering::Relaxed);
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
@@ -597,8 +596,7 @@ impl DetailedCoarseProgressBar {
         }
 
         if size < self.input_size {
-            self.best_crf
-                .store(u64::from(crf.to_bits()), Ordering::Relaxed);
+            self.best_crf.store(crf.to_bits(), Ordering::Relaxed);
         }
 
         self.render(iter, crf, size, ssim);
@@ -642,7 +640,7 @@ impl DetailedCoarseProgressBar {
 
         let ssim_str = ssim.map_or_else(String::new, |s| format!("SSIM {s:.4}"));
 
-        let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
+        let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed));
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
         } else {
@@ -706,7 +704,7 @@ impl DetailedCoarseProgressBar {
         eprintln!("{msg}");
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
-        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
+        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed));
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {
             Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))

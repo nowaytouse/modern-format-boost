@@ -9,7 +9,9 @@ All notable changes to this project will be documented in this file.
 - **"Loud and Honest" Error Reporting Architecture**:
   - **Descriptive Fallback Warnings**: Systematically replaced silent defaults (e.g., `.unwrap_or(0)`) with explicit `tracing::warn!` logs across `shared_utils`, `img`, and `video_explorer`.
   - **Mandatory Metadata Enforcement**: Hardened `ssim_calculator.rs` and `image_analyzer.rs` to skip calculations (duration/MS-SSIM) when critical metadata is missing, rather than using silent numeric fallbacks like `0` or `60.0`.
-  - **Numeric Cast Simplification**: Streamlined atomic progress and database stat retrieval by removing redundant overflow checks where safety is architecturally guaranteed, improving readability and performance.
+  - **Numeric Cast Simplification & Atomic Refactoring**: 
+    - Streamlined atomic progress and database stat retrieval by removing redundant overflow checks.
+    - **Atomic Type Optimization**: Refactored `current_crf` and `best_crf` in `progress.rs` from `AtomicU64` to `AtomicU32`, aligning storage with the 32-bit nature of `f32` and eliminating unnecessary type casts.
   - **Standardized Logging**: Unified "N/A" reporting for missing fusion scores and standardized module-specific context prefixes in warnings.
 
 - **KNN Database & Vector Encoding Modularization**:
