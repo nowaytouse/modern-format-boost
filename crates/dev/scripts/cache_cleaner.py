@@ -658,15 +658,7 @@ def main():
             return
 
         try:
-            if can_prompt_user():
-                print(
-                    f"{DIM}Press Enter to return and trigger project rebuild...{RESET}"
-                )
-                input()
-            else:
-                print(
-                    f"{DIM}Non-interactive session detected; triggering rebuild automatically...{RESET}"
-                )
+            print(f"{DIM}Triggering project rebuild automatically...{RESET}")
             run_post_cleanup_rebuild(PROJECT_ROOT)
         except (EOFError, KeyboardInterrupt):
             pass
