@@ -371,7 +371,7 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     // `duration` is required; without it frame-count and loop-intent are undefined.
     let duration = parse_f64_string_field(&format["duration"]).ok_or_else(|| {
         let msg = "Missing or unparseable 'duration' in ffprobe format section".to_string();
-        info!(error = %msg, "ffprobe: 'duration' metadata missing or malformed; animation/looping properties cannot be reliably determined");
+        debug!(error = %msg, "ffprobe: 'duration' metadata missing or malformed; animation/looping properties cannot be reliably determined");
         FFprobeError::ParseError(msg)
     })?;
 
