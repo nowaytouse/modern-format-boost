@@ -1,0 +1,98 @@
+use shared_utils::anyhow::Result;
+use shared_utils::cli_runner::{CliProcessingResult, CliRunnerConfig, run_auto_command};
+use shared_utils::unified_error::UnifiedError;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
+
+#[derive(Debug)]
+struct MockResult;
+
+impl CliProcessingResult for MockResult {
+    fn is_skipped(&self) -> bool {
+        false
+    }
+    fn is_success(&self) -> bool {
+        true
+    }
+    fn skip_reason(&self) -> Option<&str> {
+        None
+    }
+    fn input_path(&self) -> &str {
+        ""
+    }
+    fn output_path(&self) -> Option<&str> {
+        None
+    }
+    fn input_size(&self) -> u64 {
+        0
+    }
+    fn output_size(&self) -> Option<u64> {
+        None
+    }
+    fn message(&self) -> &str {
+        ""
+    }
+    fn blake3(&self) -> Option<&str> {
+        None
+    }
+}
+
+#[test]
+fn test_semantic_integrity_skips_vs_errors() -> Result<()> {
+    let input_dir = tempdir()?;
+    let output_dir = tempdir()?;
+
+    // Create two test files with video extensions so they are collected by the runner
+    let file1_path = input_dir.path().join("skip_me.mp4");
+    fs::write(&file1_path, "dummy video data for skip")?;
+
+    let file2_path = input_dir.path().join("error_me.mp4");
+    fs::write(&file2_path, "dummy video data for error")?;
+
+    let config = CliRunnerConfig {
+        input: input_dir.path().to_path_buf(),
+        output: Some(output_dir.path().to_path_buf()),
+        recursive: false,
+        label: "integrity-test".to_string(),
+        base_dir: Some(input_dir.path().to_path_buf()),
+        resume: false,
+        protect_destructive_dirs: false,
+    };
+
+    // Run batch with mock converter that injects specific error types
+    run_auto_command(&config, |path: &Path| -> Result<MockResult> {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        if name == "skip_me.mp4" {
+            // Optimization failure (IterationLimitExceeded) -> SHOULD BE SKIPPED AND COPIED
+            Err(UnifiedError::IterationLimitExceeded(shared_utils::IterationError {
+                current: 10,
+                max: 10,
+                context: "search".to_string(),
+            })
+            .into())
+        } else {
+            // Recoverable error (e.g. AnalysisError) -> SHOULD BE FAILED AND NOT COPIED
+            // (We use a non-fatal error so the batch doesn't stop immediately)
+            Err(UnifiedError::AnalysisError("simulated non-skip failure".to_string()).into())
+        }
+    })?;
+
+    // Verify file1 (Skip/Optimization Failure) WAS copied to the output directory
+    let copied_file1 = output_dir.path().join("skip_me.mp4");
+    assert!(
+        copied_file1.exists(),
+        "ERROR: Optimization failures (IterationLimitExceeded) must be treated as Skips and trigger an automatic copy to the output directory. Semantic integrity violated."
+    );
+
+    // Verify file2 (Non-skip Error) WAS NOT copied to the output directory
+    let copied_file2 = output_dir.path().join("error_me.mp4");
+    assert!(
+        !copied_file2.exists(),
+        "ERROR: Hard/Recoverable errors (AnalysisError) must NOT result in a copy to the output directory. They should remain as honest errors. Semantic integrity violated."
+    );
+
+    println!("✅ Semantic integrity test passed: Skips correctly copied, Errors correctly withheld.");
+
+    Ok(())
+}

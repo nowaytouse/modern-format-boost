@@ -382,6 +382,16 @@ where
                             result.skip_reason().unwrap_or("unknown")
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
+
+                        // Copy original file to output directory for skips to ensure a complete output set.
+                        if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                            &fixed,
+                            config.output.as_deref(),
+                            config.base_dir.as_deref(),
+                            true,
+                        ) {
+                            error!("❌ Failed to copy skipped file {}: {}", fixed.display(), copy_err);
+                        }
                     } else if result.is_success() {
                         info!(
                             "{} → {} ({}) ✅",
@@ -436,9 +446,31 @@ where
                 Err(err) => {
                     let error_msg = err.to_string();
                     let maybe_ue = err.downcast_ref::<crate::unified_error::UnifiedError>();
-                    let is_skip = maybe_ue.is_some_and(super::unified_error::UnifiedError::is_skip);
-                    let category = maybe_ue.map_or(
-                        crate::unified_error::ErrorCategory::Recoverable,
+                    
+                    // Fallback: search the error chain if direct downcast fails (handles multiple wrapping layers)
+                    let ue_from_chain = if maybe_ue.is_none() {
+                        err.chain().find_map(|e| e.downcast_ref::<crate::unified_error::UnifiedError>())
+                    } else {
+                        maybe_ue
+                    };
+
+                    let is_skip = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::is_skip)
+                        || error_msg.contains("Iteration limit exceeded")
+                        || error_msg.contains("Quality validation failed")
+                        || error_msg.contains("Compression failed")
+                        || error_msg.contains("already exists");
+                    
+                    let should_copy = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::should_copy_original)
+                        || (is_skip && !error_msg.contains("already exists")); // Don't copy if it already exists in output
+
+                    let category = ue_from_chain.map_or_else(
+                        || {
+                            if is_skip {
+                                crate::unified_error::ErrorCategory::Optional
+                            } else {
+                                crate::unified_error::ErrorCategory::Recoverable
+                            }
+                        },
                         crate::unified_error::UnifiedError::category,
                     );
 
@@ -449,6 +481,18 @@ where
                             error_msg
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
+
+                        if should_copy {
+                            // Copy original file to output directory for skip errors to ensure a complete output set.
+                            if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                                &fixed,
+                                config.output.as_deref(),
+                                config.base_dir.as_deref(),
+                                true,
+                            ) {
+                                error!("❌ Failed to copy skipped file {}: {}", fixed.display(), copy_err);
+                            }
+                        }
                     } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
                         if pause_controller.request_pause(&fixed, reason.clone()) {
                             warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
@@ -465,20 +509,6 @@ where
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push((fixed.clone(), error_msg));
-
-                        if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
-                            &fixed,
-                            config.output.as_deref(),
-                            config.base_dir.as_deref(),
-                            true,
-                        ) {
-                            error!("❌ Failed to copy original: {copy_err}");
-                        } else {
-                            info!(
-                                "📋 Copied original (conversion failed): {}",
-                                fixed.display()
-                            );
-                        }
 
                         if category == crate::unified_error::ErrorCategory::Fatal {
                             fatal_stop.store(true, Ordering::SeqCst);
@@ -647,23 +677,6 @@ where
     let result = match converter(input) {
         Ok(r) => r,
         Err(e) => {
-            if let Some(ref output_dir) = config.output {
-                if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
-                    input,
-                    Some(output_dir),
-                    config.base_dir.as_deref(),
-                    true,
-                ) {
-                    error!(
-                        "IO Error: Conversion failed AND failed to copy original source to output: {copy_err}"
-                    );
-                } else {
-                    info!(
-                        "📋 Copied original to output (conversion failed): {}",
-                        input.display()
-                    );
-                }
-            }
             return Err(e);
         }
     };

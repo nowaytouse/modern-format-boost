@@ -204,20 +204,21 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("AVIF");
-            let quality = detection.estimated_quality.ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "Cannot determine estimated quality for lossy image: {input_path}"
-                ))
-            })?;
+
+            let (quality_arg, reason) = if let Some(q) = detection.estimated_quality {
+                (format!(" -q {q}"), format!("Static lossy image (non-JPEG), recommend AVIF (quality matched to {q})"))
+            } else {
+                (String::new(), "Static lossy image (non-JPEG), quality estimation failed; recommend AVIF (using encoder defaults)".to_string())
+            };
+
             Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
-                reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
-                    .to_string(),
+                reason,
                 command: format!(
-                    "avifenc '{}' '{}' -q {}",
+                    "avifenc '{}' '{}'{}",
                     input_path,
                     output_path.display(),
-                    quality
+                    quality_arg
                 ),
                 expected_reduction: 25.0,
             })

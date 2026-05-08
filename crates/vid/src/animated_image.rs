@@ -13,7 +13,7 @@ use shared_utils::loop_intent::{LoopMeta, is_lossless_exploration_safe};
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VideoStreamInfo {
     index: usize,
-    frame_count: u64,
+    frame_count: Option<u64>,
     pix_fmt: String,
 }
 
@@ -220,8 +220,7 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
             let frame_count = stream
                 .get("nb_frames")
                 .and_then(|v| v.as_str())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0);
+                .and_then(|value| value.parse::<u64>().ok());
             let pix_fmt = stream
                 .get("pix_fmt")
                 .and_then(|v| v.as_str())
@@ -262,8 +261,9 @@ fn is_probable_alpha_aux_pair(streams: &[VideoStreamInfo], selected_stream_index
         return false;
     };
 
-    selected_stream.frame_count > 0
-        && selected_stream.frame_count == aux_stream.frame_count
+    selected_stream
+        .frame_count
+        .is_some_and(|c| c > 0 && Some(c) == aux_stream.frame_count)
         && looks_like_alpha_stream(&aux_stream.pix_fmt)
 }
 
@@ -2235,12 +2235,12 @@ mod tests {
         let streams = vec![
             VideoStreamInfo {
                 index: 0,
-                frame_count: 1,
+                frame_count: Some(1),
                 pix_fmt: "yuv420p".to_string(),
             },
             VideoStreamInfo {
                 index: 1,
-                frame_count: 11,
+                frame_count: Some(11),
                 pix_fmt: "yuv420p".to_string(),
             },
         ];
@@ -2253,12 +2253,12 @@ mod tests {
         let streams = vec![
             VideoStreamInfo {
                 index: 0,
-                frame_count: 24,
+                frame_count: Some(24),
                 pix_fmt: "yuv420p".to_string(),
             },
             VideoStreamInfo {
                 index: 1,
-                frame_count: 24,
+                frame_count: Some(24),
                 pix_fmt: "gray8".to_string(),
             },
         ];
@@ -2293,8 +2293,7 @@ mod tests {
                 let frame_count = stream
                     .get("nb_frames")
                     .and_then(|v| v.as_str())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
+                    .and_then(|value| value.parse::<u64>().ok());
                 let pix_fmt = stream
                     .get("pix_fmt")
                     .and_then(|v| v.as_str())
@@ -2308,8 +2307,9 @@ mod tests {
             })
             .collect();
         assert_eq!(streams.len(), 2);
-        assert_eq!(streams[0].frame_count, 0);
-        assert_eq!(streams[1].frame_count, 0);
+        assert_eq!(streams[0].frame_count, None);
+        assert_eq!(streams[1].frame_count, None);
+
         assert!(!is_probable_alpha_aux_pair(&streams, 0));
     }
 

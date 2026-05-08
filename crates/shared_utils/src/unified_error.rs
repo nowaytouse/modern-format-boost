@@ -109,7 +109,12 @@ impl UnifiedError {
         true
     }
 
-    /// Get error category
+    /// Get error category.
+    ///
+    /// ## Semantics
+    /// - `Optional`: Optimization target not met, but original is preserved. (Triggers Skip & Copy)
+    /// - `Recoverable`: Non-fatal failure in processing (e.g. analysis error). (Triggers Error & No Copy)
+    /// - `Fatal`: System or I/O failure that should stop the batch. (Triggers Error & No Copy)
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
@@ -118,14 +123,19 @@ impl UnifiedError {
             | Self::DirectoryNotFound { .. }
             | Self::FileWriteError { .. }
             | Self::Io(_)
-            | Self::ToolNotFound { .. } => ErrorCategory::Fatal,
+            | Self::ToolNotFound { .. }
+            | Self::NotImplemented(_) => ErrorCategory::Fatal,
 
-            // Priority 2: Optional (User-level skips)
-            Self::OutputExists { .. } | Self::SkipFile(_) | Self::CompressionFailed { .. } => {
-                ErrorCategory::Optional
-            }
+            // Priority 2: Optional (Optimization failures -> Skips)
+            // These should trigger an automatic copy of the original file to the output.
+            Self::OutputExists { .. }
+            | Self::SkipFile(_)
+            | Self::CompressionFailed { .. }
+            | Self::IterationLimitExceeded(_)
+            | Self::QualityValidationFailed { .. } => ErrorCategory::Optional,
 
-            // Priority 3: Recoverable (Upstream or Result anomalies - counted as failures but loop continues)
+            // Priority 3: Recoverable (Hard failures in processing -> Errors)
+            // These should NOT trigger a copy.
             _ => ErrorCategory::Recoverable,
         }
     }
@@ -320,13 +330,24 @@ impl UnifiedError {
         }
     }
 
-    /// Check if this error should skip the file
+    /// Check if this error should be treated as a "Skip" (original preserved).
+    ///
+    /// A Skip means we decided not to (or couldn't) optimize the file, but the
+    /// file itself is fine. In a batch with an output directory, Skips trigger
+    /// an automatic copy of the original file.
     #[must_use]
     pub const fn is_skip(&self) -> bool {
-        matches!(
-            self,
-            Self::OutputExists { .. } | Self::SkipFile(_) | Self::CompressionFailed { .. }
-        )
+        matches!(self.category(), ErrorCategory::Optional)
+    }
+
+    /// Check if this error should trigger an automatic copy of the original to output.
+    ///
+    /// Based on the "Loud and Honest" policy:
+    /// - Optimization failures (Skips) -> Copy original (ensure complete output set).
+    /// - Processing failures (Errors) -> Do NOT copy (avoid silent corruption/partial data).
+    #[must_use]
+    pub const fn should_copy_original(&self) -> bool {
+        self.is_skip()
     }
 
     /// Add file path to error
@@ -819,14 +840,35 @@ mod tests {
     }
 
     #[test]
-    fn test_unified_error_convenience_constructors() {
-        let err = UnifiedError::tool_not_found("ffmpeg");
-        assert!(matches!(err, UnifiedError::ToolNotFound { .. }));
+    fn test_optimization_failure_semantics() {
+        // Optimization failures (Iteration limit / Quality threshold) MUST be Optional Skips
+        let iter_err = UnifiedError::IterationLimitExceeded(crate::IterationError {
+            current: 100,
+            max: 100,
+            context: "test search".to_string(),
+        });
+        assert_eq!(iter_err.category(), ErrorCategory::Optional, "Iteration limit should be Optional category");
+        assert!(iter_err.is_skip(), "Iteration limit should trigger is_skip=true");
 
-        let err = UnifiedError::video_not_supported("avi");
-        assert!(matches!(err, UnifiedError::VideoFormatNotSupported(_)));
+        let quality_err = UnifiedError::QualityValidationFailed {
+            actual_ssim: 0.85,
+            expected_ssim: 0.95,
+            file_path: None,
+        };
+        assert_eq!(quality_err.category(), ErrorCategory::Optional, "Quality failure should be Optional category");
+        assert!(quality_err.is_skip(), "Quality failure should trigger is_skip=true");
 
-        let err = UnifiedError::image_not_supported("tiff");
-        assert!(matches!(err, UnifiedError::ImageFormatNotSupported(_)));
+        // Hard system failures MUST NOT be Optional Skips
+        let fatal_err = UnifiedError::file_not_found("/missing");
+        assert_eq!(fatal_err.category(), ErrorCategory::Fatal);
+        assert!(!fatal_err.is_skip(), "Fatal errors must NOT be skips");
+
+        let tool_err = UnifiedError::tool_not_found("ffmpeg");
+        assert_eq!(tool_err.category(), ErrorCategory::Fatal);
+        assert!(!tool_err.is_skip(), "Tool missing must NOT be skips");
+
+        let io_err = UnifiedError::Io(std::io::Error::new(std::io::ErrorKind::Other, "disk crash"));
+        assert_eq!(io_err.category(), ErrorCategory::Fatal);
+        assert!(!io_err.is_skip(), "IO errors must NOT be skips");
     }
 }

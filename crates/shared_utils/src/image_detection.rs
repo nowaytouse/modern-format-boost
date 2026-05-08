@@ -1057,16 +1057,27 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             )
             .sqrt();
 
-            #[cfg(feature = "high-precision")]
-            {
-                crate::numeric_cast::f64_to_rational_strict(den_f, "palette_density_denominator")
-                    .map_or(0.0, |r| (num / r).to_f64())
-            }
-            #[cfg(not(feature = "high-precision"))]
-            {
-                (num / Rational::from_f64(den_f).expect("den_f is a finite >0 pixel count"))
-                    .to_f64()
-            }
+            let den = {
+                #[cfg(feature = "high-precision")]
+                {
+                    crate::numeric_cast::f64_to_rational_strict(den_f, "palette_density_denominator")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError(
+                                "PNG Analysis: 'palette_density_denominator' conversion failed"
+                                    .to_string(),
+                            )
+                        })?
+                }
+                #[cfg(not(feature = "high-precision"))]
+                {
+                    Rational::from_f64(den_f).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "PNG Analysis: 'den_f' is not a finite number".to_string(),
+                        )
+                    })?
+                }
+            };
+            (num / den).to_f64()
         };
 
         if palette_size > 240 {
@@ -2379,19 +2390,45 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let compression = detect_compression(&format, path)?;
 
-    let img =
-        open_image_with_limits(path).map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?;
-    let (width, height) = img.dimensions();
-    let has_alpha = img.color().has_alpha();
-    let bit_depth = match img.color() {
-        image::ColorType::L16
-        | image::ColorType::La16
-        | image::ColorType::Rgb16
-        | image::ColorType::Rgba16 => 16,
-        _ => 8,
+    let (img_data, read_error) = match open_image_with_limits(path) {
+        Ok(img) => (Some(img), None),
+        Err(e) => {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "Image decode failed; attempting secondary recovery via direct bitstream analysis"
+            );
+            (None, Some(e))
+        }
     };
 
-    let entropy = calculate_entropy(&img);
+    let (width, height, has_alpha, bit_depth, entropy) = if let Some(img) = img_data {
+        let (w, h) = img.dimensions();
+        let alpha = img.color().has_alpha();
+        let depth = match img.color() {
+            image::ColorType::L16
+            | image::ColorType::La16
+            | image::ColorType::Rgb16
+            | image::ColorType::Rgba16 => 16,
+            _ => 8,
+        };
+        let ent = calculate_entropy(&img);
+        (w, h, alpha, depth, ent)
+    } else {
+        // Honest recovery: Extract REAL data from bitstream using identify.
+        let (w, h, channel_type, depth) = crate::conversion::media_info_without_ffprobe(path).ok_or_else(|| {
+            tracing::error!(
+                file = %path.display(),
+                "Secondary recovery failed: could not determine REAL media properties via bitstream fallback"
+            );
+            read_error.unwrap_or_else(|| ImgQualityError::ImageReadError("Unknown decode failure".to_string()))
+        })?;
+
+        // channel_type string comes directly from ImageMagick (e.g. 'srgba', 'graya').
+        // If it contains 'a', Alpha is physically present in the bitstream.
+        let alpha = channel_type.contains('a');
+        (w, h, alpha, depth, 0.0)
+    };
 
     let mut precision = PrecisionMetadata {
         is_lossless_deterministic: matches!(format, DetectedFormat::PNG),
@@ -2570,7 +2607,13 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             && let crate::media_penetration::PenetrationResult::Verified(real_count) =
                 crate::media_penetration::detect_real_frame_count(path, claimed_count)
         {
-            let real_u32 = u32::try_from(real_count).expect("real frame count fits in u32");
+            let real_u32 = u32::try_from(real_count).map_err(|_| {
+                ImgQualityError::AnalysisError(format!(
+                    "Penetration failure: Real frame count {} for {} exceeds u32::MAX",
+                    real_count,
+                    path.display()
+                ))
+            })?;
             if Some(real_u32) != frame_count {
                 crate::progress_mode::emit_stderr(&format!(
                     "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
@@ -2800,7 +2843,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
         let entry_offset = 6 + crate::numeric_cast::usize_to_u64_strict(i, "ICO entry index")
-            .expect("ICO index fits in u64")
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!("ICO index conversion failed for entry {i}"))
+            })?
             * 16;
         if file.seek(SeekFrom::Start(entry_offset)).is_err() {
             warn!(
@@ -3098,11 +3143,9 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_strict(
-            data.get_u32_be_strict(pos, "JP2 box size")
-                .expect("bounds checked by while condition"),
+            data.get_u32_be_strict(pos, "JP2 box size")?,
             "jp2_box_size",
-        )
-        .expect("u32 always fits in usize");
+        )?;
         let box_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
 
         if box_type == b"jp2c" {
@@ -3116,11 +3159,9 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
                 break;
             }
             let ext = crate::numeric_cast::u64_to_usize_strict(
-                data.get_u64_be_strict(pos + 8, "JP2 extended box size")
-                    .expect("bounds checked above"),
+                data.get_u64_be_strict(pos + 8, "JP2 extended box size")?,
                 "jp2_ext_box_size",
-            )
-            .expect("memory-mapped size fits in usize");
+            )?;
             pos += ext;
         } else if size < 8 {
             break;

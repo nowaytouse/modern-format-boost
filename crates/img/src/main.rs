@@ -1402,44 +1402,61 @@ fn auto_convert_directory(
                                 }
                                 continue;
                             }
-                            // Classify as read/analysis failure only on unambiguous sentinel types
-                            let is_read_error = err_str.contains("Failed to open file")
-                                || err_str.contains("ImageReadError");
 
-                            if is_read_error {
-                                shared_utils::log_auto_error!(
-                                    "Image analysis",
-                                    "⚠️  Failed to read/analyze {}: {}. Original file will be preserved.",
-                                    path.display(),
-                                    e
-                                );
+                            let is_skip = if let Some(ue) = e.downcast_ref::<shared_utils::unified_error::UnifiedError>() {
+                                ue.is_skip()
                             } else {
-                                shared_utils::log_auto_error!(
-                                    "Image conversion",
-                                    "Failed {}: {}. Preserved original (Skipped conversion).",
-                                    path.display(),
-                                    e
+                                err_str.contains("Skipped") || err_str.contains("already optimized")
+                            };
+
+                            if is_skip {
+                                shared_utils::log_eprintln!(
+                                    "⏭️  {} → SKIP ({})",
+                                    path.file_name().unwrap_or_default().to_string_lossy(),
+                                    err_str
                                 );
-                            }
+                                skipped.fetch_add(1, Ordering::Relaxed);
+                                shared_utils::progress_mode::image_processed_success(); // Skip with copy is a partial success
 
-                            shared_utils::progress_mode::log_conversion_failure(path, &err_str);
-                            failed.fetch_add(1, Ordering::Relaxed);
-                            shared_utils::progress_mode::image_processed_failure();
+                                // Copy original file to output directory to prevent data loss for skips
+                                if let Some(ref output_dir) = config.output_dir
+                                    && let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
+                                        path,
+                                        Some(output_dir),
+                                        config.base_dir.as_deref(),
+                                        config.verbose(),
+                                    ) {
+                                        shared_utils::log_eprintln!(
+                                            "🚨 [CRITICAL] Failed to copy original after skip ({}): {}. DATA LOSS RISK!",
+                                            path.display(),
+                                            copy_err
+                                        );
+                                    }
+                            } else {
+                                // Classify as read/analysis failure only on unambiguous sentinel types
+                                let is_read_error = err_str.contains("Failed to open file")
+                                    || err_str.contains("ImageReadError");
 
-                            // Copy original file to output directory to prevent data loss
-                            if let Some(ref output_dir) = config.output_dir
-                                && let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
-                                    path,
-                                    Some(output_dir),
-                                    config.base_dir.as_deref(),
-                                    config.verbose(),
-                                ) {
-                                    shared_utils::log_eprintln!(
-                                        "🚨 [CRITICAL] Failed to copy original after conversion failure ({}): {}. DATA LOSS RISK!",
+                                if is_read_error {
+                                    shared_utils::log_auto_error!(
+                                        "Image analysis",
+                                        "⚠️  Failed to read/analyze {}: {}. Original file will be preserved.",
                                         path.display(),
-                                        copy_err
+                                        e
+                                    );
+                                } else {
+                                    shared_utils::log_auto_error!(
+                                        "Image conversion",
+                                        "Failed {}: {}. Output discarded (Hard Error).",
+                                        path.display(),
+                                        e
                                     );
                                 }
+
+                                shared_utils::progress_mode::log_conversion_failure(path, &err_str);
+                                failed.fetch_add(1, Ordering::Relaxed);
+                                shared_utils::progress_mode::image_processed_failure();
+                            }
                         }
                     }
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;

@@ -183,8 +183,8 @@ impl ExploreQualityFailureDecision {
         input: &Path,
         detection: &VideoDetectionResult,
         explore_result: &shared_utils::ExploreResult,
-    ) -> ConversionOutput {
-        ConversionOutput {
+    ) -> Result<ConversionOutput> {
+        Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: input.display().to_string(),
             strategy: ConversionStrategy {
@@ -201,10 +201,15 @@ impl ExploreQualityFailureDecision {
             success: false,
             message: self.fail_message,
             final_crf: explore_result.optimal_crf,
-            exploration_attempts: u8::try_from(explore_result.iterations)
-                .expect("exploration iterations exceeded 255 - infinite loop detected"),
+            exploration_attempts: u8::try_from(explore_result.iterations).map_err(|_| {
+                VidQualityError::ConversionError(format!(
+                    "Exploration iteration limit exceeded ({} > 255) for {}",
+                    explore_result.iterations,
+                    input.display()
+                ))
+            })?,
             blake3: None,
-        }
+        })
     }
 }
 
@@ -255,8 +260,8 @@ impl FinalQualityGateFailureDecision {
         input: &Path,
         detection: &VideoDetectionResult,
         result: &shared_utils::ExploreResult,
-    ) -> ConversionOutput {
-        ConversionOutput {
+    ) -> Result<ConversionOutput> {
+        Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: input.display().to_string(),
             strategy: ConversionStrategy {
@@ -273,10 +278,15 @@ impl FinalQualityGateFailureDecision {
             success: false,
             message: self.skip_message,
             final_crf: result.optimal_crf,
-            exploration_attempts: u8::try_from(result.iterations)
-                .expect("exploration iterations exceeded 255 - infinite loop detected"),
+            exploration_attempts: u8::try_from(result.iterations).map_err(|_| {
+                VidQualityError::ConversionError(format!(
+                    "Exploration iteration limit exceeded ({} > 255) for {}",
+                    result.iterations,
+                    input.display()
+                ))
+            })?,
             blake3: None,
-        }
+        })
     }
 }
 
@@ -1363,7 +1373,13 @@ pub fn auto_convert_with_cache(
                             explore_result.iterations
                         ),
                         final_crf: explore_result.optimal_crf,
-                        exploration_attempts: u8::try_from(explore_result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
+                        exploration_attempts: u8::try_from(explore_result.iterations).map_err(|_| {
+                            VidQualityError::ConversionError(format!(
+                                "Exploration iteration limit exceeded ({} > 255) for {}",
+                                explore_result.iterations,
+                                input.display()
+                            ))
+                        })?,
                         blake3: None,
                     });
                 }
@@ -1383,14 +1399,19 @@ pub fn auto_convert_with_cache(
                 )
                 .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-                return Ok(decision.into_skip_output(input, &detection, &explore_result));
+                return Ok(decision.into_skip_output(input, &detection, &explore_result)?);
             }
 
             (
                 explore_result.output_size,
                 explore_result.optimal_crf,
-                u8::try_from(explore_result.iterations)
-                    .expect("exploration iterations exceeded 255 - infinite loop detected"),
+                u8::try_from(explore_result.iterations).map_err(|_| {
+                    VidQualityError::ConversionError(format!(
+                        "Exploration iteration limit exceeded ({} > 255) for {}",
+                        explore_result.iterations,
+                        input.display()
+                    ))
+                })?,
                 Some(explore_result),
             )
         }
@@ -1522,8 +1543,13 @@ pub fn auto_convert_with_cache(
                     result.optimal_crf, result.iterations, decision.quality_summary
                 ),
                 final_crf: result.optimal_crf,
-                exploration_attempts: u8::try_from(result.iterations)
-                    .expect("exploration iterations exceeded 255 - infinite loop detected"),
+                exploration_attempts: u8::try_from(result.iterations).map_err(|_| {
+                    VidQualityError::ConversionError(format!(
+                        "Exploration iteration limit exceeded ({} > 255) for {}",
+                        result.iterations,
+                        input.display()
+                    ))
+                })?,
                 blake3: None,
             });
         }
@@ -1544,7 +1570,7 @@ pub fn auto_convert_with_cache(
         )
         .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-        return Ok(decision.into_skip_output(input, &detection, result));
+        return Ok(decision.into_skip_output(input, &detection, result)?);
     }
 
     let pre_metadata_size = output_size;

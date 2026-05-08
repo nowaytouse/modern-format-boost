@@ -460,7 +460,67 @@ pub fn detect_video_with_cache(
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
-    let probe = probe_video(path)?;
+    let probe = match probe_video(path) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "ffprobe failed to analyze file; attempting secondary recovery via direct bitstream analysis"
+            );
+
+            let (width, height, channel_type, depth) = crate::conversion::media_info_without_ffprobe(path)
+                .ok_or_else(|| {
+                    tracing::error!(file = %path.display(), "Secondary recovery failed: could not determine REAL media properties via bitstream fallback");
+                    e // Return original ffprobe error (e) if fallback also fails
+                })?;
+
+            let file_size = std::fs::metadata(path)
+                .map(|m| m.len())
+                .map_err(|io_err| {
+                    tracing::error!(file = %path.display(), error = %io_err, "Failed to read REAL file metadata during recovery");
+                    crate::ffprobe::FFprobeError::from(io_err)
+                })?;
+
+            crate::ffprobe::FFprobeResult {
+                format_name: path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_string(),
+                duration: None,
+                size: file_size,
+                bit_rate: None,
+                video_codec: "unknown".to_string(),
+                video_codec_long: "Unknown Codec (Recovery Mode)".to_string(),
+                width,
+                height,
+                frame_rate: None,
+                avg_frame_rate: None,
+                frame_count: None,
+                // Honest pix_fmt mapping: we use the REAL channel property string from identify.
+                // If it contains 'a', the system's alpha-detection logic will find it.
+                pix_fmt: channel_type,
+                color_space: None,
+                color_transfer: None,
+                color_primaries: None,
+                bit_depth: Some(depth),
+                audio: crate::ffprobe::FFprobeAudioInfo::default(),
+                profile: None,
+                level: None,
+                max_b_frames: None,
+                encoder_settings: None,
+                video_bit_rate: None,
+                refs: None,
+                hdr: crate::ffprobe::FFprobeHdrInfo::default(),
+                subtitles: crate::ffprobe::FFprobeSubtitleInfo::default(),
+                is_variable_frame_rate: false,
+                stream_index: 0,
+                tags: HashMap::new(),
+                loop_count: None,
+                frame_types: Vec::new(),
+                pts_deltas: Vec::new(),
+                mv_magnitudes: Vec::new(),
+                pkt_sizes: Vec::new(),
+            }
+        }
+    };
 
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
     let has_b_frames = probe.has_b_frames();

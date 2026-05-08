@@ -343,6 +343,9 @@ pub mod video_quality_detector;
 /// Metadata-aware `XMP` merging logic.
 pub mod xmp_merger;
 
+#[cfg(test)]
+mod semantic_tests;
+
 /// Path-safe argument formatting.
 pub mod path_safety;
 /// Global process locking for concurrency safety.
@@ -608,6 +611,8 @@ pub use error_handler::{ErrorAction, ErrorCategory, handle_error};
 pub use unified_error::{
     ImgResult, Result as UnifiedResult, UnifiedError, VidQualityError, VidResult,
 };
+
+pub use anyhow;
 
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 

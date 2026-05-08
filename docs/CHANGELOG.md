@@ -14,10 +14,11 @@ All notable changes to this project will be documented in this file.
   - **Cold-Start Integrity**: Eliminated silent `0.1`/`0.35` defaults in `database.rs` and `loop_intent.rs`. Replaced them with symbolic constants (`DEFAULT_LOOP_BASELINE_...`) to distinguish between measured data and synthesized baselines.
   - **Semantic Refinement**: Audited and corrected misleading "mock" prefixes in production code paths (e.g., JXL recommendation indicators) to ensure semantic naming alignment.
 
-- **License Compliance & Documentation**:
-  - **Comprehensive License Audit**: Regenerated all third-party license reports (`docs/LICENSES.html`, `docs/LICENSES.json`) using `cargo-about v0.9.0` under the project's **nightly** toolchain.
-  - **Toolchain Consistency**: Re-aligned all license generation tasks with the workspace's primary `nightly` toolchain to ensure consistency across the build pipeline.
-  - **Clarification Refinement**: Audited `about.toml` clarifications; confirmed GPL-3.0-or-later compliance for JXL optional components.
+- **Semantic Integrity & Optimization**:
+  - **Skip vs Error Clarification**: Hardened the distinction between "Skip" (optimization failure, original preserved) and "Error" (processing failure).
+  - **Output Determinism**: Enforced automatic original file preservation (copying) for all Skip categories (`IterationLimitExceeded`, `QualityValidationFailed`, `CompressionFailed`) to ensure complete output sets.
+  - **Honest Failure Reporting**: Ensured hard failures (I/O, analysis, upstream errors) correctly withhold original files to avoid silent data propagation in error states.
+  - **Regression Shield**: Added `test_semantic_integrity_skips_vs_errors` to the dev test suite to prevent future semantic regression.
 
 - **Stability & Verification**:
   - **FFprobe Robustness**: Fixed a potential panic in `probe_video_streams` where missing or "N/A" `nb_frames` (common in GIFs and fragmented containers) caused an unwrap failure. Unknown frame counts now default to 0, allowing the alpha-aux heuristic to skip them safely.
