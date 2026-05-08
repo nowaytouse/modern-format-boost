@@ -959,23 +959,51 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0)
-            .mul_add(0.5, crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE),
-        85..=94 => (f64::from(quality) - 85.0).mul_add(0.7, 38.0),
-        75..=84 => (f64::from(quality) - 75.0).mul_add(0.6, 32.0),
-        60..=74 => (f64::from(quality) - 60.0).mul_add(0.27, 28.0),
-        _ => f64::from(quality).mul_add(0.13, 20.0),
+        95..=100 => (f64::from(quality) - 95.0).mul_add(
+            crate::constants::JPEG_MAP_PSNR_H95_SLOPE,
+            crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE,
+        ),
+        85..=94 => (f64::from(quality) - 85.0).mul_add(
+            crate::constants::JPEG_MAP_PSNR_H85_SLOPE,
+            crate::constants::JPEG_MAP_PSNR_H85_BASE,
+        ),
+        75..=84 => (f64::from(quality) - 75.0).mul_add(
+            crate::constants::JPEG_MAP_PSNR_H75_SLOPE,
+            crate::constants::JPEG_MAP_PSNR_H75_BASE,
+        ),
+        60..=74 => (f64::from(quality) - 60.0).mul_add(
+            crate::constants::JPEG_MAP_PSNR_H60_SLOPE,
+            crate::constants::JPEG_MAP_PSNR_H60_BASE,
+        ),
+        _ => f64::from(quality).mul_add(
+            crate::constants::JPEG_MAP_PSNR_LOW_SLOPE,
+            crate::constants::JPEG_MAP_PSNR_LOW_BASE,
+        ),
     }
 }
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0)
-            .mul_add(0.004, crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE),
-        85..=94 => (f64::from(quality) - 85.0).mul_add(0.003, 0.95),
-        75..=84 => (f64::from(quality) - 75.0).mul_add(0.005, 0.90),
-        60..=74 => (f64::from(quality) - 60.0).mul_add(0.0067, 0.80),
-        _ => f64::from(quality).mul_add(0.003, 0.60),
+        95..=100 => (f64::from(quality) - 95.0).mul_add(
+            crate::constants::JPEG_MAP_SSIM_H95_SLOPE,
+            crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE,
+        ),
+        85..=94 => (f64::from(quality) - 85.0).mul_add(
+            crate::constants::JPEG_MAP_SSIM_H85_SLOPE,
+            crate::constants::JPEG_MAP_SSIM_H85_BASE,
+        ),
+        75..=84 => (f64::from(quality) - 75.0).mul_add(
+            crate::constants::JPEG_MAP_SSIM_H75_SLOPE,
+            crate::constants::JPEG_MAP_SSIM_H75_BASE,
+        ),
+        60..=74 => (f64::from(quality) - 60.0).mul_add(
+            crate::constants::JPEG_MAP_SSIM_H60_SLOPE,
+            crate::constants::JPEG_MAP_SSIM_H60_BASE,
+        ),
+        _ => f64::from(quality).mul_add(
+            crate::constants::JPEG_MAP_SSIM_LOW_SLOPE,
+            crate::constants::JPEG_MAP_SSIM_LOW_BASE,
+        ),
     }
 }
 
@@ -1170,7 +1198,7 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
 
         // Final fallback tie-breaker
         if let Some(duration) = get_animation_duration(path)
-            && duration > 0.01
+            && duration > crate::constants::NEGLIGIBLE_DURATION_F32
         {
             log_eprintln!(
                 "🎞️  [Joint Audit: WebP] Byte markers found but structural walk failed; duration confirmed animation: {}",
@@ -1273,21 +1301,32 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         return Some(d);
     }
 
-    // If all else fails and it's a GIF, do a raw frame count
     if path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .as_deref()
         == Some("gif")
-        && let Some(frame_count) = try_get_frame_count(path)
     {
-        if frame_count <= 1 {
-            log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
-            return Some(0.0);
+        if let Some(d) = crate::image_formats::gif::get_duration_secs(path) {
+            return Some(d);
         }
-        // For a valid animated GIF without explicit duration metadata,
-        // we fallback to 10fps (0.1s per frame) as a rough estimate
-        return Some(crate::numeric_cast::u32_to_f32(frame_count) / crate::constants::FALLBACK_FPS);
+
+        if let Some(frame_count) = try_get_frame_count(path) {
+            if frame_count <= 1 {
+                log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+                return Some(0.0);
+            }
+            // For a valid animated GIF without explicit duration metadata,
+            // we fallback to 10fps (0.1s per frame) as a rough estimate
+            tracing::warn!(
+                "⚠️ [METADATA] GIF duration missing; falling back to 10fps estimate for {} frames: {}",
+                frame_count,
+                path.display()
+            );
+            return Some(
+                crate::numeric_cast::u32_to_f32(frame_count) / crate::constants::FALLBACK_FPS,
+            );
+        }
     }
 
     None
@@ -1714,16 +1753,13 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
             analysis.content_type.name,
             analysis
                 .complexity
-                .map(|v| format!("{v:.3}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}")),
             analysis
                 .edge_density
-                .map(|v| format!("{v:.3}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}")),
             analysis
                 .color_diversity
-                .map(|v| format!("{v:.3}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}")),
         );
         // Conservative strategy: no longer decide whether to treat as lossless based on old RoutingDecision; universally treat as lossy.
     } else {

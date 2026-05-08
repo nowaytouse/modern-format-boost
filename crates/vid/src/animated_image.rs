@@ -2047,8 +2047,7 @@ pub fn convert_to_gif_apple_compat(
 
         if options.verbose() {
             eprintln!(
-                "   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS",
-                extracted_count, duration_val, fps
+                "   🔧 GIF Encoding: Native speed ({extracted_count} frames / {duration_val:.2}s duration) -> target speed: {fps:.3} FPS"
             );
         }
         let mut gifski_builder = shared_utils::GifskiBuilder::new();

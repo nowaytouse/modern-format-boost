@@ -400,6 +400,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 ///
 /// # Errors
 /// Returns an error message if analysis fails.
+///
+/// # Panics
+/// Panics if the `duration_secs` is missing from the detection result,
+/// although this is guarded by a check at the start of the function.
 pub fn analyze_video_quality_from_detection(
     detection: &VideoDetectionResult,
 ) -> Result<VideoQualityAnalysis, String> {

@@ -283,7 +283,7 @@ pub struct ModeLockedImagemagickCjxlPipelineRequest<'a> {
 
 /// Run the `cjxl` pipeline via `ImageMagick`.
 /// - `metadata_policy`: preserve metadata or apply `-strip`
-/// - `output_depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
+/// - `output_depth`: PNG bit depth to emit (8 or `crate::constants::PNG_DEFAULT_SAFETY_BIT_DEPTH` as u32); use 8 only for confirmed 8-bit sources
 /// - `icc_policy`: replaces embedded ICC with standard sRGB without truncating bit depth
 /// - `apple_compat`: adds `--compress_boxes=0` to cjxl for Apple device compatibility
 ///
@@ -607,13 +607,13 @@ pub fn try_imagemagick_fallback_with_effort(
                             }
                         ));
 
-                        // Check if it's still a decode/pixel error and try 8-bit for 8-bit sources
                         if m && !c && is_decode_or_pixel_cjxl_error(&stderr2) {
                             let bit_depth = get_png_bit_depth(input).unwrap_or_else(|| {
                                 tracing::warn!(
-                                    "JXL Conversion: Failed to detect PNG bit depth; defaulting to 16-bit to ensure safety (may result in larger file size)"
+                                    "JXL Conversion: Failed to detect PNG bit depth; defaulting to {} bit to ensure safety (may result in larger file size)",
+                                    crate::constants::PNG_DEFAULT_SAFETY_BIT_DEPTH
                                 );
-                                16
+                                crate::constants::PNG_DEFAULT_SAFETY_BIT_DEPTH
                             });
                             if bit_depth <= 8 {
                                 // Attempt 3: -depth 8 -strip for 8-bit sources (no quality loss)
@@ -674,11 +674,12 @@ pub fn try_imagemagick_fallback_with_effort(
                 }
             } else if magick_ok && !cjxl_ok && is_decode_or_pixel_cjxl_error(&stderr) {
                 let bit_depth = get_png_bit_depth(input).unwrap_or_else(|| {
-                    tracing::warn!(
-                        "JXL Conversion: Failed to detect PNG bit depth; defaulting to 16-bit to ensure safety (may result in larger file size)"
-                    );
-                    16
-                });
+                tracing::warn!(
+                    "JXL Conversion: Failed to detect PNG bit depth; defaulting to {} bit to ensure safety (may result in larger file size)",
+                    crate::constants::PNG_DEFAULT_SAFETY_BIT_DEPTH
+                );
+                crate::constants::PNG_DEFAULT_SAFETY_BIT_DEPTH
+            });
                 if bit_depth <= 8 {
                     // Attempt 2: -strip -depth 8 for 8-bit sources (no quality loss)
                     crate::progress_mode::emit_stderr(

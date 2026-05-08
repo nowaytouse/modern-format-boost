@@ -223,7 +223,7 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
         LONG_VIDEO_FALLBACK_ITERATIONS
     } else if ultimate_mode {
-        crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS
+        crate::constants::GPU_ABSOLUTE_MAX_ITERATIONS
     } else {
         100
     }

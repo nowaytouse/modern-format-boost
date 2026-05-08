@@ -28,20 +28,18 @@ pub mod tiff {
 
         let data = fs::read(path)?;
         if data.len() < 8 {
-            tracing::warn!(
-                "☢️ [INTEGRITY] TIFF file too small (< 8 bytes) for header parsing; defaulting to lossless for safety: {}",
+            return Err(ImgQualityError::AnalysisError(format!(
+                "❌ [INTEGRITY] TIFF file too small (< 8 bytes) for header parsing: {}",
                 path.display()
-            );
-            return Ok(true);
+            )));
         }
 
         let is_little_endian = data.get(0..2) == Some(b"II");
         if data.get(0..2) != Some(b"II") && data.get(0..2) != Some(b"MM") {
-            tracing::warn!(
-                "☢️ [INTEGRITY] Invalid TIFF byte order marker; defaulting to lossless for safety: {}",
+            return Err(ImgQualityError::AnalysisError(format!(
+                "❌ [INTEGRITY] Invalid TIFF byte order marker: {}",
                 path.display()
-            );
-            return Ok(true);
+            )));
         }
 
         let version = if is_little_endian {
@@ -95,7 +93,10 @@ pub mod tiff {
 
         let mut ifd_offset: u64 = if is_bigtiff {
             if data.len() < 16 {
-                return Ok(true);
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "❌ [INTEGRITY] BigTIFF file too small (< 16 bytes) for header: {}",
+                    path.display()
+                )));
             }
             read_u64(8).ok_or_else(|| {
                 ImgQualityError::AnalysisError(
@@ -495,14 +496,22 @@ pub mod webp {
         ))
     }
 
-    #[must_use]
-    pub fn is_lossless(path: &Path) -> bool {
-        fs::read(path).is_ok_and(|b| is_lossless_from_bytes(&b))
+    /// Detects if a WebP file is lossless by reading it from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or if the WebP header is corrupted.
+    pub fn is_lossless(path: &Path) -> Result<bool> {
+        let b = fs::read(path)?;
+        Ok(is_lossless_from_bytes(&b))
     }
 
-    #[must_use]
-    pub fn is_animated(path: &Path) -> bool {
-        fs::read(path).is_ok_and(|b| is_animated_from_bytes(&b))
+    /// Detects if a WebP file is animated by reading it from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or if the WebP header is corrupted.
+    pub fn is_animated(path: &Path) -> Result<bool> {
+        let b = fs::read(path)?;
+        Ok(is_animated_from_bytes(&b))
     }
 }
 
@@ -610,6 +619,106 @@ pub mod gif {
         } else {
             1
         }
+    }
+
+    /// Parse GIF Graphic Control Extension (GCE) blocks and return total duration in seconds.
+    /// Returns None if no GCE blocks found or data is truncated.
+    #[must_use]
+    pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
+        if data.len() < 24 || data.get(0..3) != Some(b"GIF") {
+            return None;
+        }
+
+        let mut pos = 6;
+        if pos + 7 > data.len() {
+            return None;
+        }
+        let packed = data[pos + 4];
+        let has_gct = (packed & 0x80) != 0;
+        let gct_size = if has_gct {
+            3 * (1 << ((packed & 0x07) + 1))
+        } else {
+            0
+        };
+        pos += 7 + gct_size;
+
+        let mut total_100ths = 0u64;
+        let mut found_any_delay = false;
+
+        while pos < data.len() {
+            let byte = data[pos];
+            match byte {
+                0x2C => {
+                    if pos + 10 > data.len() {
+                        break;
+                    }
+                    let img_packed = data[pos + 9];
+                    let local_palette_active = (img_packed & 0x80) != 0;
+                    let lct_size = if local_palette_active {
+                        3 * (1 << ((img_packed & 0x07) + 1))
+                    } else {
+                        0
+                    };
+                    pos += 10 + lct_size;
+                    if pos < data.len() {
+                        pos += 1; // LZW Minimum Code Size
+                    }
+                    while pos < data.len() {
+                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        pos += 1;
+                        if block_size == 0 {
+                            break;
+                        }
+                        pos += block_size;
+                    }
+                }
+                0x21 => {
+                    if pos + 2 >= data.len() {
+                        break;
+                    }
+                    let label = data[pos + 1];
+                    let block_size_idx = pos + 2;
+                    let block_size = crate::numeric_cast::u8_to_usize_sat(data[block_size_idx]);
+
+                    if label == 0xF9 && block_size >= 4 && pos + 6 < data.len() {
+                        // GCE block: [0x21, 0xF9, 0x04, <Packed>, <Delay LSB>, <Delay MSB>, <Trans Index>, 0x00]
+                        // pos is at 0x21, so Delay LSB is at pos + 4, MSB at pos + 5
+                        let delay = u16::from_le_bytes([data[pos + 4], data[pos + 5]]);
+                        if delay > 0 {
+                            total_100ths += u64::from(delay);
+                            found_any_delay = true;
+                        }
+                    }
+
+                    pos += 2;
+                    while pos < data.len() {
+                        let inner_block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        pos += 1;
+                        if inner_block_size == 0 {
+                            break;
+                        }
+                        pos += inner_block_size;
+                    }
+                }
+                0x3B => break,
+                _ => pos += 1,
+            }
+        }
+
+        if !found_any_delay || total_100ths == 0 {
+            return None;
+        }
+
+        Some(crate::numeric_cast::f64_to_f32_lossy(
+            crate::numeric_cast::u64_to_f64(total_100ths) / 100.0,
+        ))
+    }
+
+    #[must_use]
+    pub fn get_duration_secs(path: &Path) -> Option<f32> {
+        fs::read(path)
+            .ok()
+            .and_then(|b| duration_secs_from_bytes(&b))
     }
 
     #[must_use]
@@ -742,18 +851,14 @@ pub mod avif {
         )))
     }
 
-    #[must_use]
-    pub fn is_lossless(path: &Path) -> bool {
-        match fs::read(path) {
-            Ok(b) => is_lossless_from_bytes(&b, path).unwrap_or_else(|e| {
-                tracing::warn!(path = %path.display(), error = %e, "is_lossless_from_bytes failed; treating as lossy");
-                false
-            }),
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "Failed to read AVIF for lossless detection; treating as lossy");
-                false
-            }
-        }
+    /// Detects if an AVIF file is lossless by reading it from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read, or if the AVIF header is missing
+    /// critical property markers.
+    pub fn is_lossless(path: &Path) -> Result<bool> {
+        let b = fs::read(path)?;
+        is_lossless_from_bytes(&b, path)
     }
 }
 
@@ -1030,7 +1135,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
-            webp::is_lossless(file.path()),
+            webp::is_lossless(file.path()).unwrap_or(false),
             "VP8L chunk should be detected as lossless"
         );
     }
@@ -1051,7 +1156,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
-            !webp::is_lossless(file.path()),
+            !webp::is_lossless(file.path()).unwrap_or(true),
             "VP8 chunk should be detected as lossy"
         );
     }
@@ -1114,11 +1219,11 @@ mod tests {
         let path = std::path::Path::new("/nonexistent/file.test");
 
         assert!(
-            !webp::is_lossless(path),
+            !webp::is_lossless(path).unwrap_or(true),
             "Non-existent file should return false"
         );
         assert!(
-            !webp::is_animated(path),
+            !webp::is_animated(path).unwrap_or(true),
             "Non-existent file should return false"
         );
         assert!(

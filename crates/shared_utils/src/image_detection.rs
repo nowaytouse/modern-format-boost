@@ -20,8 +20,8 @@
 //!
 //! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, `TinyPNG`). 16-bit and
 //!   truecolor PNG without tool signature are treated as lossless. Indexed PNG uses a
-//!   **conservative threshold 0.58**: only scores ≥0.58 are marked lossy; gray zone
-//!   [0.40, 0.58] is treated as lossless to reduce false positives (e.g. natural palette art).
+//!   **conservative threshold (DETECTION_LOSSY_THRESHOLD)**: only scores ≥ threshold are marked lossy; gray zone
+//!   [DETECTION_LOSSLESS_THRESHOLD, DETECTION_LOSSY_THRESHOLD] is treated as lossless to reduce false positives (e.g. natural palette art).
 //!   Heuristic score includes **palette-index frequency entropy** for indexed images and
 //!   **per-channel RGB entropy** for others. Tool signatures include zTXt decompression.
 //!   We do *not* detect "PNG exported from a lossy source" (e.g. JPEG→PNG screenshot).
@@ -574,7 +574,9 @@ pub fn detect_animation(
                 } else if fc == 1 {
                     return Ok((false, Some(1), fps));
                 }
-            } else if probe.duration.is_some_and(|d| d > 0.1_f64)
+            } else if probe
+                .duration
+                .is_some_and(|d| d > crate::constants::VIDEO_NEGLIGIBLE_DURATION_SECS)
                 && probe.format_name.contains("video")
             {
                 return Ok((true, None, fps));
@@ -912,8 +914,7 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
             },
             analysis
                 .confidence
-                .map(|c| format!("{:.1}", c * 100.0_f64))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |c| format!("{:.1}", c * 100.0_f64)),
             analysis.explanation
         ));
     }
@@ -1088,16 +1089,20 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             ));
         } else if is_medium_image && palette_size > 128 {
             factors.large_palette = crate::constants::PNG_PALETTE_FACTOR_MIN;
-        } else if palette_size <= 16 && palette_density > 0.5_f64 {
+        } else if palette_size <= 16 && palette_density > crate::constants::PNG_PALETTE_DENSITY_HIGH
+        {
             // Small palette on small image — likely intentional (pixel art, icon)
             factors.large_palette = 0.0_f64;
-        } else if palette_size <= 32 && palette_density > 0.3_f64 {
-            factors.large_palette = 0.1_f64;
+        } else if palette_size <= 32
+            && palette_density > crate::constants::PNG_PALETTE_DENSITY_MEDIUM
+        {
+            factors.large_palette = crate::constants::PNG_PALETTE_SCORE_LOW;
         } else {
-            factors.large_palette = if palette_density < 0.5_f64 {
-                0.3_f64
+            factors.large_palette = if palette_density < crate::constants::PNG_PALETTE_DENSITY_HIGH
+            {
+                crate::constants::PNG_PALETTE_SCORE_HIGH
             } else {
-                0.15_f64
+                crate::constants::PNG_PALETTE_SCORE_MEDIUM
             };
         }
 
@@ -1125,7 +1130,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     {
         let dithering_score = detect_dithering_pattern(&img);
         factors.dithering_detected = dithering_score;
-        if dithering_score > 0.5_f64 {
+        if dithering_score > crate::constants::PNG_DITHERING_THRESHOLD {
             explanations.push(format!(
                 "Dithering pattern detected (score: {dithering_score:.2})"
             ));
@@ -1142,26 +1147,27 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             .to_f64();
 
             if is_large_image {
-                if usage_ratio > 0.8_f64 {
-                    factors.color_count_anomaly = 0.85_f64;
+                if usage_ratio > crate::constants::PNG_USAGE_RATIO_HIGH {
+                    factors.color_count_anomaly = crate::constants::PNG_ANOMALY_SCORE_CRITICAL;
                     explanations.push(format!(
                         "Large image using {:.0}% of {} color palette",
                         usage_ratio * 100.0_f64,
                         palette_size
                     ));
-                } else if usage_ratio > 0.5_f64 {
-                    factors.color_count_anomaly = 0.70_f64;
+                } else if usage_ratio > crate::constants::PNG_USAGE_RATIO_RELAXED {
+                    factors.color_count_anomaly = crate::constants::PNG_ANOMALY_SCORE_MEDIUM;
                 } else {
-                    factors.color_count_anomaly = 0.50_f64;
+                    factors.color_count_anomaly = crate::constants::PNG_ANOMALY_SCORE_LOW;
                 }
-            } else if usage_ratio > 0.9_f64 && palette_size > 200 {
-                factors.color_count_anomaly = 0.8_f64;
+            } else if usage_ratio > crate::constants::PNG_USAGE_RATIO_CRITICAL && palette_size > 200
+            {
+                factors.color_count_anomaly = crate::constants::PNG_ANOMALY_SCORE_HIGH;
                 explanations.push(format!(
                     "High palette utilization ({:.0}%)",
                     usage_ratio * 100.0_f64
                 ));
-            } else if usage_ratio > 0.7_f64 && palette_size > 128 {
-                factors.color_count_anomaly = 0.5_f64;
+            } else if usage_ratio > crate::constants::PNG_USAGE_RATIO_MEDIUM && palette_size > 128 {
+                factors.color_count_anomaly = crate::constants::PNG_ANOMALY_SCORE_LOW;
             }
         }
 
@@ -1170,12 +1176,16 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         let sampled_uniques = sample_unique_color_count(&img, 10_000);
         if sampled_uniques > 0 && is_large_image {
             if sampled_uniques <= 256 {
-                factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
+                factors.color_count_anomaly = factors
+                    .color_count_anomaly
+                    .max(crate::constants::PNG_ANOMALY_SCORE_CRITICAL);
                 explanations.push(format!(
                             "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong quantization indicator"
                         ));
             } else if sampled_uniques <= 512 {
-                factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                factors.color_count_anomaly = factors
+                    .color_count_anomaly
+                    .max(crate::constants::PNG_ANOMALY_SCORE_MEDIUM);
                 explanations.push(format!(
                             "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
                         ));
@@ -1184,7 +1194,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         let banding_score = detect_gradient_banding(&img);
         factors.gradient_banding = banding_score;
-        if banding_score > 0.5_f64 {
+        if banding_score > crate::constants::PNG_BANDING_THRESHOLD {
             explanations.push(format!(
                 "Gradient banding detected (score: {banding_score:.2})"
             ));
@@ -1192,7 +1202,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         let freq_score = detect_color_frequency_distribution(&img);
         factors.color_frequency_distribution = freq_score;
-        if freq_score > 0.5_f64 {
+        if freq_score > crate::constants::PNG_FREQ_THRESHOLD {
             explanations.push(format!(
                 "Color frequency concentrated (score: {freq_score:.2}) — quantization indicator"
             ));
@@ -1228,16 +1238,24 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                         entropy_ratio, 1.0_f64
                     ));
                 }
-            } else if palette_size_f >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
+            } else if palette_size_f >= crate::constants::PNG_ENTROPY_PALETTE_SIZE_LARGE
+                && entropy < 5.0_f64
+                && pixel_count > 10_000
+            {
                 factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
-                factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
-                if factors.entropy_anomaly > 0.4_f64 {
+                factors.entropy_anomaly = factors
+                    .entropy_anomaly
+                    .clamp(0.0, crate::constants::PNG_ENTROPY_ANOMALY_HIGH);
+                if factors.entropy_anomaly > crate::constants::PNG_ENTROPY_ANOMALY_THRESHOLD {
                     explanations.push(format!(
                         "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
                     ));
                 }
-            } else if palette_size_f >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
-                factors.entropy_anomaly = 0.35_f64;
+            } else if palette_size_f >= crate::constants::PNG_ENTROPY_PALETTE_SIZE_MEDIUM
+                && entropy_ratio < 0.5_f64
+                && pixel_count > 5_000
+            {
+                factors.entropy_anomaly = crate::constants::PNG_ANOMALY_SCORE_MIN;
             }
         }
     }
@@ -1270,10 +1288,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     };
 
     if png_info.color_type == 3
-        && compression_ratio < 0.15_f64
+        && compression_ratio < crate::constants::PNG_SIZE_EFFICIENCY_THRESHOLD
         && png_info.width * png_info.height > 100_000
     {
-        factors.size_efficiency_anomaly = 0.6_f64;
+        factors.size_efficiency_anomaly = crate::constants::PNG_SIZE_EFFICIENCY_ANOMALY;
         explanations.push(format!(
             "Unusually efficient compression ({:.1}%)",
             compression_ratio * 100.0_f64
@@ -1281,10 +1299,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     }
 
     let weights = PngQuantizationWeights {
-        structural: 0.50,
-        metadata: 0.15,
-        statistical: 0.25,
-        heuristic: 0.10,
+        structural: crate::constants::DETECTION_WEIGHT_STRUCTURAL,
+        metadata: crate::constants::DETECTION_WEIGHT_METADATA,
+        statistical: crate::constants::DETECTION_WEIGHT_STATISTICAL,
+        heuristic: crate::constants::DETECTION_WEIGHT_HEURISTIC,
     };
 
     let structural_score = f64::midpoint(factors.indexed_with_alpha, factors.large_palette);

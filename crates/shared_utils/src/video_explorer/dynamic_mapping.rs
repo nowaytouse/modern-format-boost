@@ -203,7 +203,7 @@ pub fn quick_calibrate(
     let input_duration = probe
         .as_ref()
         .and_then(|p| p.duration)
-        .unwrap_or(f64::from(sample_duration));
+        .unwrap_or_else(|| f64::from(sample_duration));
     if is_gif_input {
         crate::verbose_eprintln!(
             "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"

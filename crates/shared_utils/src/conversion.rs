@@ -499,8 +499,10 @@ impl ConversionResult {
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let diff_bytes = i128::from(output_size) - i128::from(input_size);
         let size_diff = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff")
-            .map(crate::modern_ui::format_size_diff)
-            .unwrap_or_else(|| "> i64::MAX".to_string());
+            .map_or_else(
+                || "> i64::MAX".to_string(),
+                crate::modern_ui::format_size_diff,
+            );
         Self {
             success: true,
             input_path: input.display().to_string(),

@@ -1234,7 +1234,7 @@ pub fn detect_bit_depth(pix_fmt: &str) -> Option<u8> {
         return Some(10);
     }
 
-    if pix_fmt.contains("8")
+    if pix_fmt.contains('8')
         || pix_fmt.contains("yuv")
         || pix_fmt.contains("rgb")
         || pix_fmt.contains("bgr")

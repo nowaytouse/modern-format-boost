@@ -935,12 +935,10 @@ fn evaluate_kinetics_and_physics(
 ) {
     let duration_positive = (-thresholds.duration_z(meta.duration_secs)).max(0.0);
     let duration_negative = thresholds.duration_z(meta.duration_secs).max(0.0);
-    let (fps_positive, fps_negative) = if let Some(fps) = meta.fps {
+    let (fps_positive, fps_negative) = meta.fps.map_or((0.0, 0.0), |fps| {
         let z = thresholds.fps_z(fps);
         (z.max(0.0), (-z).max(0.0))
-    } else {
-        (0.0, 0.0)
-    };
+    });
     let total_pixels = f64::from(meta.width) * f64::from(meta.height);
 
     if duration_positive > 0.0_f64 {
@@ -1112,11 +1110,15 @@ fn apply_structural_signals(
         let bpf_z = thresholds.file_size_z(derived.bytes_per_frame);
         if bpf_z <= -1.5_f64 {
             // Compact frames → animation-like
-            let strength = ((-bpf_z - 1.5) / 1.5).clamp(0.15, 1.0);
+            let strength = ((-bpf_z - crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
+                / crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
+                .clamp(0.15, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
         } else if bpf_z >= 1.5_f64 {
             // Large frames → video-like
-            let strength = ((bpf_z - 1.5) / 1.5).clamp(0.15, 1.0);
+            let strength = ((bpf_z - crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
+                / crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
+                .clamp(0.15, 1.0);
             log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
         }
     }
@@ -1565,7 +1567,7 @@ pub fn evaluate_loop_tree(
     {
         let dur_str = meta
             .duration_secs
-            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
+            .map_or_else(|| "None".to_string(), |d| format!("{d:.2}s"));
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
                 "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — \
@@ -1584,7 +1586,7 @@ pub fn evaluate_loop_tree(
     {
         let dur_str = meta
             .duration_secs
-            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
+            .map_or_else(|| "None".to_string(), |d| format!("{d:.2}s"));
         return finalize(
             LoopIntentVerdict::LoopWeak(format!(
                 "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — \
@@ -1598,7 +1600,7 @@ pub fn evaluate_loop_tree(
 
     // ── Layer 0: Duration Dispatcher (Bias + Anti-Cliff Proximity Ramp) ──────────
     // Assets in the gray zone (6–15s) receive:
-    //   1. A tier-proportional base bias (UltraShort → +1.5 … DefinitivelyLong → -3.0)
+    //   1. A tier-proportional base bias (UltraShort → +crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH … DefinitivelyLong → -3.0)
     //   2. A linearly-decaying proximity bonus/penalty for assets near a veto boundary.
     //      This prevents the "behavioral cliff" where 5.9s and 6.1s are treated radically
     //      differently despite being only 0.2s apart.
@@ -2941,10 +2943,9 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     if !is_safe {
         let dur_str = meta
             .duration_secs
-            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
+            .map_or_else(|| "None".to_string(), |d| format!("{d:.2}s"));
         emit_stderr(&format!(
-            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {} exceeds limit {:.1}s ({})",
-            dur_str, threshold, keep_prob_label
+            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {dur_str} exceeds limit {threshold:.1}s ({keep_prob_label})",
         ));
     }
     is_safe
@@ -2953,9 +2954,9 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 #[must_use]
 fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     use crate::constants::{HIGH_VALUE_LOSSLESS_DURATION_LIMIT, MEME_LOSSLESS_DURATION_LIMIT};
-    if keep_prob <= 0.3 {
+    if keep_prob <= crate::constants::LOSSLESS_DURATION_LIMIT_LOW_PROB {
         HIGH_VALUE_LOSSLESS_DURATION_LIMIT
-    } else if keep_prob >= 0.7 {
+    } else if keep_prob >= crate::constants::LOSSLESS_DURATION_LIMIT_HIGH_PROB {
         MEME_LOSSLESS_DURATION_LIMIT
     } else {
         let t = (keep_prob - 0.3) / 0.4;
@@ -3188,26 +3189,24 @@ pub fn score_loop_frequency(duration_secs: Option<f64>, frame_count: Option<u64>
 #[must_use]
 pub fn score_sparse_cadence(duration_secs: Option<f64>, frame_count: Option<u64>) -> f64 {
     if let (Some(dur), Some(fc)) = (duration_secs, frame_count)
-        && dur > 0.01_f64
+        && dur > crate::constants::LOOP_INTENT_PROB_MIN
         && fc > 1
     {
         let frame_density = crate::numeric_cast::u64_to_f64(fc) / dur;
         let avg_gap = dur / crate::numeric_cast::u64_to_f64(fc);
 
-        if dur <= 1.5_f64 && frame_density >= 12.0_f64 {
+        if dur <= crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH && frame_density >= 12.0_f64 {
             return 0.98;
         }
-        if dur >= 1.5_f64 && avg_gap >= 0.25_f64 {
+        if dur >= crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH && avg_gap >= 0.25_f64 {
             return 0.92;
         }
-        if dur >= 4.0_f64 && fc <= 12 && avg_gap >= 0.5_f64 {
+        if dur >= 4.0_f64 && fc <= 12 && avg_gap >= crate::constants::LOOP_INTENT_NEUTRAL_PROB {
             return 0.95;
         }
-
-        0.5
-    } else {
-        0.5
     }
+
+    crate::constants::LOOP_INTENT_NEUTRAL_PROB
 }
 
 // ── Layer 6: Auxiliary Micro-Nudges ───────────────────────────────────────────

@@ -92,13 +92,34 @@ pub(crate) fn calculate_categorical_features(
     };
 
     (
-        cat(sample.is_meme_platform, 1.2_f64),
-        cat(sample.is_human_semantic_name, 0.8_f64),
-        cat(sample.is_native_gif, 0.6_f64),
-        cat(sample.is_high_value_source, 1.5_f64),
-        cat(sample.has_transparency, 1.5_f64),
-        cat(sample.has_embedded_icc, 1.2_f64 / 2.0_f64),
-        cat(sample.has_complex_color_profile, 1.2_f64 / 2.0_f64),
+        cat(
+            sample.is_meme_platform,
+            crate::constants::KNN_VECTOR_CAT_MEME_WEIGHT,
+        ),
+        cat(
+            sample.is_human_semantic_name,
+            crate::constants::KNN_VECTOR_CAT_NAME_WEIGHT,
+        ),
+        cat(
+            sample.is_native_gif,
+            crate::constants::KNN_VECTOR_CAT_NATIVE_WEIGHT,
+        ),
+        cat(
+            sample.is_high_value_source,
+            crate::constants::KNN_VECTOR_CAT_HIGH_VALUE_WEIGHT,
+        ),
+        cat(
+            sample.has_transparency,
+            crate::constants::KNN_VECTOR_CAT_TRANS_WEIGHT,
+        ),
+        cat(
+            sample.has_embedded_icc,
+            crate::constants::KNN_VECTOR_CAT_ICC_WEIGHT / 2.0_f64,
+        ),
+        cat(
+            sample.has_complex_color_profile,
+            crate::constants::KNN_VECTOR_CAT_COMPLEX_WEIGHT / 2.0_f64,
+        ),
     )
 }
 
@@ -118,12 +139,16 @@ pub(crate) fn calculate_extended_features(
     let sample_audio_score = if sample.is_native_gif {
         1.0_f64
     } else {
-        0.55_f64
+        crate::constants::KNN_VECTOR_DEFAULT_AUDIO_SCORE
     };
-    let baseline_fps = 30.0_f64;
+    let baseline_fps = crate::constants::KNN_VECTOR_BASELINE_FPS;
     let fps_val = sample.fps?;
     let sample_fps_score: f64 = (1.0_f64
-        - crate::database::normalize_log_ratio(fps_val.max(1e-3), baseline_fps, 1.2))
+        - crate::database::normalize_log_ratio(
+            fps_val.max(1e-3),
+            baseline_fps,
+            crate::constants::KNN_VECTOR_FPS_NORMALIZATION_SCALE,
+        ))
     .clamp(0.0_f64, 1.0_f64);
 
     let loop_freq = sample.loop_frequency?;
@@ -131,10 +156,16 @@ pub(crate) fn calculate_extended_features(
 
     let sample_loop_affinity = sample_fps_score
         .mul_add(
-            0.10,
+            crate::constants::KNN_VECTOR_LAFFIN_FPS_WEIGHT,
             loop_freq
-                .mul_add(0.45, cadence * 0.25)
-                .mul_add(0.20, sample_audio_score),
+                .mul_add(
+                    crate::constants::KNN_VECTOR_LAFFIN_FREQ_WEIGHT,
+                    cadence * crate::constants::KNN_VECTOR_LAFFIN_CADENCE_WEIGHT,
+                )
+                .mul_add(
+                    crate::constants::KNN_VECTOR_LAFFIN_AUDIO_WEIGHT,
+                    sample_audio_score,
+                ),
         )
         .clamp(0.0, 1.0);
 

@@ -555,7 +555,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
     let duration: f32 = probe_result
         .as_ref()
         .and_then(|p| p.duration)
-        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |d| {
+        .map_or(crate::constants::GPU_SAMPLE_DURATION, |d| {
             crate::numeric_cast::f64_to_f32_lossy(d)
         });
 
@@ -608,9 +608,9 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         };
 
         let sample_dur = if ultimate_mode {
-            crate::gpu_accel::GPU_SAMPLE_DURATION_ULTIMATE
+            crate::constants::GPU_SAMPLE_DURATION_ULTIMATE
         } else {
-            crate::gpu_accel::GPU_SAMPLE_DURATION
+            crate::constants::GPU_SAMPLE_DURATION
         };
         let gpu_sample_input_size = if duration <= sample_dur {
             input_size
@@ -627,7 +627,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             min_crf: 0.0,
             max_crf,
             step: gpu_step,
-            max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS,
+            max_iterations: crate::constants::GPU_ABSOLUTE_MAX_ITERATIONS,
             ultimate_mode,
             preset,
         };
@@ -1727,8 +1727,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             let audio_bitrate = probe_info
                 .and_then(|info| info.audio.bit_rate)
                 .unwrap_or_else(|| {
-                    tracing::warn!("GPU Coarse Search: Failed to detect audio bitrate; defaulting to 128kbps for size estimation");
-                    128_000
+                    tracing::warn!("GPU Coarse Search: Failed to detect audio bitrate; defaulting to {}kbps for size estimation", crate::constants::GPU_COARSE_SEARCH_DEFAULT_AUDIO_BITRATE / 1000);
+                    crate::constants::GPU_COARSE_SEARCH_DEFAULT_AUDIO_BITRATE
                 });
 
             let incompatible = audio_codec.contains("opus")
@@ -1749,7 +1749,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     audio_codec
                 );
                 AudioTranscodeStrategy::Alac
-            } else if audio_bitrate >= 128_000 {
+            } else if audio_bitrate >= crate::constants::GPU_COARSE_SEARCH_DEFAULT_AUDIO_BITRATE {
                 crate::log_eprintln!(
                     "   🎵 Medium-quality audio ({}kbps {}), using AAC 256k",
                     audio_bitrate / 1000,

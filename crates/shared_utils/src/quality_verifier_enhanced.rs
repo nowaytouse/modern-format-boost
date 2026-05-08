@@ -221,8 +221,7 @@ fn run_probe_checks(
                         (Some(i), Some(o)) => {
                             let d = diff.unwrap_or_else(|| (i - o).abs());
                             format!(
-                                "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
-                                i, o, d, tol
+                                "Duration mismatch: {i:.2}s vs {o:.2}s (diff {d:.2}s > tolerance {tol:.2}s)"
                             )
                         }
                         (None, Some(o)) => {

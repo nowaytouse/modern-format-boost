@@ -394,7 +394,9 @@ impl ExploreContext {
         let mut best_size = u64::MAX;
         let mut iterations = 0u32;
 
-        while high - low > 0.5_f32 && iterations < max_iter {
+        while high - low > crate::constants::EXPLORE_BINARY_SEARCH_PRECISION_SIZE
+            && iterations < max_iter
+        {
             let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
@@ -442,7 +444,9 @@ impl ExploreContext {
         }
         iterations = iterations.saturating_add(1);
 
-        while high - low > 1.0_f32 && iterations < max_iter {
+        while high - low > crate::constants::EXPLORE_BINARY_SEARCH_PRECISION_QUALITY
+            && iterations < max_iter
+        {
             let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
@@ -468,7 +472,7 @@ impl ExploreContext {
     }
 
     pub fn log_final_result(&mut self, crf: f32, ssim: Option<f64>, size_change_pct: f64) {
-        let status = if size_change_pct < 0.1_f64 {
+        let status = if size_change_pct < crate::constants::EXPLORE_SUCCESS_SIZE_MARGIN {
             "✅"
         } else {
             "❌"
@@ -842,7 +846,8 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         let mut best_size = boundary_size;
         let mut iterations = boundary_iter;
 
-        let search_low = (compress_boundary - 5.0).max(ctx.config.min_crf);
+        let search_low = (compress_boundary - crate::constants::EXPLORE_QUALITY_WINDOW_CRF)
+            .max(ctx.config.min_crf);
         let mut crf = compress_boundary;
 
         while crf >= search_low && iterations < ctx.config.max_iterations {
@@ -924,7 +929,7 @@ impl ExploreStrategy for CompressOnlyStrategy {
             } else {
                 CheckResult::Failed("Not compressed".into())
             },
-            0.7,
+            crate::constants::EXPLORE_CONFIDENCE_MEDIUM,
         ))
     }
 
@@ -960,7 +965,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
                 None,
                 ctx.config.max_iterations,
                 CheckResult::Failed("No compressing CRF found".into()),
-                0.75,
+                crate::constants::EXPLORE_CONFIDENCE_NORMAL,
             ));
         };
 
@@ -988,7 +993,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
             } else {
                 CheckResult::Failed("SSIM below target".into())
             },
-            0.8,
+            crate::constants::EXPLORE_CONFIDENCE_HIGH,
         ))
     }
 

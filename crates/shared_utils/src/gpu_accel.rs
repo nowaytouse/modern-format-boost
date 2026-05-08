@@ -126,17 +126,12 @@ impl StderrCapture {
     }
 }
 
-/// Total duration (seconds) to sample for GPU probe/SSIM when video is short. Longer segments improve adaptation to varying content.
-pub const GPU_SAMPLE_DURATION: f32 = 60.0;
-
-/// Duration (seconds) per segment in multi-segment sampling (5 segments). Longer segments improve SSIM representativeness across media types.
-pub const GPU_SEGMENT_DURATION: f32 = 15.0;
-
-/// Ultimate mode: longer sample for better accuracy (was 45.0)
-pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 60.0;
-
-/// Ultimate mode: longer segment per position (5 segments = 65s total, was 50s)
-pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
+// --- Sampling Positions ---
+pub const GPU_SAMPLE_POS_START: f64 = 0.0;
+pub const GPU_SAMPLE_POS_QUARTER: f64 = 0.25;
+pub const GPU_SAMPLE_POS_HALF: f64 = 0.50;
+pub const GPU_SAMPLE_POS_THREE_QUARTERS: f64 = 0.75;
+pub const GPU_SAMPLE_POS_TAIL: f64 = 0.90;
 
 /// Number of segments to sample in multi-segment GPU probing.
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
@@ -187,21 +182,21 @@ pub(crate) fn build_multi_segment_sampling_filter(
     duration: f64,
     ultimate_mode: bool,
 ) -> Option<String> {
-    if duration < 60.0_f64 {
+    if duration < crate::constants::GPU_MIN_DURATION_FOR_SAMPLING {
         return None;
     }
 
     let seg_dur = if ultimate_mode {
-        GPU_SEGMENT_DURATION_ULTIMATE
+        crate::constants::GPU_SEGMENT_DURATION_ULTIMATE
     } else {
-        GPU_SEGMENT_DURATION
+        crate::constants::GPU_SEGMENT_DURATION
     };
     let positions = [
-        0.0_f64,
-        duration * 0.25_f64,
-        duration * 0.50_f64,
-        duration * 0.75_f64,
-        (duration * 0.90).max(duration - f64::from(seg_dur)),
+        GPU_SAMPLE_POS_START,
+        duration * GPU_SAMPLE_POS_QUARTER,
+        duration * GPU_SAMPLE_POS_HALF,
+        duration * GPU_SAMPLE_POS_THREE_QUARTERS,
+        (duration * GPU_SAMPLE_POS_TAIL).max(duration - f64::from(seg_dur)),
     ];
 
     Some(format!(
@@ -239,15 +234,6 @@ fn build_sampling_vf_args(vf_args: &[String], duration: f64, ultimate_mode: bool
         vec!["-vf".to_string(), filters.join(",")]
     }
 }
-
-/// Step size for CRF adjustments during GPU coarse search.
-pub const GPU_COARSE_STEP: f32 = 1.0;
-
-/// Absolute maximum number of iterations allowed in GPU coarse search.
-pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
-
-/// Maximum number of iterations for GPU coarse search (alias for `GPU_ABSOLUTE_MAX_ITERATIONS`).
-pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
 const GPU_NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -1594,7 +1580,7 @@ impl Default for GpuCoarseConfig {
             initial_crf: 18.0,
             min_crf: 0.0,
             max_crf: 51.0,
-            step: GPU_COARSE_STEP,
+            step: crate::constants::GPU_COARSE_STEP,
             max_iterations: 10,
             ultimate_mode: false,
             preset: crate::types::EncoderPreset::Medium,
@@ -2041,7 +2027,7 @@ fn gpu_coarse_search_with_log_impl(
         duration_output
             .ok()
             .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-            .unwrap_or(GPU_SAMPLE_DURATION)
+            .unwrap_or(crate::constants::GPU_SAMPLE_DURATION)
     };
 
     let skip_gpu =
@@ -2105,9 +2091,9 @@ fn gpu_coarse_search_with_log_impl(
         (limit, true)
     } else {
         let limit = if config.ultimate_mode {
-            GPU_SAMPLE_DURATION_ULTIMATE
+            crate::constants::GPU_SAMPLE_DURATION_ULTIMATE
         } else {
-            GPU_SAMPLE_DURATION
+            crate::constants::GPU_SAMPLE_DURATION
         };
         let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
@@ -2117,7 +2103,7 @@ fn gpu_coarse_search_with_log_impl(
         (limit, false)
     };
 
-    let max_iterations_limit = GPU_ABSOLUTE_MAX_ITERATIONS;
+    let max_iterations_limit = crate::constants::GPU_ABSOLUTE_MAX_ITERATIONS;
 
     log_msg!(
         "GPU Search ({}, {:.2}MB, {:.1}s)",
@@ -2141,9 +2127,9 @@ fn gpu_coarse_search_with_log_impl(
         input_size
     } else {
         let multi_segment_duration = if config.ultimate_mode {
-            GPU_SAMPLE_DURATION_ULTIMATE
+            crate::constants::GPU_SAMPLE_DURATION_ULTIMATE
         } else {
-            GPU_SAMPLE_DURATION
+            crate::constants::GPU_SAMPLE_DURATION
         };
         let ratio = multi_segment_duration / duration;
         crate::numeric_cast::f64_to_u64_sat(
@@ -2235,9 +2221,9 @@ fn gpu_coarse_search_with_log_impl(
     );
 
     let seg_dur = if config.ultimate_mode {
-        GPU_SEGMENT_DURATION_ULTIMATE
+        crate::constants::GPU_SEGMENT_DURATION_ULTIMATE
     } else {
-        GPU_SEGMENT_DURATION
+        crate::constants::GPU_SEGMENT_DURATION
     };
 
     if duration >= 60.0 {

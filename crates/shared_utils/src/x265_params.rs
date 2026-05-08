@@ -69,7 +69,12 @@ fn ram_aware_profile() -> X265MemoryProfile {
         return X265MemoryProfile::LowMemory;
     }
 
-    let (available_mb, total_mb) = crate::system_memory::get_memory_mb().unwrap_or((0, 0));
+    let (available_mb, total_mb) = crate::system_memory::get_memory_mb().unwrap_or_else(|| {
+        tracing::warn!(
+            "System RAM detection failed; falling back to conservative LowMemory profile for x265"
+        );
+        (0, 0)
+    });
     profile_for_available_memory(available_mb, total_mb)
 }
 

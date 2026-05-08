@@ -24,11 +24,11 @@ pub enum SamplingStrategy {
 impl SamplingStrategy {
     #[must_use]
     pub fn from_duration(duration_secs: f64) -> Self {
-        if duration_secs <= 60.0 {
+        if duration_secs <= crate::constants::MSSSIM_DURATION_THRESHOLD_FULL {
             Self::Full
-        } else if duration_secs <= 300.0 {
+        } else if duration_secs <= crate::constants::MSSSIM_DURATION_THRESHOLD_THIRD {
             Self::OneThird
-        } else if duration_secs <= 1800.0 {
+        } else if duration_secs <= crate::constants::MSSSIM_DURATION_THRESHOLD_TENTH {
             Self::OneTenth
         } else {
             Self::Skip
@@ -38,9 +38,9 @@ impl SamplingStrategy {
     #[must_use]
     pub const fn sampling_rate(&self) -> Option<u32> {
         match self {
-            Self::Full => Some(1),
-            Self::OneThird => Some(3),
-            Self::OneTenth => Some(10),
+            Self::Full => Some(crate::constants::MSSSIM_RATE_FULL),
+            Self::OneThird => Some(crate::constants::MSSSIM_RATE_THIRD),
+            Self::OneTenth => Some(crate::constants::MSSSIM_RATE_TENTH),
             Self::Skip => None,
         }
     }
@@ -48,8 +48,14 @@ impl SamplingStrategy {
     #[must_use]
     pub fn ffmpeg_filter(&self) -> Option<String> {
         match self {
-            Self::OneThird => Some("select='not(mod(n\\,3))'".to_string()),
-            Self::OneTenth => Some("select='not(mod(n\\,10))'".to_string()),
+            Self::OneThird => Some(format!(
+                "select='not(mod(n\\,{}))'",
+                crate::constants::MSSSIM_RATE_THIRD
+            )),
+            Self::OneTenth => Some(format!(
+                "select='not(mod(n\\,{}))'",
+                crate::constants::MSSSIM_RATE_TENTH
+            )),
             _ => None,
         }
     }
@@ -88,8 +94,12 @@ impl SamplingConfig {
 
         let sampled_frames = match strategy {
             SamplingStrategy::Full => total_frames,
-            SamplingStrategy::OneThird => total_frames / 3,
-            SamplingStrategy::OneTenth => total_frames / 10,
+            SamplingStrategy::OneThird => {
+                total_frames / u64::from(crate::constants::MSSSIM_RATE_THIRD)
+            }
+            SamplingStrategy::OneTenth => {
+                total_frames / u64::from(crate::constants::MSSSIM_RATE_TENTH)
+            }
             SamplingStrategy::Skip => 0,
         };
 

@@ -29,10 +29,10 @@ use rug::Rational;
 use std::collections::HashSet;
 
 const JXL_FINALIST_LIMIT: usize = 8;
-const JXL_NEAR_BEST_MARGIN_RATIO: f64 = 0.01;
-const JXL_BOUNDARY_LOW_RATIO: f64 = 0.95;
-const JXL_BOUNDARY_HIGH_RATIO: f64 = 1.05;
-const JXL_REGION_BUCKET_COUNT: f64 = 6.0;
+const JXL_NEAR_BEST_MARGIN_RATIO: f64 = crate::constants::JXL_DISTANCE_PLATEAU;
+const JXL_BOUNDARY_LOW_RATIO: f64 = crate::constants::JXL_BOUNDARY_LOW_RATIO;
+const JXL_BOUNDARY_HIGH_RATIO: f64 = crate::constants::JXL_BOUNDARY_HIGH_RATIO;
+const JXL_REGION_BUCKET_COUNT: f64 = crate::constants::JXL_REGION_BUCKET_COUNT;
 
 // --- Perceptual Band Boundaries ---
 //
@@ -56,9 +56,9 @@ const JXL_REGION_BUCKET_COUNT: f64 = 6.0;
 // distribution changes significantly, recalibrate via telemetry-driven analysis of
 // (initial_ratio, pressure_stops, chosen_profile, target_distance, outcome_quality)
 // tuples logged by the screening pass.
-const JXL_DISTANCE_CEILING_PLATEAU_MAX: f64 = 0.01;
-const JXL_DISTANCE_VISUAL_LOSSLESS_MAX: f64 = 0.1;
-const JXL_DISTANCE_BALANCED_MAX: f64 = 0.3;
+const JXL_DISTANCE_CEILING_PLATEAU_MAX: f64 = crate::constants::JXL_DISTANCE_PLATEAU;
+const JXL_DISTANCE_VISUAL_LOSSLESS_MAX: f64 = crate::constants::JXL_DISTANCE_VISUAL_LOSSLESS_MAX;
+const JXL_DISTANCE_BALANCED_MAX: f64 = crate::constants::JXL_DISTANCE_BALANCED_MAX;
 
 // --- Pressure-Stop Boundaries ---
 //
@@ -70,9 +70,9 @@ const JXL_DISTANCE_BALANCED_MAX: f64 = 0.3;
 //   ≤ 0.5850 stops (~1.50×) → BoundaryPush:  moderate oversize; push to visual lossless
 //   ≤ 1.3219 stops (~2.50×) → WidePush:      significant oversize; explore balanced range
 //   > 1.3219 stops           → CeilingSweep:  extreme oversize; sweep toward ceiling
-const JXL_MICRO_PRESSURE_STOPS_MAX: f64 = 0.070_389_327_9; // log2(1.05)
-const JXL_BOUNDARY_PRESSURE_STOPS_MAX: f64 = 0.584_962_500_7; // log2(1.50)
-const JXL_WIDE_PRESSURE_STOPS_MAX: f64 = 1.321_928_094_9; // log2(2.50)
+const JXL_MICRO_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_MICRO_PRESSURE_LIMIT; // log2(1.05)
+const JXL_BOUNDARY_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_BOUNDARY_PRESSURE_STOPS_MAX; // log2(1.50)
+const JXL_WIDE_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_WIDE_PRESSURE_STOPS_MAX; // log2(2.50)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JxlPromotionReason {
@@ -265,11 +265,11 @@ fn trim_decimal_string(mut raw: String) -> String {
 /// Formatted string representation
 fn format_scalar_for_log(value: f64) -> String {
     let normalized = value.max(0.0);
-    let raw = if normalized >= 0.99_f64 {
+    let raw = if normalized >= crate::constants::JXL_EXPLORE_PLATEAU_LIMIT {
         format!("{normalized:.8}")
-    } else if normalized < 0.01_f64 {
+    } else if normalized < crate::constants::JXL_DISTANCE_PLATEAU {
         format!("{normalized:.6}")
-    } else if normalized < 0.1_f64 {
+    } else if normalized < crate::constants::JXL_EXPLORE_FLOOR_LIMIT {
         format!("{normalized:.4}")
     } else {
         format!("{normalized:.3}")
@@ -379,7 +379,7 @@ fn smoothstep01(value: f64) -> f64 {
 
 /// Interpolate in **log10-distance space** (plateau tier only).
 ///
-/// Used for the `MicroAdjust` profile where distances are sub-0.01. In this range,
+/// Used for the `MicroAdjust` profile where distances are sub-PLATEAU. In this range,
 /// linear steps would collapse to identical f32 values, so log-space preserves
 /// resolution across the near-lossless plateau. Smoothstep easing prevents
 /// clustering at band edges.
@@ -396,7 +396,7 @@ fn interpolate_plateau_distance(
 
 /// Interpolate in **linear distance space** (perceptual tiers).
 ///
-/// Used for `BoundaryPush`, `WidePush`, and `CeilingSweep` profiles. In the d=0.01..1.0
+/// Used for `BoundaryPush`, `WidePush`, and `CeilingSweep` profiles. In the d=PLATEAU..1.0
 /// range, equal Δdistance ≈ equal ΔJND, so linear spacing tracks perceptual
 /// quality steps. Smoothstep easing concentrates probes near the band center
 /// where the quality/size trade-off is steepest.
@@ -1248,16 +1248,17 @@ mod tests {
 
     #[test]
     fn test_screening_keeps_best_ladder_candidate() {
-        let result =
-            screen_jxl_candidates(
-                100,
-                120,
-                |distance| {
-                    if distance <= 0.01 { Ok(90) } else { Ok(110) }
-                },
-            )
-            .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
-            .unwrap_or_else(|| panic!("screening result should exist"));
+        let result = screen_jxl_candidates(100, 120, |distance| {
+            if distance
+                <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
+            {
+                Ok(90)
+            } else {
+                Ok(110)
+            }
+        })
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert_eq!(result.best_output_size, 90);
         assert!(result.best_distance > JXL_EXPLORE_FLOOR);
@@ -1303,7 +1304,9 @@ mod tests {
         let result = screen_jxl_candidates(100, 104, |distance| {
             let size = if distance <= 0.002 {
                 99
-            } else if distance <= 0.01 {
+            } else if distance
+                <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
+            {
                 100
             } else if distance <= 0.03 {
                 98

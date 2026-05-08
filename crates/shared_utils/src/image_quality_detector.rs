@@ -208,8 +208,12 @@ pub fn analyze_image_quality(
         height,
     });
 
-    let confidence =
-        calculate_analysis_confidence(pixels, file_size, edge_density, color_diversity);
+    let confidence = Some(calculate_analysis_confidence(
+        pixels,
+        file_size,
+        edge_density,
+        color_diversity,
+    ));
 
     Ok(ImageQualityAnalysis {
         width,
@@ -820,7 +824,7 @@ pub(crate) fn calculate_analysis_confidence(
     file_size: u64,
     edge_density: Option<f64>,
     color_diversity: Option<f64>,
-) -> Option<f64> {
+) -> f64 {
     let mut confidence: f64 = crate::constants::IMAGE_CONFIDENCE_BASE;
 
     if pixels > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD {
@@ -854,7 +858,7 @@ pub(crate) fn calculate_analysis_confidence(
         confidence -= crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
 
-    Some(confidence.clamp(0.0, 1.0))
+    confidence.clamp(0.0, 1.0)
 }
 
 #[must_use]
@@ -972,12 +976,10 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
             analysis.content_type.name,
             analysis
                 .complexity
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .edge_density
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string())
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))
         ),
     );
     write_to_log_at_level(
@@ -986,28 +988,22 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
             "  color_diversity={} texture_variance={} noise={} sharpness={} contrast={} confidence={:.4}",
             analysis
                 .color_diversity
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .texture_variance
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .noise_level
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .sharpness
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .contrast
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             analysis
                 .confidence
-                .map(|v| format!("{v:.4}"))
-                .unwrap_or_else(|| "N/A".to_string())
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))
         ),
     );
     write_to_log_at_level(Level::DEBUG, "");
@@ -1043,11 +1039,7 @@ mod property_tests {
             div in 0.0_f64..1.5f64
         ) {
             let conf = calculate_analysis_confidence(pixels, size, Some(edge), Some(div));
-            prop_assert!(
-                conf.is_some_and(|c| (0.0_f64..=1.0_f64).contains(&c)),
-                "Confidence must be in [0, 1] (got {:?})",
-                conf
-            );
+            prop_assert!((0.0_f64..=1.0_f64).contains(&conf), "Confidence must be in [0, 1] (got {:?})", conf);
         }
     }
 }

@@ -1911,8 +1911,10 @@ fn sample_distance(
     stats_map: &FeatureMap,
 ) -> f64 {
     let target = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
-    let target_vector = crate::database_vector::compute_sample_vector(&target, stats_map).unwrap();
-    let sample_vector = crate::database_vector::compute_sample_vector(sample, stats_map).unwrap();
+    let target_vector = crate::database_vector::compute_sample_vector(&target, stats_map)
+        .expect("KNN: Target search vector computation failed during distance calculation");
+    let sample_vector = crate::database_vector::compute_sample_vector(sample, stats_map)
+        .expect("KNN: Sample search vector computation failed during distance calculation");
     vector_l2_distance(&target_vector, &sample_vector)
 }
 

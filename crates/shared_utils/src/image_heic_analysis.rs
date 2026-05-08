@@ -450,7 +450,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     #[cfg(feature = "v1_21")]
     {
         // Set to 15GB memory limit for large/complex HEIC files (e.g., from Weibo)
-        limits.set_max_total_memory(15 * 1024 * 1024 * 1024);
+        limits.set_max_total_memory(crate::constants::HEIC_MAX_MEMORY_LIMIT);
 
         // Increase ipco box child limit from default 100 to 50000
         // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors

@@ -179,8 +179,11 @@ fn calculate_confidence(
         || luma_confidence.clamp(0.0, 1.0),
         |chroma| {
             let chroma_confidence = 1.0_f64 / chroma.weighted_sse.mul_add(0.01, 1.0);
-            0.7f64
-                .mul_add(luma_confidence, 0.3 * chroma_confidence)
+            crate::constants::JPEG_LUMA_WEIGHT
+                .mul_add(
+                    luma_confidence,
+                    crate::constants::JPEG_CHROMA_WEIGHT * chroma_confidence,
+                )
                 .clamp(0.0, 1.0)
         },
     )
@@ -428,9 +431,10 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
             if luma_estimate.is_exact_match && chroma.is_exact_match {
                 luma_estimate.quality
             } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
-                let weighted = luma_estimate
-                    .interpolated_quality
-                    .mul_add(0.7, chroma.interpolated_quality * 0.3);
+                let weighted = luma_estimate.interpolated_quality.mul_add(
+                    crate::constants::JPEG_LUMA_WEIGHT,
+                    chroma.interpolated_quality * crate::constants::JPEG_CHROMA_WEIGHT,
+                );
                 crate::numeric_cast::f64_to_u8_sat(weighted.round())
             } else {
                 luma_estimate.quality
@@ -457,8 +461,9 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         _ => "Low quality (visible compression artifacts)".to_string(),
     };
 
-    let is_high_quality_original =
-        final_quality >= 90 && is_standard_table && confidence >= 0.95_f64;
+    let is_high_quality_original = final_quality >= 90
+        && is_standard_table
+        && confidence >= crate::constants::JPEG_CONFIDENCE_THRESHOLD_STANDARD;
     let is_complete = is_jpeg_complete(data);
 
     let analysis = JpegQualityAnalysis {
@@ -1532,7 +1537,7 @@ fn extract_gainmap_from_mpf(
             source = ?gainmap_candidate.source,
             repaired_eoi = gainmap_candidate.repaired_eoi,
             decoded = gainmap_candidate.decoded,
-            aspect_diff = %gainmap_candidate.aspect_diff.map(|v| format!("{v:.4}")).unwrap_or_else(|| "N/A".to_string()),
+            aspect_diff = %gainmap_candidate.aspect_diff.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
             "Recovered gainmap using MPF fallback candidate"
         );
     }
@@ -1687,7 +1692,7 @@ mod tests {
         let estimate = estimate_quality_precise(&qt, &IJG_LUMINANCE_BASE);
         let confidence = calculate_confidence(&estimate, None);
         assert!(
-            confidence >= 0.98_f64,
+            confidence >= crate::constants::JPEG_CONFIDENCE_THRESHOLD_STRICT,
             "Confidence should be high for exact match"
         );
     }
