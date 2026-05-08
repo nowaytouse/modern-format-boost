@@ -207,7 +207,10 @@ fn calculate_window_ssim(
     }
 
     let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
-    #[allow(clippy::suboptimal_flops)] // Simple sum of squares, mul_add would reduce readability
+    #[allow(
+        clippy::suboptimal_flops,
+        reason = "SSIM denominator: a literal `mean_x*mean_x + mean_y*mean_y` reads more clearly as the textbook SSIM formula than a chain of mul_add calls; not a hot path."
+    )]
     let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
 
     numerator / denominator

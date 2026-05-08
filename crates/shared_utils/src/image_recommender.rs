@@ -29,8 +29,7 @@ pub fn get_recommendation_from_row(
     let features: DetectionResult = serde_json::from_str(&row.raw_features_json)?;
     let is_lossless = features.compression == CompressionType::Lossless;
 
-    // We mock the JxlIndicator generation here based on DB features
-    let indicator = mock_jxl_indicator_from_features(&features, &row.rel_path);
+    let indicator = jxl_indicator_from_features(&features, &row.rel_path);
 
     Ok(format_recommendation(&indicator, &row.format, is_lossless))
 }
@@ -65,8 +64,9 @@ fn format_recommendation(
     }
 }
 
-/// 🔬 Logic Replica: Mirror of `image_analyzer::generate_jxl_indicator` using DB features.
-fn mock_jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> JxlIndicator {
+/// Build a `JxlIndicator` from indexed DB features, mirroring `image_analyzer::generate_jxl_indicator`.
+/// This is the production code path used when the analyzer output is not in scope (DB-driven flow).
+fn jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> JxlIndicator {
     let output_path = format!("{rel_path}.jxl");
     let is_lossless = features.compression == CompressionType::Lossless;
     let default_effort = crate::constants::JXL_DEFAULT_EFFORT;

@@ -469,7 +469,10 @@ pub(crate) fn format_quality_check_line(
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 /// # Panics
 /// Panics if the output path cannot be derived from input path.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "GPU coarse-search public entrypoint: argument unpacking + multi-stage orchestration (encoder, mapping, search, log) is intrinsically linear; splitting forces helper churn without clarity gain."
+)]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {

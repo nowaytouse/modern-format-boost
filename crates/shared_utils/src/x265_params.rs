@@ -132,9 +132,8 @@ fn profile_for_available_memory(available_mb: u64, total_mb: u64) -> X265MemoryP
     let free_ratio =
         crate::numeric_cast::u64_to_f64(available_mb) / crate::numeric_cast::u64_to_f64(total_mb);
 
-    if available_mb >= constants::X265_DEFAULT_RAM_THRESHOLD_MB
-        || (available_mb >= constants::X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB
-            && free_ratio >= constants::X265_DEFAULT_RAM_RATIO_THRESHOLD)
+    if available_mb >= constants::X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB
+        && free_ratio >= constants::X265_DEFAULT_RAM_RATIO_THRESHOLD
     {
         X265MemoryProfile::Default
     } else if available_mb >= constants::X265_MODERATE_RAM_THRESHOLD_MB

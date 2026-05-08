@@ -1907,11 +1907,11 @@ pub fn gpu_coarse_search_with_log(
 ///
 /// # Returns
 /// GPU coarse search results with optimal settings
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::complexity)]
 #[allow(
+    clippy::too_many_lines,
+    clippy::complexity,
     clippy::cognitive_complexity,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    reason = "GPU coarse-search orchestrator: pipeline-staged state (encoder probe, CRF mapping, vf-arg fan-out, log capture) is tightly interleaved; helper extraction would obscure the linear stage progression."
 )]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,

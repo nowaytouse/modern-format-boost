@@ -612,7 +612,10 @@ mod raw {
     }
 
     #[inline]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Audited: u64→f64 mantissa loss above 2^53 is acceptable for memory-MB and ratio math; callers operate on values well below 2^53."
+    )]
     pub(super) const fn u64_to_f64(v: u64) -> f64 {
         v as f64
     }
@@ -623,19 +626,28 @@ mod raw {
     }
 
     #[inline]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Audited: i64→f64 mantissa loss above 2^53 is acceptable for the bounded counters this helper serves; callers stay below 2^53."
+    )]
     pub(super) const fn i64_to_f64(v: i64) -> f64 {
         v as f64
     }
 
     #[inline]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Audited: i32→f32 loses precision only above 2^24; callers operate on small magnitude pixel/index counters far below that bound."
+    )]
     pub(super) const fn i32_to_f32(v: i32) -> f32 {
         v as f32
     }
 
     #[inline]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Audited: u32→f32 loses precision only above 2^24; callers operate on bounded color/coordinate values far below that limit."
+    )]
     pub(super) const fn u32_to_f32(v: u32) -> f32 {
         v as f32
     }
@@ -789,7 +801,11 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
 ///
 /// - `NaN` or negative → `0`
 /// - `> 255` → `255`
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Saturating f32→u8 conversion: NaN/negative are explicitly clamped to 0 and >255 to 255 above, so the `as u8` cast is provably range-safe."
+)]
 pub fn f32_to_u8_sat(v: f32) -> u8 {
     if v.is_nan() || v < 0.0 {
         tracing::warn!("☢️ [ANOMALY] Float NaN/negative squashed to 0");

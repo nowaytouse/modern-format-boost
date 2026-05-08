@@ -396,13 +396,19 @@ impl Default for LoopReferenceProfile {
                 mean: collection
                     .duration_avg
                     .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),
-                std_dev: ((collection.duration_max.unwrap_or(30.0)
-                    - collection.duration_min.unwrap_or(0.1))
+                std_dev: ((collection
+                    .duration_max
+                    .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_MAX_SECS)
+                    - collection
+                        .duration_min
+                        .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_MIN_SECS))
                     / 4.0)
                     .max(0.5),
                 p10: collection.duration_min,
                 p25: Some(f64::midpoint(
-                    collection.duration_min.unwrap_or(0.1),
+                    collection
+                        .duration_min
+                        .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_MIN_SECS),
                     collection
                         .duration_avg
                         .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),

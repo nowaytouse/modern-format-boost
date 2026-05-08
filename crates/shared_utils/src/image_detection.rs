@@ -954,7 +954,10 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
 ///
 /// # Panics
 /// Panics if the PNG decompression fails unexpectedly on a valid zTXt chunk.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sequential PNG chunk-stream parser; fragmenting would split tightly coupled offset/state bookkeeping across helpers without clarifying intent."
+)]
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -1533,7 +1536,10 @@ struct PngQuantizationWeights {
 ///
 /// # Panics
 /// Panics if the PNG structure is fundamentally corrupted beyond repair.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Single-pass PNG chunk walker; helpers would obscure the strict ordering and offset invariants required for correctness on malformed inputs."
+)]
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
     fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
@@ -1970,7 +1976,10 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 /// Color frequency concentration — quantized images have a few dominant colors
 /// covering most pixels. Natural palette art distributes more evenly.
 /// Returns score in [0.0, 1.0] where high = likely quantized.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Histogram + entropy + concentration analysis is one cohesive pass over the pixel buffer; splitting forces redundant copies of the RGBA8 buffer."
+)]
 fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();

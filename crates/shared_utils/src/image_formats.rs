@@ -1219,12 +1219,12 @@ mod tests {
         let path = std::path::Path::new("/nonexistent/file.test");
 
         assert!(
-            !webp::is_lossless(path).unwrap_or(true),
-            "Non-existent file should return false"
+            webp::is_lossless(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
         );
         assert!(
-            !webp::is_animated(path).unwrap_or(true),
-            "Non-existent file should return false"
+            webp::is_animated(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
         );
         assert!(
             !gif::is_animated(path),

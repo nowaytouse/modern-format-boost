@@ -253,7 +253,10 @@ const MARKER_EOI: u8 = 0xD9;
 ///
 /// # Errors
 /// Returns an error if the JPEG data is corrupted or missing DQT markers.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sequential JPEG marker walker accumulating DQT tables; offset arithmetic and marker-state interleave tightly enough that helpers would fragment a single linear scan."
+)]
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
@@ -1259,7 +1262,10 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Extract gainmap image data from MPF segment.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Single MPF parser walking the index entries; helper extraction would split offset/length validation from the entry decoding it gates."
+)]
 fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],

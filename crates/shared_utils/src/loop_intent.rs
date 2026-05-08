@@ -705,10 +705,16 @@ impl LoopThresholds {
             .p50
             .map_or(short_percentile, |median| median * 0.60_f64);
         let duration_override_secs = if duration_percentiles_available {
-            short_percentile.min(median_scaled.max(0.35)).clamp(
-                0.35,
-                reference.collection.duration_p90.unwrap_or(0.35).max(0.35),
-            )
+            short_percentile
+                .min(median_scaled.max(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_P90_SECS))
+                .clamp(
+                    crate::constants::DEFAULT_LOOP_BASELINE_DURATION_P90_SECS,
+                    reference
+                        .collection
+                        .duration_p90
+                        .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_P90_SECS)
+                        .max(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_P90_SECS),
+                )
         } else {
             reference
                 .duration
@@ -3789,9 +3795,8 @@ mod tests {
         let meta = LoopMeta::from_gif_path(file.path())
             .expect("valid GIF header should produce loop metadata");
         assert!(
-            meta.duration_secs
-                .is_some_and(|d| (d - 0.0).abs() < f64::EPSILON),
-            "Expected duration_secs to be approximately 0.0, got {:?}",
+            meta.duration_secs.is_none(),
+            "Missing frame delays must yield None (no forgery), got {:?}",
             meta.duration_secs
         );
         assert_eq!(meta.frame_count, Some(1));

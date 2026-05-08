@@ -300,7 +300,10 @@ impl SourceCodec {
     /// Identifies the file format based on internal magic bytes.
     /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Single dispatch table over many container/codec signatures; splitting would scatter the parsing tape into helpers and obscure the format-detection precedence."
+    )]
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).map_err(|e| {

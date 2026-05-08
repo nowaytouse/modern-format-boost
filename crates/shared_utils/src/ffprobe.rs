@@ -539,7 +539,10 @@ fn parse_required_u32_field(
 ///
 /// # Returns
 /// Parsed video stream fields, or `FFprobeError` if parsing fails
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Single ffprobe JSON normalizer: covers many heterogeneous codec/format dialects in one place so divergent fallbacks cannot drift across helpers."
+)]
 fn parse_video_stream_fields(
     video_stream: &serde_json::Value,
     format_name: &str,
