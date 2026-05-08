@@ -49,9 +49,11 @@ pub const LOOP_KNN_P90_BIAS_THRESHOLD_MULTIPLIER: f64 = 1.5;
 // 2. Physical "Bottom-line" Thresholds
 /// Default baseline for "Sticker Safe Zone" (seconds) if KNN is unavailable.
 pub const DEFAULT_LOOP_BASELINE_DURATION_SECS: f64 = 2.0;
-/// Cold-start baseline minimum loop duration (seconds) used when the global collection
-/// has no observed `duration_min`. Named here (rather than inlined as a magic literal)
-/// so the fallback is auditable and cannot masquerade as real data.
+/// Cold-start baseline minimum loop duration (seconds).
+///
+/// Used when the global collection has no observed `duration_min`. Named here (rather
+/// than inlined as a magic literal) so the fallback is auditable and cannot
+/// masquerade as real data.
 pub const DEFAULT_LOOP_BASELINE_DURATION_MIN_SECS: f64 = 0.1;
 /// Cold-start baseline maximum loop duration (seconds) used when the global collection
 /// has no observed `duration_max`.
@@ -220,10 +222,12 @@ pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 3;
 pub const X265_MODERATE_MEMORY_LOOKAHEAD_SLICES: usize = 3;
 /// Moderate-memory x265 profile: moderate lookahead queue depth.
 pub const X265_MODERATE_MEMORY_RC_LOOKAHEAD: usize = 20;
-/// RAM threshold (MB) above which the Default (uncapped) x265 profile is permitted,
-/// provided the free-memory ratio also satisfies `X265_DEFAULT_RAM_RATIO_THRESHOLD`.
-/// A large absolute amount alone is not sufficient on big-RAM systems where the
-/// machine may still be heavily loaded; the ratio gate prevents that silent misclassification.
+/// RAM threshold (MB) for permitting the Default (uncapped) x265 profile.
+///
+/// Permits the profile provided the free-memory ratio also satisfies
+/// `X265_DEFAULT_RAM_RATIO_THRESHOLD`. A large absolute amount alone is not
+/// sufficient on big-RAM systems where the machine may still be heavily loaded;
+/// the ratio gate prevents that silent misclassification.
 pub const X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB: u64 = 8 * 1024;
 /// Minimum free-memory ratio required to stay on the default x265 profile.
 pub const X265_DEFAULT_RAM_RATIO_THRESHOLD: f64 = 0.25;
