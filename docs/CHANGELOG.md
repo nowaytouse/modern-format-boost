@@ -14,6 +14,11 @@ All notable changes to this project will be documented in this file.
   - **Cold-Start Integrity**: Eliminated silent `0.1`/`0.35` defaults in `database.rs` and `loop_intent.rs`. Replaced them with symbolic constants (`DEFAULT_LOOP_BASELINE_...`) to distinguish between measured data and synthesized baselines.
   - **Semantic Refinement**: Audited and corrected misleading "mock" prefixes in production code paths (e.g., JXL recommendation indicators) to ensure semantic naming alignment.
 
+- **License Compliance & Documentation**:
+  - **Comprehensive License Audit**: Regenerated all third-party license reports (`docs/LICENSES.html`, `docs/LICENSES.json`) using `cargo-about v0.9.0` under the project's **nightly** toolchain.
+  - **Toolchain Consistency**: Re-aligned all license generation tasks with the workspace's primary `nightly` toolchain to ensure consistency across the build pipeline.
+  - **Clarification Refinement**: Audited `about.toml` clarifications; confirmed GPL-3.0-or-later compliance for JXL optional components.
+
 - **Stability & Verification**:
   - **Test Suite Recovery**: Restored the workspace to 100% Green (1047/1047 tests passed) by resolving boundary regressions.
   - **Panic Path Audit**: Audited 156 remaining `unwrap()`/`expect()` calls; added diagnostic rationales and refactored high-risk sites into safe error propagation patterns.

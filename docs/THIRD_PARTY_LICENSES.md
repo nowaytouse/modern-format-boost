@@ -31,8 +31,6 @@ The following dependencies use GPL-3.0-or-later license:
 
 These are used for JPEG XL format support. If you distribute this software, you must comply with GPL-3.0-or-later terms for these components.
 
-## Detailed License Information
-
 For complete license texts and detailed attribution, see:
 
 - **docs/LICENSES.html** - Full HTML report with all license texts
@@ -44,14 +42,9 @@ For complete license texts and detailed attribution, see:
 To regenerate license reports:
 
 ```bash
-# Install cargo-about
-cargo install cargo-about
-
-# Generate HTML report
-cargo about generate docs/licenses-template/licenses.hbs > docs/LICENSES.html
-
-# Generate JSON report
-cargo about generate --format json about.toml > docs/LICENSES.json
+# Generate reports using the project's nightly toolchain
+cargo +nightly about generate --workspace --all-features docs/licenses-template/licenses.hbs -o docs/LICENSES.html
+cargo +nightly about generate --workspace --all-features --format json -o docs/LICENSES.json
 ```
 
 ## Compliance
