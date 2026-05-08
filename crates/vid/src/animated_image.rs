@@ -206,22 +206,32 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
         .into_iter()
         .flatten()
         .filter(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
-        .map(|stream| VideoStreamInfo {
-            index: stream
+        .filter_map(|stream| {
+            // `index` is mandatory — a stream without a parseable index cannot be
+            // referenced by ffmpeg -map, so we drop it rather than invent an id.
+            let index = stream
                 .get("index")
                 .and_then(serde_json::Value::as_u64)
-                .and_then(|v| usize::try_from(v).ok())
-                .expect("Failed to parse integer or missing required value"),
-            frame_count: stream
+                .and_then(|v| usize::try_from(v).ok())?;
+            // `nb_frames` is best-effort in ffprobe: GIF/MKV/fragmented containers
+            // often report "N/A" or omit the field entirely. Treat "unknown" as 0
+            // so the alpha-aux heuristic (which gates on `frame_count > 0`) cleanly
+            // skips it, rather than aborting the whole pipeline with an expect panic.
+            let frame_count = stream
                 .get("nb_frames")
                 .and_then(|v| v.as_str())
                 .and_then(|value| value.parse::<u64>().ok())
-                .expect("Failed to parse integer or missing required value"),
-            pix_fmt: stream
+                .unwrap_or(0);
+            let pix_fmt = stream
                 .get("pix_fmt")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
-                .to_ascii_lowercase(),
+                .to_ascii_lowercase();
+            Some(VideoStreamInfo {
+                index,
+                frame_count,
+                pix_fmt,
+            })
         })
         .collect()
 }
@@ -2254,6 +2264,53 @@ mod tests {
         ];
 
         assert!(is_probable_alpha_aux_pair(&streams, 0));
+    }
+
+    #[test]
+    fn probe_video_streams_handles_missing_nb_frames_without_panicking() {
+        // Regression: GIFs (and many fragmented containers) cause ffprobe to omit
+        // or emit "N/A" for nb_frames. Prior code .expect()'d the parse and panicked
+        // the whole batch mid-run. Now "unknown" frame counts surface as 0 and the
+        // alpha-aux heuristic gates them out cleanly.
+        let json = serde_json::json!({
+            "streams": [
+                { "codec_type": "video", "index": 0, "nb_frames": "N/A", "pix_fmt": "yuv420p" },
+                { "codec_type": "video", "index": 1, "pix_fmt": "rgba" },
+                { "codec_type": "audio", "index": 2 },
+            ]
+        });
+        let streams: Vec<VideoStreamInfo> = json
+            .get("streams")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
+            .filter_map(|stream| {
+                let index = stream
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let frame_count = stream
+                    .get("nb_frames")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let pix_fmt = stream
+                    .get("pix_fmt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                Some(VideoStreamInfo {
+                    index,
+                    frame_count,
+                    pix_fmt,
+                })
+            })
+            .collect();
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].frame_count, 0);
+        assert_eq!(streams[1].frame_count, 0);
+        assert!(!is_probable_alpha_aux_pair(&streams, 0));
     }
 
     #[test]

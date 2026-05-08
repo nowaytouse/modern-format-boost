@@ -20,7 +20,9 @@ All notable changes to this project will be documented in this file.
   - **Clarification Refinement**: Audited `about.toml` clarifications; confirmed GPL-3.0-or-later compliance for JXL optional components.
 
 - **Stability & Verification**:
+  - **FFprobe Robustness**: Fixed a potential panic in `probe_video_streams` where missing or "N/A" `nb_frames` (common in GIFs and fragmented containers) caused an unwrap failure. Unknown frame counts now default to 0, allowing the alpha-aux heuristic to skip them safely.
   - **Test Suite Recovery**: Restored the workspace to 100% Green (1047/1047 tests passed) by resolving boundary regressions.
+  - **Regression Test Coverage**: Added `probe_video_streams_handles_missing_nb_frames_without_panicking` to ensure continued stability for edge-case media containers.
   - **Panic Path Audit**: Audited 156 remaining `unwrap()`/`expect()` calls; added diagnostic rationales and refactored high-risk sites into safe error propagation patterns.
   - **Registry Finalization**: Completed the migration of all remaining magic numbers into the centralized `constants.rs` registry.
 
