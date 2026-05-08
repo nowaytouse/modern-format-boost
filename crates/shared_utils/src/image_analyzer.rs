@@ -1828,12 +1828,21 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
-    // Detect animation via ffprobe/jxlinfo
-    let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::JXL).unwrap_or_else(|e| {
-            tracing::warn!(path = %path.display(), error = %e, "Image Analysis: JXL animation detection failed; defaulting to Static (1 frame)");
-            (false, Some(1), None)
-        });
+    // Detect animation via ffprobe/jxlinfo. If detection fails we record the failure
+    // in `analysis_error` and refuse to assert "static, 1 frame" as a measurement;
+    // duration_secs stays None and downstream callers can inspect analysis_error
+    // before relying on is_animated.
+    let (is_animated, animation_error) = match detect_animation(path, &DetectedFormat::JXL) {
+        Ok((animated, _frame_count, _fps)) => (animated, None),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "JXL animation detection failed; recording analysis_error and treating as non-animated for this run"
+            );
+            (false, Some(format!("JXL animation detection failed: {e}")))
+        }
+    };
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -1876,7 +1885,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
         },
         history: crate::common_utils::get_current_history(),
         perception: VisualPerception::default(),
-        analysis_error: None,
+        analysis_error: animation_error,
     }
 }
 
@@ -1951,12 +1960,21 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
-    // Detect animation via ISOBMFF ftyp brand (avis/msf1)
-    let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::AVIF).unwrap_or_else(|e| {
-            tracing::warn!(path = %path.display(), error = %e, "Image Analysis: AVIF animation detection failed; defaulting to Static (1 frame)");
-            (false, Some(1), None)
-        });
+    // Detect animation via ISOBMFF ftyp brand (avis/msf1). On failure, record the
+    // error in `analysis_error` rather than asserting "static, 1 frame" as if it
+    // were measured fact — that fabrication previously caused real animated AVIFs
+    // with detection failures to be encoded as still images.
+    let (is_animated, animation_error) = match detect_animation(path, &DetectedFormat::AVIF) {
+        Ok((animated, _frame_count, _fps)) => (animated, None),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "AVIF animation detection failed; recording analysis_error and treating as non-animated for this run"
+            );
+            (false, Some(format!("AVIF animation detection failed: {e}")))
+        }
+    };
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -2000,7 +2018,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
         },
         history: crate::common_utils::get_current_history(),
         perception: VisualPerception::default(),
-        analysis_error: None,
+        analysis_error: animation_error,
     }
 }
 

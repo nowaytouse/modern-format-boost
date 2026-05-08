@@ -469,10 +469,15 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         }
 
         // Add to concat list
-        let duration_sec = frame_durations_ms
+        // After the resize/zero-clamp pass above, frame_durations_ms is guaranteed to
+        // have exactly `frame_count` entries with non-zero values; we therefore treat
+        // a missing index as a programmer error (panic) rather than fabricating a 100 ms
+        // duration that would silently corrupt the concat demuxer's timing.
+        let duration_ms = frame_durations_ms
             .get((i - 1) as usize)
             .copied()
-            .map_or(0.1_f64, |d| f64::from(d) / 1_000.0_f64);
+            .expect("frame_durations_ms was sized to frame_count above; index must exist");
+        let duration_sec = f64::from(duration_ms) / 1_000.0_f64;
         let _ = writeln!(
             concat_content,
             "file '{}'",
