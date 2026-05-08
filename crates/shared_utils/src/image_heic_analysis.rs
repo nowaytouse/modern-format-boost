@@ -25,7 +25,7 @@ pub struct HeicAuxInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeicAnalysis {
-    pub bit_depth: u8,
+    pub bit_depth: Option<u8>,
     pub codec: String,
     pub is_lossless: bool,
     pub has_alpha: bool,
@@ -604,7 +604,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let codec = "HEVC".to_string();
 
     let analysis = HeicAnalysis {
-        bit_depth,
+        bit_depth: Some(bit_depth),
         codec,
         is_lossless,
         has_alpha,

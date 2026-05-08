@@ -35,7 +35,7 @@ fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecomm
         DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG
     );
     let is_high_bitrate_h264 =
-        features.codec == DetectedCodec::H264 && features.bitrate > 50_000_000;
+        features.codec == DetectedCodec::H264 && features.bitrate.is_some_and(|b| b > 50_000_000);
 
     if is_old_lossless || is_high_bitrate_h264 {
         recommended_codec = "AV1 (SVT-AV1)".to_string();

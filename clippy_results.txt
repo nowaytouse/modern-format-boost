@@ -1,0 +1,599 @@
+[1m[33mwarning[0m: patch `criterion v0.8.2 (https://github.com/criterion-rs/criterion.rs.git#d3f10461)` was not used in the crate graph
+[1m[96mhelp[0m: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+[1m[92m    Checking[0m shared_utils v0.11.3 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:501:25
+    [1m[94m|[0m
+[1m[94m501[0m [1m[94m|[0m           let size_diff = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff")
+    [1m[94m|[0m [1m[91m _________________________^[0m
+[1m[94m502[0m [1m[94m|[0m [1m[91m|[0m             .map(crate::modern_ui::format_size_diff)
+[1m[94m503[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "> i64::MAX".to_string());
+    [1m[94m|[0m [1m[91m|________________________________________________________^[0m [1m[91mhelp: try: `crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff").map_or_else(|| "> i64::MAX".to_string(), crate::modern_ui::format_size_diff)`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+    [1m[94m= [0m[1mnote[0m: `-D clippy::map-unwrap-or` implied by `-D clippy::pedantic`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::map_unwrap_or)]`
+
+[1m[91merror[0m[1m: single-character string constant used as pattern[0m
+    [1m[94m--> [0mcrates/shared_utils/src/ffprobe.rs:1234:25
+     [1m[94m|[0m
+[1m[94m1234[0m [1m[94m|[0m     if pix_fmt.contains("8") || pix_fmt.contains("yuv") || pix_fmt.contains("rgb") || pix_fmt.contains("bgr") || pix_fmt.contains([1m[94m...[0m
+     [1m[94m|[0m                         [1m[91m^^^[0m [1m[91mhelp: consider using a `char`: `'8'`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#single_char_pattern
+     [1m[94m= [0m[1mnote[0m: `-D clippy::single-char-pattern` implied by `-D clippy::pedantic`
+     [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::single_char_pattern)]`
+
+[1m[91merror[0m[1m: this function's return value is unnecessarily wrapped by `Option`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:818:1
+    [1m[94m|[0m
+[1m[94m818[0m [1m[94m|[0m [1m[91m/[0m pub(crate) fn calculate_analysis_confidence(
+[1m[94m819[0m [1m[94m|[0m [1m[91m|[0m     pixels: u64,
+[1m[94m820[0m [1m[94m|[0m [1m[91m|[0m     file_size: u64,
+[1m[94m821[0m [1m[94m|[0m [1m[91m|[0m     edge_density: Option<f64>,
+[1m[94m822[0m [1m[94m|[0m [1m[91m|[0m     color_diversity: Option<f64>,
+[1m[94m823[0m [1m[94m|[0m [1m[91m|[0m ) -> Option<f64> {
+    [1m[94m|[0m [1m[91m|________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_wraps
+    [1m[94m= [0m[1mnote[0m: `-D clippy::unnecessary-wraps` implied by `-D clippy::pedantic`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::unnecessary_wraps)]`
+[1m[96mhelp[0m: remove `Option` from the return type...
+    [1m[94m|[0m
+[1m[94m823[0m [91m- [0m) -> [91mOption<f64>[0m {
+[1m[94m823[0m [92m+ [0m) -> [92mf64[0m {
+    [1m[94m|[0m
+[1m[96mhelp[0m: ...and then remove the surrounding `Some()` from returning expressions
+    [1m[94m|[0m
+[1m[94m857[0m [91m- [0m    [91mSome(confidence.clamp(0.0, 1.0))[0m
+[1m[94m857[0m [92m+ [0m    [92mconfidence.clamp(0.0, 1.0)[0m
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:973:13
+    [1m[94m|[0m
+[1m[94m973[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m974[0m [1m[94m|[0m [1m[91m|[0m                 .complexity
+[1m[94m975[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m976[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m973[0m [92m~ [0m            [92manalysis[0m
+[1m[94m974[0m [92m~                 .complexity.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:977:13
+    [1m[94m|[0m
+[1m[94m977[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m978[0m [1m[94m|[0m [1m[91m|[0m                 .edge_density
+[1m[94m979[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m980[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string())
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m977[0m [92m~ [0m            [92manalysis[0m
+[1m[94m978[0m [92m+                 .edge_density.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:987:13
+    [1m[94m|[0m
+[1m[94m987[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m988[0m [1m[94m|[0m [1m[91m|[0m                 .color_diversity
+[1m[94m989[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m990[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m987[0m [92m~ [0m            [92manalysis[0m
+[1m[94m988[0m [92m~                 .color_diversity.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:991:13
+    [1m[94m|[0m
+[1m[94m991[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m992[0m [1m[94m|[0m [1m[91m|[0m                 .texture_variance
+[1m[94m993[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m994[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m991[0m [92m~ [0m            [92manalysis[0m
+[1m[94m992[0m [92m~                 .texture_variance.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:995:13
+    [1m[94m|[0m
+[1m[94m995[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m996[0m [1m[94m|[0m [1m[91m|[0m                 .noise_level
+[1m[94m997[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m998[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m995[0m [92m~ [0m            [92manalysis[0m
+[1m[94m996[0m [92m~                 .noise_level.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:999:13
+     [1m[94m|[0m
+[1m[94m 999[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1000[0m [1m[94m|[0m [1m[91m|[0m                 .sharpness
+[1m[94m1001[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m1002[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m 999[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1000[0m [92m~                 .sharpness.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:1003:13
+     [1m[94m|[0m
+[1m[94m1003[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1004[0m [1m[94m|[0m [1m[91m|[0m                 .contrast
+[1m[94m1005[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m1006[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1003[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1004[0m [92m~                 .contrast.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m,
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_quality_detector.rs:1007:13
+     [1m[94m|[0m
+[1m[94m1007[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1008[0m [1m[94m|[0m [1m[91m|[0m                 .confidence
+[1m[94m1009[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.4}"))
+[1m[94m1010[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string())
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1007[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1008[0m [92m+                 .confidence.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:773:24
+    [1m[94m|[0m
+[1m[94m773[0m [1m[94m|[0m           let conf_str = details
+    [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m774[0m [1m[94m|[0m [1m[91m|[0m             .confidence
+[1m[94m775[0m [1m[94m|[0m [1m[91m|[0m             .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m776[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "N/A".to_string());
+    [1m[94m|[0m [1m[91m|_________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m773[0m [92m~ [0m        let conf_str = [92mdetails[0m
+[1m[94m774[0m [92m~             .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:788:24
+    [1m[94m|[0m
+[1m[94m788[0m [1m[94m|[0m           let conf_str = details
+    [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m789[0m [1m[94m|[0m [1m[91m|[0m             .confidence
+[1m[94m790[0m [1m[94m|[0m [1m[91m|[0m             .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m791[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "N/A".to_string());
+    [1m[94m|[0m [1m[91m|_________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m788[0m [92m~ [0m        let conf_str = [92mdetails[0m
+[1m[94m789[0m [92m~             .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:850:24
+    [1m[94m|[0m
+[1m[94m850[0m [1m[94m|[0m           let conf_str = details
+    [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m851[0m [1m[94m|[0m [1m[91m|[0m             .confidence
+[1m[94m852[0m [1m[94m|[0m [1m[91m|[0m             .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m853[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "N/A".to_string());
+    [1m[94m|[0m [1m[91m|_________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m850[0m [92m~ [0m        let conf_str = [92mdetails[0m
+[1m[94m851[0m [92m~             .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:865:24
+    [1m[94m|[0m
+[1m[94m865[0m [1m[94m|[0m           let conf_str = details
+    [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m866[0m [1m[94m|[0m [1m[91m|[0m             .confidence
+[1m[94m867[0m [1m[94m|[0m [1m[91m|[0m             .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m868[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "N/A".to_string());
+    [1m[94m|[0m [1m[91m|_________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m865[0m [92m~ [0m        let conf_str = [92mdetails[0m
+[1m[94m866[0m [92m~             .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:949:24
+    [1m[94m|[0m
+[1m[94m949[0m [1m[94m|[0m           let conf_str = details
+    [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m950[0m [1m[94m|[0m [1m[91m|[0m             .confidence
+[1m[94m951[0m [1m[94m|[0m [1m[91m|[0m             .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m952[0m [1m[94m|[0m [1m[91m|[0m             .unwrap_or_else(|| "N/A".to_string());
+    [1m[94m|[0m [1m[91m|_________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m949[0m [92m~ [0m        let conf_str = [92mdetails[0m
+[1m[94m950[0m [92m~             .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: these match arms have identical bodies[0m
+    [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:1222:9
+     [1m[94m|[0m
+[1m[94m1222[0m [1m[94m|[0m           Some(0) => 1.0_f64,
+     [1m[94m|[0m           [1m[91m^^^^^^^^^^^^^^^^^^[0m
+[1m[94m...[0m
+[1m[94m1226[0m [1m[94m|[0m [1m[91m/[0m         None => {
+[1m[94m1227[0m [1m[94m|[0m [1m[91m|[0m             // Neutral factor: no bonus applied because metadata is unknown.
+[1m[94m1228[0m [1m[94m|[0m [1m[91m|[0m             // This is honest (no forgery) and doesn't block the workflow.
+[1m[94m1229[0m [1m[94m|[0m [1m[91m|[0m             1.0_f64
+[1m[94m1230[0m [1m[94m|[0m [1m[91m|[0m         }
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is unintentional make the arms return different values
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#match_same_arms
+     [1m[94m= [0m[1mnote[0m: `-D clippy::match-same-arms` implied by `-D clippy::pedantic`
+     [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::match_same_arms)]`
+[1m[96mhelp[0m: otherwise merge the patterns into a single arm
+     [1m[94m|[0m
+[1m[94m1222[0m [92m~ [0m        Some(1) => 1.05_f64,
+[1m[94m1223[0m [1m[94m|[0m         Some(2) => 1.08_f64,
+[1m[94m1224[0m [1m[94m|[0m         Some(3..) => 1.12_f64,
+[1m[94m1225[0m [92m~ [0m        [92mSome(0) | [0mNone => {
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: these match arms have identical bodies[0m
+    [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:1316:9
+     [1m[94m|[0m
+[1m[94m1316[0m [1m[94m|[0m           Some(_) => 1.0,
+     [1m[94m|[0m           [1m[91m^^^^^^^^^^^^^^[0m
+[1m[94m1317[0m [1m[94m|[0m [1m[91m/[0m         None => {
+[1m[94m1318[0m [1m[94m|[0m [1m[91m|[0m             // Honest neutrality: no bias if metadata is missing.
+[1m[94m1319[0m [1m[94m|[0m [1m[91m|[0m             1.0
+[1m[94m1320[0m [1m[94m|[0m [1m[91m|[0m         }
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is unintentional make the arms return different values
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#match_same_arms
+[1m[96mhelp[0m: otherwise merge the patterns into a single arm
+     [1m[94m|[0m
+[1m[94m1316[0m [92m~ [0m        Some(_)[92m | None[0m => 1.0,
+[1m[94m1317[0m [92m~ [0m        }
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/quality_matcher.rs:1664:20
+     [1m[94m|[0m
+[1m[94m1664[0m [1m[94m|[0m       let conf_str = d
+     [1m[94m|[0m [1m[91m ____________________^[0m
+[1m[94m1665[0m [1m[94m|[0m [1m[91m|[0m         .confidence
+[1m[94m1666[0m [1m[94m|[0m [1m[91m|[0m         .map(|c| format!("{:.0}%", c * 100.0))
+[1m[94m1667[0m [1m[94m|[0m [1m[91m|[0m         .unwrap_or_else(|| "N/A".to_string());
+     [1m[94m|[0m [1m[91m|_____________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1664[0m [92m~ [0m    let conf_str = [92md[0m
+[1m[94m1665[0m [92m~         .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0))[0m;
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: function call inside of `unwrap_or`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/video_explorer/dynamic_mapping.rs:206:10
+    [1m[94m|[0m
+[1m[94m206[0m [1m[94m|[0m         .unwrap_or(f64::from(sample_duration));
+    [1m[94m|[0m          [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: try: `unwrap_or_else(|| f64::from(sample_duration))`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#or_fun_call
+    [1m[94m= [0m[1mnote[0m: `-D clippy::or-fun-call` implied by `-D clippy::nursery`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::nursery` add `#[allow(clippy::or_fun_call)]`
+
+[1m[91merror[0m[1m: docs for function which may panic missing `# Panics` section[0m
+   [1m[94m--> [0mcrates/shared_utils/src/video_quality_detector.rs:399:1
+    [1m[94m|[0m
+[1m[94m399[0m [1m[94m|[0m [1m[91m/[0m pub fn analyze_video_quality_from_detection(
+[1m[94m400[0m [1m[94m|[0m [1m[91m|[0m     detection: &VideoDetectionResult,
+[1m[94m401[0m [1m[94m|[0m [1m[91m|[0m ) -> Result<VideoQualityAnalysis, String> {
+    [1m[94m|[0m [1m[91m|_________________________________________^[0m
+    [1m[94m|[0m
+[1m[92mnote[0m: first possible panic found here
+   [1m[94m--> [0mcrates/shared_utils/src/video_quality_detector.rs:410:24
+    [1m[94m|[0m
+[1m[94m410[0m [1m[94m|[0m         duration_secs: detection.duration_secs.expect("Guard at 392 ensured presence"),
+    [1m[94m|[0m                        [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_panics_doc
+    [1m[94m= [0m[1mnote[0m: `-D clippy::missing-panics-doc` implied by `-D clippy::pedantic`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::missing_panics_doc)]`
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_verifier_enhanced.rs:229:29
+    [1m[94m|[0m
+[1m[94m229[0m [1m[94m|[0m [1m[94m...[0m                   format!("Input duration missing, but output is {:.2}s", o)
+    [1m[94m|[0m                       [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
+    [1m[94m= [0m[1mnote[0m: `-D clippy::uninlined-format-args` implied by `-D clippy::pedantic`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::pedantic` add `#[allow(clippy::uninlined_format_args)]`
+[1m[96mhelp[0m: change this to
+    [1m[94m|[0m
+[1m[94m229[0m [91m- [0m                            format!("Input duration missing, but output is {:.2}s"[91m, o[0m)
+[1m[94m229[0m [92m+ [0m                            format!("Input duration missing, but output is {[92mo[0m:.2}s")
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/quality_verifier_enhanced.rs:232:29
+    [1m[94m|[0m
+[1m[94m232[0m [1m[94m|[0m [1m[94m...[0m                   format!("Input is {:.2}s, but output duration missing", i)
+    [1m[94m|[0m                       [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+    [1m[94m|[0m
+[1m[94m232[0m [91m- [0m                            format!("Input is {:.2}s, but output duration missing"[91m, i[0m)
+[1m[94m232[0m [92m+ [0m                            format!("Input is {[92mi[0m:.2}s, but output duration missing")
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on a `Result` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_analyzer.rs:458:21
+    [1m[94m|[0m
+[1m[94m458[0m [1m[94m|[0m       let precision = detect_image(path).map(|d| d.precision).unwrap_or_else(|e| {
+    [1m[94m|[0m [1m[91m _____________________^[0m
+[1m[94m459[0m [1m[94m|[0m [1m[91m|[0m         tracing::warn!(path = %path.display(), error = %e, "Image Analysis: Precision detection failed; using unknown (None) defa[1m[94m...[0m
+[1m[94m460[0m [1m[94m|[0m [1m[91m|[0m         PrecisionMetadata::default()
+[1m[94m461[0m [1m[94m|[0m [1m[91m|[0m     });
+    [1m[94m|[0m [1m[91m|______^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m458[0m [92m~ [0m    let precision = [92mdetect_image(path).map_or_else(|e| {[0m
+[1m[94m459[0m [92m+         tracing::warn!(path = %path.display(), error = %e, "Image Analysis: Precision detection failed; using unknown (None) defaults");[0m
+[1m[94m460[0m [92m+         PrecisionMetadata::default()[0m
+[1m[94m461[0m [92m~     }, |d| d.precision)[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_analyzer.rs:1711:13
+     [1m[94m|[0m
+[1m[94m1711[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1712[0m [1m[94m|[0m [1m[91m|[0m                 .complexity
+[1m[94m1713[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.3}"))
+[1m[94m1714[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1711[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1712[0m [92m~                 .complexity.map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}"))[0m,
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_analyzer.rs:1715:13
+     [1m[94m|[0m
+[1m[94m1715[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1716[0m [1m[94m|[0m [1m[91m|[0m                 .edge_density
+[1m[94m1717[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.3}"))
+[1m[94m1718[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1715[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1716[0m [92m~                 .edge_density.map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}"))[0m,
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_analyzer.rs:1719:13
+     [1m[94m|[0m
+[1m[94m1719[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m1720[0m [1m[94m|[0m [1m[91m|[0m                 .color_diversity
+[1m[94m1721[0m [1m[94m|[0m [1m[91m|[0m                 .map(|v| format!("{v:.3}"))
+[1m[94m1722[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1719[0m [92m~ [0m            [92manalysis[0m
+[1m[94m1720[0m [92m~                 .color_diversity.map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}"))[0m,
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_detection.rs:911:13
+    [1m[94m|[0m
+[1m[94m911[0m [1m[94m|[0m [1m[91m/[0m             analysis
+[1m[94m912[0m [1m[94m|[0m [1m[91m|[0m                 .confidence
+[1m[94m913[0m [1m[94m|[0m [1m[91m|[0m                 .map(|c| format!("{:.1}", c * 100.0_f64))
+[1m[94m914[0m [1m[94m|[0m [1m[91m|[0m                 .unwrap_or_else(|| "N/A".to_string()),
+    [1m[94m|[0m [1m[91m|_____________________________________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m911[0m [92m~ [0m            [92manalysis[0m
+[1m[94m912[0m [92m~                 .confidence.map_or_else(|| "N/A".to_string(), |c| format!("{:.1}", c * 100.0_f64))[0m,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_jpeg_analysis.rs:1535:28
+     [1m[94m|[0m
+[1m[94m1535[0m [1m[94m|[0m             aspect_diff = %gainmap_candidate.aspect_diff.map(|v| format!("{v:.4}")).unwrap_or_else(|| "N/A".to_string()),
+     [1m[94m|[0m                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: try: `gainmap_candidate.aspect_diff.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#map_unwrap_or
+
+[1m[91merror[0m[1m: function call inside of `unwrap_or`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:738:14
+    [1m[94m|[0m
+[1m[94m738[0m [1m[94m|[0m             .unwrap_or(reference.collection.duration_p90.unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS))
+    [1m[94m|[0m              [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: try: `unwrap_or_else(|| reference.collection.duration_p90.unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS))`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#or_fun_call
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:921:40
+    [1m[94m|[0m
+[1m[94m921[0m [1m[94m|[0m       let (fps_positive, fps_negative) = if let Some(fps) = meta.fps {
+    [1m[94m|[0m [1m[91m ________________________________________^[0m
+[1m[94m922[0m [1m[94m|[0m [1m[91m|[0m         let z = thresholds.fps_z(fps);
+[1m[94m923[0m [1m[94m|[0m [1m[91m|[0m         (z.max(0.0), (-z).max(0.0))
+[1m[94m924[0m [1m[94m|[0m [1m[91m|[0m     } else {
+[1m[94m925[0m [1m[94m|[0m [1m[91m|[0m         (0.0, 0.0)
+[1m[94m926[0m [1m[94m|[0m [1m[91m|[0m     };
+    [1m[94m|[0m [1m[91m|_____^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+    [1m[94m= [0m[1mnote[0m: `-D clippy::option-if-let-else` implied by `-D clippy::nursery`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::nursery` add `#[allow(clippy::option_if_let_else)]`
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m921[0m [92m~ [0m    let (fps_positive, fps_negative) = [92mmeta.fps.map_or((0.0, 0.0), |fps| {[0m
+[1m[94m922[0m [92m+         let z = thresholds.fps_z(fps);[0m
+[1m[94m923[0m [92m+         (z.max(0.0), (-z).max(0.0))[0m
+[1m[94m924[0m [92m~     })[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: multiply and add expressions can be calculated more efficiently and accurately[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:930:46
+    [1m[94m|[0m
+[1m[94m930[0m [1m[94m|[0m         let short_fast = duration_positive * (1.0_f64 + fps_positive * 0.5_f64);
+    [1m[94m|[0m                                              [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: consider using: `fps_positive.mul_add(0.5_f64, 1.0_f64)`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#suboptimal_flops
+    [1m[94m= [0m[1mnote[0m: `-D clippy::suboptimal-flops` implied by `-D clippy::nursery`
+    [1m[94m= [0m[1mhelp[0m: to override `-D clippy::nursery` add `#[allow(clippy::suboptimal_flops)]`
+
+[1m[91merror[0m[1m: multiply and add expressions can be calculated more efficiently and accurately[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:938:45
+    [1m[94m|[0m
+[1m[94m938[0m [1m[94m|[0m         let long_slow = duration_negative * (1.0_f64 + fps_negative * 0.5_f64);
+    [1m[94m|[0m                                             [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: consider using: `fps_negative.mul_add(0.5_f64, 1.0_f64)`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#suboptimal_flops
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1224:24
+     [1m[94m|[0m
+[1m[94m1224[0m [1m[94m|[0m           let headroom = if let Some(dur) = meta.duration_secs {
+     [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m1225[0m [1m[94m|[0m [1m[91m|[0m             1.0_f64 - ((dur - thresholds.duration_override_secs) / range).clamp(0.0, 1.0)
+[1m[94m1226[0m [1m[94m|[0m [1m[91m|[0m         } else {
+[1m[94m1227[0m [1m[94m|[0m [1m[91m|[0m             0.0_f64
+[1m[94m1228[0m [1m[94m|[0m [1m[91m|[0m         };
+     [1m[94m|[0m [1m[91m|_________^[0m [1m[91mhelp: try: `meta.duration_secs.map_or(0.0_f64, |dur| 1.0_f64 - ((dur - thresholds.duration_override_secs) / range).clamp(0.0, 1.0))`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1249:29
+     [1m[94m|[0m
+[1m[94m1249[0m [1m[94m|[0m           let tail_headroom = if let Some(dur) = meta.duration_secs {
+     [1m[94m|[0m [1m[91m _____________________________^[0m
+[1m[94m1250[0m [1m[94m|[0m [1m[91m|[0m             1.0_f64 - ((dur - thresholds.short_clip_secs) / range).clamp(0.0, 1.0)
+[1m[94m1251[0m [1m[94m|[0m [1m[91m|[0m         } else {
+[1m[94m1252[0m [1m[94m|[0m [1m[91m|[0m             0.0
+[1m[94m1253[0m [1m[94m|[0m [1m[91m|[0m         };
+     [1m[94m|[0m [1m[91m|_________^[0m [1m[91mhelp: try: `meta.duration_secs.map_or(0.0, |dur| 1.0_f64 - ((dur - thresholds.short_clip_secs) / range).clamp(0.0, 1.0))`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1392:24
+     [1m[94m|[0m
+[1m[94m1392[0m [1m[94m|[0m           let overflow = if let Some(dur) = meta.duration_secs {
+     [1m[94m|[0m [1m[91m ________________________^[0m
+[1m[94m1393[0m [1m[94m|[0m [1m[91m|[0m             ((dur - thresholds.modern_bias_duration_secs)
+[1m[94m1394[0m [1m[94m|[0m [1m[91m|[0m                 / thresholds.modern_bias_duration_secs.max(1.0))
+[1m[94m1395[0m [1m[94m|[0m [1m[91m|[0m             .clamp(0.0, 1.0)
+[1m[94m1396[0m [1m[94m|[0m [1m[91m|[0m         } else {
+[1m[94m1397[0m [1m[94m|[0m [1m[91m|[0m             0.0_f64
+[1m[94m1398[0m [1m[94m|[0m [1m[91m|[0m         };
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1392[0m [92m~ [0m        let overflow = [92mmeta.duration_secs.map_or(0.0_f64, |dur| ((dur - thresholds.modern_bias_duration_secs)[0m
+[1m[94m1393[0m [92m+                 / thresholds.modern_bias_duration_secs.max(1.0))[0m
+[1m[94m1394[0m [92m~             .clamp(0.0, 1.0))[0m;
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1600:29
+     [1m[94m|[0m
+[1m[94m1600[0m [1m[94m|[0m               let proximity = if let Some(dur) = meta.duration_secs {
+     [1m[94m|[0m [1m[91m _____________________________^[0m
+[1m[94m1601[0m [1m[94m|[0m [1m[91m|[0m                 1.0_f64 - (dur - short_veto) / short_buf
+[1m[94m1602[0m [1m[94m|[0m [1m[91m|[0m             } else {
+[1m[94m1603[0m [1m[94m|[0m [1m[91m|[0m                 0.0_f64
+[1m[94m1604[0m [1m[94m|[0m [1m[91m|[0m             };
+     [1m[94m|[0m [1m[91m|_____________^[0m [1m[91mhelp: try: `meta.duration_secs.map_or(0.0_f64, |dur| 1.0_f64 - (dur - short_veto) / short_buf)`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1622:29
+     [1m[94m|[0m
+[1m[94m1622[0m [1m[94m|[0m               let proximity = if let Some(dur) = meta.duration_secs {
+     [1m[94m|[0m [1m[91m _____________________________^[0m
+[1m[94m1623[0m [1m[94m|[0m [1m[91m|[0m                 (dur - long_ramp_bottom) / long_buf
+[1m[94m1624[0m [1m[94m|[0m [1m[91m|[0m             } else {
+[1m[94m1625[0m [1m[94m|[0m [1m[91m|[0m                 1.0_f64 // Conservative fallback for Long/VeryLong if duration missing
+[1m[94m1626[0m [1m[94m|[0m [1m[91m|[0m             };
+     [1m[94m|[0m [1m[91m|_____________^[0m [1m[91mhelp: try: `meta.duration_secs.map_or(1.0_f64, |dur| (dur - long_ramp_bottom) / long_buf)`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+
+[1m[91merror[0m: could not compile `shared_utils` (lib) due to 38 previous errors
+[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+[1m[91merror[0m: could not compile `shared_utils` (lib test) due to 38 previous errors

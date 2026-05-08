@@ -308,11 +308,11 @@ fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<Str
 /// Return the correct pixel format for encoding: yuv420p10le for 10-bit HDR content,
 /// yuv420p for 8-bit SDR. Preserving the bit depth is essential for HDR accuracy.
 const fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
-    if probe.bit_depth >= 10 {
-        "yuv420p10le"
-    } else {
-        "yuv420p"
-    }
+    let is_ten_bit = match probe.bit_depth {
+        Some(bd) => bd >= 10,
+        None => false,
+    };
+    if is_ten_bit { "yuv420p10le" } else { "yuv420p" }
 }
 
 /// Percentage change from input stream size (avoids div-by-zero / inf when input is 0).
@@ -554,8 +554,9 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
     };
     let duration: f32 = probe_result
         .as_ref()
-        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| {
-            crate::numeric_cast::f64_to_f32_lossy(p.duration)
+        .and_then(|p| p.duration)
+        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |d| {
+            crate::numeric_cast::f64_to_f32_lossy(d)
         });
 
     // [New Logic] Bitrate-based GPU Start Condition
@@ -1118,7 +1119,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         result.psnr_uv_score = psnr_uv;
     };
 
-    let duration_opt = probe_result.as_ref().map(|probe| probe.duration);
+    let duration_opt = probe_result.as_ref().and_then(|probe| probe.duration);
     if let Some(duration) = duration_opt {
         crate::verbose_eprintln!(
             "   Video duration: {:.1}s ({:.1} min)",
@@ -4396,11 +4397,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         total_file_compressed && ssim_ok
     };
 
-    let ssim_val =
-        crate::numeric_cast::option_f64_strict(ssim, "final_ssim").unwrap_or_else(|| {
-            tracing::debug!("Missing final_ssim; defaulting to 0.0");
-            0.0
-        });
+    let ssim_val = crate::numeric_cast::option_f64_strict(ssim, "final_ssim");
 
     let sampling_coverage = 1.0_f64;
 
@@ -4425,14 +4422,19 @@ fn cpu_fine_tune_from_gpu_boundary(
             (Some(_), Some(_)) => 0.7_f64,
             _ => 0.5_f64,
         }
-    } else if ssim_val >= 0.99_f64 {
-        1.0_f64
-    } else if ssim_val >= 0.95_f64 {
-        0.9_f64
-    } else if ssim_val >= 0.90_f64 {
-        0.7_f64
+    } else if let Some(val) = ssim_val {
+        if val >= 0.99_f64 {
+            1.0_f64
+        } else if val >= 0.95_f64 {
+            0.9_f64
+        } else if val >= 0.90_f64 {
+            0.7_f64
+        } else {
+            0.5_f64
+        }
     } else {
-        0.5_f64
+        // Honest: if SSIM failed, confidence is very low.
+        0.3_f64
     };
 
     let confidence_detail = ConfidenceBreakdown {

@@ -55,7 +55,15 @@ fn production_code_has_no_numeric_forgery_fallbacks() {
     let offenders = offending_lines(
         &root,
         &files,
-        &["unwrap_or(0)", "unwrap_or(0.0)", "unwrap_or(1)"],
+        &[
+            "unwrap_or(0)",
+            "unwrap_or(0.0)",
+            "unwrap_or(1)",
+            "unwrap_or(1.0)",
+            "unwrap_or(0.5)",
+            "unwrap_or(85)",
+            "unwrap_or(35)",
+        ],
     );
 
     assert!(

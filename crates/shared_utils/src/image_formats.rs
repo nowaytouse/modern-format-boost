@@ -146,21 +146,21 @@ pub mod tiff {
                     && tag == 259
                 {
                     let compression = if is_bigtiff {
-                        read_u16(pos + 12).unwrap_or_else(|| {
-                            tracing::warn!(
-                                "Failed to read TIFF compression tag at offset {}",
-                                pos + 12
-                            );
-                            1 // Default compression
-                        })
+                        read_u16(pos + 12).ok_or_else(|| {
+                            ImgQualityError::AnalysisError(format!(
+                                "TIFF: Failed to read compression tag at offset {} in {}",
+                                pos + 12,
+                                path.display()
+                            ))
+                        })?
                     } else {
-                        read_u16(pos + 8).unwrap_or_else(|| {
-                            tracing::warn!(
-                                "Failed to read TIFF compression tag at offset {}",
-                                pos + 8
-                            );
-                            1 // Default compression
-                        })
+                        read_u16(pos + 8).ok_or_else(|| {
+                            ImgQualityError::AnalysisError(format!(
+                                "TIFF: Failed to read compression tag at offset {} in {}",
+                                pos + 8,
+                                path.display()
+                            ))
+                        })?
                     };
                     if compression == 6 || compression == 7 || compression == 50001 {
                         return Ok(false);
@@ -204,10 +204,12 @@ pub mod png {
         if let Ok(mut file) = fs::File::open(path) {
             let mut header = [0u8; 16];
             if file.read_exact(&mut header).is_ok() {
-                return 6;
+                // Heuristic: PNG with reasonable header is usually medium compression
+                return crate::constants::FALLBACK_COMPRESSION_PNG;
             }
         }
-        6
+        tracing::warn!(path = %path.display(), "PNG Analysis: Could not read header to estimate compression; using default medium ({})", crate::constants::FALLBACK_COMPRESSION_PNG);
+        crate::constants::FALLBACK_COMPRESSION_PNG
     }
 }
 
@@ -242,7 +244,8 @@ pub mod jpeg {
                 }
             }
         }
-        85
+        tracing::warn!(path = %path.display(), "JPEG Analysis: No DQT markers found in first 4KB; using default quality ({})", crate::constants::FALLBACK_QUALITY_JPEG);
+        crate::constants::FALLBACK_QUALITY_JPEG
     }
 
     #[must_use]
@@ -279,8 +282,9 @@ pub mod webp {
         // WebP structure: RIFF[size]WEBP[chunks...]
         // Walk top-level chunks to find ANMF frames
         if data.len() < 12 {
-            // Fallback to lossy for corrupted/truncated files (safe default for animated WebP)
-            return Ok(false);
+            return Err(ImgQualityError::AnalysisError(
+                "WebP: data too small for format identification".to_string(),
+            ));
         }
 
         let mut pos = 12; // skip RIFF + size + WEBP
@@ -372,17 +376,15 @@ pub mod webp {
                 && vp8_data.get(3..6) == Some(&[0x9D, 0x01, 0x2A])
             {
                 let y_ac_qi = vp8_data[10] & 0x7F;
-                let quality = crate::numeric_cast::u32_to_u8_sat(
-                    (u32::from(127 - y_ac_qi) * 100)
-                        .checked_div(127)
-                        .unwrap_or_else(|| {
-                            tracing::warn!(
-                                "WebP Analysis: Division by 127 failed in quality calculation; defaulting to max quality (100) to prevent panic"
-                            );
-                            100
-                        })
-                        .min(100),
-                );
+                let quality = (u32::from(127 - y_ac_qi) * 100)
+                    .checked_div(127)
+                    .map(|q| crate::numeric_cast::u32_to_u8_sat(q.min(100)))
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "WebP Analysis: Division by 127 failed in quality calculation"
+                                .to_string(),
+                        )
+                    })?;
                 return Ok(quality);
             }
             let padded = (chunk_size + 1) & !1;
@@ -415,10 +417,7 @@ pub mod webp {
 
     #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
-        let count = crate::numeric_cast::usize_to_u32_sat(
-            data.windows(4).filter(|w| *w == b"ANMF").count(),
-        ); // Marker
-        count.max(1)
+        crate::numeric_cast::usize_to_u32_sat(data.windows(4).filter(|w| *w == b"ANMF").count()) // Marker
     }
 
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.

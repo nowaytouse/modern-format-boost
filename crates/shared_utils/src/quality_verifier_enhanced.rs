@@ -205,21 +205,42 @@ fn run_probe_checks(
             }
             if options.require_duration_match {
                 let tol = options.duration_tolerance_secs.max(0.0);
-                let diff = (inp.duration - out.duration).abs();
-                let ok = diff <= tol;
+                let (diff, ok) = match (inp.duration, out.duration) {
+                    (Some(i), Some(o)) => {
+                        let d = (i - o).abs();
+                        (Some(d), d <= tol)
+                    }
+                    (None, None) => (None, true), // Both missing: technically a match in absence
+                    _ => (None, false),           // One missing: mismatch
+                };
+
                 *duration_match = if ok {
                     CheckResult::Passed
                 } else {
-                    CheckResult::Failed(format!(
-                        "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
-                        inp.duration, out.duration, diff, tol
-                    ))
+                    let reason = match (inp.duration, out.duration) {
+                        (Some(i), Some(o)) => {
+                            let d = diff.unwrap_or_else(|| (i - o).abs());
+                            format!(
+                                "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
+                                i, o, d, tol
+                            )
+                        }
+                        (None, Some(o)) => {
+                            format!("Input duration missing, but output is {o:.2}s")
+                        }
+                        (Some(i), None) => {
+                            format!("Input is {i:.2}s, but output duration missing")
+                        }
+                        (None, None) => unreachable!("Handled in match arm"),
+                    };
+                    CheckResult::Failed(reason)
                 };
+                let diff_str = diff.map_or_else(|| "N/A".to_string(), |d| format!("{d:.2}s"));
                 details.push(format!(
-                    "Duration: input {:.2}s, output {:.2}s, diff {:.2}s (tolerance {:.2}s) → {}",
+                    "Duration: input {:?}, output {:?}, diff {} (tolerance {:.2}s) → {}",
                     inp.duration,
                     out.duration,
-                    diff,
+                    diff_str,
                     tol,
                     if ok { "OK" } else { "MISMATCH" }
                 ));

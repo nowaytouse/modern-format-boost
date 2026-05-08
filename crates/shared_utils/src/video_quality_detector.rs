@@ -36,7 +36,7 @@ pub struct VideoQualityAnalysis {
     pub height: u32,
     pub file_size: u64,
     pub duration_secs: f64,
-    pub fps: f64,
+    pub fps: Option<f64>,
     pub frame_count: Option<u64>,
 
     pub codec: String,
@@ -48,13 +48,13 @@ pub struct VideoQualityAnalysis {
     pub total_bitrate: u64,
     pub video_bitrate: Option<u64>,
     pub bpp: f64,
-    pub bit_depth: u8,
+    pub bit_depth: Option<u8>,
 
     pub pix_fmt: String,
     pub chroma: ChromaSubsampling,
     pub gop_size: Option<u32>,
     /// Actual B-frame count (`max_b_frames`) from ffprobe.
-    pub b_frame_count: u8,
+    pub b_frame_count: Option<u8>,
     pub has_b_frames: bool,
 
     pub color_space: Option<String>,
@@ -177,13 +177,13 @@ pub struct VideoQualityInput<'a> {
     pub codec: &'a str,
     pub width: u32,
     pub height: u32,
-    pub fps: f64,
+    pub fps: Option<f64>,
     pub duration_secs: f64,
     pub total_bitrate: u64,
     pub video_bitrate: Option<u64>,
     pub pix_fmt: &'a str,
-    pub bit_depth: u8,
-    pub max_b_frames: u8,
+    pub bit_depth: Option<u8>,
+    pub max_b_frames: Option<u8>,
     pub encoder_params: Option<&'a str>,
     pub gop_size: Option<u32>,
     pub color_space: Option<&'a str>,
@@ -269,7 +269,8 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     if width == 0 || height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
-    if fps <= 0.0_f64 {
+    let fps_val = fps.ok_or_else(|| "❌ Missing frame rate metadata".to_string())?;
+    if fps_val <= 0.0_f64 {
         return Err("❌ Invalid frame rate: fps must be > 0".to_string());
     }
     if duration_secs <= 0.0_f64 {
@@ -282,10 +283,24 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 
     let skip_decision = should_skip_video_codec(codec);
 
-    let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
+    let effective_bitrate = video_bitrate
+        .or_else(|| {
+            if total_bitrate > 0 {
+                Some(total_bitrate)
+            } else if duration_secs > 0.0 {
+                // Calculate from file size: (file_size * 8) / duration
+                let bits = crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64;
+                Some(crate::numeric_cast::f64_to_u64_sat(bits / duration_secs))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            "❌ Missing bitrate: cannot calculate BPP for quality assessment".to_string()
+        })?;
     let bpp = {
         let pixels_per_second = Rational::from(width) * Rational::from(height) * {
-            let Some(fps_r) = crate::numeric_cast::f64_to_rational_strict(fps, "fps") else {
+            let Some(fps_r) = crate::numeric_cast::f64_to_rational_strict(fps_val, "fps") else {
                 return Err("❌ Invalid frame rate: fps is NaN/Inf".to_string());
             };
             fps_r
@@ -314,10 +329,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         cs_lower.contains("bt2020") || cs_lower.contains("2020")
     });
 
-    let has_b_frames = max_b_frames > 0;
+    let has_b_frames = max_b_frames.is_some_and(|b| b > 0);
     let b_frame_count = max_b_frames;
 
-    let content_type = estimate_content_type(bpp, codec_type, width, height, fps);
+    let content_type = estimate_content_type(bpp, codec_type, width, height, fps_val);
 
     let compression_type = CompressionLevel::from_bpp(bpp, codec_type);
 
@@ -327,8 +342,12 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     let estimated_crf = encoder_params.map_or_else(
         || estimate_crf_from_bpp(bpp, codec_type),
         |params| {
-            extract_crf_from_params(params)
-                .unwrap_or_else(|| estimate_crf_from_bpp(bpp, codec_type))
+            extract_crf_from_params(params).unwrap_or_else(|| {
+                tracing::warn!(
+                    "Video Analysis: Metadata search for CRF failed; falling back to BPP heuristic"
+                );
+                estimate_crf_from_bpp(bpp, codec_type)
+            })
         },
     );
 
@@ -344,7 +363,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         height,
         file_size,
         duration_secs,
-        fps,
+        fps: Some(fps_val),
         frame_count: input_frame_count,
         codec: codec.to_string(),
         codec_type,
@@ -384,19 +403,22 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 pub fn analyze_video_quality_from_detection(
     detection: &VideoDetectionResult,
 ) -> Result<VideoQualityAnalysis, String> {
-    if detection.duration_secs <= 0.0_f64 {
+    if detection.duration_secs.is_none_or(|d| d <= 0.0) {
         return Err("Invalid duration: must be > 0".to_string());
     }
-    if detection.fps <= 0.0_f64 {
-        return Err("Invalid frame rate: fps must be > 0".to_string());
-    }
+    let total_bitrate = detection
+        .bitrate
+        .ok_or_else(|| "Missing total bitrate".to_string())?;
+
     analyze_video_quality(VideoQualityInput {
         codec: detection.codec.as_str(),
         width: detection.width,
         height: detection.height,
         fps: detection.fps,
-        duration_secs: detection.duration_secs,
-        total_bitrate: detection.bitrate,
+        duration_secs: detection
+            .duration_secs
+            .expect("Guard at 406 ensured presence"),
+        total_bitrate,
         video_bitrate: detection.video_bitrate,
         pix_fmt: &detection.pix_fmt,
         bit_depth: detection.bit_depth,
@@ -457,21 +479,26 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
     write_to_log_at_level(
         Level::DEBUG,
         &format!(
-            "  size={}x{} fps={:.2} duration={:.2}s frames={}",
+            "  size={}x{} fps={} duration={:.2}s frames={:?}",
             analysis.width,
             analysis.height,
-            analysis.fps,
-            analysis.duration_secs,
             analysis
-                .frame_count
-                .map_or_else(|| "unknown".to_string(), |fc| fc.to_string())
+                .fps
+                .map_or_else(|| "N/A".to_string(), |f| format!("{f:.2}")),
+            analysis.duration_secs,
+            analysis.frame_count
         ),
     );
     write_to_log_at_level(
         Level::DEBUG,
         &format!(
             "  bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={}",
-            analysis.total_bitrate, analysis.video_bitrate, analysis.bpp, analysis.bit_depth
+            analysis.total_bitrate,
+            analysis.video_bitrate,
+            analysis.bpp,
+            analysis
+                .bit_depth
+                .map_or_else(|| "N/A".to_string(), |v| v.to_string())
         ),
     );
     write_to_log_at_level(
@@ -499,36 +526,33 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
 
 #[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
-    let gop_fallback = crate::numeric_cast::f64_to_u32_strict(
-        (analysis.fps * 2.5).round().clamp(12.0, 250.0),
-        "gop_fallback",
-    )
-    .unwrap_or_else(|| {
-        tracing::warn!(
-            "Invalid FPS {} for GOP calculation, using default",
-            analysis.fps
-        );
-        30 // Default GOP size
+    let gop_size = analysis.gop_size.or_else(|| {
+        analysis.fps.and_then(|f| {
+            crate::numeric_cast::f64_to_u32_strict((f * 2.5).round().clamp(12.0, 250.0), "gop_calc")
+        })
     });
     let color_fallback = if analysis.height <= 576 {
         "bt601"
     } else {
         "bt709"
     };
+    if analysis.color_space.is_none() {
+        tracing::warn!(
+            "Video Analysis: Missing color space; defaulting to {} based on resolution",
+            color_fallback
+        );
+    }
     VideoAnalysisBuilder::new()
         .basic(
             &analysis.codec,
             analysis.width,
             analysis.height,
             analysis.fps,
-            analysis.duration_secs,
+            Some(analysis.duration_secs),
         )
         .file_size(analysis.file_size)
         .video_bitrate(analysis.video_bitrate.unwrap_or(analysis.total_bitrate))
-        .gop(
-            analysis.gop_size.unwrap_or(gop_fallback),
-            analysis.b_frame_count,
-        )
+        .gop(gop_size, analysis.b_frame_count)
         .pix_fmt(&analysis.pix_fmt)
         .color(
             analysis.color_space.as_deref().unwrap_or(color_fallback),
@@ -576,7 +600,7 @@ fn estimate_content_type(
 fn calculate_quality_score(
     bpp: f64,
     codec_type: VideoCodecType,
-    bit_depth: u8,
+    bit_depth: Option<u8>,
     compression: CompressionLevel,
 ) -> u8 {
     let base = match compression {
@@ -585,10 +609,19 @@ fn calculate_quality_score(
         CompressionLevel::HighQuality => 80,
         CompressionLevel::Standard => 60,
         CompressionLevel::LowQuality => 40,
-        CompressionLevel::Unknown => 50, // Neutral fallback for unknown compression
+        CompressionLevel::Unknown => {
+            tracing::warn!(
+                "Video Analysis: [ANOMALY] Unknown compression level; using neutral score (50)"
+            );
+            50
+        }
     };
 
-    let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
+    let depth_bonus = if bit_depth.is_some_and(|bd| bd >= 10) {
+        5
+    } else {
+        0
+    };
 
     let codec_bonus = if codec_type == VideoCodecType::ModernEfficient {
         3
@@ -653,7 +686,12 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
             return crf;
         }
     }
-    35 // Fallback to safe standard
+    tracing::warn!(
+        "Video Analysis: BPP-to-CRF LUT failed for adjusted_bpp={:.4}; using fallback CRF ({})",
+        adjusted_bpp,
+        crate::constants::FALLBACK_CRF_VIDEO
+    );
+    crate::numeric_cast::f32_to_u8_sat(crate::constants::FALLBACK_CRF_VIDEO)
 }
 
 fn calculate_video_confidence(
@@ -708,13 +746,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: Some(7_500_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: Some("bt709"),
@@ -737,13 +775,13 @@ mod tests {
             codec: "hevc",
             width: 3840,
             height: 2160,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 120.0,
             total_bitrate: 20_000_000,
             video_bitrate: Some(19_000_000),
             pix_fmt: "yuv420p10le",
-            bit_depth: 10,
-            max_b_frames: 2,
+            bit_depth: Some(10),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: Some("bt2020nc"),
@@ -756,7 +794,7 @@ mod tests {
         assert!(result.is_modern_codec);
         assert!(result.should_skip, "HEVC should be skipped");
         assert!(result.is_hdr, "BT.2020 should be detected as HDR");
-        assert_eq!(result.bit_depth, 10);
+        assert_eq!(result.bit_depth, Some(10));
     }
 
     #[test]
@@ -765,13 +803,13 @@ mod tests {
             codec: "av1",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 90.0,
             total_bitrate: 5_000_000,
             video_bitrate: Some(4_800_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(120),
             color_space: None,
@@ -793,13 +831,13 @@ mod tests {
             codec: "prores",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 150_000_000,
             video_bitrate: Some(145_000_000),
             pix_fmt: "yuv422p10le",
-            bit_depth: 10,
-            max_b_frames: 0,
+            bit_depth: Some(10),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: Some(1),
             color_space: Some("bt709"),
@@ -820,13 +858,13 @@ mod tests {
             codec: "ffv1",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 30.0,
             total_bitrate: 200_000_000,
             video_bitrate: Some(195_000_000),
             pix_fmt: "yuv444p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: Some(1),
             color_space: None,
@@ -848,13 +886,13 @@ mod tests {
                 codec,
                 width: 1920,
                 height: 1080,
-                fps: 30.0,
+                fps: Some(30.0),
                 duration_secs: 60.0,
                 total_bitrate: 8_000_000,
                 video_bitrate: None,
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -875,13 +913,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -895,13 +933,13 @@ mod tests {
             codec: "mjpeg",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 50_000_000,
             video_bitrate: None,
             pix_fmt: "yuvj420p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -915,13 +953,13 @@ mod tests {
             codec: "prores",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 150_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p10le",
-            bit_depth: 10,
-            max_b_frames: 0,
+            bit_depth: Some(10),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -990,13 +1028,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: Some(8_000_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1020,13 +1058,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 10_000_000,
             video_bitrate: Some(8_000_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1050,13 +1088,13 @@ mod tests {
             codec: "ffv1",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 200_000_000,
             video_bitrate: None,
             pix_fmt: "yuv444p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1074,13 +1112,13 @@ mod tests {
             codec: "prores",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 150_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p10le",
-            bit_depth: 10,
-            max_b_frames: 0,
+            bit_depth: Some(10),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1098,13 +1136,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1127,13 +1165,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 3_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1156,13 +1194,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 20_000_000,
             video_bitrate: Some(19_000_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1184,13 +1222,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 1_000_000,
             video_bitrate: Some(900_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1212,13 +1250,13 @@ mod tests {
             codec: "ffv1",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 200_000_000,
             video_bitrate: None,
             pix_fmt: "yuv444p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1236,13 +1274,13 @@ mod tests {
             codec: "hevc",
             width: 3840,
             height: 2160,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 25_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p10le",
-            bit_depth: 10,
-            max_b_frames: 2,
+            bit_depth: Some(10),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: Some("bt2020nc"),
@@ -1260,13 +1298,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: Some("bt709"),
@@ -1284,13 +1322,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1311,13 +1349,13 @@ mod tests {
             codec: "hevc",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1337,13 +1375,13 @@ mod tests {
             codec: "ffv1",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 200_000_000,
             video_bitrate: None,
             pix_fmt: "yuv444p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1360,13 +1398,13 @@ mod tests {
             codec: "prores",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 150_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p10le",
-            bit_depth: 10,
-            max_b_frames: 0,
+            bit_depth: Some(10),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1384,13 +1422,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1407,13 +1445,13 @@ mod tests {
             codec: "h264",
             width: 0,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1436,13 +1474,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 0,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1465,13 +1503,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 0.0,
+            fps: Some(0.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1494,13 +1532,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: -30.0,
+            fps: Some(-30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1517,13 +1555,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 0.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1546,13 +1584,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: -60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1569,13 +1607,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 100_000,
             video_bitrate: Some(90_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1601,13 +1639,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 500_000_000,
             video_bitrate: Some(490_000_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1633,13 +1671,13 @@ mod tests {
             codec: "h264",
             width: 854,
             height: 480,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 2_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1660,13 +1698,13 @@ mod tests {
             codec: "h264",
             width: 1280,
             height: 720,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 5_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1685,13 +1723,13 @@ mod tests {
             codec: "hevc",
             width: 3840,
             height: 2160,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 25_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p10le",
-            bit_depth: 10,
-            max_b_frames: 2,
+            bit_depth: Some(10),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1711,13 +1749,13 @@ mod tests {
             codec: "av1",
             width: 7680,
             height: 4320,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 80_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p10le",
-            bit_depth: 10,
-            max_b_frames: 2,
+            bit_depth: Some(10),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1737,13 +1775,13 @@ mod tests {
             codec: "h264",
             width: 1080,
             height: 1920,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1763,13 +1801,13 @@ mod tests {
             codec: "h264",
             width: 1080,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 6_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1788,13 +1826,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1803,7 +1841,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 24.0).abs() < 0.01_f64);
+        assert!(result.fps.is_some_and(|f| (f - 24.0).abs() < 0.01_f64));
         assert_eq!(result.frame_count, Some(1440));
     }
 
@@ -1813,13 +1851,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 60.0,
+            fps: Some(60.0),
             duration_secs: 60.0,
             total_bitrate: 15_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1828,7 +1866,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 60.0).abs() < 0.01_f64);
+        assert!(result.fps.is_some_and(|f| (f - 60.0).abs() < 0.01_f64));
         assert_eq!(result.frame_count, Some(3600));
     }
 
@@ -1838,13 +1876,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 120.0,
+            fps: Some(120.0),
             duration_secs: 30.0,
             total_bitrate: 25_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1853,7 +1891,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 120.0).abs() < 0.01_f64);
+        assert!(result.fps.is_some_and(|f| (f - 120.0).abs() < 0.01_f64));
         assert_eq!(result.frame_count, Some(3600));
     }
 
@@ -1863,13 +1901,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 29.97,
+            fps: Some(29.97),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1878,7 +1916,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 29.97).abs() < 0.01_f64);
+        assert!(result.fps.is_some_and(|f| (f - 29.97).abs() < 0.01_f64));
     }
 
     #[test]
@@ -1887,13 +1925,13 @@ mod tests {
             codec: "ffv1",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 200_000_000,
             video_bitrate: None,
             pix_fmt: "yuv444p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1907,13 +1945,13 @@ mod tests {
             codec: "huffyuv",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 300_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1927,13 +1965,13 @@ mod tests {
             codec: "utvideo",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 250_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -1952,13 +1990,13 @@ mod tests {
                 codec,
                 width: 1920,
                 height: 1080,
-                fps: 30.0,
+                fps: Some(30.0),
                 duration_secs: 60.0,
                 total_bitrate: 8_000_000,
                 video_bitrate: None,
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -1980,13 +2018,13 @@ mod tests {
             codec: "prores",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 150_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p10le",
-            bit_depth: 10,
-            max_b_frames: 0,
+            bit_depth: Some(10),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2000,13 +2038,13 @@ mod tests {
             codec: "dnxhd",
             width: 1920,
             height: 1080,
-            fps: 24.0,
+            fps: Some(24.0),
             duration_secs: 60.0,
             total_bitrate: 120_000_000,
             video_bitrate: None,
             pix_fmt: "yuv422p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2023,13 +2061,13 @@ mod tests {
             codec: "mjpeg",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 50_000_000,
             video_bitrate: None,
             pix_fmt: "yuvj420p",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2043,13 +2081,13 @@ mod tests {
             codec: "gif",
             width: 640,
             height: 480,
-            fps: 15.0,
+            fps: Some(15.0),
             duration_secs: 10.0,
             total_bitrate: 5_000_000,
             video_bitrate: None,
             pix_fmt: "rgb8",
-            bit_depth: 8,
-            max_b_frames: 0,
+            bit_depth: Some(8),
+            max_b_frames: Some(0),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2066,13 +2104,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 10_000_000,
             video_bitrate: Some(8_000_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: None,
@@ -2085,13 +2123,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 10_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2114,13 +2152,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: None,
@@ -2133,13 +2171,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2160,13 +2198,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 120.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2179,13 +2217,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 5.0,
             total_bitrate: 8_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: None,
             color_space: None,
@@ -2206,13 +2244,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: Some(7_500_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: Some("bt709"),
@@ -2242,13 +2280,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: Some(7_500_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: Some("bt709"),
@@ -2261,13 +2299,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 8_000_000,
             video_bitrate: Some(7_500_000),
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: None,
             gop_size: Some(60),
             color_space: Some("bt709"),
@@ -2299,13 +2337,13 @@ mod tests {
                 codec: "h264",
                 width: w,
                 height: h,
-                fps,
+                fps: Some(fps),
                 duration_secs: 60.0,
                 total_bitrate: bitrate,
                 video_bitrate: Some(bitrate),
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -2344,13 +2382,13 @@ mod tests {
                 codec: "hevc",
                 width: 1920,
                 height: 1080,
-                fps,
+                fps: Some(fps),
                 duration_secs: duration,
                 total_bitrate: 8_000_000,
                 video_bitrate: None,
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -2388,13 +2426,13 @@ mod tests {
                 codec,
                 width: 1920,
                 height: 1080,
-                fps: 30.0,
+                fps: Some(30.0),
                 duration_secs: 60.0,
                 total_bitrate: 8_000_000,
                 video_bitrate: None,
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -2425,13 +2463,13 @@ mod tests {
                 codec,
                 width: 1920,
                 height: 1080,
-                fps: 30.0,
+                fps: Some(30.0),
                 duration_secs: 60.0,
                 total_bitrate: 8_000_000,
                 video_bitrate: None,
                 pix_fmt: "yuv420p",
-                bit_depth: 8,
-                max_b_frames: 2,
+                bit_depth: Some(8),
+                max_b_frames: Some(2),
                 encoder_params: None,
                 gop_size: None,
                 color_space: None,
@@ -2461,13 +2499,13 @@ mod tests {
             codec: "h264",
             width: 1920,
             height: 1080,
-            fps: 30.0,
+            fps: Some(30.0),
             duration_secs: 60.0,
             total_bitrate: 1_000_000,
             video_bitrate: None,
             pix_fmt: "yuv420p",
-            bit_depth: 8,
-            max_b_frames: 2,
+            bit_depth: Some(8),
+            max_b_frames: Some(2),
             encoder_params: Some("rc=crf / crf=15.0 / preset=medium"),
             gop_size: None,
             color_space: None,

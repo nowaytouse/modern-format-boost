@@ -25,10 +25,10 @@ fn main() {
 
     // 2. Create mock LoopMeta using only existing public fields
     let meta = LoopMeta {
-        duration_secs: 2.5,
+        duration_secs: Some(2.5),
         width: 640,
         height: 480,
-        fps: 30.0,
+        fps: Some(30.0),
         frame_count: Some(75),
         file_size_bytes: 500_000,
         file_name: Some("test_file.gif".to_string()),

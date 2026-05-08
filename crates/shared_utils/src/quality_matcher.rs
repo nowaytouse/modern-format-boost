@@ -574,7 +574,7 @@ pub struct QualityAnalysis {
     pub width: u32,
     pub height: u32,
     pub has_b_frames: bool,
-    pub bit_depth: u8,
+    pub bit_depth: Option<u8>,
     pub has_alpha: bool,
     pub duration_secs: Option<f64>,
     pub fps: Option<f64>,
@@ -636,7 +636,7 @@ impl Default for QualityAnalysis {
             width: 0,
             height: 0,
             has_b_frames: false,
-            bit_depth: 8,
+            bit_depth: Some(8),
             has_alpha: false,
             duration_secs: None,
             fps: None,
@@ -703,7 +703,7 @@ pub struct AnalysisDetails {
     #[serde(default = "default_one")]
     pub duration_factor: f64,
 
-    pub confidence: f64,
+    pub confidence: Option<f64>,
     pub match_mode: MatchMode,
     pub quality_bias: QualityBias,
 }
@@ -730,7 +730,7 @@ impl Default for AnalysisDetails {
             bframe_factor: 1.0,
             fps_factor: 1.0,
             duration_factor: 1.0,
-            confidence: 0.0,
+            confidence: None,
             match_mode: MatchMode::Quality,
             quality_bias: QualityBias::Balanced,
         }
@@ -770,23 +770,28 @@ pub fn calculate_av1_crf_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Av1, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
+        let conf_str = details
+            .confidence
+            .map(|c| format!("{:.0}%", c * 100.0))
+            .unwrap_or_else(|| "N/A".to_string());
         return Err(format!(
-            "❌ Cannot calculate AV1 CRF: effective_bpp is {} (must be > 0)\n\
+            "❌ Cannot calculate AV1 CRF: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
              - File size is 0 or unknown\n\
              - video_bitrate not provided\n\
              - Duration/fps detection failed\n\
              - Invalid dimensions\n\
-             💡 Confidence: {:.0}%",
-            effective_bpp,
-            details.confidence * 100.0
+             💡 Confidence: {conf_str}"
         ));
     }
     if !effective_bpp.is_finite() {
+        let conf_str = details
+            .confidence
+            .map(|c| format!("{:.0}%", c * 100.0))
+            .unwrap_or_else(|| "N/A".to_string());
         return Err(format!(
             "❌ Cannot calculate AV1 CRF: effective_bpp is non-finite (NaN/Inf)\n\
-             💡 Confidence: {:.0}%",
-            details.confidence * 100.0
+             💡 Confidence: {conf_str}"
         ));
     }
     // Defensive clamp so formula inputs are always in a safe range; final CRF clamp [15, 40] remains the safeguard.
@@ -842,23 +847,28 @@ pub fn calculate_hevc_crf_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Hevc, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
+        let conf_str = details
+            .confidence
+            .map(|c| format!("{:.0}%", c * 100.0))
+            .unwrap_or_else(|| "N/A".to_string());
         return Err(format!(
-            "❌ Cannot calculate HEVC CRF: effective_bpp is {} (must be > 0)\n\
+            "❌ Cannot calculate HEVC CRF: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
              - File size is 0 or unknown\n\
              - video_bitrate not provided\n\
              - Duration/fps detection failed\n\
              - Invalid dimensions\n\
-             💡 Confidence: {:.0}%",
-            effective_bpp,
-            details.confidence * 100.0
+             💡 Confidence: {conf_str}"
         ));
     }
     if !effective_bpp.is_finite() {
+        let conf_str = details
+            .confidence
+            .map(|c| format!("{:.0}%", c * 100.0))
+            .unwrap_or_else(|| "N/A".to_string());
         return Err(format!(
             "❌ Cannot calculate HEVC CRF: effective_bpp is non-finite (NaN/Inf)\n\
-             💡 Confidence: {:.0}%",
-            details.confidence * 100.0
+             💡 Confidence: {conf_str}"
         ));
     }
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
@@ -924,7 +934,7 @@ pub fn calculate_jxl_distance_with_options(
             distance: clamped,
             effective_bpp: analysis.bpp,
             analysis_details: AnalysisDetails {
-                confidence: calculate_confidence_v3(analysis),
+                confidence: Some(calculate_confidence_v3(analysis)),
                 match_mode: mode,
                 quality_bias: bias,
                 ..Default::default()
@@ -936,15 +946,17 @@ pub fn calculate_jxl_distance_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Jxl, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
+        let conf_str = details
+            .confidence
+            .map(|c| format!("{:.0}%", c * 100.0))
+            .unwrap_or_else(|| "N/A".to_string());
         return Err(format!(
-            "❌ Cannot calculate JXL distance: effective_bpp is {} (must be > 0)\n\
+            "❌ Cannot calculate JXL distance: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
              - File size is 0 or unknown\n\
              - Invalid dimensions\n\
              💡 For JPEG sources, ensure JPEG quality analysis is available\n\
-             💡 Confidence: {:.0}%",
-            effective_bpp,
-            details.confidence * 100.0
+             💡 Confidence: {conf_str}"
         ));
     }
 
@@ -997,12 +1009,7 @@ pub fn calculate_effective_bpp_with_options(
     let source_codec = parse_source_codec(&analysis.source_codec);
     let codec_factor = calculate_codec_efficiency(source_codec, analysis.encoder_preset.as_deref());
 
-    let gop_factor = calculate_gop_factor(
-        analysis.gop_size,
-        analysis
-            .b_frame_count
-            .unwrap_or(if analysis.has_b_frames { 2 } else { 0 }),
-    );
+    let gop_factor = calculate_gop_factor(analysis.gop_size, analysis.b_frame_count);
 
     let chroma_factor = calculate_chroma_factor(analysis.pix_fmt.as_deref());
 
@@ -1114,7 +1121,7 @@ pub fn calculate_effective_bpp_with_options(
         bframe_factor: gop_factor,
         fps_factor: 1.0,
         duration_factor: 1.0,
-        confidence,
+        confidence: Some(confidence),
         match_mode: mode,
         quality_bias: bias,
     };
@@ -1198,7 +1205,7 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())
 }
 
-fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
+fn calculate_gop_factor(gop_size: Option<u32>, b_frames: Option<u8>) -> f64 {
     let gop_base = match gop_size {
         Some(1) => 0.70_f64,
         Some(2..=10) => 0.85_f64,
@@ -1209,10 +1216,15 @@ fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
     };
 
     let b_pyramid_bonus = match b_frames {
-        0 => 1.0_f64,
-        1 => 1.05_f64,
-        2 => 1.08_f64,
-        _ => 1.12_f64,
+        Some(0) => 1.0_f64,
+        Some(1) => 1.05_f64,
+        Some(2) => 1.08_f64,
+        Some(3..) => 1.12_f64,
+        None => {
+            // Neutral factor: no bonus applied because metadata is unknown.
+            // This is honest (no forgery) and doesn't block the workflow.
+            1.0_f64
+        }
     };
 
     gop_base * b_pyramid_bonus
@@ -1292,13 +1304,17 @@ fn calculate_resolution_factor(pixels: u64) -> f64 {
     }
 }
 
-fn calculate_color_depth_factor(bit_depth: u8, codec: SourceCodec) -> f64 {
+fn calculate_color_depth_factor(bit_depth: Option<u8>, codec: SourceCodec) -> f64 {
     match bit_depth {
-        1..=8 if codec == SourceCodec::Gif => 1.3,
-        10 => 1.25,
-        12 => 1.5,
-        16 => 2.0,
-        _ => 1.0,
+        Some(1..=8) if codec == SourceCodec::Gif => 1.3,
+        Some(10) => 1.25,
+        Some(12) => 1.5,
+        Some(16) => 2.0,
+        Some(_) => 1.0,
+        None => {
+            // Honest neutrality: no bias if metadata is missing.
+            1.0
+        }
     }
 }
 
@@ -1442,7 +1458,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     }
 
     max_score += 3.0_f64;
-    if analysis.bit_depth > 0 {
+    if analysis.bit_depth.is_some_and(|bd| bd > 0) {
         score += 3.0_f64;
     }
 
@@ -1642,7 +1658,11 @@ fn log_analysis_header(encoder_name: &str, d: &AnalysisDetails) {
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
     );
-    eprintln!("      Confidence: {:.0}%", d.confidence * 100.0_f64);
+    let conf_str = d
+        .confidence
+        .map(|c| format!("{:.0}%", c * 100.0))
+        .unwrap_or_else(|| "N/A".to_string());
+    eprintln!("      Confidence: {conf_str}");
     eprintln!();
 }
 
@@ -1663,7 +1683,10 @@ fn log_source_info(analysis: &QualityAnalysis, codec: SourceCodec, d: &AnalysisD
     );
     eprintln!(
         "         Bit depth: {}-bit (factor: {:.2})",
-        analysis.bit_depth, d.color_depth_factor
+        analysis
+            .bit_depth
+            .map_or_else(|| "N/A".to_string(), |v| format!("{v}")),
+        d.color_depth_factor
     );
     eprintln!();
 }
@@ -1812,7 +1835,7 @@ pub fn from_video_detection(
         width,
         height,
         has_b_frames,
-        bit_depth,
+        bit_depth: Some(bit_depth),
         has_alpha: false,
         duration_secs: Some(duration_secs),
         fps: Some(fps),
@@ -1839,14 +1862,14 @@ impl VideoAnalysisBuilder {
         codec: &str,
         width: u32,
         height: u32,
-        fps: f64,
-        duration_secs: f64,
+        fps: Option<f64>,
+        duration_secs: Option<f64>,
     ) -> Self {
         self.analysis.source_codec = codec.to_string();
         self.analysis.width = width;
         self.analysis.height = height;
-        self.analysis.fps = Some(fps);
-        self.analysis.duration_secs = Some(duration_secs);
+        self.analysis.fps = fps;
+        self.analysis.duration_secs = duration_secs;
         self
     }
 
@@ -1871,10 +1894,13 @@ impl VideoAnalysisBuilder {
     }
 
     #[must_use]
-    pub const fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
-        self.analysis.gop_size = Some(gop_size);
-        self.analysis.b_frame_count = Some(b_frames);
-        self.analysis.has_b_frames = b_frames > 0;
+    pub const fn gop(mut self, gop_size: Option<u32>, b_frames: Option<u8>) -> Self {
+        self.analysis.gop_size = gop_size;
+        self.analysis.b_frame_count = b_frames;
+        self.analysis.has_b_frames = match b_frames {
+            Some(b) => b > 0,
+            None => false,
+        };
         self
     }
 
@@ -1898,7 +1924,7 @@ impl VideoAnalysisBuilder {
     }
 
     #[must_use]
-    pub const fn bit_depth(mut self, depth: u8) -> Self {
+    pub const fn bit_depth(mut self, depth: Option<u8>) -> Self {
         self.analysis.bit_depth = depth;
         self
     }
@@ -2132,7 +2158,7 @@ pub fn from_image_analysis(
         width,
         height,
         has_b_frames: false,
-        bit_depth,
+        bit_depth: Some(bit_depth),
         has_alpha,
         duration_secs,
         fps,
@@ -2154,7 +2180,7 @@ mod tests {
             width: 1920,
             height: 1080,
             has_b_frames: true,
-            bit_depth: 8,
+            bit_depth: Some(8),
             has_alpha: false,
             duration_secs: Some(60.0_f64),
             fps: Some(30.0_f64),
@@ -2166,7 +2192,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
         // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing artificial constraints
         assert!(result.crf >= 0.0 && result.crf <= 51.0);
-        assert!(result.analysis_details.confidence > 0.5_f64);
+        assert!(result.analysis_details.confidence > Some(0.5_f64));
     }
 
     #[test]
@@ -2177,7 +2203,7 @@ mod tests {
             width: 640,
             height: 480,
             has_b_frames: false,
-            bit_depth: 8,
+            bit_depth: Some(8),
             has_alpha: false,
             duration_secs: Some(5.0_f64),
             fps: Some(10.0_f64),
@@ -2211,7 +2237,7 @@ mod tests {
             width: 1920,
             height: 1080,
             has_b_frames: false,
-            bit_depth: 8,
+            bit_depth: Some(8),
             has_alpha: false,
             duration_secs: None,
             fps: None,
@@ -2226,9 +2252,9 @@ mod tests {
 
     #[test]
     fn test_gop_factor() {
-        assert!(calculate_gop_factor(Some(1), 0) < 0.8_f64);
-        assert!(calculate_gop_factor(Some(250), 3) > 1.3_f64);
-        assert!((calculate_gop_factor(Some(30), 2) - 1.08).abs() < 0.1_f64);
+        assert!(calculate_gop_factor(Some(1), Some(0)) < 0.8_f64);
+        assert!(calculate_gop_factor(Some(250), Some(3)) > 1.3_f64);
+        assert!((calculate_gop_factor(Some(30), Some(2)) - 1.08).abs() < 0.1_f64);
     }
 
     #[test]
@@ -2335,7 +2361,7 @@ mod tests {
             width: 1920,
             height: 1080,
             has_b_frames: true,
-            bit_depth: 8,
+            bit_depth: Some(8),
             has_alpha: false,
             duration_secs: Some(60.0_f64),
             fps: Some(30.0_f64),
@@ -2348,7 +2374,7 @@ mod tests {
             ..Default::default()
         };
         let result = calculate_av1_crf(&complete).unwrap_or_else(|e| panic!("{e}"));
-        assert!(result.analysis_details.confidence > 0.8_f64);
+        assert!(result.analysis_details.confidence > Some(0.8_f64));
 
         let minimal = QualityAnalysis {
             bpp: 0.0,
@@ -2356,7 +2382,7 @@ mod tests {
             width: 1920,
             height: 1080,
             has_b_frames: false,
-            bit_depth: 0,
+            bit_depth: Some(0),
             has_alpha: false,
             duration_secs: None,
             fps: None,
@@ -2365,7 +2391,7 @@ mod tests {
             ..Default::default()
         };
         let result = calculate_av1_crf(&minimal).unwrap_or_else(|e| panic!("{e}"));
-        assert!(result.analysis_details.confidence < 0.7_f64);
+        assert!(result.analysis_details.confidence < Some(0.7_f64));
     }
 
     #[test]
@@ -2411,12 +2437,12 @@ mod tests {
     #[test]
     fn test_precision_1080p_h264_8mbps() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .color("bt709", false)
-            .bit_depth(8)
+            .bit_depth(Some(8))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -2447,12 +2473,12 @@ mod tests {
     #[test]
     fn test_precision_4k_h264_20mbps() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .basic("h264", 3840, 2160, Some(30.0), Some(60.0))
             .video_bitrate(20_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p")
             .color("bt709", false)
-            .bit_depth(8)
+            .bit_depth(Some(8))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -2467,16 +2493,16 @@ mod tests {
     #[test]
     fn test_precision_animation_content() {
         let base = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 24.0, 60.0)
+            .basic("h264", 1920, 1080, Some(24.0), Some(60.0))
             .video_bitrate(5_000_000)
-            .gop(48, 2)
+            .gop(Some(48), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let animation = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 24.0, 60.0)
+            .basic("h264", 1920, 1080, Some(24.0), Some(60.0))
             .video_bitrate(5_000_000)
-            .gop(48, 2)
+            .gop(Some(48), Some(2))
             .pix_fmt("yuv420p")
             .content_type(ContentType::Animation)
             .build();
@@ -2495,16 +2521,16 @@ mod tests {
     #[test]
     fn test_precision_film_grain_content() {
         let base = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 24.0, 60.0)
+            .basic("h264", 1920, 1080, Some(24.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(48, 2)
+            .gop(Some(48), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let grain = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 24.0, 60.0)
+            .basic("h264", 1920, 1080, Some(24.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(48, 2)
+            .gop(Some(48), Some(2))
             .pix_fmt("yuv420p")
             .content_type(ContentType::FilmGrain)
             .film_grain(true)
@@ -2530,21 +2556,21 @@ mod tests {
     #[test]
     fn test_precision_hdr_content() {
         let sdr = VideoAnalysisBuilder::new()
-            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .basic("h264", 3840, 2160, Some(30.0), Some(60.0))
             .video_bitrate(15_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p10le")
             .color("bt709", false)
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let hdr = VideoAnalysisBuilder::new()
-            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .basic("h264", 3840, 2160, Some(30.0), Some(60.0))
             .video_bitrate(15_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p10le")
             .color("bt2020nc", true)
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let sdr_result = calculate_av1_crf(&sdr).unwrap_or_else(|e| panic!("{e}"));
@@ -2561,16 +2587,16 @@ mod tests {
     #[test]
     fn test_precision_chroma_subsampling() {
         let yuv420 = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let yuv444 = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv444p")
             .build();
 
@@ -2588,16 +2614,16 @@ mod tests {
     #[test]
     fn test_precision_gop_structure() {
         let all_intra = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(20_000_000)
-            .gop(1, 0)
+            .gop(Some(1), Some(0))
             .pix_fmt("yuv420p")
             .build();
 
         let long_gop = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(250, 3)
+            .gop(Some(250), Some(3))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2619,9 +2645,9 @@ mod tests {
     #[test]
     fn test_precision_screen_recording() {
         let screen = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(2_000_000)
-            .gop(60, 0)
+            .gop(Some(60), Some(0))
             .pix_fmt("yuv420p")
             .content_type(ContentType::ScreenRecording)
             .build();
@@ -2643,16 +2669,16 @@ mod tests {
     #[test]
     fn test_precision_ultrawide_aspect() {
         let standard = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let ultrawide = VideoAnalysisBuilder::new()
-            .basic("h264", 2560, 1080, 30.0, 60.0)
+            .basic("h264", 2560, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2669,16 +2695,16 @@ mod tests {
     #[test]
     fn test_precision_codec_efficiency() {
         let h264_source = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let hevc_source = VideoAnalysisBuilder::new()
-            .basic("hevc", 1920, 1080, 30.0, 60.0)
+            .basic("hevc", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2696,9 +2722,9 @@ mod tests {
     #[test]
     fn test_precision_boundary_low_bpp() {
         let low_bpp = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(500_000)
-            .gop(60, 0)
+            .gop(Some(60), Some(0))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2719,11 +2745,11 @@ mod tests {
     #[test]
     fn test_precision_boundary_high_bpp() {
         let high_bpp = VideoAnalysisBuilder::new()
-            .basic("prores", 1920, 1080, 30.0, 60.0)
+            .basic("prores", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(150_000_000)
-            .gop(1, 0)
+            .gop(Some(1), Some(0))
             .pix_fmt("yuv422p10le")
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let result = calculate_av1_crf(&high_bpp).unwrap_or_else(|e| panic!("{e}"));
@@ -2759,14 +2785,19 @@ mod tests {
             result.distance
         );
         assert!(
-            (result.analysis_details.confidence - calculate_confidence_v3(&jpeg)).abs()
+            (result
+                .analysis_details
+                .confidence
+                .expect("Confidence should be present")
+                - calculate_confidence_v3(&jpeg))
+            .abs()
                 < f64::EPSILON,
-            "JPEG estimated-quality path should use calculated confidence, got {}",
+            "JPEG estimated-quality path should use calculated confidence, got {:?}",
             result.analysis_details.confidence
         );
         assert!(
-            result.analysis_details.confidence < 0.9_f64,
-            "Sparse JPEG metadata should not be reported as fixed 0.9 confidence, got {}",
+            result.analysis_details.confidence < Some(0.9_f64),
+            "Sparse JPEG metadata should not be reported as fixed 0.9 confidence, got {:?}",
             result.analysis_details.confidence
         );
     }
@@ -2798,7 +2829,7 @@ mod tests {
             source_codec: "gif".to_string(),
             width: 640,
             height: 480,
-            bit_depth: 8,
+            bit_depth: Some(8),
             duration_secs: Some(5.0_f64),
             fps: Some(10.0_f64),
             file_size: 5_000_000,
@@ -2823,9 +2854,9 @@ mod tests {
     #[test]
     fn test_precision_consistency() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2845,9 +2876,9 @@ mod tests {
     #[test]
     fn test_precision_mode_comparison() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2869,9 +2900,9 @@ mod tests {
     #[test]
     fn test_strict_1080p_5mbps() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 120.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(120.0))
             .video_bitrate(5_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2887,9 +2918,9 @@ mod tests {
     #[test]
     fn test_strict_720p_2mbps() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1280, 720, 30.0, 60.0)
+            .basic("h264", 1280, 720, Some(30.0), Some(60.0))
             .video_bitrate(2_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2905,9 +2936,9 @@ mod tests {
     #[test]
     fn test_strict_4k_15mbps() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .basic("h264", 3840, 2160, Some(30.0), Some(60.0))
             .video_bitrate(15_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2923,9 +2954,9 @@ mod tests {
     #[test]
     fn test_edge_extremely_low_bitrate() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(500_000)
-            .gop(60, 0)
+            .gop(Some(60), Some(0))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2941,11 +2972,11 @@ mod tests {
     #[test]
     fn test_edge_extremely_high_bitrate() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("prores", 1920, 1080, 30.0, 60.0)
+            .basic("prores", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(100_000_000)
-            .gop(1, 0)
+            .gop(Some(1), Some(0))
             .pix_fmt("yuv422p10le")
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -2960,9 +2991,9 @@ mod tests {
     #[test]
     fn test_edge_small_resolution() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 320, 240, 15.0, 30.0)
+            .basic("h264", 320, 240, Some(15.0), Some(30.0))
             .video_bitrate(500_000)
-            .gop(30, 1)
+            .gop(Some(30), Some(1))
             .pix_fmt("yuv420p")
             .build();
 
@@ -2978,11 +3009,11 @@ mod tests {
     #[test]
     fn test_edge_8k_resolution() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 7680, 4320, 30.0, 60.0)
+            .basic("h264", 7680, 4320, Some(30.0), Some(60.0))
             .video_bitrate(50_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p10le")
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -2997,9 +3028,9 @@ mod tests {
     #[test]
     fn test_edge_high_framerate() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 120.0, 60.0)
+            .basic("h264", 1920, 1080, Some(120.0), Some(60.0))
             .video_bitrate(15_000_000)
-            .gop(120, 3)
+            .gop(Some(120), Some(3))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3015,9 +3046,9 @@ mod tests {
     #[test]
     fn test_edge_short_gop() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(10_000_000)
-            .gop(2, 0)
+            .gop(Some(2), Some(0))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3033,9 +3064,9 @@ mod tests {
     #[test]
     fn test_edge_max_bframes() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(250, 8)
+            .gop(Some(250), Some(8))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3051,12 +3082,12 @@ mod tests {
     #[test]
     fn test_edge_10bit_hdr() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .basic("h264", 3840, 2160, Some(30.0), Some(60.0))
             .video_bitrate(20_000_000)
-            .gop(60, 3)
+            .gop(Some(60), Some(3))
             .pix_fmt("yuv420p10le")
             .color("bt2020nc", true)
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3077,9 +3108,9 @@ mod tests {
     #[test]
     fn test_edge_rgb_format() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(15_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("rgb24")
             .build();
 
@@ -3095,9 +3126,9 @@ mod tests {
     #[test]
     fn test_edge_vertical_video() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1080, 1920, 30.0, 60.0)
+            .basic("h264", 1080, 1920, Some(30.0), Some(60.0))
             .video_bitrate(5_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3113,9 +3144,9 @@ mod tests {
     #[test]
     fn test_edge_ultrawide_cinema() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 2560, 1080, 24.0, 120.0)
+            .basic("h264", 2560, 1080, Some(24.0), Some(120.0))
             .video_bitrate(8_000_000)
-            .gop(48, 2)
+            .gop(Some(48), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3131,11 +3162,11 @@ mod tests {
     #[test]
     fn test_edge_lossless_source() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("ffv1", 1920, 1080, 30.0, 60.0)
+            .basic("ffv1", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(200_000_000)
-            .gop(1, 0)
+            .gop(Some(1), Some(0))
             .pix_fmt("yuv444p10le")
-            .bit_depth(10)
+            .bit_depth(Some(10))
             .build();
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3150,16 +3181,16 @@ mod tests {
     #[test]
     fn test_factor_gop_isolation() {
         let short_gop = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(10, 1)
+            .gop(Some(10), Some(1))
             .pix_fmt("yuv420p")
             .build();
 
         let long_gop = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(250, 3)
+            .gop(Some(250), Some(3))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3177,16 +3208,16 @@ mod tests {
     #[test]
     fn test_factor_chroma_isolation() {
         let yuv420 = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
         let yuv444 = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv444p")
             .build();
 
@@ -3205,17 +3236,17 @@ mod tests {
     #[test]
     fn test_factor_hdr_isolation() {
         let sdr = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .color("bt709", false)
             .build();
 
         let hdr = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .color("bt2020nc", true)
             .build();
@@ -3234,17 +3265,17 @@ mod tests {
     #[test]
     fn test_factor_content_type_isolation() {
         let live_action = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .content_type(ContentType::LiveAction)
             .build();
 
         let animation = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .content_type(ContentType::Animation)
             .build();
@@ -3271,9 +3302,9 @@ mod tests {
     #[test]
     fn test_factor_bias_isolation() {
         let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
             .video_bitrate(8_000_000)
-            .gop(60, 2)
+            .gop(Some(60), Some(2))
             .pix_fmt("yuv420p")
             .build();
 
@@ -3494,8 +3525,8 @@ fn test_strict_apple_compat_routing() {
 #[test]
 fn test_apple_compat_hevc_crf_vp9_source() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("vp9", 1920, 1080, 30.0, 60.0)
-        .bit_depth(8)
+        .basic("vp9", 1920, 1080, Some(30.0), Some(60.0))
+        .bit_depth(Some(8))
         .file_size(45_000_000)
         .video_bitrate(6_000_000)
         .pix_fmt("yuv420p")
@@ -3512,8 +3543,8 @@ fn test_apple_compat_hevc_crf_vp9_source() {
 #[test]
 fn test_apple_compat_hevc_crf_av1_source() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("av1", 1920, 1080, 30.0, 60.0)
-        .bit_depth(8)
+        .basic("av1", 1920, 1080, Some(30.0), Some(60.0))
+        .bit_depth(Some(8))
         .file_size(30_000_000)
         .video_bitrate(4_000_000)
         .pix_fmt("yuv420p")
@@ -3530,8 +3561,8 @@ fn test_apple_compat_hevc_crf_av1_source() {
 #[test]
 fn test_apple_compat_hevc_crf_4k_hdr() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("av1", 3840, 2160, 60.0, 120.0)
-        .bit_depth(10)
+        .basic("av1", 3840, 2160, Some(60.0), Some(120.0))
+        .bit_depth(Some(10))
         .file_size(1_800_000_000)
         .video_bitrate(120_000_000)
         .pix_fmt("yuv420p10le")
@@ -3564,12 +3595,12 @@ fn test_apple_compat_codec_efficiency() {
 #[test]
 fn test_h264_to_hevc_crf_1080p_8mbps() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("h264", 1920, 1080, 30.0, 120.0)
-        .bit_depth(8)
+        .basic("h264", 1920, 1080, Some(30.0), Some(120.0))
+        .bit_depth(Some(8))
         .file_size(120_000_000)
         .video_bitrate(8_000_000)
         .pix_fmt("yuv420p")
-        .gop(60, 2)
+        .gop(Some(60), Some(2))
         .build();
 
     let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3587,12 +3618,12 @@ fn test_h264_to_hevc_crf_1080p_8mbps() {
 #[test]
 fn test_h264_to_hevc_crf_720p_4mbps() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("h264", 1280, 720, 30.0, 60.0)
-        .bit_depth(8)
+        .basic("h264", 1280, 720, Some(30.0), Some(60.0))
+        .bit_depth(Some(8))
         .file_size(30_000_000)
         .video_bitrate(4_000_000)
         .pix_fmt("yuv420p")
-        .gop(30, 2)
+        .gop(Some(30), Some(2))
         .build();
 
     let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3606,12 +3637,12 @@ fn test_h264_to_hevc_crf_720p_4mbps() {
 #[test]
 fn test_h264_to_hevc_crf_4k_20mbps() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("h264", 3840, 2160, 30.0, 180.0)
-        .bit_depth(8)
+        .basic("h264", 3840, 2160, Some(30.0), Some(180.0))
+        .bit_depth(Some(8))
         .file_size(450_000_000)
         .video_bitrate(20_000_000)
         .pix_fmt("yuv420p")
-        .gop(60, 3)
+        .gop(Some(60), Some(3))
         .build();
 
     let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3625,12 +3656,12 @@ fn test_h264_to_hevc_crf_4k_20mbps() {
 #[test]
 fn test_h264_to_hevc_crf_low_bitrate() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("h264", 854, 480, 24.0, 300.0)
-        .bit_depth(8)
+        .basic("h264", 854, 480, Some(24.0), Some(300.0))
+        .bit_depth(Some(8))
         .file_size(45_000_000)
         .video_bitrate(1_200_000)
         .pix_fmt("yuv420p")
-        .gop(48, 1)
+        .gop(Some(48), Some(1))
         .build();
 
     let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3644,12 +3675,12 @@ fn test_h264_to_hevc_crf_low_bitrate() {
 #[test]
 fn test_h264_to_hevc_crf_bluray_quality() {
     let analysis = VideoAnalysisBuilder::new()
-        .basic("h264", 1920, 1080, 24.0, 7200.0)
-        .bit_depth(8)
+        .basic("h264", 1920, 1080, Some(24.0), Some(7200.0))
+        .bit_depth(Some(8))
         .file_size(4_500_000_000)
         .video_bitrate(40_000_000)
         .pix_fmt("yuv420p")
-        .gop(24, 3)
+        .gop(Some(24), Some(3))
         .build();
 
     let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
@@ -3663,16 +3694,16 @@ fn test_h264_to_hevc_crf_bluray_quality() {
 #[test]
 fn test_h264_vs_av1_efficiency_comparison() {
     let h264 = VideoAnalysisBuilder::new()
-        .basic("h264", 1920, 1080, 30.0, 60.0)
-        .bit_depth(8)
+        .basic("h264", 1920, 1080, Some(30.0), Some(60.0))
+        .bit_depth(Some(8))
         .file_size(60_000_000)
         .video_bitrate(8_000_000)
         .pix_fmt("yuv420p")
         .build();
 
     let av1 = VideoAnalysisBuilder::new()
-        .basic("av1", 1920, 1080, 30.0, 60.0)
-        .bit_depth(8)
+        .basic("av1", 1920, 1080, Some(30.0), Some(60.0))
+        .bit_depth(Some(8))
         .file_size(30_000_000)
         .video_bitrate(4_000_000)
         .pix_fmt("yuv420p")

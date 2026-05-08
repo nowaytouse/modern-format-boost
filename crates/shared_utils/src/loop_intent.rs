@@ -134,11 +134,11 @@ impl DurationTier {
 )]
 pub struct LoopMeta {
     // ── Basic geometry ──
-    pub duration_secs: f64,
+    pub duration_secs: Option<f64>,
     pub duration_tier: Option<DurationTier>, // Optional so we don't break Default, though constructor populates it
     pub width: u32,
     pub height: u32,
-    pub fps: f64,
+    pub fps: Option<f64>,
     pub frame_count: Option<u64>,
     pub file_size_bytes: u64,
 
@@ -252,7 +252,7 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: detection.duration_secs,
-            duration_tier: Some(DurationTier::from_secs(detection.duration_secs)),
+            duration_tier: detection.duration_secs.map(DurationTier::from_secs),
             width: detection.width,
             height: detection.height,
             fps: detection.fps,
@@ -363,7 +363,7 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: probe.duration,
-            duration_tier: Some(DurationTier::from_secs(probe.duration)),
+            duration_tier: probe.duration.map(DurationTier::from_secs),
             width: probe.width,
             height: probe.height,
             fps: probe.frame_rate,
@@ -494,19 +494,11 @@ impl LoopMeta {
         });
 
         let mut meta = Self {
-            duration_secs: scan.duration_secs.unwrap_or_else(|| {
-                tracing::debug!("Intent: Missing 'duration_secs' from GIF scan; defaulting to 0.0");
-                0.0_f64
-            }),
-            duration_tier: Some(DurationTier::from_secs(scan.duration_secs.unwrap_or_else(
-                || {
-                    tracing::debug!("Intent: Missing 'duration_secs' for tier; defaulting to 0.0");
-                    0.0_f64
-                },
-            ))),
+            duration_secs: scan.duration_secs,
+            duration_tier: scan.duration_secs.map(DurationTier::from_secs),
             width,
             height,
-            fps,
+            fps: Some(fps),
             frame_count: Some(u64::from(frame_count)),
             file_size_bytes: file_size,
             file_name,
@@ -578,7 +570,7 @@ impl LoopMeta {
 
     #[must_use]
     pub fn should_sample_webp_compression_ratio(&self) -> bool {
-        self.width >= 64 && self.height >= 64 && self.duration_secs > 0.05
+        self.width >= 64 && self.height >= 64 && self.duration_secs.is_some_and(|d| d > 0.05)
     }
 
     /// Re-run semantic scoring with dynamic keywords from the database.
@@ -590,9 +582,9 @@ impl LoopMeta {
 
     /// Returns the duration tier, falling back to calculation if the cached field is None.
     #[must_use]
-    pub fn tier(&self) -> DurationTier {
+    pub fn tier(&self) -> Option<DurationTier> {
         self.duration_tier
-            .unwrap_or_else(|| DurationTier::from_secs(self.duration_secs))
+            .or_else(|| self.duration_secs.map(DurationTier::from_secs))
     }
 }
 
@@ -705,6 +697,7 @@ impl LoopThresholds {
                 reference
                     .collection
                     .duration_p90
+                    .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
                     .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
             });
         let median_scaled = reference
@@ -712,9 +705,10 @@ impl LoopThresholds {
             .p50
             .map_or(short_percentile, |median| median * 0.60_f64);
         let duration_override_secs = if duration_percentiles_available {
-            short_percentile
-                .min(median_scaled.max(0.35))
-                .clamp(0.35, reference.collection.duration_p90.max(0.35))
+            short_percentile.min(median_scaled.max(0.35)).clamp(
+                0.35,
+                reference.collection.duration_p90.unwrap_or(0.35).max(0.35),
+            )
         } else {
             reference
                 .duration
@@ -739,8 +733,18 @@ impl LoopThresholds {
         let modern_bias_duration_secs = reference
             .duration
             .p75
-            .unwrap_or(reference.collection.duration_p90)
-            .max(reference.collection.duration_p90)
+            .unwrap_or_else(|| {
+                reference
+                    .collection
+                    .duration_p90
+                    .unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS)
+            })
+            .max(
+                reference
+                    .collection
+                    .duration_p90
+                    .unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS),
+            )
             .max(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS);
 
         Self {
@@ -753,7 +757,7 @@ impl LoopThresholds {
         }
     }
 
-    fn get_feature_weight(&self, key: &str) -> f64 {
+    fn get_feature_weight(&self, key: &str) -> Option<f64> {
         match key {
             "duration" => self.reference.duration.weight,
             "fps" => self.reference.fps.weight,
@@ -765,10 +769,15 @@ impl LoopThresholds {
             "p_depth" => self.reference.palette_depth.weight,
             "m_gini" => self.reference.motion_gini.weight,
             "t_flat" => self.reference.temporal_flatness.weight,
-            _ => None,
+            "webp_ratio" => self.reference.webp_ratio.weight,
+            _ => {
+                tracing::warn!(
+                    "☢️ [ANOMALY] Unknown feature weight key: '{}'. Refusing to forge data.",
+                    key
+                );
+                None
+            }
         }
-        .unwrap_or(1.0)
-        .max(0.01) // Ensure it never fully zeros out a signal unless intentionally zero
     }
 
     fn clamp_z(value: f64) -> f64 {
@@ -778,8 +787,8 @@ impl LoopThresholds {
         )
     }
 
-    fn duration_z(&self, duration_secs: f64) -> f64 {
-        Self::clamp_z(self.reference.duration.z_score(duration_secs))
+    fn duration_z(&self, duration_secs: Option<f64>) -> f64 {
+        duration_secs.map_or(0.0, |d| Self::clamp_z(self.reference.duration.z_score(d)))
     }
 
     fn fps_z(&self, fps: f64) -> f64 {
@@ -849,10 +858,12 @@ fn is_silent_webm(meta: &LoopMeta, ext_lower: &str) -> bool {
 
 fn is_short_silent_asset(meta: &LoopMeta, _thresholds: &LoopThresholds) -> bool {
     !meta.has_audio
-        && matches!(
-            meta.tier(),
-            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
-        )
+        && meta.tier().is_some_and(|t| {
+            matches!(
+                t,
+                DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+            )
+        })
 }
 
 fn checkpoint_verdict(
@@ -897,20 +908,22 @@ fn is_near_16_by_9(width: u32, height: u32) -> bool {
 
 fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
     match meta.tier() {
-        DurationTier::UltraShort | DurationTier::Short => {
+        Some(DurationTier::UltraShort | DurationTier::Short) => {
             crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
         }
-        DurationTier::MediumLong => crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
-            -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
-            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-        ),
-        DurationTier::Long | DurationTier::VeryLong => {
+        Some(DurationTier::MediumLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX
+            .mul_add(
+                -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
+                crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
+            ),
+        Some(DurationTier::Long | DurationTier::VeryLong) => {
             crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
             )
         }
-        DurationTier::DefinitivelyLong => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
+        Some(DurationTier::DefinitivelyLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
+        None => 0.0,
     }
 }
 
@@ -922,12 +935,16 @@ fn evaluate_kinetics_and_physics(
 ) {
     let duration_positive = (-thresholds.duration_z(meta.duration_secs)).max(0.0);
     let duration_negative = thresholds.duration_z(meta.duration_secs).max(0.0);
-    let fps_positive = thresholds.fps_z(meta.fps.max(1.0)).max(0.0);
-    let fps_negative = (-thresholds.fps_z(meta.fps.max(1.0))).max(0.0);
+    let (fps_positive, fps_negative) = if let Some(fps) = meta.fps {
+        let z = thresholds.fps_z(fps);
+        (z.max(0.0), (-z).max(0.0))
+    } else {
+        (0.0, 0.0)
+    };
     let total_pixels = f64::from(meta.width) * f64::from(meta.height);
 
     if duration_positive > 0.0_f64 {
-        let short_fast = duration_positive * (1.0_f64 + fps_positive * 0.5_f64);
+        let short_fast = duration_positive * fps_positive.mul_add(0.5_f64, 1.0_f64);
         log_odds.add(
             short_fast.min(crate::constants::TREE_Z_SCORE_CAP)
                 * crate::constants::SHORT_FAST_POSITIVE_LOG_ODDS,
@@ -935,7 +952,7 @@ fn evaluate_kinetics_and_physics(
     }
 
     if duration_negative > 0.0_f64 {
-        let long_slow = duration_negative * (1.0_f64 + fps_negative * 0.5_f64);
+        let long_slow = duration_negative * fps_negative.mul_add(0.5_f64, 1.0_f64);
         log_odds.add(
             -long_slow.min(crate::constants::TREE_Z_SCORE_CAP)
                 * crate::constants::LONG_SLOW_NEGATIVE_LOG_ODDS,
@@ -976,12 +993,14 @@ fn evaluate_kinetics_and_physics(
         } else {
             crate::constants::LARGE_MEDIA_AUDIO_MULTIPLIER
         };
-        log_odds.add(
-            -large_media_signal.min(crate::constants::LARGE_MEDIA_SIGNAL_MAX)
-                * audio_multiplier
-                * crate::constants::LARGE_MEDIA_NEGATIVE_LOG_ODDS
-                * thresholds.get_feature_weight("file_size_bytes").sqrt(),
-        );
+        if let Some(weight) = thresholds.get_feature_weight("file_size_bytes") {
+            log_odds.add(
+                -large_media_signal.min(crate::constants::LARGE_MEDIA_SIGNAL_MAX)
+                    * audio_multiplier
+                    * crate::constants::LARGE_MEDIA_NEGATIVE_LOG_ODDS
+                    * weight.sqrt(),
+            );
+        }
     }
 }
 
@@ -1001,10 +1020,12 @@ fn apply_structural_signals(
     use std::intrinsics::{likely, unlikely};
 
     let short_silent_asset = is_short_silent_asset(meta, thresholds);
-    let is_short_tier = matches!(
-        meta.tier(),
-        DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
-    );
+    let is_short_tier = meta.tier().is_some_and(|t| {
+        matches!(
+            t,
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
+    });
 
     // loop_closure_score: pkt_size autocorrelation. This measures CODEC behavior, not visual
     // content. Positive signal restricted to short tiers only — for long content, CBR encoding
@@ -1203,11 +1224,19 @@ fn apply_weak_heuristics(
     let is_webm = is_silent_webm(meta, &ext_lower);
     let short_silent_asset = is_short_silent_asset(meta, thresholds);
     let is_short_clip = short_silent_asset
-        && meta.duration_secs > thresholds.duration_override_secs
-        && meta.duration_secs <= thresholds.short_clip_secs;
+        && meta
+            .duration_secs
+            .is_some_and(|d| d > thresholds.duration_override_secs)
+        && meta
+            .duration_secs
+            .is_some_and(|d| d <= thresholds.short_clip_secs);
     let is_extended_short_asset = short_silent_asset
-        && meta.duration_secs > thresholds.short_clip_secs
-        && meta.duration_secs <= thresholds.short_asset_window_secs;
+        && meta
+            .duration_secs
+            .is_some_and(|d| d > thresholds.short_clip_secs)
+        && meta
+            .duration_secs
+            .is_some_and(|d| d <= thresholds.short_asset_window_secs);
 
     // NOTE: platform_marker is already counted in Layer 2 of both image/video sub-trees
     // (with metadata_trust attenuation). Do NOT re-add here — that would double-count.
@@ -1222,8 +1251,9 @@ fn apply_weak_heuristics(
     }
     if is_short_clip {
         let range = (thresholds.short_clip_secs - thresholds.duration_override_secs).max(0.5);
-        let headroom = 1.0_f64
-            - ((meta.duration_secs - thresholds.duration_override_secs) / range).clamp(0.0, 1.0);
+        let headroom = meta.duration_secs.map_or(0.0_f64, |dur| {
+            1.0_f64 - ((dur - thresholds.duration_override_secs) / range).clamp(0.0, 1.0)
+        });
         let format_bonus = if is_image {
             crate::constants::SHORT_CLIP_FORMAT_BONUS_IMAGE
         } else {
@@ -1244,8 +1274,9 @@ fn apply_weak_heuristics(
     }
     if is_extended_short_asset {
         let range = (thresholds.short_asset_window_secs - thresholds.short_clip_secs).max(0.5);
-        let tail_headroom =
-            1.0_f64 - ((meta.duration_secs - thresholds.short_clip_secs) / range).clamp(0.0, 1.0);
+        let tail_headroom = meta.duration_secs.map_or(0.0, |dur| {
+            1.0_f64 - ((dur - thresholds.short_clip_secs) / range).clamp(0.0, 1.0)
+        });
         let square_bonus = if meta.width > 0 && meta.width == meta.height {
             crate::constants::EXTENDED_SHORT_ASSET_SQUARE_BONUS
         } else {
@@ -1274,18 +1305,22 @@ fn apply_weak_heuristics(
     // (loop_count=0 with metadata_trust decay; loop_count=1 at full weight).
     // Do NOT re-add here — that would double-count without the trust attenuation.
 
-    if let Some(delay_variation) = meta.frame_delay_variation {
+    if let Some(delay_variation) = meta.frame_delay_variation
+        && let Some(weight) = thresholds.get_feature_weight("delay_var")
+    {
         log_odds.add(
             -thresholds.delay_variation_z(delay_variation)
                 * crate::constants::FEATURE_WEIGHT_DELAY_VAR
-                * thresholds.get_feature_weight("delay_var"),
+                * weight,
         );
     }
-    if let Some(webp_ratio) = meta.webp_compression_ratio {
+    if let Some(webp_ratio) = meta.webp_compression_ratio
+        && let Some(weight) = thresholds.get_feature_weight("webp_ratio")
+    {
         log_odds.add(
             thresholds.webp_ratio_z(webp_ratio)
                 * crate::constants::FEATURE_WEIGHT_WEBP_RATIO
-                * thresholds.get_feature_weight("webp_ratio"),
+                * weight,
         );
     }
     if let Some(motion_gini) = meta.motion_gini {
@@ -1316,24 +1351,27 @@ fn apply_weak_heuristics(
                 }
             },
         );
-        log_odds.add(
-            z * crate::constants::FEATURE_WEIGHT_MOTION_GINI
-                * support_relief
-                * thresholds.get_feature_weight("m_gini"),
-        );
+        if let Some(weight) = thresholds.get_feature_weight("m_gini") {
+            log_odds
+                .add(z * crate::constants::FEATURE_WEIGHT_MOTION_GINI * support_relief * weight);
+        }
     }
-    if let Some(palette_depth) = meta.palette_depth {
+    if let Some(palette_depth) = meta.palette_depth
+        && let Some(weight) = thresholds.get_feature_weight("p_depth")
+    {
         log_odds.add(
             thresholds.palette_depth_z(palette_depth)
                 * crate::constants::FEATURE_WEIGHT_PALETTE_DEPTH
-                * thresholds.get_feature_weight("p_depth"),
+                * weight,
         );
     }
-    if let Some(temporal_flatness) = meta.temporal_flatness {
+    if let Some(temporal_flatness) = meta.temporal_flatness
+        && let Some(weight) = thresholds.get_feature_weight("t_flat")
+    {
         log_odds.add(
             thresholds.temporal_flatness_z(temporal_flatness)
                 * crate::constants::FEATURE_WEIGHT_TEMPORAL_FLATNESS
-                * thresholds.get_feature_weight("t_flat"),
+                * weight,
         );
     }
 
@@ -1367,14 +1405,22 @@ fn apply_weak_heuristics(
         }
     }
 
-    if fps_anomaly_score(meta.fps) > 0.6_f64 {
+    if let Some(fps) = meta.fps
+        && fps_anomaly_score(fps) > 0.6_f64
+    {
         log_odds.add(crate::constants::FPS_ANOMALY_BONUS);
     }
 
-    if !meta.has_audio && meta.duration_secs > thresholds.modern_bias_duration_secs {
-        let overflow = ((meta.duration_secs - thresholds.modern_bias_duration_secs)
-            / thresholds.modern_bias_duration_secs.max(1.0))
-        .clamp(0.0, 1.0);
+    if !meta.has_audio
+        && meta
+            .duration_secs
+            .is_some_and(|d| d > thresholds.modern_bias_duration_secs)
+    {
+        let overflow = meta.duration_secs.map_or(0.0_f64, |dur| {
+            ((dur - thresholds.modern_bias_duration_secs)
+                / thresholds.modern_bias_duration_secs.max(1.0))
+            .clamp(0.0, 1.0)
+        });
         let container_penalty = if is_video {
             crate::constants::LONG_SILENT_PENALTY_VIDEO_ADD
         } else if is_image {
@@ -1406,7 +1452,7 @@ fn apply_weak_heuristics(
         .map_or(true, |value| value == "1");
     let is_modern = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
     let bias_threshold = thresholds.modern_bias_duration_secs;
-    if is_modern && bias_enabled && meta.duration_secs > bias_threshold {
+    if is_modern && bias_enabled && meta.duration_secs.is_some_and(|d| d > bias_threshold) {
         let master_like = meta.has_embedded_icc
             || meta.has_complex_color_profile
             || meta
@@ -1467,7 +1513,12 @@ pub fn evaluate_loop_tree(
     let derived = DerivedLoopSignals::from_meta(meta);
     let thresholds = LoopThresholds::from_profile(reference_profile);
     let mut log_odds = LogOdds::default();
-    let tier = meta.tier();
+    let Some(tier) = meta.tier() else {
+        return finalize(
+            LoopIntentVerdict::Error("Missing duration: cannot resolve duration tier".to_string()),
+            log_odds,
+        );
+    };
 
     // `finalize` is a module-level free function — see below evaluate_loop_tree.
 
@@ -1482,7 +1533,11 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    if !meta.is_native_gif && meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS {
+    if !meta.is_native_gif
+        && meta
+            .duration_secs
+            .is_some_and(|d| d < crate::constants::NEGLIGIBLE_DURATION_SECS)
+    {
         return finalize(
             LoopIntentVerdict::Error("Layer 0: degenerate duration".to_string()),
             log_odds,
@@ -1503,14 +1558,19 @@ pub fn evaluate_loop_tree(
     let has_audible_audio_global = derived.has_audible_audio;
 
     // Hard veto: Extreme short (≤ 6.0s, silent)
-    if meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+    if meta
+        .duration_secs
+        .is_some_and(|d| d <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS)
         && !has_audible_audio_global
     {
+        let dur_str = meta
+            .duration_secs
+            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s — \
+                "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — \
                  definitively animated image regardless of all other signals",
-                meta.duration_secs,
+                dur_str,
                 crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
             )),
             log_odds,
@@ -1518,12 +1578,18 @@ pub fn evaluate_loop_tree(
     }
 
     // Hard veto: Extreme long (≥ 15.0s) — no exceptions, even for silent assets
-    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
+    if meta
+        .duration_secs
+        .is_some_and(|d| d >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS)
+    {
+        let dur_str = meta
+            .duration_secs
+            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
         return finalize(
             LoopIntentVerdict::LoopWeak(format!(
-                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s — \
+                "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — \
                  definitively video regardless of all other signals",
-                meta.duration_secs,
+                dur_str,
                 crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
             )),
             log_odds,
@@ -1550,31 +1616,33 @@ pub fn evaluate_loop_tree(
         DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
     );
 
-    if is_short_tier {
-        if has_audible_audio_global {
-            // Audible audio in a short asset is an extremely strong anti-loop signal,
-            // but we still let the full tree run so structural signals can be logged.
-            log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG);
-        } else {
-            // Silent short assets: tier bias
-            match tier {
-                DurationTier::UltraShort => {
-                    log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT);
-                }
-                DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
-                DurationTier::MediumLong => {
-                    log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG);
-                }
-                _ => {}
+    if has_audible_audio_global {
+        // Audible audio is an extremely strong anti-loop signal regardless of duration,
+        // but we still let the full tree run so structural signals can be logged.
+        log_odds.add(crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG);
+    } else if is_short_tier {
+        // Silent short assets: tier bias
+        match tier {
+            DurationTier::UltraShort => {
+                log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT);
             }
-            // Anti-cliff proximity ramp (short side): 6.0–8.0s
-            let short_veto = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
-            let short_buf = crate::constants::EXTREME_SHORT_PROXIMITY_BUFFER_SECS;
-            let short_ramp_top = short_veto + short_buf;
-            if meta.duration_secs > short_veto && meta.duration_secs <= short_ramp_top {
-                let proximity = 1.0_f64 - (meta.duration_secs - short_veto) / short_buf;
-                log_odds.add(proximity * crate::constants::EXTREME_SHORT_PROXIMITY_MAX_BIAS);
+            DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
+            DurationTier::MediumLong => {
+                log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG);
             }
+            _ => {}
+        }
+        // Anti-cliff proximity ramp (short side): 6.0–8.0s
+        let short_veto = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
+        let short_buf = crate::constants::EXTREME_SHORT_PROXIMITY_BUFFER_SECS;
+        let short_ramp_top = short_veto + short_buf;
+        if meta.duration_secs.is_some_and(|d| d > short_veto)
+            && meta.duration_secs.is_some_and(|d| d <= short_ramp_top)
+        {
+            let proximity = meta
+                .duration_secs
+                .map_or(0.0_f64, |dur| 1.0_f64 - (dur - short_veto) / short_buf);
+            log_odds.add(proximity * crate::constants::EXTREME_SHORT_PROXIMITY_MAX_BIAS);
         }
     } else {
         // Long tiers: tier bias
@@ -1590,8 +1658,12 @@ pub fn evaluate_loop_tree(
         let long_veto = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
         let long_buf = crate::constants::EXTREME_LONG_PROXIMITY_BUFFER_SECS;
         let long_ramp_bottom = long_veto - long_buf;
-        if meta.duration_secs >= long_ramp_bottom && meta.duration_secs < long_veto {
-            let proximity = (meta.duration_secs - long_ramp_bottom) / long_buf;
+        if meta.duration_secs.is_some_and(|d| d >= long_ramp_bottom)
+            && meta.duration_secs.is_some_and(|d| d < long_veto)
+        {
+            let proximity = meta
+                .duration_secs
+                .map_or(1.0_f64, |dur| (dur - long_ramp_bottom) / long_buf);
             log_odds.add(-proximity * crate::constants::EXTREME_LONG_PROXIMITY_MAX_BIAS);
         }
     }
@@ -1954,8 +2026,10 @@ fn should_accept_layer6_loopstrong(
     let is_gif_family =
         ext == "gif" || crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext.as_str());
     let short_clip_like = !meta.has_audio
-        && meta.duration_secs > 0.0_f64
-        && meta.duration_secs <= thresholds.short_asset_window_secs;
+        && meta.duration_secs.is_some_and(|d| d > 0.0_f64)
+        && meta
+            .duration_secs
+            .is_some_and(|d| d <= thresholds.short_asset_window_secs);
 
     final_score >= crate::constants::LAYER6_HIGH_SCORE_THRESHOLD
         && keep_prob >= crate::constants::LAYER6_KEEP_PROB_MIN
@@ -2125,14 +2199,17 @@ fn layer6_directional_arbitration(
         arbitration.add_keep(0.22, "transparency");
     }
     if short_silent_asset {
-        let delta = if meta.duration_secs <= thresholds.short_clip_secs {
+        let delta = if meta
+            .duration_secs
+            .is_some_and(|d| d <= thresholds.short_clip_secs)
+        {
             0.14_f64
         } else {
             0.10_f64
         };
         arbitration.add_keep(
             delta,
-            format!("short silent asset {:.2}s", meta.duration_secs),
+            format!("short silent asset {:?}s", meta.duration_secs),
         );
     }
     if meta.width > 0 && meta.width == meta.height {
@@ -2185,8 +2262,12 @@ fn layer6_directional_arbitration(
     if detect_scene_cut(&meta.pkt_sizes) {
         arbitration.add_convert(0.20, "scene cut");
     }
-    if !meta.has_audio && meta.duration_secs > thresholds.modern_bias_duration_secs {
-        arbitration.add_convert(0.14, format!("long silent clip {:.1}s", meta.duration_secs));
+    if !meta.has_audio
+        && meta
+            .duration_secs
+            .is_some_and(|d| d > thresholds.modern_bias_duration_secs)
+    {
+        arbitration.add_convert(0.14, format!("long silent clip {:?}s", meta.duration_secs));
     }
     if is_video
         && !short_silent_asset
@@ -2214,20 +2295,15 @@ fn layer6_directional_arbitration(
     // Frame density normalization: avoid penalizing high-fps short loops (e.g. Live2D 60fps).
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
-    if meta.frame_count.is_some_and(|fc| fc > 500) && meta.duration_secs > 0.01_f64 {
-        let fallback_fc = meta.frame_count.unwrap_or_else(|| {
-            tracing::debug!("Intent: Missing 'frame_count'; defaulting to 0");
-            0
-        });
-        let fps = crate::numeric_cast::u64_to_f64(fallback_fc) / meta.duration_secs;
+    if let (Some(fc), Some(dur)) = (meta.frame_count, meta.duration_secs)
+        && fc > 500
+        && dur > 0.01_f64
+    {
+        let fps = crate::numeric_cast::u64_to_f64(fc) / dur;
         if fps < 24.0_f64 {
-            let weight = (crate::numeric_cast::u64_to_f64(fallback_fc.saturating_sub(500))
-                / 2000.0)
+            let weight = (crate::numeric_cast::u64_to_f64(fc.saturating_sub(500)) / 2000.0)
                 .clamp(0.04, 0.14);
-            arbitration.add_convert(
-                weight,
-                format!("high frame count {fallback_fc} @ {fps:.0}fps"),
-            );
+            arbitration.add_convert(weight, format!("high frame count {fc} @ {fps:.0}fps"));
         }
     }
 
@@ -2312,17 +2388,21 @@ pub fn apply_apple_compat_modern_animation_policy(
     }
 
     // Long animations are video-like; never force GIF.
-    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
+    if meta
+        .duration_secs
+        .is_some_and(|d| d >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS)
+    {
         return verdict;
     }
 
     // Short animations are definitively "animated image" territory.
-    if meta.duration_secs > 0.0_f64
-        && meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+    if let Some(dur) = meta.duration_secs
+        && dur > 0.0_f64
+        && dur <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
     {
         return LoopIntentVerdict::LoopStrong(format!(
-            "Apple compat policy: modern animated format ({ext_lower}) → force GIF (duration={:.2}s, frames={}, audio={})",
-            meta.duration_secs,
+            "Apple compat policy: modern animated format ({ext_lower}) \u{2192} force GIF (duration={:.2}s, frames={}, audio={})",
+            dur,
             meta.frame_count.map_or(0, |fc| fc),
             meta.has_audio
         ));
@@ -2330,7 +2410,9 @@ pub fn apply_apple_compat_modern_animation_policy(
 
     // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
     // animation is clearly not video-like (small-ish frame count, silent).
-    if meta.duration_secs <= 0.0_f64 && meta.frame_count.is_none_or(|fc| fc <= 300) {
+    if meta.duration_secs.is_some_and(|d| d <= 0.0_f64)
+        && meta.frame_count.is_none_or(|fc| fc <= 300)
+    {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
             meta.frame_count.map_or(0, |fc| fc),
@@ -2426,7 +2508,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
         // 2. Transparency verification (detect fake alpha channels)
         if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
-            match detect_real_transparency(p, Some(mutable_meta.duration_secs)) {
+            match detect_real_transparency(p, mutable_meta.duration_secs) {
                 crate::media_penetration::PenetrationResult::Verified(is_real) => {
                     mutable_meta.transparency_is_real = Some(is_real);
                     if is_real {
@@ -2855,12 +2937,14 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
                 )
             },
         );
-    let is_safe = meta.duration_secs < f64::from(threshold);
-
+    let is_safe = meta.duration_secs.is_some_and(|d| d < f64::from(threshold));
     if !is_safe {
+        let dur_str = meta
+            .duration_secs
+            .map_or_else(|| "None".to_string(), |d| format!("{:.2}s", d));
         emit_stderr(&format!(
-            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds limit {:.1}s ({})",
-            meta.duration_secs, threshold, keep_prob_label
+            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {} exceeds limit {:.1}s ({})",
+            dur_str, threshold, keep_prob_label
         ));
     }
     is_safe
@@ -3064,66 +3148,66 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
 }
 
 #[must_use]
-pub fn score_loop_frequency(duration_secs: f64, frame_count: Option<u64>) -> f64 {
-    if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc == 0) {
-        return 0.5;
+pub fn score_loop_frequency(duration_secs: Option<f64>, frame_count: Option<u64>) -> f64 {
+    if let (Some(dur), Some(fc)) = (duration_secs, frame_count)
+        && dur > 0.01_f64
+        && fc > 0
+    {
+        let loops_per_minute = 60.0_f64 / dur;
+        let frame_density = crate::numeric_cast::u64_to_f64(fc) / dur;
+
+        let loop_score = if loops_per_minute >= 20.0_f64 {
+            1.0_f64
+        } else if loops_per_minute >= 10.0_f64 {
+            0.8_f64
+        } else if loops_per_minute >= 5.0_f64 {
+            0.6_f64
+        } else if loops_per_minute >= 2.0_f64 {
+            0.4_f64
+        } else {
+            0.2_f64
+        };
+
+        let density_adj = if frame_density < 1.2_f64 {
+            -0.35_f64
+        } else if frame_density < 3.0_f64 {
+            -0.20_f64
+        } else if frame_density < 6.0_f64 {
+            -0.08_f64
+        } else {
+            0.0_f64
+        };
+
+        let combined_score: f64 = loop_score + density_adj;
+        combined_score.clamp(0.0_f64, 1.0_f64)
+    } else {
+        0.5
     }
-    let fc = frame_count.unwrap_or_else(|| {
-        tracing::debug!("Intent: Missing 'frame_count' in frequency scoring; defaulting to 0");
-        0
-    });
-    let loops_per_minute = 60.0_f64 / duration_secs;
-    let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs;
-
-    let loop_score = if loops_per_minute >= 20.0_f64 {
-        1.0_f64
-    } else if loops_per_minute >= 10.0_f64 {
-        0.8_f64
-    } else if loops_per_minute >= 5.0_f64 {
-        0.6_f64
-    } else if loops_per_minute >= 2.0_f64 {
-        0.4_f64
-    } else {
-        0.2_f64
-    };
-
-    let density_adj = if frame_density < 1.2_f64 {
-        -0.35_f64
-    } else if frame_density < 3.0_f64 {
-        -0.20_f64
-    } else if frame_density < 6.0_f64 {
-        -0.08_f64
-    } else {
-        0.0_f64
-    };
-
-    let combined_score: f64 = loop_score + density_adj;
-    combined_score.clamp(0.0_f64, 1.0_f64)
 }
 
 #[must_use]
-pub fn score_sparse_cadence(duration_secs: f64, frame_count: Option<u64>) -> f64 {
-    if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc <= 1) {
-        return 0.5;
-    }
-    let fc = frame_count.unwrap_or_else(|| {
-        tracing::debug!("Intent: Missing 'frame_count' in cadence scoring; defaulting to 0");
-        0
-    });
-    let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs.max(0.01);
-    let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(fc);
+pub fn score_sparse_cadence(duration_secs: Option<f64>, frame_count: Option<u64>) -> f64 {
+    if let (Some(dur), Some(fc)) = (duration_secs, frame_count)
+        && dur > 0.01_f64
+        && fc > 1
+    {
+        let frame_density = crate::numeric_cast::u64_to_f64(fc) / dur;
+        let avg_gap = dur / crate::numeric_cast::u64_to_f64(fc);
 
-    if duration_secs <= 1.5_f64 && frame_density >= 12.0_f64 {
-        return 0.98;
-    }
-    if duration_secs >= 1.5_f64 && avg_gap >= 0.25_f64 {
-        return 0.92;
-    }
-    if duration_secs >= 4.0_f64 && fc <= 12 && avg_gap >= 0.5_f64 {
-        return 0.95;
-    }
+        if dur <= 1.5_f64 && frame_density >= 12.0_f64 {
+            return 0.98;
+        }
+        if dur >= 1.5_f64 && avg_gap >= 0.25_f64 {
+            return 0.92;
+        }
+        if dur >= 4.0_f64 && fc <= 12 && avg_gap >= 0.5_f64 {
+            return 0.95;
+        }
 
-    0.5
+        0.5
+    } else {
+        0.5
+    }
 }
 
 // ── Layer 6: Auxiliary Micro-Nudges ───────────────────────────────────────────
@@ -3616,7 +3700,7 @@ mod tests {
 
     fn base_profile() -> LoopReferenceProfile {
         let collection = crate::database::GlobalCollectionStats {
-            duration_p90: 16.0,
+            duration_p90: Some(16.0),
             ..Default::default()
         };
 
@@ -3659,11 +3743,10 @@ mod tests {
 
     fn base_meta() -> LoopMeta {
         LoopMeta {
-            duration_secs: 7.9,
+            duration_secs: Some(7.9),
             width: 640,
-
             height: 640,
-            fps: 12.0,
+            fps: Some(12.0),
             frame_count: Some(96),
             file_size_bytes: 1_200_000,
             source_extension: Some("mp4".to_string()),
@@ -3707,8 +3790,9 @@ mod tests {
         let meta = LoopMeta::from_gif_path(file.path())
             .expect("valid GIF header should produce loop metadata");
         assert!(
-            (meta.duration_secs - 0.0).abs() < f64::EPSILON,
-            "Expected duration_secs to be approximately 0.0, got {}",
+            meta.duration_secs
+                .is_some_and(|d| (d - 0.0).abs() < f64::EPSILON),
+            "Expected duration_secs to be approximately 0.0, got {:?}",
             meta.duration_secs
         );
         assert_eq!(meta.frame_count, Some(1));
@@ -3725,10 +3809,10 @@ mod tests {
     fn duration_override_beats_large_resolution_and_size() {
         let profile = base_profile();
         let mut meta = base_meta();
-        meta.duration_secs = 2.0_f64;
+        meta.duration_secs = Some(2.0_f64);
         meta.width = 3840;
         meta.height = 2160;
-        meta.fps = 60.0_f64;
+        meta.fps = Some(60.0_f64);
         meta.file_size_bytes = 30_000_000;
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -3745,7 +3829,7 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         // Use 12.0s Long tier where audio penalty is -LOG_ODDS_BIAS_DEFINITIVELY_LONG (-3.0).
-        meta.duration_secs = 12.0_f64;
+        meta.duration_secs = Some(12.0_f64);
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288); // 24fps × 12s
@@ -3771,7 +3855,7 @@ mod tests {
     fn layer_0_long_media_proceeds_to_stage_1() {
         let profile = base_profile();
         let mut meta = base_meta();
-        meta.duration_secs = 12.0_f64;
+        meta.duration_secs = Some(12.0_f64);
         meta.loop_count = Some(0); // Weighted signal, not immediate exit
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -3793,7 +3877,7 @@ mod tests {
         meta.container = Some("gif".to_string());
         meta.is_native_gif = true;
         meta.has_audio = false;
-        meta.duration_secs = 4.0_f64;
+        meta.duration_secs = Some(4.0_f64);
         meta.width = 150;
         meta.height = 108;
         meta.frame_count = Some(40);
@@ -3816,7 +3900,7 @@ mod tests {
         meta.container = Some("gif".to_string());
         meta.is_native_gif = true;
         meta.has_audio = false;
-        meta.duration_secs = 4.0_f64;
+        meta.duration_secs = Some(4.0_f64);
         meta.width = 500;
         meta.height = 500;
         meta.frame_count = Some(40);
@@ -3835,7 +3919,7 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         // Use 12.0s Long tier where audio penalty is maximal.
-        meta.duration_secs = 12.0_f64;
+        meta.duration_secs = Some(12.0_f64);
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288);
@@ -3862,7 +3946,7 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         meta.loop_count = Some(0);
-        meta.duration_secs = 12.0_f64;
+        meta.duration_secs = Some(12.0_f64);
 
         // loop_count=0 is now a weighted signal, not an immediate exit.
         // With 12s duration (Long tier) and no other pro-loop signals,
@@ -3880,7 +3964,7 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         meta.app_extensions = Some(vec!["TENOR".to_string()]);
-        meta.duration_secs = 14.0_f64; // Long duration - will go to specialized tree
+        meta.duration_secs = Some(14.0_f64); // Long duration - will go to specialized tree
         meta.has_audio = false; // Ensure it's silent
         meta.frame_count = Some(168); // Ensure valid frame count
         meta.source_extension = Some("mp4".to_string()); // Video container
@@ -3900,8 +3984,8 @@ mod tests {
     fn short_fast_silent_media_scores_loopstrong() {
         let profile = base_profile();
         let mut meta = base_meta();
-        meta.duration_secs = 4.0_f64;
-        meta.fps = 24.0_f64;
+        meta.duration_secs = Some(4.0_f64);
+        meta.fps = Some(24.0_f64);
         meta.frame_count = Some(96);
         meta.width = 320;
         meta.height = 320;
@@ -3921,8 +4005,8 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         // 28s now hits the ≥15s hard veto. We test that it correctly exits as LoopWeak.
-        meta.duration_secs = 28.0_f64;
-        meta.fps = 4.0_f64;
+        meta.duration_secs = Some(28.0_f64);
+        meta.fps = Some(4.0_f64);
         meta.frame_count = Some(112);
         meta.file_size_bytes = 12_000_000;
         meta.width = 1920;
@@ -3954,8 +4038,8 @@ mod tests {
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
         meta.loop_count = Some(1);
-        meta.duration_secs = 11.0_f64;
-        meta.fps = 8.0_f64;
+        meta.duration_secs = Some(11.0_f64);
+        meta.fps = Some(8.0_f64);
         meta.frame_count = Some(88);
         meta.file_size_bytes = 3_800_000;
         meta.webp_compression_ratio = Some(3.5_f64);
@@ -3974,8 +4058,8 @@ mod tests {
         let mut meta = base_meta();
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
-        meta.duration_secs = 7.0_f64;
-        meta.fps = 10.0_f64;
+        meta.duration_secs = Some(7.0_f64);
+        meta.fps = Some(10.0_f64);
         meta.frame_count = Some(70);
         meta.file_size_bytes = 500_000;
         meta.has_transparency = true;
@@ -3998,7 +4082,7 @@ mod tests {
     fn balanced_case_stays_uncertain() {
         let profile = base_profile();
         let mut meta = base_meta();
-        meta.duration_secs = 9.0_f64;
+        meta.duration_secs = Some(9.0_f64);
         // Strong positive physical signals to counteract the structural checkpoint.
         // At 9s (Short tier, +0.5 bias), we need the loop_closure and periodicity
         // to push log-odds into the gray zone (-1.05..+1.05) rather than triggering
@@ -4030,10 +4114,10 @@ mod tests {
     #[test]
     fn legacy_meme_profile_resolves_without_layer7_fallback() {
         let meta = LoopMeta {
-            duration_secs: 3.5,
+            duration_secs: Some(3.5),
             width: 640,
             height: 360,
-            fps: 24.0,
+            fps: Some(24.0),
             frame_count: Some(84),
             file_size_bytes: 2_000_000,
             has_audio: false,
@@ -4055,10 +4139,10 @@ mod tests {
     #[test]
     fn legacy_silent_technical_profile_resolves_without_layer7_fallback() {
         let meta = LoopMeta {
-            duration_secs: 8.5,
+            duration_secs: Some(8.5),
             width: 1280,
             height: 720,
-            fps: 30.0,
+            fps: Some(30.0),
             frame_count: Some(255),
             file_size_bytes: 8_000_000,
             has_audio: false,
@@ -4114,7 +4198,7 @@ mod tests {
             p90: None,
             weight: None,
         };
-        profile.collection.duration_p90 = 15.0_f64;
+        profile.collection.duration_p90 = Some(15.0_f64);
 
         let thresholds = LoopThresholds::from_profile(Some(&profile));
         assert!(thresholds.duration_override_secs > 2.0_f64);
@@ -4136,7 +4220,7 @@ mod tests {
         let mut meta = base_meta();
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
-        meta.duration_secs = 5.0_f64;
+        meta.duration_secs = Some(5.0_f64);
         meta.has_audio = false;
 
         assert!(should_accept_layer6_loopstrong(
@@ -4155,7 +4239,7 @@ mod tests {
         let mut meta = base_meta();
         meta.source_extension = Some("mp4".to_string());
         meta.container = Some("mp4".to_string());
-        meta.duration_secs = 9.5_f64;
+        meta.duration_secs = Some(9.5_f64);
         meta.has_audio = false;
 
         assert!(should_accept_layer6_loopstrong(
@@ -4172,7 +4256,7 @@ mod tests {
         let profile = base_profile();
         let thresholds = LoopThresholds::from_profile(Some(&profile));
         let mut meta = base_meta();
-        meta.duration_secs = 24.0_f64;
+        meta.duration_secs = Some(24.0_f64);
         meta.source_extension = Some("mp4".to_string());
         meta.container = Some("mp4".to_string());
 
@@ -4191,7 +4275,7 @@ mod tests {
         let mut meta = base_meta();
         // Use 14.0s to stay inside the gray zone (6–15s). Previously 18.0s, which now
         // hits the ≥15s hard veto and would never reach Layer 1-D.
-        meta.duration_secs = 14.0_f64;
+        meta.duration_secs = Some(14.0_f64);
 
         // SAFETY: test-only; these tests must not run in parallel with other env-var tests.
         unsafe { std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "1") };
@@ -4252,7 +4336,7 @@ mod tests {
         // Expected: Should be treated as animation (LoopStrong)
         let profile = base_profile();
         let mut meta = base_meta();
-        meta.duration_secs = 2.28_f64;
+        meta.duration_secs = Some(2.28_f64);
         meta.frame_count = Some(57);
         meta.has_audio = true; // Audio track exists
         meta.audio_is_silent = Some(true); // But it's silent (-91 dB)

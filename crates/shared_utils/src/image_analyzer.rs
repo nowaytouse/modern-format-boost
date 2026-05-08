@@ -118,7 +118,7 @@ pub struct ImageAnalysis {
     pub height: u32,
     pub file_size: u64,
 
-    pub color_depth: u8,
+    pub color_depth: Option<u8>,
     pub color_space: String,
     pub has_alpha: bool,
     pub is_animated: bool,
@@ -163,7 +163,7 @@ impl Default for ImageAnalysis {
             width: 0,
             height: 0,
             file_size: 0,
-            color_depth: 8,
+            color_depth: None,
             color_space: "unknown".into(),
             has_alpha: false,
             is_animated: false,
@@ -397,11 +397,11 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let (width, height) = img.dimensions();
     let has_alpha = has_alpha_channel(&img);
-    let color_depth = detect_color_depth(&img);
+    let color_depth = Some(detect_color_depth(&img));
     let color_space = detect_color_space(&img);
 
-    let is_animated = is_animated_format(path, format).unwrap_or_else(|_| {
-        tracing::debug!("Missing animation info; defaulting to false");
+    let is_animated = is_animated_format(path, format).unwrap_or_else(|e| {
+        tracing::warn!(path = %path.display(), error = %e, "Image Analysis: Failed to determine if format is animated; defaulting to false (Static)");
         false
     });
 
@@ -455,11 +455,10 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
-    let precision = if let Ok(detection) = detect_image(path) {
-        detection.precision
-    } else {
+    let precision = detect_image(path).map_or_else(|e| {
+        tracing::warn!(path = %path.display(), error = %e, "Image Analysis: Precision detection failed; using unknown (None) defaults");
         PrecisionMetadata::default()
-    };
+    }, |d| d.precision);
 
     Ok(ImageAnalysis {
         cache_version: 2,
@@ -510,7 +509,11 @@ impl ImageAnalysis {
                             format!(
                                 "{} {}",
                                 heic.codec,
-                                if heic.bit_depth > 8 { "HDR" } else { "SD" }
+                                if heic.bit_depth.is_some_and(|d| d > 8) {
+                                    "HDR"
+                                } else {
+                                    "SD"
+                                }
                             )
                         }
                     },
@@ -615,8 +618,8 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             (
                 0,
                 0,
-                false, // Assume no alpha due to failure
-                8,
+                false, // Refusing to forge alpha
+                None,  // Honestly reporting None when deep analysis fails
                 is_lossless_fallback,
                 "unknown".to_string(),
                 ImageFeatures::default(),
@@ -638,10 +641,10 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
-    // HEIC/HEIF animation detection for metadata correctness.
-    // Routing-wise, HEIC/HEIF is intercepted by is_apple_native before this matters,
-    // but correct is_animated ensures downstream consumers get truthful metadata.
-    let is_animated = crate::image_detection::is_isobmff_animated_sequence(path);
+    let is_animated = crate::image_detection::is_isobmff_animated_sequence(path).unwrap_or_else(|e| {
+        tracing::warn!(path = %path.display(), error = %e, "HEIC Analysis: is_isobmff_animated_sequence failed; defaulting to false (Static)");
+        false
+    });
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -718,6 +721,13 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
         }
     };
 
+    if width == 0 || height == 0 {
+        log_eprintln!(
+            "☢️ [ANOMALY] JPEG Analysis: Failed to read dimensions for {}. Information invalidated.",
+            path.display()
+        );
+    }
+
     let mut metadata = extract_metadata(path);
 
     if let Some(jpeg) = jpeg_analysis.as_ref()
@@ -746,7 +756,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
         width,
         height,
         file_size,
-        color_depth: 8,
+        color_depth: Some(8),
         color_space: "sRGB".to_string(),
         has_alpha: false,
         is_animated: false,
@@ -1372,7 +1382,10 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                 let r_frame_rate = stream
                     .get("r_frame_rate")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("0/1");
+                    .unwrap_or_else(|| {
+                        tracing::warn!("☢️ [ANOMALY] JXL 'r_frame_rate' missing; defaulting to '0/1'. Duration will be unknown.");
+                        "0/1"
+                    });
 
                 // Parse frame rate (format: "num/den")
                 let fps = crate::ffprobe::parse_frame_rate(r_frame_rate)
@@ -1697,11 +1710,20 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
 
     if let Some(analysis) = crate::image_quality_detector::analyze_image_quality_from_path(path) {
         log_eprintln!(
-            "   📊 Fallback analysis: content_type={} complexity={:.3} edge_density={:.3} color_diversity={:.3}",
+            "   📊 Fallback analysis: content_type={} complexity={} edge_density={} color_diversity={}",
             analysis.content_type.name,
-            analysis.complexity,
-            analysis.edge_density,
-            analysis.color_diversity,
+            analysis
+                .complexity
+                .map(|v| format!("{v:.3}"))
+                .unwrap_or_else(|| "N/A".to_string()),
+            analysis
+                .edge_density
+                .map(|v| format!("{v:.3}"))
+                .unwrap_or_else(|| "N/A".to_string()),
+            analysis
+                .color_diversity
+                .map(|v| format!("{v:.3}"))
+                .unwrap_or_else(|| "N/A".to_string()),
         );
         // Conservative strategy: no longer decide whether to treat as lossless based on old RoutingDecision; universally treat as lossy.
     } else {
@@ -1772,7 +1794,10 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
 
     // Detect animation via ffprobe/jxlinfo
     let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::JXL).unwrap_or((false, Some(1), None));
+        detect_animation(path, &DetectedFormat::JXL).unwrap_or_else(|e| {
+            tracing::warn!(path = %path.display(), error = %e, "Image Analysis: JXL animation detection failed; defaulting to Static (1 frame)");
+            (false, Some(1), None)
+        });
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -1786,7 +1811,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
         width,
         height,
         file_size,
-        color_depth,
+        color_depth: Some(color_depth),
         color_space: "sRGB".to_string(),
         has_alpha,
         is_animated,
@@ -1839,11 +1864,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
                 || pix_fmt.contains("rgba")
                 || pix_fmt.contains("gbrap")
                 || pix_fmt.starts_with("p4");
-            let depth = if probe.bit_depth > 0 {
-                probe.bit_depth
-            } else {
-                8
-            };
+            let depth = probe.bit_depth.unwrap_or(8);
             (probe.width, probe.height, alpha, depth)
         }
         Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
@@ -1885,7 +1906,10 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
 
     // Detect animation via ISOBMFF ftyp brand (avis/msf1)
     let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::AVIF).unwrap_or((false, Some(1), None));
+        detect_animation(path, &DetectedFormat::AVIF).unwrap_or_else(|e| {
+            tracing::warn!(path = %path.display(), error = %e, "Image Analysis: AVIF animation detection failed; defaulting to Static (1 frame)");
+            (false, Some(1), None)
+        });
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -1900,7 +1924,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
         width,
         height,
         file_size,
-        color_depth,
+        color_depth: Some(color_depth),
         color_space: "sRGB".to_string(),
         has_alpha,
         is_animated,

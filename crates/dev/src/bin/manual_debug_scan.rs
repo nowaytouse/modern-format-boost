@@ -148,7 +148,9 @@ fn manual_debug_scan_debug_dir_only() {
                     shared_utils::loop_intent::assess_loop_intent_from_meta(&meta, Some(p));
                 eprintln!(
                     "Deep verdict: {:?} (duration={:.2}s,size={})",
-                    verdict, meta.duration_secs, meta.file_size_bytes
+                    verdict,
+                    meta.duration_secs.unwrap_or(0.0),
+                    meta.file_size_bytes
                 );
             } else {
                 eprintln!("Deep probe failed for {}", p.display());

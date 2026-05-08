@@ -193,9 +193,9 @@ dependencies = [
 
 [[package]]
 name = "avif-serialize"
-version = "0.8.8"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "375082f007bd67184fb9c0374614b29f9aaa604ec301635f72338bb65386a53d"
+checksum = "e7178fe5f7d460b13895ebb9dcb28a3a6216d2df2574a0806cb51b555d297f38"
 dependencies = [
  "arrayvec",
 ]
@@ -1824,7 +1824,7 @@ source = "git+https://github.com/tailhook/quick-error.git#936a0683022e73086705de
 [[package]]
 name = "quick-xml"
 version = "0.39.3"
-source = "git+https://github.com/tafia/quick-xml.git#2c46d248e07a8375d7ae7109379fba06728af54e"
+source = "git+https://github.com/tafia/quick-xml.git#8128038a58feb3d10a4280897777ceec88d47853"
 dependencies = [
  "memchr",
 ]
@@ -2408,7 +2408,7 @@ checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile.git#55c78be522a4caec49f3f9cf38b2a212279baa73"
+source = "git+https://github.com/Stebalien/tempfile.git#bb3951112d1025af1a1a1aa17a485026e671b00d"
 dependencies = [
  "fastrand",
  "getrandom 0.4.2",

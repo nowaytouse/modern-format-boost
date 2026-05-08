@@ -1283,6 +1283,9 @@ pub fn calculate_quality_score(
     phase: SearchPhase,
 ) -> QualityScore {
     let compression_ratio = if input_size == 0 {
+        tracing::warn!(
+            "GPU Accel: input_size is 0; defaulting to neutral compression ratio 1.0 (Information invalidated)"
+        );
         1.0_f64
     } else {
         crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size)

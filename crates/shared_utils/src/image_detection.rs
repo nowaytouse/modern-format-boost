@@ -147,7 +147,7 @@ pub struct PrecisionMetadata {
 pub struct PngQuantizationAnalysis {
     pub is_quantized: bool,
 
-    pub confidence: f64,
+    pub confidence: Option<f64>,
 
     pub factor_scores: PngQuantizationFactors,
 
@@ -402,7 +402,11 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     // Security: Read up to 1MB (1_048_576 bytes) to safely parse FTYP even if it has bloated metadata,
     // while still preventing OOM on multi-GB fake files.
     let Ok(mut file) = std::fs::File::open(path) else {
-        return DetectedFormat::HEIC;
+        warn!(
+            "☢️ [ANOMALY] Failed to open file for ftyp brand resolution at '{}'. Refusing to forge HEIC.",
+            path.display()
+        );
+        return DetectedFormat::Unknown("ISOBMFF file open failure".to_string());
     };
     let mut data = vec![0u8; 1_048_576];
     let read_len = match std::io::Read::read(&mut file, &mut data) {
@@ -423,7 +427,11 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     data.truncate(read_len);
 
     if data.len() < 16 || data.get(4..8) != Some(b"ftyp") {
-        return DetectedFormat::HEIC;
+        warn!(
+            "☢️ [ANOMALY] ftyp box too short or missing at '{}'. Refusing to forge HEIC.",
+            path.display()
+        );
+        return DetectedFormat::Unknown("Malformed ftyp box".to_string());
     }
 
     let box_size_u32 = if data.len() >= 4 {
@@ -446,7 +454,11 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
     if ftyp_end < 16 {
-        return DetectedFormat::HEIC;
+        warn!(
+            "☢️ [ANOMALY] ftyp box truncated before brands at '{}'. Refusing to forge HEIC.",
+            path.display()
+        );
+        return DetectedFormat::Unknown("ftyp box truncated".to_string());
     }
 
     let Some(compat_data) = data.get(16..ftyp_end) else {
@@ -550,8 +562,10 @@ pub fn detect_animation(
             let probe_frames = probe
                 .frame_count
                 .and_then(|c| crate::numeric_cast::u64_to_u32_strict(c, "probe_frames"));
-            if probe.frame_rate > 0.0_f64 {
-                fps = Some(crate::numeric_cast::f64_to_f32_lossy(probe.frame_rate));
+            if let Some(r_fps) = probe.frame_rate
+                && r_fps > 0.0_f64
+            {
+                fps = Some(crate::numeric_cast::f64_to_f32_lossy(r_fps));
             }
 
             if let Some(fc) = probe_frames {
@@ -560,7 +574,9 @@ pub fn detect_animation(
                 } else if fc == 1 {
                     return Ok((false, Some(1), fps));
                 }
-            } else if probe.duration > 0.1_f64 && probe.format_name.contains("video") {
+            } else if probe.duration.is_some_and(|d| d > 0.1_f64)
+                && probe.format_name.contains("video")
+            {
                 return Ok((true, None, fps));
             }
         }
@@ -585,7 +601,10 @@ pub fn detect_animation(
 
     match format {
         DetectedFormat::AVIF => {
-            is_animated = is_isobmff_animated_sequence(path);
+            is_animated = is_isobmff_animated_sequence(path).unwrap_or_else(|e| {
+                tracing::warn!(path = %path.display(), error = %e, "is_isobmff_animated_sequence failed; defaulting to false (Static)");
+                false
+            });
             if is_animated {
                 frame_count = None;
             }
@@ -708,60 +727,54 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
 
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
 /// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
-#[must_use]
-pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
+///
+/// # Errors
+/// Returns an error if the file cannot be read or ftyp box is malformed.
+pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
 
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
+    let mut file = File::open(path)?;
 
     let mut header = [0u8; 32];
-    if std::io::Read::read_exact(&mut file, &mut header).is_err() {
-        return false;
-    }
+    std::io::Read::read_exact(&mut file, &mut header)?;
 
     if header[4..8] != *b"ftyp" {
-        return false;
+        return Ok(false);
     }
 
     let major_brand = &header[8..12];
     for seq_brand in SEQUENCE_BRANDS {
         if major_brand == *seq_brand {
-            return true;
+            return Ok(true);
         }
     }
 
     // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let Ok(ftyp_box_size) = usize::try_from(u32::from_be_bytes([
-        header[0], header[1], header[2], header[3],
-    ])) else {
-        warn!("☢️ [ANOMALY] ftyp box size overflows usize");
-        return false;
-    };
+    let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+    let ftyp_box_size = crate::numeric_cast::u32_to_usize_strict(ftyp_box_size, "ftyp_box_size")
+        .ok_or_else(|| ImgQualityError::AnalysisError("ftyp box size overflow".to_string()))?;
+
     if !(16..=4096).contains(&ftyp_box_size) {
-        return false;
+        return Ok(false);
     }
     let compat_size = ftyp_box_size - 16;
     if compat_size == 0 {
-        return false;
+        return Ok(false);
     }
 
     let mut compat_data = vec![0u8; compat_size];
-    if std::io::Read::read_exact(&mut file, &mut compat_data).is_err() {
-        return false;
-    }
+    std::io::Read::read_exact(&mut file, &mut compat_data)?;
 
     for cb in compat_data.chunks_exact(4) {
         for seq_brand in SEQUENCE_BRANDS {
             if cb == *seq_brand {
-                return true;
+                return Ok(true);
             }
         }
     }
 
-    false
+    Ok(false)
 }
 
 /// Returns true if the JXL file contains animation.
@@ -897,7 +910,10 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
             } else {
                 "Lossless"
             },
-            analysis.confidence * 100.0_f64,
+            analysis
+                .confidence
+                .map(|c| format!("{:.1}", c * 100.0_f64))
+                .unwrap_or_else(|| "N/A".to_string()),
             analysis.explanation
         ));
     }
@@ -1331,7 +1347,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     if png_info.bit_depth == 16 {
         return Ok(PngQuantizationAnalysis {
             is_quantized: false,
-            confidence: 1.0,
+            confidence: Some(1.0),
             factor_scores: factors,
             detected_tool: None,
             explanation: "16-bit PNG - always lossless".to_string(),
@@ -1368,7 +1384,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 if sampled_uniques <= 256 {
                     return Ok(PngQuantizationAnalysis {
                         is_quantized: true,
-                        confidence: 0.80,
+                        confidence: Some(0.80),
                         factor_scores: factors,
                         detected_tool: None,
                         explanation: format!(
@@ -1403,7 +1419,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 let tc_score_f = tc_score.to_f64();
                 return Ok(PngQuantizationAnalysis {
                     is_quantized: true,
-                    confidence: 0.70 + tc_score_f * 0.15,
+                    confidence: Some(0.70 + tc_score_f * 0.15),
                     factor_scores: factors,
                     detected_tool: None,
                     explanation: format!(
@@ -1414,7 +1430,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
             return Ok(PngQuantizationAnalysis {
                 is_quantized: false,
-                confidence: 0.65,
+                confidence: Some(0.65),
                 factor_scores: factors,
                 detected_tool: None,
                 explanation: "Truecolor PNG — weak quantization signal, treating as lossless"
@@ -1423,7 +1439,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         }
         return Ok(PngQuantizationAnalysis {
             is_quantized: false,
-            confidence: 0.90,
+            confidence: Some(0.90),
             factor_scores: factors,
             detected_tool: None,
             explanation: "Truecolor PNG without quantization indicators".to_string(),
@@ -1433,7 +1449,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     if detected_tool.is_some() {
         return Ok(PngQuantizationAnalysis {
             is_quantized: true,
-            confidence: 0.99,
+            confidence: Some(0.99),
             factor_scores: factors,
             detected_tool,
             explanation: explanations.join("; "),
@@ -1467,7 +1483,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
     Ok(PngQuantizationAnalysis {
         is_quantized,
-        confidence: confidence.min(1.0),
+        confidence: Some(confidence.min(1.0)),
         factor_scores: factors,
         detected_tool,
         explanation,
@@ -2670,7 +2686,10 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
                 ]);
                 return (num_frames > 1, num_frames.max(1));
             }
-            return (true, 2); // Fallback if we can't read frame count
+            warn!(
+                "☢️ [ANOMALY] PNG acTL chunk found but num_frames data is missing/truncated! Information invalidated."
+            );
+            return (true, 0); // Honest report: it's animated, but count is unknown
         }
 
         // Skip chunk data and CRC

@@ -1347,19 +1347,21 @@ pub fn convert_to_mp4_matched(
     let mut actual_initial_crf = initial_crf;
 
     // Get duration and metadata for smart CRF initialization
-    let probe = shared_utils::ffprobe::probe_video(input).ok();
-    let duration = probe.as_ref().map_or(0.0, |p| {
-        shared_utils::numeric_cast::f64_to_f32_lossy(p.duration)
-    });
-
-    let is_safe_for_lossless = (is_gif && flag_mode.is_ultimate())
-        && probe.as_ref().map_or_else(
-            || duration < ANIMATION_CLIP_THRESHOLD_SECS,
-            |p| {
-                let meta = LoopMeta::from_ffprobe_result(p, input);
+    let probe_opt = shared_utils::ffprobe::probe_video(input).ok();
+    let is_safe_for_lossless = if let Some(probe) = probe_opt.as_ref()
+        && let Some(dur_val) = probe.duration
+    {
+        let duration = shared_utils::numeric_cast::f64_to_f32_lossy(dur_val);
+        (is_gif && flag_mode.is_ultimate())
+            && (if duration < ANIMATION_CLIP_THRESHOLD_SECS {
+                let meta = LoopMeta::from_ffprobe_result(probe, input);
                 is_lossless_exploration_safe(&meta, Some(input))
-            },
-        );
+            } else {
+                false
+            })
+    } else {
+        false
+    };
 
     if is_safe_for_lossless {
         // [Data-Driven Optimization]
@@ -2018,15 +2020,25 @@ pub fn convert_to_gif_apple_compat(
             VidQualityError::ConversionError(format!("Failed to probe source for FPS: {e}"))
         })?;
 
-        let fps = if probe_res.duration > 0.0_f64 && extracted_count > 0 {
+        let duration_val = probe_res.duration.ok_or_else(|| {
+            VidQualityError::ConversionError(
+                "Source duration missing - cannot determine native speed".to_string(),
+            )
+        })?;
+
+        let fps = if duration_val > 0.0_f64 && extracted_count > 0 {
             // 100% data-driven: Actual extracted frames / Metadata total duration
-            shared_utils::numeric_cast::usize_to_f64(extracted_count) / probe_res.duration
-        } else if probe_res.avg_frame_rate > 0.0_f64 {
+            shared_utils::numeric_cast::usize_to_f64(extracted_count) / duration_val
+        } else if let Some(avg_fps) = probe_res.avg_frame_rate
+            && avg_fps > 0.0_f64
+        {
             // Use directly reported average frame rate
-            probe_res.avg_frame_rate
-        } else if probe_res.frame_rate > 0.0_f64 {
+            avg_fps
+        } else if let Some(r_fps) = probe_res.frame_rate
+            && r_fps > 0.0_f64
+        {
             // Use directly reported r_frame_rate
-            probe_res.frame_rate
+            r_fps
         } else {
             return Err(VidQualityError::ConversionError(
                 "Source metadata lacks both duration and frame rate - cannot determine native speed".to_string()
@@ -2036,7 +2048,7 @@ pub fn convert_to_gif_apple_compat(
         if options.verbose() {
             eprintln!(
                 "   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS",
-                extracted_count, probe_res.duration, fps
+                extracted_count, duration_val, fps
             );
         }
         let mut gifski_builder = shared_utils::GifskiBuilder::new();

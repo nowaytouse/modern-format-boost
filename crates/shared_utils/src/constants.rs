@@ -727,6 +727,18 @@ pub const DEFAULT_PALETTE_SIZE: f64 = 256.0;
 /// Default frame complexity/payload fallback.
 pub const DEFAULT_COMPLEXITY_PRIOR: f64 = 0.5;
 
+/// Default quality fallback for JPEG files when markers are unreadable (85 = Standard High).
+pub const FALLBACK_QUALITY_JPEG: u8 = 85;
+/// Default compression level for PNG files when unknown (6 = Medium).
+pub const FALLBACK_COMPRESSION_PNG: u8 = 6;
+/// Default CRF fallback for video when BPP-to-CRF LUT fails (35 = Safe Standard).
+pub const FALLBACK_CRF_VIDEO: f32 = 35.0;
+/// Default quality fallback for AVIF files (85).
+pub const FALLBACK_QUALITY_AVIF: u8 = 85;
+
+/// Neutral weight for feature calculations (1.0).
+pub const FEATURE_WEIGHT_NEUTRAL: f64 = 1.0;
+
 // --- GPU Search Step & Boundary Constants ---
 
 /// CRF step size for coarse search in ultimate mode (High precision).

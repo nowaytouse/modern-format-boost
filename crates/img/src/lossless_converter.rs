@@ -1278,7 +1278,13 @@ pub fn convert_to_avif(
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    let q = quality.unwrap_or(85);
+    let q = quality.unwrap_or_else(|| {
+        tracing::warn!(
+            "AVIF: Missing quality; defaulting to {}",
+            shared_utils::constants::FALLBACK_QUALITY_AVIF
+        );
+        shared_utils::constants::FALLBACK_QUALITY_AVIF
+    });
 
     let mut builder = shared_utils::AvifencBuilder::new();
     builder
@@ -1417,7 +1423,11 @@ pub fn calculate_matched_distance_for_static(
         &analysis.format,
         analysis.width,
         analysis.height,
-        analysis.color_depth,
+        analysis.color_depth.ok_or_else(|| {
+            shared_utils::img_errors::ImgQualityError::AnalysisError(
+                "Missing bit depth in image analysis".to_string(),
+            )
+        })?,
         analysis.has_alpha,
         file_size,
         None,

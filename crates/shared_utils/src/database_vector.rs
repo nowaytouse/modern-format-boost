@@ -18,12 +18,13 @@ pub(crate) fn calculate_continuous_features(
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
     let fc = sample.frame_count?;
-    let sample_frame_density = crate::numeric_cast::u64_to_f64(fc) / sample.duration_secs.max(0.05);
-    let sample_frame_gap = sample.duration_secs / crate::numeric_cast::u64_to_f64(fc.max(1));
+    let dur = sample.duration_secs?;
+    let sample_frame_density = crate::numeric_cast::u64_to_f64(fc) / dur.max(0.05);
+    let sample_frame_gap = dur / crate::numeric_cast::u64_to_f64(fc.max(1));
 
     Some((
         sample_pixels / get_std("pixels")? * get_w("pixels")?.sqrt(),
-        sample.duration_secs / get_std("duration")? * get_w("duration")?.sqrt(),
+        dur / get_std("duration")? * get_w("duration")?.sqrt(),
         crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")?
             * get_w("frame_count")?.sqrt(),
         crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")?
@@ -120,8 +121,9 @@ pub(crate) fn calculate_extended_features(
         0.55_f64
     };
     let baseline_fps = 30.0_f64;
+    let fps_val = sample.fps?;
     let sample_fps_score: f64 = (1.0_f64
-        - crate::database::normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
+        - crate::database::normalize_log_ratio(fps_val.max(1e-3), baseline_fps, 1.2))
     .clamp(0.0_f64, 1.0_f64);
 
     let loop_freq = sample.loop_frequency?;

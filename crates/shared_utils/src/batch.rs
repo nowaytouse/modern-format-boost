@@ -1018,23 +1018,15 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         None
     };
 
-    let duration_secs = if probe.duration.is_finite() && probe.duration > 0.0_f64 {
-        Some(probe.duration)
-    } else {
-        None
-    };
+    let duration_secs = probe.duration.filter(|&d| d.is_finite() && d > 0.0);
 
-    let frame_rate = if probe.frame_rate.is_finite() && probe.frame_rate > 0.0_f64 {
-        Some(probe.frame_rate)
-    } else {
-        None
-    };
+    let frame_rate = probe.frame_rate.filter(|&f| f.is_finite() && f > 0.0_f64);
 
     let frame_count = probe.frame_count.map_or_else(
         || {
-            if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
+            if let (Some(dur), Some(fps)) = (duration_secs, frame_rate) {
                 Some(crate::numeric_cast::f64_to_u64_sat(
-                    (duration * fps).round().max(1.0_f64),
+                    (dur * fps).round().max(1.0_f64),
                 ))
             } else {
                 None

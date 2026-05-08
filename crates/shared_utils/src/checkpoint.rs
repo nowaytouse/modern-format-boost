@@ -91,7 +91,8 @@ struct CheckpointEntry {
     /// Creation time in Unix seconds.
     ctime: i64,
     /// Birth time in Unix seconds (if available).
-    btime: i64,
+    #[serde(default)]
+    btime: Option<i64>,
 }
 
 impl CheckpointEntry {
@@ -122,10 +123,10 @@ impl CheckpointEntry {
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
-        let btime = metadata.created().map_or(ctime, |t| {
-            t.duration_since(UNIX_EPOCH).map_or(ctime, |d| {
-                crate::numeric_cast::u128_to_i64_strict(d.as_nanos(), "btime").unwrap_or(ctime)
-            })
+        let btime = metadata.created().ok().and_then(|t| {
+            t.duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|d| crate::numeric_cast::u128_to_i64_strict(d.as_nanos(), "btime"))
         });
 
         Ok(Self {

@@ -202,7 +202,8 @@ pub fn quick_calibrate(
         .is_some_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
     let input_duration = probe
         .as_ref()
-        .map_or_else(|| f64::from(sample_duration), |p| p.duration);
+        .and_then(|p| p.duration)
+        .unwrap_or(f64::from(sample_duration));
     if is_gif_input {
         crate::verbose_eprintln!(
             "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
@@ -366,7 +367,9 @@ pub fn quick_calibrate(
 
             // Probe the input to decide HDR-aware pix_fmt so the CPU calibration
             // encode doesn't silently downshift a 10-bit HDR source to 8-bit SDR.
-            let is_ten_bit = probe.as_ref().is_some_and(|p| p.bit_depth >= 10);
+            let is_ten_bit = probe
+                .as_ref()
+                .is_some_and(|p| p.bit_depth.is_some_and(|bd| bd >= 10));
             let pix_fmt = if is_ten_bit { "yuv420p10le" } else { "yuv420p" };
             let cpu_vf_args = vec![
                 "-vf".to_string(),

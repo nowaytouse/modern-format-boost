@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## 💎 Technical Integrity & Zero-Forgery Mandate (v0.11.4) (2026-05-08)
+
+- **Total Elimination of Numeric Forgery**:
+  - **Zero-Unwrap Audit**: Audited the entire workspace to eliminate "silent forgery" patterns where missing metadata (duration, bitrate, frame count) was defaulted to `0.0`, `1.0`, or `0`.
+  - **Strict Option Handling**: Refactored critical conversion paths in `vid` and `shared_utils` to use explicit `Option` matching and error propagation (`ok_or_else`), ensuring the system errors loudly rather than degrading silently.
+  - **Derived Bitrate Logic**: Implemented scientific bitrate derivation from file size and duration when metadata is absent (e.g., in WebP containers), replacing the previous zero-default fallback.
+
+- **Diagnostic & Snapshot Alignment**:
+  - **Honest Reason Strings**: Updated `LoopIntentVerdict` diagnostic messages to explicitly report `None` or `N/A` for missing durations, rather than misleading zero-length timestamps.
+  - **Precision Standardization**: Standardized floating-point precision in logs to `{:.2}s`, restoring alignment with `classification_snapshots` suite while maintaining strict data integrity.
+
+- **Conversion Logic Hardening**:
+  - **GIF Recovery Path**: Fixed a potential panic in `conversion_api.rs` by implementing explicit status checks for skipped conversions and enforcing presence of output metadata on success.
+  - **Image Quality Assurance**: Refortified `determine_strategy` to refuse heuristic fallbacks for lossy images when quality estimation is impossible, preventing "blind" transcodes.
+
+- **Global Audit & Verification**:
+  - **Full Test Pass**: Achieved 100% Green status across 1000+ tests, including the new `test_real_silent_fallbacks` which enforces the zero-forgery policy.
+  - **Exhaustive Clippy Pass**: Resolved all cross-crate warnings under strict `-D warnings` and `pedantic` flags.
+
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (v0.11.3) (2026-05-07)
 
 - **Post-Hardening Fixes & Compilation Stability**:

@@ -121,7 +121,7 @@ mod tests {
             width: 1920,
             height: 1080,
             file_size: 1_000_000,
-            color_depth: 8,
+            color_depth: Some(8),
             color_space: "sRGB".to_string(),
             has_alpha: false,
             is_animated: false,

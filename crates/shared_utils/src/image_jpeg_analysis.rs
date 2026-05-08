@@ -1532,7 +1532,7 @@ fn extract_gainmap_from_mpf(
             source = ?gainmap_candidate.source,
             repaired_eoi = gainmap_candidate.repaired_eoi,
             decoded = gainmap_candidate.decoded,
-            aspect_diff = gainmap_candidate.aspect_diff.unwrap_or_default(),
+            aspect_diff = %gainmap_candidate.aspect_diff.map(|v| format!("{v:.4}")).unwrap_or_else(|| "N/A".to_string()),
             "Recovered gainmap using MPF fallback candidate"
         );
     }

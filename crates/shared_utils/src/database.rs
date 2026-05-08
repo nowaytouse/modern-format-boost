@@ -260,13 +260,13 @@ pub struct InferenceBlindSpot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalCollectionStats {
     /// Minimum duration in seconds.
-    pub duration_min: f64,
+    pub duration_min: Option<f64>,
     /// Average duration in seconds.
-    pub duration_avg: f64,
+    pub duration_avg: Option<f64>,
     /// Maximum duration in seconds.
-    pub duration_max: f64,
+    pub duration_max: Option<f64>,
     /// 90th percentile duration in seconds.
-    pub duration_p90: f64,
+    pub duration_p90: Option<f64>,
 
     /// Minimum file size in bytes.
     pub size_min: f64,
@@ -350,10 +350,10 @@ impl Default for GlobalCollectionStats {
             DEFAULT_LOOP_BASELINE_DURATION_SECS, MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
         };
         Self {
-            duration_min: 0.1,
-            duration_avg: DEFAULT_LOOP_BASELINE_DURATION_SECS,
-            duration_max: 30.0,
-            duration_p90: MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
+            duration_min: Some(0.1),
+            duration_avg: Some(DEFAULT_LOOP_BASELINE_DURATION_SECS),
+            duration_max: Some(30.0),
+            duration_p90: Some(MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS),
 
             size_min: 1000.0,
             size_avg: 1_000_000.0,
@@ -393,19 +393,30 @@ impl Default for LoopReferenceProfile {
 
         Self {
             duration: DistributionStats {
-                mean: collection.duration_avg,
-                std_dev: ((collection.duration_max - collection.duration_min) / 4.0).max(0.5),
-                p10: Some(collection.duration_min),
+                mean: collection
+                    .duration_avg
+                    .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),
+                std_dev: ((collection.duration_max.unwrap_or(30.0)
+                    - collection.duration_min.unwrap_or(0.1))
+                    / 4.0)
+                    .max(0.5),
+                p10: collection.duration_min,
                 p25: Some(f64::midpoint(
-                    collection.duration_min,
-                    collection.duration_avg,
+                    collection.duration_min.unwrap_or(0.1),
+                    collection
+                        .duration_avg
+                        .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),
                 )),
-                p50: Some(collection.duration_avg),
+                p50: collection.duration_avg,
                 p75: Some(f64::midpoint(
-                    collection.duration_avg,
-                    collection.duration_p90,
+                    collection
+                        .duration_avg
+                        .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),
+                    collection
+                        .duration_p90
+                        .unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS),
                 )),
-                p90: Some(collection.duration_p90),
+                p90: collection.duration_p90,
                 weight: None,
             },
             fps: DistributionStats {
@@ -555,10 +566,10 @@ pub(crate) struct SampleRow {
     pub(crate) _loss_tolerance: Option<String>,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) duration_secs: f64,
+    pub(crate) duration_secs: Option<f64>,
     pub(crate) frame_count: Option<u64>,
     pub(crate) file_size_bytes: u64,
-    pub(crate) fps: f64,
+    pub(crate) fps: Option<f64>,
     pub(crate) temporal_bpp: f64,
     pub(crate) spatial_bpp: f64,
     pub(crate) has_transparency: bool,
@@ -937,7 +948,7 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let candidates: Vec<(LabelStatus, f64, f64)> = rows
+    let candidates: Vec<(LabelStatus, Option<f64>, f64)> = rows
         .iter()
         .map(|row| {
             let label_str: Option<String> = row.get(0);
@@ -948,14 +959,23 @@ fn lookup_similar_samples_inner(
                 _ => LabelStatus::NotLabeled,
             };
             return (
-                label,                // label status
-                row.get::<_, f64>(1), // duration_secs
-                row.get::<_, f64>(2), // dist
+                label,                        // label status
+                row.get::<_, Option<f64>>(1), // duration_secs
+                row.get::<_, f64>(2),         // dist
             );
         })
         .collect();
 
-    let neighbor_count = adaptive_neighbor_count(candidates.len());
+    let neighbor_count = match adaptive_neighbor_count(candidates.len()) {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::error!(
+                "☢️ [CRITICAL ANOMALY] {}; skipping KNN classification to avoid forgery.",
+                err
+            );
+            return Ok(None);
+        }
+    };
     let neighbors = &candidates[..neighbor_count.min(candidates.len())];
 
     let min_distance = neighbors.first().map_or(0.0_f64, |(_, _, d)| *d);
@@ -1025,8 +1045,10 @@ fn lookup_similar_samples_inner(
             _ => Rational::from((1, 2)),                // Uncertain/Fallback
         };
 
-        if prob >= Rational::from((1, 2)) {
-            loop_durations.push(*duration_secs);
+        if prob >= Rational::from((1, 2))
+            && let Some(d) = duration_secs
+        {
+            loop_durations.push(*d);
         }
 
         weighted_keep += prob * final_weight.clone();
@@ -1160,12 +1182,16 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 
 #[must_use]
 fn resolved_duration_secs(meta: &LoopMeta) -> Option<f64> {
-    if meta.duration_secs > 0.11 {
-        Some(meta.duration_secs)
+    if meta.duration_secs.is_some_and(|d| d > 0.11) {
+        meta.duration_secs
     } else {
         match meta.frame_count {
-            Some(fc) if fc > 1 && meta.fps > 0.1 => {
-                Some(crate::numeric_cast::u64_to_f64(fc) / meta.fps)
+            Some(fc)
+                if fc > 1
+                    && let Some(fps) = meta.fps
+                    && fps > 0.1 =>
+            {
+                Some(crate::numeric_cast::u64_to_f64(fc) / fps)
             }
             Some(_fc) => {
                 // We have a frame count but no reliable duration/FPS.
@@ -1207,7 +1233,7 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
         );
     }
     if let Some(duration) = resolved_duration_secs(&current_meta) {
-        current_meta.duration_secs = duration;
+        current_meta.duration_secs = Some(duration);
     } else {
         crate::log_eprintln!(
             "   ☢️  Lossless-first (CRF 0.00) skip: metadata invalidated (duration unknown)."
@@ -1232,19 +1258,21 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
         lossless_duration_limit_for_keep_prob,
     );
 
-    let is_safe = current_meta.duration_secs < f64::from(threshold);
+    let is_safe = current_meta
+        .duration_secs
+        .is_some_and(|d| d < f64::from(threshold));
 
     if !is_safe {
         if let Some(keep_prob) = keep_prob {
             crate::log_eprintln!(
-                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
+                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:?}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
                 current_meta.duration_secs,
                 threshold,
                 keep_prob
             );
         } else {
             crate::log_eprintln!(
-                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds conservative unknown-evidence limit {:.1}s",
+                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:?}s exceeds conservative unknown-evidence limit {:.1}s",
                 current_meta.duration_secs,
                 threshold
             );
@@ -1283,7 +1311,7 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
             source_ext TEXT,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
-            duration_secs DOUBLE PRECISION NOT NULL,
+            duration_secs DOUBLE PRECISION,
             frame_count BIGINT NOT NULL,
             file_size_bytes BIGINT NOT NULL,
             fps DOUBLE PRECISION,
@@ -1360,7 +1388,7 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
             id BIGSERIAL PRIMARY KEY,
             file_hash TEXT,
             source_path TEXT,
-            duration_secs DOUBLE PRECISION NOT NULL,
+            duration_secs DOUBLE PRECISION,
             webp_compression_ratio DOUBLE PRECISION,
             tree_probability DOUBLE PRECISION NOT NULL,
             knn_keep_probability DOUBLE PRECISION,
@@ -1483,13 +1511,13 @@ pub struct SampleInsert {
     /// Image height in pixels.
     height: u32,
     /// Total animation duration in seconds.
-    duration_secs: f64,
+    duration_secs: Option<f64>,
     /// Total number of frames.
     frame_count: Option<u64>,
     /// File size in bytes.
     file_size_bytes: u64,
     /// Frames per second.
-    fps: f64,
+    fps: Option<f64>,
     /// Whether the file has an embedded ICC color profile.
     has_embedded_icc: bool,
     /// Whether the file uses a complex color profile.
@@ -1651,7 +1679,7 @@ fn gather_sample_metadata(path: &Path) -> Option<LoopMeta> {
         meta.frame_delay_variation = scan.frame_delay_variation;
         meta.loop_count = scan.loop_count;
         if let Some(duration_secs) = scan.duration_secs {
-            meta.duration_secs = duration_secs;
+            meta.duration_secs = Some(duration_secs);
         }
     }
 
@@ -1888,18 +1916,18 @@ fn sample_distance(
     vector_l2_distance(&target_vector, &sample_vector)
 }
 
-fn adaptive_neighbor_count(total: usize) -> usize {
-    crate::numeric_cast::u64_to_usize_strict(
+fn adaptive_neighbor_count(total: usize) -> Result<usize, String> {
+    let count = crate::numeric_cast::u64_to_usize_strict(
         crate::numeric_cast::f64_to_u64_strict(
             (crate::numeric_cast::usize_to_f64(total)).sqrt().round(),
             "adaptive_neighbor_total_rounded",
         )
-        .unwrap_or(6),
+        .ok_or_else(|| "❌ Failed to calculate adaptive neighbor count".to_string())?,
         "adaptive_neighbor_total",
     )
-    .unwrap_or_else(|| total.min(6))
-    .clamp(6, 24)
-    .min(total)
+    .ok_or_else(|| "❌ Adaptive neighbor count overflowed usize".to_string())?;
+
+    Ok(count.clamp(6, 24).min(total))
 }
 
 fn class_balance_weight(total: i64, class_count: i64) -> f64 {
@@ -1930,7 +1958,7 @@ fn imbalance_ratio(keep_count: i64, weak_count: i64) -> f64 {
     (keep.max(weak) / keep.min(weak)).max(1.0)
 }
 
-fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, f64, f64)]) -> f64 {
+fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, Option<f64>, f64)]) -> f64 {
     let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let q1 = *distances.get(distances.len() / 4).unwrap_or(&0.0_f64);
@@ -2568,14 +2596,16 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     )?;
 
     let collection_stats = GlobalCollectionStats {
-        duration_min: dur_min,
-        duration_avg: dur_avg,
-        duration_max: dur_max,
-        duration_p90: feature_map
-            .stats
-            .get("duration")
-            .and_then(|stats| stats.p90)
-            .unwrap_or(dur_avg),
+        duration_min: Some(dur_min),
+        duration_avg: Some(dur_avg),
+        duration_max: Some(dur_max),
+        duration_p90: Some(
+            feature_map
+                .stats
+                .get("duration")
+                .and_then(|stats| stats.p90)
+                .unwrap_or(dur_avg),
+        ),
 
         size_min: crate::numeric_cast::i64_to_f64(size_min_i64.max(0)),
         size_avg,
@@ -2629,7 +2659,7 @@ fn map_row_to_sample(row: &postgres::Row) -> Option<SampleRow> {
     let file_size_bytes =
         crate::numeric_cast::i64_to_u64_strict(row.get::<_, i64>(6), "db_backfill_file_size")?;
     let fps =
-        crate::numeric_cast::option_f64_strict(row.get::<_, Option<f64>>(7), "db_backfill_fps")?;
+        crate::numeric_cast::option_f64_strict(row.get::<_, Option<f64>>(7), "db_backfill_fps");
 
     Some(SampleRow {
         _loss_tolerance: row.get(1),
@@ -2751,10 +2781,10 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
     };
 
     json!({
-        "duration_secs": f64_safe(meta.duration_secs),
+        "duration_secs": meta.duration_secs.map_or_else(|| json!(null), |v| if v.is_finite() { json!(v) } else { json!(0.0) }),
         "width": meta.width,
         "height": meta.height,
-        "fps": f64_safe(meta.fps),
+        "fps": opt_f64_safe(meta.fps),
         "frame_count": meta.frame_count,
         "file_size_bytes": meta.file_size_bytes,
         "has_audio": meta.has_audio,
@@ -3185,11 +3215,11 @@ mod tests {
         let duration = 2.0_f64;
         let size = 120_000;
         LoopMeta {
-            duration_secs: duration,
+            duration_secs: Some(duration),
             duration_tier: Some(crate::loop_intent::DurationTier::from_secs(duration)),
             width: 320,
             height: 320,
-            fps: 12.0,
+            fps: Some(12.0),
             frame_count: Some(frames),
             file_size_bytes: size,
             file_name: None,
@@ -3258,10 +3288,10 @@ mod tests {
             _loss_tolerance: Some("high".to_string()),
             width: 300,
             height: 300,
-            duration_secs: 2.2,
+            duration_secs: Some(2.2),
             frame_count: Some(24),
             file_size_bytes: 125_000,
-            fps: 12.0,
+            fps: Some(12.0),
             temporal_bpp: 0.05,
             spatial_bpp: 1.2,
             has_transparency: true,
@@ -3293,10 +3323,10 @@ mod tests {
             _loss_tolerance: Some("low".to_string()),
             width: 1920,
             height: 1080,
-            duration_secs: 20.0,
+            duration_secs: Some(20.0),
             frame_count: Some(600),
             file_size_bytes: 20_000_000,
-            fps: 30.0,
+            fps: Some(30.0),
             temporal_bpp: 0.4,
             spatial_bpp: 35.0,
             has_transparency: false,
@@ -3348,9 +3378,9 @@ mod tests {
     #[test]
     fn resolved_duration_secs_recovers_from_zero_probe_duration() {
         let mut meta = base_meta();
-        meta.duration_secs = 0.0_f64;
+        meta.duration_secs = Some(0.0_f64);
         meta.frame_count = Some(800);
-        meta.fps = 10.0_f64;
+        meta.fps = Some(10.0_f64);
         assert!(
             (resolved_duration_secs(&meta).expect("Test should have valid duration") - 80.0).abs()
                 < 0.01_f64

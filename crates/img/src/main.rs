@@ -821,10 +821,12 @@ fn auto_convert_single_file(
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     // Check for Live Photos first (before any analysis)
-    if shared_utils::is_live_photo(input) {
+    // Only skip in Apple compat mode to preserve the pair association.
+    // In normal mode, we treat the HEIC as a regular image to be upgraded.
+    if config.apple_compat() && shared_utils::is_live_photo(input) {
         let reason =
-            "Live Photo detected - img strictly processes static images only (handled by vid)";
-        shared_utils::progress_mode::image_ignored(reason);
+            "Live Photo detected in Apple compat mode - skipping to preserve pair (handled by vid)";
+        shared_utils::progress_mode::image_skipped(reason);
         let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or_else(
             |e| {
                 tracing::warn!(
@@ -835,12 +837,12 @@ fn auto_convert_single_file(
             },
             |m| m.len(),
         );
-        // [FIX] Completely ignore: NO COPY, NO STATS
+        copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
-            skipped: false,
-            ignored: true,
+            skipped: true,
+            ignored: false,
             message: reason.to_string(),
             original_size: file_size,
             output_size: None,
@@ -856,13 +858,13 @@ fn auto_convert_single_file(
     if analysis.is_animated {
         let reason =
             "Animated media detected - img strictly processes static images only (handled by vid)";
-        shared_utils::progress_mode::image_ignored(reason);
-        // [FIX] Completely ignore: NO COPY, NO STATS
+        shared_utils::progress_mode::image_skipped(reason);
+        copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
-            skipped: false,
-            ignored: true,
+            skipped: true,
+            ignored: false,
             message: reason.to_string(),
             original_size: analysis.file_size,
             output_size: None,

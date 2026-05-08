@@ -337,7 +337,9 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
 
 /// Return the correct pixel format (10-bit for HDR, otherwise 8-bit).
 const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
-    if detection.bit_depth >= 10 {
+    if let Some(depth) = detection.bit_depth
+        && depth >= 10
+    {
         "yuv420p10le"
     } else {
         "yuv420p"
@@ -817,11 +819,11 @@ pub fn auto_convert_with_cache(
                 "Animated-image reconciliation corrected frame_count before vid static isolation"
             );
             detection.frame_count = Some(corrected);
-            if detection.duration_secs <= 0.0_f64
+            if detection.duration_secs.is_none_or(|d| d <= 0.0_f64)
                 && let Some(dur) = image_det.duration
                 && dur > 0.0
             {
-                detection.duration_secs = f64::from(dur);
+                detection.duration_secs = Some(f64::from(dur));
             }
         } else if image_is_animated {
             tracing::warn!(
@@ -844,6 +846,16 @@ pub fn auto_convert_with_cache(
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
+        // Even though ignored in vid, we must ensure the file is copied to the output
+        // to prevent data loss in cases where img also skips it (e.g. Live Photos).
+        shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: input.display().to_string(),
@@ -859,7 +871,7 @@ pub fn auto_convert_with_cache(
             output_size: 0,
             size_ratio: 0.0,
             success: true,
-            message: "Ignored static image in vid module".to_string(),
+            message: "Ignored static image in vid module (copied to output)".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
@@ -1026,10 +1038,34 @@ pub fn auto_convert_with_cache(
                 input,
                 &convert_options_from_config(config),
             )?;
-            let output_size = result
-                .output_size
-                .expect("Failed to parse integer or missing required value");
-            let output_path = result.output_path.unwrap_or_default();
+
+            // Early exit for skipped results
+            if result.skipped {
+                return Ok(ConversionOutput {
+                    input_path: input.display().to_string(),
+                    output_path: String::new(),
+                    strategy,
+                    input_size: detection.file_size,
+                    output_size: 0,
+                    size_ratio: 1.0,
+                    success: result.success,
+                    message: result.message,
+                    final_crf: 0.0,
+                    exploration_attempts: 0,
+                    blake3: None,
+                });
+            }
+
+            let output_size = result.output_size.ok_or_else(|| {
+                VidQualityError::ConversionError(
+                    "GIF conversion success but missing output size".to_string(),
+                )
+            })?;
+            let output_path = result.output_path.ok_or_else(|| {
+                VidQualityError::ConversionError(
+                    "GIF conversion success but missing output path".to_string(),
+                )
+            })?;
             let size_ratio = if detection.file_size > 0 {
                 let ratio = Rational::from((output_size, detection.file_size));
                 ratio.to_f64()
@@ -1165,7 +1201,7 @@ pub fn auto_convert_with_cache(
                     .expect("String formatting should not fail");
             }
 
-            let is_hdr_content = detection.bit_depth >= 10
+            let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
                 || detection.is_dolby_vision
                 || detection.is_hdr10_plus
                 || detection.mastering_display.is_some()
@@ -1766,8 +1802,8 @@ pub fn calculate_matched_crf(
 
     if let Some(vbr) = detection.video_bitrate {
         builder = builder.video_bitrate(vbr);
-    } else {
-        builder = builder.video_bitrate(detection.bitrate);
+    } else if let Some(br) = detection.bitrate {
+        builder = builder.video_bitrate(br);
     }
 
     if !detection.pix_fmt.is_empty() {
@@ -1786,7 +1822,7 @@ pub fn calculate_matched_crf(
     }
 
     if detection.has_b_frames {
-        builder = builder.gop(60, 2);
+        builder = builder.gop(Some(60), Some(2));
     }
 
     let analysis = builder.build();
@@ -1847,7 +1883,7 @@ fn execute_lossless(
     // Attempt to extract HDR10+ metadata for injection
     let hdr10plus = prepare_hdr10plus_metadata(detection);
 
-    let is_hdr_content = detection.bit_depth >= 10
+    let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
         || detection.is_dolby_vision
         || detection.is_hdr10_plus
         || detection.mastering_display.is_some()
@@ -2069,12 +2105,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: true,
             audio_codec: Some("opus".to_string()),
             quality_score: 75,
@@ -2094,7 +2130,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2122,12 +2158,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: true,
             audio_codec: Some("opus".to_string()),
             quality_score: 75,
@@ -2147,7 +2183,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2186,12 +2222,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: true,
             audio_codec: Some("aac".to_string()),
             quality_score: 80,
@@ -2211,7 +2247,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2252,12 +2288,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: true,
             audio_codec: Some("aac".to_string()),
             quality_score: 70,
@@ -2277,7 +2313,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2321,12 +2357,12 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 frame_count: Some(1800),
-                fps: 30.0,
-                duration_secs: 60.0,
-                bit_depth: 8,
+                fps: Some(30.0),
+                duration_secs: Some(60.0),
+                bit_depth: Some(8),
                 pix_fmt: "yuv420p".to_string(),
                 file_size: 50_000_000,
-                bitrate: 6_666_666,
+                bitrate: Some(6_666_666),
                 has_audio: false,
                 audio_codec: None,
                 quality_score: 70,
@@ -2346,7 +2382,7 @@ mod tests {
                 is_hdr10_plus: false,
                 has_subtitles: false,
                 subtitle_codec: None,
-                max_b_frames: 0,
+                max_b_frames: Some(0),
                 encoder_params: None,
                 audio_channels: None,
                 is_variable_frame_rate: false,
@@ -2402,12 +2438,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".into(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: true,
             audio_codec: Some("opus".into()),
             quality_score: 85,
@@ -2427,7 +2463,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2458,12 +2494,12 @@ mod tests {
             width: 3840,
             height: 2160,
             frame_count: Some(3600),
-            fps: 60.0,
-            duration_secs: 60.0,
-            bit_depth: 10,
+            fps: Some(60.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(10),
             pix_fmt: "yuv420p10le".into(),
             file_size: 100_000_000,
-            bitrate: 13_333_333,
+            bitrate: Some(13_333_333),
             has_audio: true,
             audio_codec: Some("aac".into()),
             quality_score: 90,
@@ -2483,7 +2519,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2517,12 +2553,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".into(),
             file_size: 50_000_000,
-            bitrate: 6_666_666,
+            bitrate: Some(6_666_666),
             has_audio: false,
             audio_codec: None,
             quality_score: 75,
@@ -2542,7 +2578,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2574,12 +2610,12 @@ mod tests {
             width: 3840,
             height: 2160,
             frame_count: Some(3600),
-            fps: 60.0,
-            duration_secs: 60.0,
-            bit_depth: 10,
+            fps: Some(60.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(10),
             pix_fmt: "yuv420p10le".into(),
             file_size: 500_000_000,
-            bitrate: 66_666_666,
+            bitrate: Some(66_666_666),
             has_audio: true,
             audio_codec: Some("opus".into()),
             quality_score: 95,
@@ -2599,7 +2635,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2627,12 +2663,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(900),
-            fps: 30.0,
-            duration_secs: 30.0,
-            bit_depth: 10,
+            fps: Some(30.0),
+            duration_secs: Some(30.0),
+            bit_depth: Some(10),
             pix_fmt: "yuv444p10le".into(),
             file_size: 2_000_000_000,
-            bitrate: 533_333_333,
+            bitrate: Some(533_333_333),
             has_audio: false,
             audio_codec: None,
             quality_score: 100,
@@ -2652,7 +2688,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2687,12 +2723,12 @@ mod tests {
             width: 1920,
             height: 1080,
             frame_count: Some(1800),
-            fps: 30.0,
-            duration_secs: 60.0,
-            bit_depth: 10,
+            fps: Some(30.0),
+            duration_secs: Some(60.0),
+            bit_depth: Some(10),
             pix_fmt: "yuv422p10le".into(),
             file_size: 1_000_000_000,
-            bitrate: 133_333_333,
+            bitrate: Some(133_333_333),
             has_audio: true,
             audio_codec: Some("pcm_s24le".into()),
             quality_score: 98,
@@ -2712,7 +2748,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2747,12 +2783,12 @@ mod tests {
             width: 1280,
             height: 720,
             frame_count: Some(900),
-            fps: 30.0,
-            duration_secs: 30.0,
-            bit_depth: 8,
+            fps: Some(30.0),
+            duration_secs: Some(30.0),
+            bit_depth: Some(8),
             pix_fmt: "yuv420p".into(),
             file_size: 10_000_000,
-            bitrate: 2_666_666,
+            bitrate: Some(2_666_666),
             has_audio: false,
             audio_codec: None,
             quality_score: 70,
@@ -2772,7 +2808,7 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            max_b_frames: 0,
+            max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
             is_variable_frame_rate: false,
@@ -2804,7 +2840,7 @@ mod tests {
         // Mock a 10-bit HDR10+ result
         let detection = VideoDetectionResult {
             file_path: "test.mp4".to_string(),
-            bit_depth: 10,
+            bit_depth: Some(10),
             is_hdr10_plus: true, // HDR10+ detected
             is_dolby_vision: false,
             color_transfer: Some("smpte2084".to_string()),
@@ -2819,7 +2855,7 @@ mod tests {
         write!(hdr_x265_params, ":dhdr10-info={}", mock_json_path.display())
             .expect("String formatting should not fail");
 
-        let is_hdr_content = detection.bit_depth >= 10
+        let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
             || detection.is_dolby_vision
             || detection.is_hdr10_plus
             || detection.mastering_display.is_some()
@@ -2857,10 +2893,10 @@ mod tests {
             compression: CompressionType::Standard,
             width: 512,
             height: 512,
-            duration_secs: 2.0,
+            duration_secs: Some(2.0),
             has_audio: false,
             frame_count: Some(50),
-            fps: 25.0,
+            fps: Some(25.0),
             file_size: 500_000,
             ..Default::default()
         };
@@ -2899,10 +2935,10 @@ mod tests {
             compression: CompressionType::Lossless,
             width: 1,
             height: 1,
-            duration_secs: 0.2,
+            duration_secs: Some(0.2),
             has_audio: false,
             frame_count: Some(2),
-            fps: 10.0,
+            fps: Some(10.0),
             file_size: std::fs::metadata(gif.path())
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .len(),
@@ -2942,10 +2978,10 @@ mod tests {
             compression: CompressionType::Lossless,
             width: 1,
             height: 1,
-            duration_secs: 0.2,
+            duration_secs: Some(0.2),
             has_audio: false,
             frame_count: Some(2),
-            fps: 10.0,
+            fps: Some(10.0),
             file_size: std::fs::metadata(gif.path())
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .len(),
@@ -2977,10 +3013,10 @@ mod tests {
             compression: CompressionType::Standard,
             width: 512,
             height: 512,
-            duration_secs: 0.0,
+            duration_secs: Some(0.0),
             has_audio: false,
             frame_count: Some(12),
-            fps: 0.0,
+            fps: Some(0.0),
             file_size: 500_000,
             ..Default::default()
         };
@@ -3015,10 +3051,10 @@ mod tests {
             compression: CompressionType::Standard,
             width: 720,
             height: 720,
-            duration_secs: shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0,
+            duration_secs: Some(shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0),
             has_audio: false,
             frame_count: Some(600),
-            fps: 30.0,
+            fps: Some(30.0),
             file_size: 5_000_000,
             ..Default::default()
         };

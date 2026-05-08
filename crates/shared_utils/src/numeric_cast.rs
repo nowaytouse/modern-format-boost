@@ -785,6 +785,22 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
     raw::f32_to_u16(v)
 }
 
+/// Saturating cast: `f32` → `u8`.
+///
+/// - `NaN` or negative → `0`
+/// - `> 255` → `255`
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn f32_to_u8_sat(v: f32) -> u8 {
+    if v.is_nan() || v < 0.0 {
+        tracing::warn!("☢️ [ANOMALY] Float NaN/negative squashed to 0");
+        return 0;
+    }
+    if v > 255.0 {
+        return 255;
+    }
+    v as u8
+}
+
 // ---------------------------------------------------------------------------
 // f32 → signed integer (saturating)
 // ---------------------------------------------------------------------------

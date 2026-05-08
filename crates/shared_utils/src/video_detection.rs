@@ -194,19 +194,19 @@ pub struct VideoDetectionResult {
     pub width: u32,
     pub height: u32,
     pub frame_count: Option<u64>,
-    pub fps: f64,
-    pub duration_secs: f64,
-    pub bit_depth: u8,
+    pub fps: Option<f64>,
+    pub duration_secs: Option<f64>,
+    pub bit_depth: Option<u8>,
     pub pix_fmt: String,
     pub color_space: ColorSpace,
-    pub bitrate: u64,
+    pub bitrate: Option<u64>,
     pub has_audio: bool,
     pub audio_codec: Option<String>,
     pub file_size: u64,
     pub quality_score: u8,
     pub archival_candidate: bool,
     pub profile: Option<String>,
-    pub max_b_frames: u8,
+    pub max_b_frames: Option<u8>,
     pub has_b_frames: bool,
     pub encoder_params: Option<String>,
     pub video_bitrate: Option<u64>,
@@ -273,8 +273,8 @@ impl VideoDetectionResult {
 
     /// Returns true for high-bitrate archival-grade content
     #[must_use]
-    pub const fn is_high_fidelity(&self) -> bool {
-        self.bit_depth >= 10
+    pub fn is_high_fidelity(&self) -> bool {
+        self.bit_depth.is_some_and(|d| d >= 10)
             && matches!(
                 self.compression,
                 CompressionType::Lossless | CompressionType::VisuallyLossless
@@ -291,10 +291,10 @@ impl VideoDetectionResult {
 #[must_use]
 pub fn determine_compression_type(
     codec: &DetectedCodec,
-    bitrate: u64,
+    bitrate: Option<u64>,
     width: u32,
     height: u32,
-    fps: f64,
+    fps: Option<f64>,
     precision: &VideoPrecisionMetadata,
 ) -> CompressionType {
     if codec.is_lossless() || precision.is_lossless_deterministic {
@@ -325,16 +325,20 @@ pub fn determine_compression_type(
     }
 
     // BPP (Bits Per Pixel) thresholding for generic streams
-    let pixels_per_second = f64::from(width) * f64::from(height) * fps;
-    if pixels_per_second > 0.0_f64 {
-        let bits_per_pixel =
-            (crate::numeric_cast::u64_to_f64(bitrate) * 8.0_f64) / pixels_per_second;
-        if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
-            return CompressionType::VisuallyLossless;
-        } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {
-            return CompressionType::HighQuality;
-        } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_STANDARD {
-            return CompressionType::Standard;
+    if let Some(fps_val) = fps {
+        let pixels_per_second = f64::from(width) * f64::from(height) * fps_val;
+        if pixels_per_second > 0.0_f64
+            && let Some(bitrate_val) = bitrate
+        {
+            let bits_per_pixel =
+                (crate::numeric_cast::u64_to_f64(bitrate_val) * 8.0_f64) / pixels_per_second;
+            if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
+                return CompressionType::VisuallyLossless;
+            } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {
+                return CompressionType::HighQuality;
+            } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_STANDARD {
+                return CompressionType::Standard;
+            }
         }
     }
     CompressionType::LowQuality
@@ -343,8 +347,8 @@ pub fn determine_compression_type(
 #[must_use]
 pub fn calculate_quality_score(
     compression: &CompressionType,
-    bit_depth: u8,
-    _bitrate: u64,
+    bit_depth: Option<u8>,
+    _bitrate: Option<u64>,
     width: u32,
     height: u32,
 ) -> u8 {
@@ -355,9 +359,9 @@ pub fn calculate_quality_score(
         CompressionType::Standard => 60,
         CompressionType::LowQuality => 40,
     };
-    let depth_bonus = if bit_depth
-        >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD)
-    {
+    let depth_bonus = if bit_depth.is_some_and(|d| {
+        d >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD)
+    }) {
         crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_QUALITY_BONUS)
     } else {
         0
@@ -461,20 +465,35 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
     let has_b_frames = probe.has_b_frames();
 
-    let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
-
     // `bit_rate` is absent for image containers probed via ffprobe (e.g. WebP).
-    // Warn at the boundary; downstream logic uses 0 where a bitrate is needed.
-    let format_bit_rate: u64 = probe.bit_rate.unwrap_or_else(|| {
-        tracing::warn!(
-            path = %path.display(),
-            "ffprobe reported no container bit_rate; using 0 for compression heuristics"
-        );
-        0
+    // Root fix: Derive bitrate from file size and duration if missing to ensure accurate BPP and compression detection.
+    let format_bit_rate = probe.bit_rate.or_else(|| {
+        if let Some(dur) = probe.duration
+            && dur > 0.0
+        {
+            let bits = probe.size.saturating_mul(8);
+            let derived =
+                crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(bits) / dur);
+            if derived > 0 {
+                tracing::debug!(
+                    "ffprobe: Derived bitrate {:.1} kbps from file size and duration",
+                    crate::numeric_cast::u64_to_f64(derived) / 1000.0
+                );
+                Some(derived)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     });
 
-    let bits_per_pixel = if pixels_per_second > 0.0_f64 {
-        crate::numeric_cast::u64_to_f64(format_bit_rate) / pixels_per_second
+    let bits_per_pixel = if let Some(bitrate_val) = format_bit_rate
+        && let Some(fps) = probe.frame_rate
+        && (f64::from(probe.width) * f64::from(probe.height) * fps) > 0.0_f64
+    {
+        crate::numeric_cast::u64_to_f64(bitrate_val)
+            / (f64::from(probe.width) * f64::from(probe.height) * fps)
     } else {
         0.0_f64
     };
@@ -581,7 +600,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         || result.pix_fmt.contains("gbrap");
     if has_transparency
         && let crate::media_penetration::PenetrationResult::Verified(is_real) =
-            crate::media_penetration::detect_real_transparency(path, Some(result.duration_secs))
+            crate::media_penetration::detect_real_transparency(path, result.duration_secs)
         && !is_real
     {
         crate::progress_mode::emit_stderr(&format!(
@@ -607,8 +626,12 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
     // where loop intent might be ambiguous, and only if it's not a native gif/webp.
-    if result.duration_secs >= crate::constants::INTERLACE_DETECTION_MIN_DURATION_SECS
-        && result.duration_secs <= crate::constants::INTERLACE_DETECTION_MAX_DURATION_SECS
+    if result
+        .duration_secs
+        .is_some_and(|d| d >= crate::constants::INTERLACE_DETECTION_MIN_DURATION_SECS)
+        && result
+            .duration_secs
+            .is_some_and(|d| d <= crate::constants::INTERLACE_DETECTION_MAX_DURATION_SECS)
         && result.format != "gif"
         && result.format != "webp"
         && let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =
@@ -623,10 +646,10 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 fn extract_video_precision(
     tags: &HashMap<String, String>,
     encoder_settings: Option<&str>,
-    max_b_frames: u8,
+    max_b_frames: Option<u8>,
 ) -> VideoPrecisionMetadata {
     let mut precision = VideoPrecisionMetadata {
-        original_max_b_frames: Some(max_b_frames),
+        original_max_b_frames: max_b_frames,
         original_encoder: tags.get("encoder").cloned(),
         ..Default::default()
     };

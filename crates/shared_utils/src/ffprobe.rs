@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -91,7 +91,7 @@ impl FFprobeHdrInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FFprobeResult {
     pub format_name: String,
-    pub duration: f64,
+    pub duration: Option<f64>,
     pub size: u64,
     /// Container-level bit rate from ffprobe format section.
     /// `None` when ffprobe does not report it (common for image containers, e.g. WebP).
@@ -100,19 +100,19 @@ pub struct FFprobeResult {
     pub video_codec_long: String,
     pub width: u32,
     pub height: u32,
-    pub frame_rate: f64,
-    pub avg_frame_rate: f64,
+    pub frame_rate: Option<f64>,
+    pub avg_frame_rate: Option<f64>,
     pub frame_count: Option<u64>,
     pub pix_fmt: String,
     pub color_space: Option<String>,
     pub color_transfer: Option<String>,
     pub color_primaries: Option<String>,
-    pub bit_depth: u8,
+    pub bit_depth: Option<u8>,
     pub audio: FFprobeAudioInfo,
     pub profile: Option<String>,
     pub level: Option<String>,
     /// Actual B-frame count (`max_b_frames`) from ffprobe.
-    pub max_b_frames: u8,
+    pub max_b_frames: Option<u8>,
     /// Raw encoder settings string (e.g. from x264-params or x265-params tags).
     pub encoder_settings: Option<String>,
     pub video_bit_rate: Option<u64>,
@@ -140,7 +140,7 @@ pub struct FFprobeResult {
 impl FFprobeResult {
     #[must_use]
     pub const fn has_b_frames(&self) -> bool {
-        self.max_b_frames > 0
+        matches!(self.max_b_frames, Some(b) if b > 0)
     }
 }
 
@@ -152,16 +152,20 @@ pub fn is_ffprobe_available() -> bool {
 /// Enhanced VFR detection with slow-motion video handling
 fn detect_vfr_enhanced(
     video_stream: &serde_json::Value,
-    r_frame_rate: f64,
-    avg_frame_rate: f64,
+    r_frame_rate: Option<f64>,
+    avg_frame_rate: Option<f64>,
     format_name: &str,
 ) -> bool {
-    if r_frame_rate <= 0.0_f64 || avg_frame_rate <= 0.0_f64 {
+    let (Some(r_fr), Some(avg_fr)) = (r_frame_rate, avg_frame_rate) else {
+        return false;
+    };
+
+    if r_fr <= 0.0_f64 || avg_fr <= 0.0_f64 {
         return false;
     }
 
     // Slow-motion detection (separate logic for reliability)
-    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0_f64 {
+    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_fr >= 60.0_f64 {
         // Check for Apple's slow-mo tag (most reliable indicator)
         if video_stream
             .get("tags")
@@ -172,13 +176,13 @@ fn detect_vfr_enhanced(
         }
 
         // Check for significant frame rate ratio (recording vs playback)
-        if r_frame_rate / avg_frame_rate > 2.0_f64 {
+        if r_fr / avg_fr > 2.0_f64 {
             return true;
         }
     }
 
     // Standard VFR detection with 2% threshold
-    let diff_ratio = (r_frame_rate - avg_frame_rate).abs() / r_frame_rate;
+    let diff_ratio = (r_fr - avg_fr).abs() / r_fr;
     diff_ratio > 0.02
 }
 
@@ -188,7 +192,7 @@ struct ProbeFormatInfo {
     size: u64,
     /// `None` when ffprobe format section omits `bit_rate` (e.g. image containers).
     bit_rate: Option<u64>,
-    duration: f64,
+    duration: Option<f64>,
     tags: HashMap<String, String>,
 }
 
@@ -198,17 +202,17 @@ struct VideoStreamFields {
     video_codec_long: String,
     width: u32,
     height: u32,
-    frame_rate: f64,
-    avg_frame_rate: f64,
+    frame_rate: Option<f64>,
+    avg_frame_rate: Option<f64>,
     frame_count: Option<u64>,
     pix_fmt: String,
     color_space: Option<String>,
     color_transfer: Option<String>,
     color_primaries: Option<String>,
-    bit_depth: u8,
+    bit_depth: Option<u8>,
     profile: Option<String>,
     level: Option<String>,
-    max_b_frames: u8,
+    max_b_frames: Option<u8>,
     encoder_settings: Option<String>,
     video_bit_rate: Option<u64>,
     refs: Option<u32>,
@@ -368,12 +372,13 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
         );
     }
 
-    // `duration` is required; without it frame-count and loop-intent are undefined.
-    let duration = parse_f64_string_field(&format["duration"]).ok_or_else(|| {
-        let msg = "Missing or unparseable 'duration' in ffprobe format section".to_string();
-        debug!(error = %msg, "ffprobe: 'duration' metadata missing or malformed; animation/looping properties cannot be reliably determined");
-        FFprobeError::ParseError(msg)
-    })?;
+    // `duration` is optional in the format section for some containers.
+    let duration = parse_f64_string_field(&format["duration"]);
+    if duration.is_none() {
+        debug!(
+            "ffprobe: 'duration' metadata missing from format section (expected for static image containers or malformed streams)"
+        );
+    }
 
     Ok(ProbeFormatInfo {
         format_name,
@@ -459,35 +464,29 @@ fn select_video_stream<'a>(
 /// # Returns
 /// Resolved duration in seconds
 fn resolve_probe_duration(
-    format_duration: f64,
+    format_duration: Option<f64>,
     video_stream: &serde_json::Value,
     format_name: &str,
     path: &Path,
-) -> f64 {
+) -> Option<f64> {
     // `format_duration` was already validated as present in `parse_probe_format`;
     // the stream-level fallback is a secondary source for edge cases.
-    let mut duration = if format_duration > 0.0_f64 {
-        format_duration
-    } else if let Some(d) = parse_f64_string_field(&video_stream["duration"]) {
-        d
-    } else {
-        info!(
-            path = %path.display(),
-            "ffprobe: Could not resolve a valid duration from format or stream sections; defaulting to 0.0s (animation/looping metadata may be incomplete)"
-        );
-        0.0_f64
-    };
+    let mut duration = format_duration.filter(|&d| d > 0.0_f64);
+
+    if duration.is_none() {
+        duration = parse_f64_string_field(&video_stream["duration"]);
+    }
 
     // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
     // Loop-intent logic requires a real duration; derive it from ANMF frame durations.
-    if duration <= 0.0_f64
+    if duration.is_none()
         && format_name.contains("webp")
         && let Ok(data) = std::fs::read(path)
         && let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data)
     {
         let native_dur = f64::from(native_dur);
         if native_dur > 0.0_f64 {
-            duration = native_dur;
+            duration = Some(native_dur);
         }
     }
 
@@ -544,7 +543,7 @@ fn parse_required_u32_field(
 fn parse_video_stream_fields(
     video_stream: &serde_json::Value,
     format_name: &str,
-    duration: f64,
+    duration: Option<f64>,
     path: &Path,
 ) -> Result<VideoStreamFields, FFprobeError> {
     let video_codec = video_stream["codec_name"]
@@ -569,11 +568,13 @@ fn parse_video_stream_fields(
         )));
     }
 
-    let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {e}")))?;
-    let mut avg_frame_rate =
-        parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
-            .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
+    let frame_rate = video_stream["r_frame_rate"]
+        .as_str()
+        .and_then(|s| parse_frame_rate(s).ok());
+
+    let mut avg_frame_rate = video_stream["avg_frame_rate"]
+        .as_str()
+        .and_then(|s| parse_frame_rate(s).ok());
     let is_variable_frame_rate =
         detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, format_name);
     let mut frame_count = parse_u64_string_field(&video_stream["nb_frames"]);
@@ -589,18 +590,13 @@ fn parse_video_stream_fields(
         if native_frames > 1 {
             frame_count = Some(native_frames);
         }
-        if duration <= 0.0_f64
+        if duration.is_none()
             && let Some(duration_secs) = crate::image_formats::webp::duration_secs_from_bytes(&data)
         {
             let duration_secs = f64::from(duration_secs);
             if duration_secs > 0.0_f64 {
-                avg_frame_rate = frame_count.map_or_else(
-                    || {
-                        tracing::warn!("Missing frame count for FPS calculation");
-                        0.0
-                    },
-                    |fc| crate::numeric_cast::u64_to_f64(fc) / duration_secs,
-                );
+                avg_frame_rate =
+                    frame_count.map(|fc| crate::numeric_cast::u64_to_f64(fc) / duration_secs);
             }
         }
     }
@@ -611,23 +607,16 @@ fn parse_video_stream_fields(
         .unwrap_or("unknown")
         .to_string();
     // `has_b_frames` is an optional stream field; absent means the codec/container
-    // did not advertise B-frame usage — treat as 0, but warn so it's visible.
-    let max_b_frames_raw = video_stream["has_b_frames"].as_i64();
-    let max_b_frames = max_b_frames_raw.map_or_else(
-        || {
-            warn!("ffprobe: 'has_b_frames' metadata missing from stream; assuming 0 (no B-frames) for this codec/container");
-            0_u8
-        },
-        |v| {
-            u8::try_from(v.clamp(0, i64::from(u8::MAX))).unwrap_or_else(|_| {
-                warn!(
-                    has_b_frames_raw = v,
-                    "has_b_frames out of u8 range; clamping to 255"
-                );
-                u8::MAX
-            })
-        },
-    );
+    // did not advertise B-frame usage — treat as None to avoid forgery.
+    let max_b_frames = video_stream["has_b_frames"].as_i64().map(|v| {
+        u8::try_from(v.clamp(0, i64::from(u8::MAX))).unwrap_or_else(|_| {
+            warn!(
+                has_b_frames_raw = v,
+                "has_b_frames out of u8 range; clamping to 255"
+            );
+            u8::MAX
+        })
+    });
 
     Ok(VideoStreamFields {
         video_codec,
@@ -1219,31 +1208,43 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
 }
 
 #[must_use]
-pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
-    if pix_fmt.contains("16le")
-        || pix_fmt.contains("16be")
-        || pix_fmt.contains("48le")
-        || pix_fmt.contains("48be")
-        || pix_fmt.contains("64le")
-        || pix_fmt.contains("64be")
-    {
-        return 16;
+pub fn detect_bit_depth(pix_fmt: &str) -> Option<u8> {
+    if pix_fmt.is_empty() {
+        return None;
+    }
+    let pix_fmt = pix_fmt.to_lowercase();
+    if pix_fmt.contains("16") || pix_fmt.contains("48") || pix_fmt.contains("64") {
+        return Some(16);
     }
 
-    if pix_fmt.contains("12le") || pix_fmt.contains("12be") {
-        return 12;
+    // Explicitly handle 8-bit formats that contain '12' or '10' in their name
+    if pix_fmt == "nv12" || pix_fmt == "nv21" {
+        return Some(8);
     }
 
-    if pix_fmt.contains("10le")
-        || pix_fmt.contains("10be")
+    if pix_fmt.contains("12") {
+        return Some(12);
+    }
+
+    if pix_fmt.contains("10")
         || pix_fmt.contains("p010")
         || pix_fmt.contains("p210")
         || pix_fmt.contains("p410")
     {
-        return 10;
+        return Some(10);
     }
 
-    8
+    if pix_fmt.contains("8")
+        || pix_fmt.contains("yuv")
+        || pix_fmt.contains("rgb")
+        || pix_fmt.contains("bgr")
+        || pix_fmt.contains("nv12")
+        || pix_fmt.contains("gray")
+    {
+        return Some(8);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1299,7 +1300,7 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(
                 detect_bit_depth(input),
-                *expected,
+                Some(*expected),
                 "detect_bit_depth({input:?})"
             );
         }
@@ -1404,7 +1405,7 @@ mod tests {
             info.bit_rate.is_none(),
             "bit_rate should be None when absent from format section"
         );
-        assert!((info.duration - 0.04).abs() < 1e-9_f64);
+        assert!(info.duration.is_some_and(|d| (d - 0.04).abs() < 1e-9_f64));
     }
 
     /// `bit_rate` is null JSON (another form of absent) — must not panic.
@@ -1428,25 +1429,14 @@ mod tests {
 
     /// Missing `duration` must return `Err`, not panic or use a bogus default.
     #[test]
-    fn parse_probe_format_absent_duration_returns_err() {
+    fn parse_probe_format_absent_duration_returns_none() {
         let format = serde_json::json!({
             "format_name": "webp_pipe",
             "size": "204800"
-            // duration absent
         });
         let result = parse_probe_format(&format);
-        assert!(
-            result.is_err(),
-            "parse_probe_format must return Err when duration is absent: {result:?}"
-        );
-        let msg = format!(
-            "{:?}",
-            result.expect_err("parse_probe_format should return Err when duration is absent")
-        );
-        assert!(
-            msg.contains("duration"),
-            "error message should mention 'duration', got: {msg}"
-        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().duration.is_none());
     }
 
     /// `has_valid_dimensions` must not panic when width/height are 0.
@@ -1509,16 +1499,16 @@ mod tests {
             // has_b_frames intentionally absent — mirrors WebP probe output
         });
         let path = std::path::Path::new("test.webp");
-        let result = parse_video_stream_fields(&stream, "webp_pipe", 0.04_f64, path);
+        let result = parse_video_stream_fields(&stream, "webp_pipe", Some(0.04_f64), path);
         assert!(
             result.is_ok(),
             "absent has_b_frames must not cause panic or Err: {result:?}"
         );
         let fields = result.expect("parse_video_stream_fields should succeed in test");
         // has_b_frames absent → treated as 0
-        assert_eq!(
-            fields.max_b_frames, 0,
-            "absent has_b_frames should default to 0"
+        assert!(
+            fields.max_b_frames.is_none(),
+            "absent has_b_frames should be None"
         );
     }
 
@@ -1551,7 +1541,8 @@ mod tests {
         // The DV extraction is called inside `extract_side_data_info`.
         // Call parse_video_stream_fields which exercises that path.
         let path = std::path::Path::new("test_dv.mkv");
-        let result = parse_video_stream_fields(&stream_json, "matroska,webm", 3600.0_f64, path);
+        let result =
+            parse_video_stream_fields(&stream_json, "matroska,webm", Some(3600.0_f64), path);
         // Must not panic regardless of DV profile value
         assert!(
             result.is_ok(),
