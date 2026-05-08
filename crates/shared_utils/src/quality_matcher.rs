@@ -1806,14 +1806,13 @@ fn log_medium_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) 
     eprintln!("         Aspect factor: {:.2}", d.aspect_factor);
     eprintln!("         Complexity factor: {:.2}", d.complexity_factor);
     if analysis.spatial_complexity.is_some() || analysis.temporal_complexity.is_some() {
+        let fmt_complexity = |v: Option<f64>| -> String {
+            v.map_or_else(|| "—".to_string(), |x| format!("{x:.1}"))
+        };
         eprintln!(
-            "            └─ SI: {:.1}, TI: {:.1}",
-            analysis
-                .spatial_complexity
-                .unwrap_or(crate::constants::DEFAULT_COMPLEXITY_PRIOR),
-            analysis
-                .temporal_complexity
-                .unwrap_or(crate::constants::DEFAULT_COMPLEXITY_PRIOR)
+            "            └─ SI: {}, TI: {}",
+            fmt_complexity(analysis.spatial_complexity),
+            fmt_complexity(analysis.temporal_complexity)
         );
     }
     eprintln!("         Grain factor: {:.2}", d.grain_factor);

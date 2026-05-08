@@ -2607,13 +2607,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         duration_min: Some(dur_min),
         duration_avg: Some(dur_avg),
         duration_max: Some(dur_max),
-        duration_p90: Some(
-            feature_map
-                .stats
-                .get("duration")
-                .and_then(|stats| stats.p90)
-                .unwrap_or(dur_avg),
-        ),
+        duration_p90: feature_map
+            .stats
+            .get("duration")
+            .and_then(|stats| stats.p90),
 
         size_min: crate::numeric_cast::i64_to_f64(size_min_i64.max(0)),
         size_avg,

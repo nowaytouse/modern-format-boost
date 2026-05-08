@@ -1893,37 +1893,48 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
     // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
     // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
-    let (width, height, has_alpha, color_depth) = match crate::probe_video(path) {
-        Ok(probe) => {
-            let pix_fmt = probe.pix_fmt.to_lowercase();
-            let alpha = pix_fmt.contains("yuva")
-                || pix_fmt.contains("rgba")
-                || pix_fmt.contains("gbrap")
-                || pix_fmt.starts_with("p4");
-            let depth = probe.bit_depth.unwrap_or(8);
-            (probe.width, probe.height, alpha, depth)
-        }
-        Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
-            Ok(img) => {
-                log_eprintln!(
-                    "⚠️  ffprobe AVIF probe failed for {}; falling back to image decode: {}",
-                    path.display(),
-                    probe_err
-                );
-                let (w, h) = img.dimensions();
-                (w, h, has_alpha_channel(&img), detect_color_depth(&img))
+    let (width, height, has_alpha, color_depth): (u32, u32, bool, Option<u8>) =
+        match crate::probe_video(path) {
+            Ok(probe) => {
+                let pix_fmt = probe.pix_fmt.to_lowercase();
+                let alpha = pix_fmt.contains("yuva")
+                    || pix_fmt.contains("rgba")
+                    || pix_fmt.contains("gbrap")
+                    || pix_fmt.starts_with("p4");
+                if probe.bit_depth.is_none() {
+                    log_eprintln!(
+                        "ℹ️  ffprobe did not report bit_depth for AVIF {}; recording color_depth as unknown (no forgery to 8-bit)",
+                        path.display()
+                    );
+                }
+                (probe.width, probe.height, alpha, probe.bit_depth)
             }
-            Err(image_err) => {
-                log_eprintln!(
-                    "⚠️  Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
-                    path.display(),
-                    probe_err,
-                    image_err
-                );
-                (0u32, 0u32, false, 8u8)
-            }
-        },
-    };
+            Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
+                Ok(img) => {
+                    log_eprintln!(
+                        "⚠️  ffprobe AVIF probe failed for {}; falling back to image decode: {}",
+                        path.display(),
+                        probe_err
+                    );
+                    let (w, h) = img.dimensions();
+                    (
+                        w,
+                        h,
+                        has_alpha_channel(&img),
+                        Some(detect_color_depth(&img)),
+                    )
+                }
+                Err(image_err) => {
+                    log_eprintln!(
+                        "⚠️  Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
+                        path.display(),
+                        probe_err,
+                        image_err
+                    );
+                    (0u32, 0u32, false, None)
+                }
+            },
+        };
 
     let is_lossless = match detect_compression(&DetectedFormat::AVIF, path) {
         Ok(ct) => ct == CompressionType::Lossless,
@@ -1960,7 +1971,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
         width,
         height,
         file_size,
-        color_depth: Some(color_depth),
+        color_depth,
         color_space: "sRGB".to_string(),
         has_alpha,
         is_animated,

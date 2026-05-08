@@ -262,12 +262,10 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
             ),
         )
     })?;
-    // Directly use image descriptor count, which is the most reliable method
-    let frame_count_calculated = if frame_count_direct > 0 {
-        frame_count_direct
-    } else {
-        1 // If no image descriptors detected, return at least 1
-    };
+    // Honest reporting: `frame_count_direct` is the count of image descriptors
+    // we actually saw in the GIF stream. If a file has none, we report 0 (the truth).
+    // Callers must decide whether 0 frames is anomalous; we do not fabricate a frame.
+    let frame_count_calculated = frame_count_direct;
 
     Ok(GifHeaderScan {
         palette_size,

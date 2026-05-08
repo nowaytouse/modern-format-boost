@@ -485,20 +485,20 @@ impl LoopMeta {
 
         let frame_count = scan.frame_count;
 
-        let fps = scan.duration_secs.map_or(12.0_f64, |dur| {
-            if frame_count > 1 && dur > 0.0_f64 {
-                f64::from(frame_count) / dur
-            } else {
-                12.0_f64
-            }
-        });
+        // Honest fps: only report when we have both a real duration and >1 frames.
+        // Refuse to fabricate a default cadence (previously 12.0) that downstream
+        // scoring could mistake for an observed measurement.
+        let fps = match (scan.duration_secs, frame_count) {
+            (Some(dur), n) if n > 1 && dur > 0.0_f64 => Some(f64::from(n) / dur),
+            _ => None,
+        };
 
         let mut meta = Self {
             duration_secs: scan.duration_secs,
             duration_tier: scan.duration_secs.map(DurationTier::from_secs),
             width,
             height,
-            fps: Some(fps),
+            fps,
             frame_count: Some(u64::from(frame_count)),
             file_size_bytes: file_size,
             file_name,

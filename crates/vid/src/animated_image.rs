@@ -923,20 +923,23 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         }
     };
 
-    // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
-    // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
-        probe.stream_index
-    } else {
-        0 // Default to first stream
-    };
-
-    // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
-    // For AVIF/HEIC with multiple streams, use the stream_idx from probe
+    // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC).
+    // For JXL/WebP, actual_input is APNG (single stream) and effective_stream_idx is forced
+    // to 0 below, so we skip probing and skip propagating an unrelated probe error.
     let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
         0 // APNG is always single-stream
     } else {
-        stream_idx
+        // Honest: a failed probe on a multi-stream-capable container must surface;
+        // silently selecting stream 0 would mis-map AVIF/HEIC inputs whose primary
+        // image item is not at index 0.
+        shared_utils::probe_video(input)
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!(
+                    "ffprobe failed to determine stream index for {} (refusing to silently default to stream 0): {e}",
+                    input.display()
+                ))
+            })?
+            .stream_index
     };
 
     let mut builder = shared_utils::FfmpegBuilder::new();
@@ -1969,20 +1972,20 @@ pub fn convert_to_gif_apple_compat(
 
     let (width, height) = get_input_dimensions(&actual_input)?;
 
-    // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
-    // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
-        probe.stream_index
-    } else {
-        0
-    };
-
-    // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
-    // For AVIF/HEIC with multiple streams, use the stream_idx from probe
+    // See `convert_to_mp4`: same honest stream-index policy. JXL/WebP are forced to 0
+    // (APNG is single-stream); other containers must surface a probe failure rather
+    // than silently defaulting to stream 0.
     let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
-        0 // APNG is always single-stream
+        0
     } else {
-        stream_idx
+        shared_utils::probe_video(input)
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!(
+                    "ffprobe failed to determine stream index for {} (refusing to silently default to stream 0): {e}",
+                    input.display()
+                ))
+            })?
+            .stream_index
     };
 
     let has_multiple_streams = probe_video_streams(&actual_input).len() > 1;
