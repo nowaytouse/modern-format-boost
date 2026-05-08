@@ -44,6 +44,7 @@ jobs:
           storage-repo-branch: clusterfuzzlite-data
           sanitizer: address
           dry-run: false
+          keep-unaffected-fuzz-targets: true
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
@@ -101,6 +102,7 @@ jobs:
           storage-repo-branch: clusterfuzzlite-data
           sanitizer: address
           dry-run: false
+          keep-unaffected-fuzz-targets: true
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
