@@ -7,19 +7,25 @@ pub(crate) fn calculate_continuous_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map(|s| s.std_dev.max(crate::constants::KNN_VECTOR_MIN_STD_DEV))
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
             .get(f)
             .and_then(|s| s.weight)
-            .map(|w| w.max(0.01))
+            .map(|w| w.max(crate::constants::KNN_VECTOR_MIN_WEIGHT))
     };
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
     let fc = sample.frame_count?;
     let dur = sample.duration_secs?;
-    let sample_frame_density = crate::numeric_cast::u64_to_f64(fc) / dur.max(0.05);
+    let sample_frame_density = crate::numeric_cast::u64_to_f64(fc)
+        / dur.max(crate::constants::KNN_VECTOR_MIN_DURATION_FOR_DENSITY);
     let sample_frame_gap = dur / crate::numeric_cast::u64_to_f64(fc.max(1));
 
     Some((
@@ -40,13 +46,18 @@ pub(crate) fn calculate_discrete_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map(|s| s.std_dev.max(crate::constants::KNN_VECTOR_MIN_STD_DEV))
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
             .get(f)
             .and_then(|s| s.weight)
-            .map(|w| w.max(0.01))
+            .map(|w| w.max(crate::constants::KNN_VECTOR_MIN_WEIGHT))
     };
 
     let sample_webp_ratio =
@@ -127,13 +138,18 @@ pub(crate) fn calculate_extended_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64, f64)> {
-    let get_std = |f: &str| stats_map.stats.get(f).map(|s| s.std_dev.max(1e-6));
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map(|s| s.std_dev.max(crate::constants::KNN_VECTOR_MIN_STD_DEV))
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
             .get(f)
             .and_then(|s| s.weight)
-            .map(|w| w.max(0.01))
+            .map(|w| w.max(crate::constants::KNN_VECTOR_MIN_WEIGHT))
     };
 
     let sample_audio_score = if sample.is_native_gif {
@@ -145,7 +161,7 @@ pub(crate) fn calculate_extended_features(
     let fps_val = sample.fps?;
     let sample_fps_score: f64 = (1.0_f64
         - crate::database::normalize_log_ratio(
-            fps_val.max(1e-3),
+            fps_val.max(crate::constants::KNN_VECTOR_FPS_MIN_LIMIT),
             baseline_fps,
             crate::constants::KNN_VECTOR_FPS_NORMALIZATION_SCALE,
         ))

@@ -1,9 +1,12 @@
+// Image Analysis Module
+use crate::builder_base::ToolBuilder;
 use crate::ffprobe_json::ColorInfo;
 use crate::image_detection::{PrecisionMetadata, detect_image};
 use crate::image_heic_analysis::{HeicAnalysis, analyze_heic_file_v4, is_heic_file};
 use crate::image_jpeg_analysis::{JpegQualityAnalysis, analyze_jpeg_file};
 use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
+use crate::probe_video;
 use crate::types::{ProcessHistory, VisualPerception};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 #[cfg(feature = "high-precision")]
@@ -340,7 +343,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     {
         use image::Limits;
         let mut limits = Limits::default();
-        limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+        limits.max_alloc = Some(crate::constants::IMAGE_DECODE_MAX_ALLOC_BYTES);
         reader.limits(limits);
     }
 
@@ -959,22 +962,30 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(
-            crate::constants::JPEG_MAP_PSNR_H95_SLOPE,
-            crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE,
-        ),
-        85..=94 => (f64::from(quality) - 85.0).mul_add(
+        crate::constants::JPEG_QUALITY_TIER_HIGH..=100 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_HIGH)).mul_add(
+                crate::constants::JPEG_MAP_PSNR_H95_SLOPE,
+                crate::constants::JPEG_QUALITY_MAPPING_V1_PSNR_BASE,
+            )
+        }
+        crate::constants::JPEG_QUALITY_TIER_MEDIUM_HIGH..=94 => (f64::from(quality)
+            - f64::from(crate::constants::JPEG_QUALITY_TIER_MEDIUM_HIGH))
+        .mul_add(
             crate::constants::JPEG_MAP_PSNR_H85_SLOPE,
             crate::constants::JPEG_MAP_PSNR_H85_BASE,
         ),
-        75..=84 => (f64::from(quality) - 75.0).mul_add(
-            crate::constants::JPEG_MAP_PSNR_H75_SLOPE,
-            crate::constants::JPEG_MAP_PSNR_H75_BASE,
-        ),
-        60..=74 => (f64::from(quality) - 60.0).mul_add(
-            crate::constants::JPEG_MAP_PSNR_H60_SLOPE,
-            crate::constants::JPEG_MAP_PSNR_H60_BASE,
-        ),
+        crate::constants::JPEG_QUALITY_TIER_MEDIUM..=84 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_MEDIUM)).mul_add(
+                crate::constants::JPEG_MAP_PSNR_H75_SLOPE,
+                crate::constants::JPEG_MAP_PSNR_H75_BASE,
+            )
+        }
+        crate::constants::JPEG_QUALITY_TIER_LOW..=74 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_LOW)).mul_add(
+                crate::constants::JPEG_MAP_PSNR_H60_SLOPE,
+                crate::constants::JPEG_MAP_PSNR_H60_BASE,
+            )
+        }
         _ => f64::from(quality).mul_add(
             crate::constants::JPEG_MAP_PSNR_LOW_SLOPE,
             crate::constants::JPEG_MAP_PSNR_LOW_BASE,
@@ -984,22 +995,30 @@ fn estimate_psnr_from_quality(quality: u8) -> f64 {
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => (f64::from(quality) - 95.0).mul_add(
-            crate::constants::JPEG_MAP_SSIM_H95_SLOPE,
-            crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE,
-        ),
-        85..=94 => (f64::from(quality) - 85.0).mul_add(
+        crate::constants::JPEG_QUALITY_TIER_HIGH..=100 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_HIGH)).mul_add(
+                crate::constants::JPEG_MAP_SSIM_H95_SLOPE,
+                crate::constants::JPEG_QUALITY_MAPPING_V1_SSIM_BASE,
+            )
+        }
+        crate::constants::JPEG_QUALITY_TIER_MEDIUM_HIGH..=94 => (f64::from(quality)
+            - f64::from(crate::constants::JPEG_QUALITY_TIER_MEDIUM_HIGH))
+        .mul_add(
             crate::constants::JPEG_MAP_SSIM_H85_SLOPE,
             crate::constants::JPEG_MAP_SSIM_H85_BASE,
         ),
-        75..=84 => (f64::from(quality) - 75.0).mul_add(
-            crate::constants::JPEG_MAP_SSIM_H75_SLOPE,
-            crate::constants::JPEG_MAP_SSIM_H75_BASE,
-        ),
-        60..=74 => (f64::from(quality) - 60.0).mul_add(
-            crate::constants::JPEG_MAP_SSIM_H60_SLOPE,
-            crate::constants::JPEG_MAP_SSIM_H60_BASE,
-        ),
+        crate::constants::JPEG_QUALITY_TIER_MEDIUM..=84 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_MEDIUM)).mul_add(
+                crate::constants::JPEG_MAP_SSIM_H75_SLOPE,
+                crate::constants::JPEG_MAP_SSIM_H75_BASE,
+            )
+        }
+        crate::constants::JPEG_QUALITY_TIER_LOW..=74 => {
+            (f64::from(quality) - f64::from(crate::constants::JPEG_QUALITY_TIER_LOW)).mul_add(
+                crate::constants::JPEG_MAP_SSIM_H60_SLOPE,
+                crate::constants::JPEG_MAP_SSIM_H60_BASE,
+            )
+        }
         _ => f64::from(quality).mul_add(
             crate::constants::JPEG_MAP_SSIM_LOW_SLOPE,
             crate::constants::JPEG_MAP_SSIM_LOW_BASE,
@@ -1785,34 +1804,34 @@ fn is_jxl_file(path: &Path) -> bool {
 }
 
 fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
+    use crate::builder_base::ToolBuilder;
     use crate::image_detection::{DetectedFormat, detect_animation};
 
-    let (width, height, has_alpha, color_depth) =
-        if crate::tool_builders::JxlinfoBuilder::check_available() {
-            let output = crate::tool_builders::JxlinfoBuilder::new()
-                .input(path)
-                .build()
-                .output();
+    let (width, height, has_alpha, color_depth) = if crate::tool_builders::JxlinfoBuilder::new()
+        .check_available()
+    {
+        let output = crate::tool_builders::JxlinfoBuilder::new()
+            .input(path)
+            .build()
+            .output();
 
-            if let Ok(out) = output {
-                if out.status.success() {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    parse_jxlinfo_output(&stdout)
-                } else {
-                    (0, 0, false, 8)
-                }
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                parse_jxlinfo_output(&stdout)
             } else {
                 (0, 0, false, 8)
             }
-        } else if let Ok(probe) = crate::probe_video(path) {
-            (probe.width, probe.height, false, 8)
         } else {
-            log_eprintln!(
-                "⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable"
-            );
-            log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
             (0, 0, false, 8)
-        };
+        }
+    } else if let Ok(probe) = probe_video(path) {
+        (probe.width, probe.height, false, 8)
+    } else {
+        log_eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
+        log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
+        (0, 0, false, 8)
+    };
 
     let metadata = extract_metadata(path);
 
@@ -1902,48 +1921,49 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
     // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
     // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
-    let (width, height, has_alpha, color_depth): (u32, u32, bool, Option<u8>) =
-        match crate::probe_video(path) {
-            Ok(probe) => {
-                let pix_fmt = probe.pix_fmt.to_lowercase();
-                let alpha = pix_fmt.contains("yuva")
-                    || pix_fmt.contains("rgba")
-                    || pix_fmt.contains("gbrap")
-                    || pix_fmt.starts_with("p4");
-                if probe.bit_depth.is_none() {
-                    log_eprintln!(
-                        "ℹ️  ffprobe did not report bit_depth for AVIF {}; recording color_depth as unknown (no forgery to 8-bit)",
-                        path.display()
-                    );
-                }
-                (probe.width, probe.height, alpha, probe.bit_depth)
+    let (width, height, has_alpha, color_depth): (u32, u32, bool, Option<u8>) = match probe_video(
+        path,
+    ) {
+        Ok(probe) => {
+            let pix_fmt = probe.pix_fmt.to_lowercase();
+            let alpha = pix_fmt.contains("yuva")
+                || pix_fmt.contains("rgba")
+                || pix_fmt.contains("gbrap")
+                || pix_fmt.starts_with("p4");
+            if probe.bit_depth.is_none() {
+                log_eprintln!(
+                    "ℹ️  ffprobe did not report bit_depth for AVIF {}; recording color_depth as unknown (no forgery to 8-bit)",
+                    path.display()
+                );
             }
-            Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
-                Ok(img) => {
-                    log_eprintln!(
-                        "⚠️  ffprobe AVIF probe failed for {}; falling back to image decode: {}",
-                        path.display(),
-                        probe_err
-                    );
-                    let (w, h) = img.dimensions();
-                    (
-                        w,
-                        h,
-                        has_alpha_channel(&img),
-                        Some(detect_color_depth(&img)),
-                    )
-                }
-                Err(image_err) => {
-                    log_eprintln!(
-                        "⚠️  Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
-                        path.display(),
-                        probe_err,
-                        image_err
-                    );
-                    (0u32, 0u32, false, None)
-                }
-            },
-        };
+            (probe.width, probe.height, alpha, probe.bit_depth)
+        }
+        Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
+            Ok(img) => {
+                log_eprintln!(
+                    "⚠️  ffprobe AVIF probe failed for {}; falling back to image decode: {}",
+                    path.display(),
+                    probe_err
+                );
+                let (w, h) = img.dimensions();
+                (
+                    w,
+                    h,
+                    has_alpha_channel(&img),
+                    Some(detect_color_depth(&img)),
+                )
+            }
+            Err(image_err) => {
+                log_eprintln!(
+                    "⚠️  Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
+                    path.display(),
+                    probe_err,
+                    image_err
+                );
+                (0u32, 0u32, false, None)
+            }
+        },
+    };
 
     let is_lossless = match detect_compression(&DetectedFormat::AVIF, path) {
         Ok(ct) => ct == CompressionType::Lossless,

@@ -1,5 +1,6 @@
 //! Type-safe builders for JPEG XL (cjxl, djxl) tools.
 
+use crate::builder_base::ToolBuilder;
 use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,6 +27,11 @@ impl CjxlBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -99,11 +105,16 @@ impl CjxlBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for CjxlBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_CJXL
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_CJXL);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.use_stdin {
             cmd.arg("-");
@@ -172,14 +183,6 @@ impl CjxlBuilder {
 
         cmd
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_CJXL)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
 }
 
 /// Builder for constructing `djxl` commands.
@@ -196,6 +199,11 @@ impl DjxlBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.input = Some(path.as_ref().to_path_buf());
         self
@@ -210,11 +218,16 @@ impl DjxlBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for DjxlBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_DJXL
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_DJXL);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
@@ -229,13 +242,5 @@ impl DjxlBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_DJXL)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }

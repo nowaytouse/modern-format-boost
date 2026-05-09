@@ -3,6 +3,7 @@
 //! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
 //! Invariants: `CStrings` and pointers are valid for the duration of each call; paths come from Rust `Path`.
 
+use crate::builder_base::ToolBuilder;
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;

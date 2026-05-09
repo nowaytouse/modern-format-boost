@@ -847,16 +847,30 @@ mod tests {
             max: 100,
             context: "test search".to_string(),
         });
-        assert_eq!(iter_err.category(), ErrorCategory::Optional, "Iteration limit should be Optional category");
-        assert!(iter_err.is_skip(), "Iteration limit should trigger is_skip=true");
+        assert_eq!(
+            iter_err.category(),
+            ErrorCategory::Optional,
+            "Iteration limit should be Optional category"
+        );
+        assert!(
+            iter_err.is_skip(),
+            "Iteration limit should trigger is_skip=true"
+        );
 
         let quality_err = UnifiedError::QualityValidationFailed {
             actual_ssim: 0.85,
             expected_ssim: 0.95,
             file_path: None,
         };
-        assert_eq!(quality_err.category(), ErrorCategory::Optional, "Quality failure should be Optional category");
-        assert!(quality_err.is_skip(), "Quality failure should trigger is_skip=true");
+        assert_eq!(
+            quality_err.category(),
+            ErrorCategory::Optional,
+            "Quality failure should be Optional category"
+        );
+        assert!(
+            quality_err.is_skip(),
+            "Quality failure should trigger is_skip=true"
+        );
 
         // Hard system failures MUST NOT be Optional Skips
         let fatal_err = UnifiedError::file_not_found("/missing");
@@ -867,7 +881,7 @@ mod tests {
         assert_eq!(tool_err.category(), ErrorCategory::Fatal);
         assert!(!tool_err.is_skip(), "Tool missing must NOT be skips");
 
-        let io_err = UnifiedError::Io(std::io::Error::new(std::io::ErrorKind::Other, "disk crash"));
+        let io_err = UnifiedError::Io(std::io::Error::other("disk crash"));
         assert_eq!(io_err.category(), ErrorCategory::Fatal);
         assert!(!io_err.is_skip(), "IO errors must NOT be skips");
     }

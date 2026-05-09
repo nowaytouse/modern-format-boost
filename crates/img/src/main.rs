@@ -10,6 +10,7 @@ use img::{
     ConfigFlags, ConvertFlags, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,
 };
+use shared_utils::ToolBuilder;
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
@@ -166,7 +167,7 @@ fn main() -> anyhow::Result<()> {
         .ok();
 
     if let Some(ref cache) = cache
-        && let Err(e) = cache.cleanup_old_records(30 * 24 * 3600)
+        && let Err(e) = cache.cleanup_old_records(shared_utils::constants::CACHE_PRUNE_AGE_SECS)
     {
         shared_utils::log_eprintln!("⚠️ [Cache] Failed to cleanup old records: {}", e);
     }
@@ -201,7 +202,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(guard) => Some(guard),
                     Err(e) => {
                         shared_utils::log_eprintln!("❌ {e}");
-                        std::process::exit(3);
+                        std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                     }
                 }
             } else {
@@ -252,7 +253,7 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::log_eprintln!(
                     "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
                 );
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             let flag_mode =
@@ -265,7 +266,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(mode) => mode,
                     Err(e) => {
                         shared_utils::log_eprintln!("{}", e);
-                        std::process::exit(1);
+                        std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                     }
                 };
 
@@ -274,7 +275,7 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::tools::require_tools(&["cjxl", "djxl", "exiftool", "ffmpeg"])
             {
                 shared_utils::log_eprintln!("{e}");
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
@@ -422,7 +423,7 @@ fn main() -> anyhow::Result<()> {
                     "❌ Error: Input path does not exist: {}",
                     input.display()
                 ));
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
 
@@ -434,7 +435,7 @@ fn main() -> anyhow::Result<()> {
                     "\x1b[33mrestore-timestamps failed\x1b[0m",
                     e
                 );
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
 
@@ -500,9 +501,12 @@ fn main() -> anyhow::Result<()> {
                             res.to_f64()
                         };
                         let usage_percent = permille / 100.0;
-                        println!("\n💾 Storage Usage: {usage_percent:.1}% of 85 GB limit");
+                        println!(
+                            "\n💾 Storage Usage: {usage_percent:.1}% of {} GB limit",
+                            shared_utils::constants::CACHE_SIZE_LIMIT_BYTES / 1024 / 1024 / 1024
+                        );
 
-                        if usage_percent > 80.0 {
+                        if usage_percent > shared_utils::constants::CACHE_USAGE_WARNING_THRESHOLD {
                             println!("⚠️  Cache is approaching size limit!");
                         }
 
@@ -510,12 +514,12 @@ fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         shared_utils::log_eprintln!("❌ Failed to get cache statistics: {}", e);
-                        std::process::exit(1);
+                        std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                     }
                 }
             } else {
                 shared_utils::log_eprintln!("❌ Cache is not initialized");
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
 
@@ -529,7 +533,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         shared_utils::log_eprintln!("❌ {e}");
-                        std::process::exit(3);
+                        std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                     }
                 }
             }
@@ -616,7 +620,8 @@ fn verify_conversion(
     println!(
         "   Original size:  {} bytes ({:.2} KB)",
         original_analysis.file_size,
-        shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size) / 1024.0
+        shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size)
+            / shared_utils::numeric_cast::u64_to_f64(shared_utils::constants::BYTES_PER_KB)
     );
     println!(
         "   Converted size: {} bytes ({:.2} KB)",
@@ -792,14 +797,14 @@ fn auto_convert_single_file(
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
         eprintln!("{e}");
-        std::process::exit(1);
+        std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
     }
 
     if let Some(ref out_dir) = config.output_dir
         && let Err(e) = shared_utils::check_apple_photos_library(out_dir)
     {
         eprintln!("{e}");
-        std::process::exit(1);
+        std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
@@ -1116,7 +1121,12 @@ fn dispatch_static_conversion(
                     input.display()
                 );
             }
-            convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
+            convert_to_jxl(
+                input,
+                options,
+                shared_utils::constants::JXL_ULTIMATE_DISTANCE,
+                analysis.hdr_info.as_ref(),
+            )?
         }
     })
 }
@@ -1403,6 +1413,7 @@ fn auto_convert_directory(
                                 continue;
                             }
 
+                            #[allow(clippy::option_if_let_else)]
                             let is_skip = if let Some(ue) = e.downcast_ref::<shared_utils::unified_error::UnifiedError>() {
                                 ue.is_skip()
                             } else {

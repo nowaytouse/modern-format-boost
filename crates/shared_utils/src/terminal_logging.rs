@@ -223,9 +223,7 @@ impl TerminalLogger {
     /// Prints formatted size
     #[must_use]
     pub fn format_size(&self, bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
+        use crate::constants::{GB, KB, MB};
 
         if bytes >= GB {
             format!(

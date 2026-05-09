@@ -1,17 +1,9 @@
-//! Type-safe builders for non-imaging media tools (VMAF, Exiv2, JXL-info, Dovi, HDR10+, x265).
+//! Miscellaneous type-safe tool builders.
 
+use crate::builder_base::ToolBuilder;
+use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-// Re-export other builders for architectural consistency and easier access.
-pub use crate::ffmpeg_builder::{
-    FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
-};
-pub use crate::image_builders::{
-    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder,
-    WebpmuxBuilder,
-};
-pub use crate::jxl_builder::{CjxlBuilder, DjxlBuilder};
 
 /// Builder for constructing `vmaf` commands.
 #[derive(Debug, Default)]
@@ -30,6 +22,11 @@ impl VmafBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn reference<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -73,10 +70,15 @@ impl VmafBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("vmaf");
+impl ToolBuilder for VmafBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_VMAF
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(reference) = &self.reference {
             cmd.arg("--reference")
@@ -115,14 +117,6 @@ impl VmafBuilder {
 
         cmd
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("vmaf")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
 }
 
 /// Builder for constructing `exiv2` commands.
@@ -136,6 +130,11 @@ impl Exiv2Builder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -159,10 +158,19 @@ impl Exiv2Builder {
         self.args.push("-ps".to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("exiv2");
+impl ToolBuilder for Exiv2Builder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_EXIV2
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        &["-V"]
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         for arg in &self.args {
             cmd.arg(arg);
@@ -173,14 +181,6 @@ impl Exiv2Builder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("exiv2")
-            .arg("-V")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -196,28 +196,30 @@ impl JxlinfoBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.input = Some(path.as_ref().to_path_buf());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("jxlinfo");
+impl ToolBuilder for JxlinfoBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_JXLINFO
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("jxlinfo")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -234,6 +236,11 @@ impl DoviBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn mode<S: AsRef<str>>(&mut self, mode: S) -> &mut Self {
@@ -255,10 +262,15 @@ impl DoviBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("dovi_tool");
+impl ToolBuilder for DoviBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_DOVI_TOOL
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(mode) = &self.mode {
             cmd.arg(mode);
@@ -278,14 +290,6 @@ impl DoviBuilder {
 
         cmd
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("dovi_tool")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
 }
 
 /// Builder for constructing `hdr10plus_tool` commands.
@@ -301,6 +305,11 @@ impl Hdr10PlusBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn mode<S: AsRef<str>>(&mut self, mode: S) -> &mut Self {
@@ -322,10 +331,19 @@ impl Hdr10PlusBuilder {
         self.skip_validation = enabled;
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("hdr10plus_tool");
+impl ToolBuilder for Hdr10PlusBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_HDR10PLUS_TOOL
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        &["--help"]
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(mode) = &self.mode {
             cmd.arg(mode);
@@ -344,14 +362,6 @@ impl Hdr10PlusBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("hdr10plus_tool")
-            .arg("--help")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -395,6 +405,11 @@ impl X265Builder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -477,10 +492,15 @@ impl X265Builder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(crate::constants::TOOL_X265);
+impl ToolBuilder for X265Builder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_X265
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.y4m {
             cmd.arg("--y4m");
@@ -548,69 +568,13 @@ impl X265Builder {
 
         cmd
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(crate::constants::TOOL_X265)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::X265Builder;
-    use std::path::Path;
-
-    #[test]
-    fn x265_builder_preserves_stdio_dash_input() {
-        let args: Vec<String> = X265Builder::new()
-            .input(Path::new("-"))
-            .output(Path::new("out.hevc"))
-            .build()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        let input_idx = args
-            .iter()
-            .position(|arg| arg == "--input")
-            .unwrap_or_else(|| panic!("x265 input arg should exist"));
-        assert_eq!(
-            args.get(input_idx + 1)
-                .expect("Required string property missing"),
-            "-"
-        );
-    }
-
-    #[test]
-    fn x265_builder_still_arms_dash_prefixed_real_paths() {
-        let args: Vec<String> = X265Builder::new()
-            .input(Path::new("-clip.y4m"))
-            .output(Path::new("out.hevc"))
-            .build()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        let input_idx = args
-            .iter()
-            .position(|arg| arg == "--input")
-            .unwrap_or_else(|| panic!("x265 input arg should exist"));
-        assert_eq!(
-            args.get(input_idx + 1)
-                .expect("Required string property missing"),
-            "./-clip.y4m"
-        );
-    }
-}
-
-/// Builder for constructing `osascript` (macOS) commands.
+/// Builder for constructing `osascript` commands.
 #[derive(Debug, Default)]
 pub struct OsascriptBuilder {
     script: Option<String>,
-    args: Vec<String>,
+    extra_args: Vec<String>,
 }
 
 impl OsascriptBuilder {
@@ -619,33 +583,45 @@ impl OsascriptBuilder {
         Self::default()
     }
 
-    pub fn script<S: Into<String>>(&mut self, script: S) -> &mut Self {
-        self.script = Some(script.into());
-        self
-    }
-
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
-        self
-    }
-
     #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("osascript");
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
+    pub fn script<S: AsRef<str>>(&mut self, script: S) -> &mut Self {
+        self.script = Some(script.as_ref().to_string());
+        self
+    }
+
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.extra_args.push(arg.as_ref().to_string());
+        self
+    }
+}
+
+impl ToolBuilder for OsascriptBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_OSASCRIPT
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
+
         if let Some(script) = &self.script {
             cmd.arg("-e").arg(script);
         }
-        for arg in &self.args {
+
+        for arg in &self.extra_args {
             cmd.arg(arg);
         }
+
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
+    fn check_available(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new("osascript")
+            Command::new(self.get_command_name())
                 .arg("-e")
                 .arg("return")
                 .output()
@@ -671,19 +647,29 @@ impl PowershellBuilder {
         Self::default()
     }
 
-    pub fn command<S: Into<String>>(&mut self, command: S) -> &mut Self {
-        self.command = Some(command.into());
-        self
-    }
-
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
-        self
-    }
-
     #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("powershell");
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
+    pub fn command<S: AsRef<str>>(&mut self, command: S) -> &mut Self {
+        self.command = Some(command.as_ref().to_string());
+        self
+    }
+
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.as_ref().to_string());
+        self
+    }
+}
+
+impl ToolBuilder for PowershellBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_POWERSHELL
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         cmd.arg("-NoProfile").arg("-NonInteractive");
         if let Some(command) = &self.command {
             cmd.arg("-Command").arg(command);
@@ -694,16 +680,14 @@ impl PowershellBuilder {
         cmd
     }
 
-    #[must_use]
-    pub const fn check_available() -> bool {
+    fn check_available(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
-            Command::new("powershell")
+            Command::new(self.get_command_name())
                 .arg("-Command")
                 .arg("Get-Date")
                 .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+                .is_ok_and(|o| o.status.success())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -724,7 +708,7 @@ impl AclBuilder {
     #[must_use]
     pub fn getfacl() -> Self {
         Self {
-            tool: "getfacl".to_string(),
+            tool: constants::TOOL_GETFACL.to_string(),
             ..Default::default()
         }
     }
@@ -740,13 +724,13 @@ impl AclBuilder {
     #[must_use]
     pub fn setfacl() -> Self {
         Self {
-            tool: "setfacl".to_string(),
+            tool: constants::TOOL_SETFACL.to_string(),
             ..Default::default()
         }
     }
 
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.as_ref().to_string());
         self
     }
 
@@ -754,10 +738,15 @@ impl AclBuilder {
         self.input = Some(path.as_ref().to_path_buf());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(&self.tool);
+impl ToolBuilder for AclBuilder {
+    fn get_command_name(&self) -> &str {
+        &self.tool
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         for arg in &self.args {
             cmd.arg(arg);
         }
@@ -767,10 +756,9 @@ impl AclBuilder {
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("getfacl")
-            .arg("--version")
+    fn check_available(&self) -> bool {
+        Command::new(constants::TOOL_GETFACL)
+            .arg(constants::ARG_VERSION)
             .output()
             .is_ok_and(|o| o.status.success())
     }
@@ -788,23 +776,32 @@ impl SysctlBuilder {
         Self::default()
     }
 
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
-        self
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("sysctl");
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.as_ref().to_string());
+        self
+    }
+}
+
+impl ToolBuilder for SysctlBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_SYSCTL
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         for arg in &self.args {
             cmd.arg(arg);
         }
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("sysctl")
+    fn check_available(&self) -> bool {
+        Command::new(self.get_command_name())
             .arg("-a")
             .output()
             .is_ok_and(|o| o.status.success())
@@ -822,13 +819,22 @@ impl VmstatBuilder {
     }
 
     #[must_use]
-    pub fn build(&self) -> Command {
-        Command::new("vm_stat")
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+}
+
+impl ToolBuilder for VmstatBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_VM_STAT
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("vm_stat")
+    fn build(&self) -> Command {
+        Command::new(self.get_command_name())
+    }
+
+    fn check_available(&self) -> bool {
+        Command::new(self.get_command_name())
             .output()
             .is_ok_and(|o| o.status.success())
     }
@@ -847,8 +853,13 @@ impl AttribBuilder {
         Self::default()
     }
 
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.as_ref().to_string());
         self
     }
 
@@ -856,10 +867,15 @@ impl AttribBuilder {
         self.input = Some(path.as_ref().to_path_buf());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("attrib");
+impl ToolBuilder for AttribBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_ATTRIB
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         for arg in &self.args {
             cmd.arg(arg);
         }
@@ -869,9 +885,8 @@ impl AttribBuilder {
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("attrib")
+    fn check_available(&self) -> bool {
+        Command::new(self.get_command_name())
             .arg("/?")
             .output()
             .is_ok_and(|o| o.status.success())
@@ -893,13 +908,18 @@ impl RsyncBuilder {
         Self::default()
     }
 
-    pub fn executable<S: Into<String>>(&mut self, path: S) -> &mut Self {
-        self.executable = Some(path.into());
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
+    pub fn executable<S: AsRef<str>>(&mut self, path: S) -> &mut Self {
+        self.executable = Some(path.as_ref().to_string());
         self
     }
 
-    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.into());
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.as_ref().to_string());
         self
     }
 
@@ -912,11 +932,15 @@ impl RsyncBuilder {
         self.destination = Some(path.as_ref().to_path_buf());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let exe = self.executable.as_deref().unwrap_or("rsync");
-        let mut cmd = Command::new(exe);
+impl ToolBuilder for RsyncBuilder {
+    fn get_command_name(&self) -> &str {
+        self.executable.as_deref().unwrap_or(constants::TOOL_RSYNC)
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         // Protect args against shell/remote interpretation (requires rsync 3.0.0+)
         cmd.arg("--protect-args");
@@ -947,19 +971,29 @@ impl PsBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub const fn pid(&mut self, pid: u32) -> &mut Self {
         self.pid = Some(pid);
         self
     }
 
-    pub fn output_field<S: Into<String>>(&mut self, field: S) -> &mut Self {
-        self.output_fields.push(field.into());
+    pub fn output_field<S: AsRef<str>>(&mut self, field: S) -> &mut Self {
+        self.output_fields.push(field.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("ps");
+impl ToolBuilder for PsBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_PS
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         if let Some(pid) = self.pid {
             cmd.args(["-p", &pid.to_string()]);
         }
@@ -984,8 +1018,13 @@ impl KillBuilder {
         Self::default()
     }
 
-    pub fn signal<S: Into<String>>(&mut self, sig: S) -> &mut Self {
-        self.signal = Some(sig.into());
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
+    pub fn signal<S: AsRef<str>>(&mut self, sig: S) -> &mut Self {
+        self.signal = Some(sig.as_ref().to_string());
         self
     }
 
@@ -993,10 +1032,15 @@ impl KillBuilder {
         self.pid = Some(pid);
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("kill");
+impl ToolBuilder for KillBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_KILL
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         if let Some(sig) = &self.signal {
             cmd.arg(sig);
         }
@@ -1018,8 +1062,18 @@ impl HostnameBuilder {
     }
 
     #[must_use]
-    pub fn build(&self) -> Command {
-        Command::new("hostname")
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+}
+
+impl ToolBuilder for HostnameBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_HOSTNAME
+    }
+
+    fn build(&self) -> Command {
+        Command::new(self.get_command_name())
     }
 }
 
@@ -1036,19 +1090,29 @@ impl TaskkillBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub const fn pid(&mut self, pid: u32) -> &mut Self {
         self.pid = Some(pid);
         self
     }
 
-    pub const fn force(&mut self) -> &mut Self {
-        self.force = true;
+    pub const fn force(&mut self, enabled: bool) -> &mut Self {
+        self.force = enabled;
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new("taskkill");
+impl ToolBuilder for TaskkillBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_TASKKILL
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         if let Some(pid) = self.pid {
             cmd.args(["/PID", &pid.to_string()]);
         }

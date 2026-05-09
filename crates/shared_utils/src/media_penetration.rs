@@ -3,6 +3,7 @@
 //! Content-based verification that bypasses potentially fake metadata.
 //! All detection functions decode actual media content instead of trusting container headers.
 
+use crate::builder_base::ToolBuilder;
 use crate::progress_mode::emit_stderr;
 use std::intrinsics::likely;
 use std::path::Path;
@@ -35,7 +36,7 @@ impl<T> PenetrationResult<T> {
 /// Returns `Verified(true)` if silent, `Verified(false)` if audible, `Failed` on error.
 #[must_use]
 pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
-    const SILENCE_THRESHOLD_DB: f64 = -70.0;
+    const SILENCE_THRESHOLD_DB: f64 = crate::constants::AUDIO_SILENCE_THRESHOLD_DB;
 
     let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
@@ -99,12 +100,20 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
         );
         return PenetrationResult::Failed;
     };
-    let sample_points = if duration_val <= 1.0_f64 {
+    let sample_points = if duration_val <= crate::constants::TRANSPARENCY_SAMPLE_POINTS_SHORT_LIMIT
+    {
         vec![0.0_f64]
-    } else if duration_val <= 5.0_f64 {
-        vec![0.0_f64, duration_val * 0.5_f64]
+    } else if duration_val <= crate::constants::TRANSPARENCY_SAMPLE_POINTS_MEDIUM_LIMIT {
+        vec![
+            0.0_f64,
+            duration_val * crate::constants::SAMPLING_POINT_MID_F64,
+        ]
     } else {
-        vec![0.0_f64, duration_val * 0.5_f64, duration_val - 0.1_f64]
+        vec![
+            0.0_f64,
+            duration_val * crate::constants::SAMPLING_POINT_MID_F64,
+            duration_val - crate::constants::PENETRATION_SAMPLING_EOF_OFFSET,
+        ]
     };
 
     let mut found_transparency = false;
@@ -150,7 +159,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
             {
                 let min_str = part.split_whitespace().next().unwrap_or("");
                 if let Ok(min_val) = min_str.parse::<f64>()
-                    && likely(min_val < 255.0_f64)
+                    && likely(min_val < crate::constants::MAX_8BIT_VALUE_F64)
                 {
                     found_transparency = true;
                     break;
@@ -171,7 +180,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     // Phase 2: Full Decode Verification (for suspicious cases)
     // If sampling succeeded but found no transparency, do a full decode to be absolutely sure.
     // This catches cases where transparency only appears in specific frames.
-    if sampling_succeeded && duration_val > 1.0_f64 {
+    if sampling_succeeded && duration_val > crate::constants::PENETRATION_MIN_SAMPLING_DURATION {
         return run_full_decode_transparency(path);
     }
 
@@ -218,7 +227,7 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
         {
             let min_str = part.split_whitespace().next().unwrap_or("");
             if let Ok(min_val) = min_str.parse::<f64>()
-                && likely(min_val < 255.0_f64)
+                && likely(min_val < crate::constants::MAX_8BIT_VALUE_F64)
             {
                 emit_stderr("   Full decode found transparency in at least one frame");
                 return PenetrationResult::Verified(true);
@@ -234,8 +243,10 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
 /// Returns `Verified(count)` with real count, `Skipped` if claim is reasonable.
 #[must_use]
 pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> PenetrationResult<u64> {
-    // Only verify suspicious claims (≤1 or >50000)
-    if claimed_frame_count > 1 && claimed_frame_count <= 50000 {
+    // Only verify suspicious claims (<= LOWER_LIMIT or > UPPER_LIMIT)
+    if claimed_frame_count > crate::constants::FRAME_COUNT_TRUST_LOWER_LIMIT
+        && claimed_frame_count <= crate::constants::FRAME_COUNT_TRUST_UPPER_LIMIT
+    {
         return PenetrationResult::Skipped;
     }
 
@@ -308,7 +319,7 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
     // Only sample the first 24 frames (~1 second) to keep the penetration fast.
     let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
-        .frames_v(24)
+        .frames_v(crate::constants::INTERLACE_DETECTION_SAMPLE_FRAMES)
         .arg("-vf")
         .arg("idet")
         .format("null")
@@ -481,7 +492,7 @@ mod tests {
     #[test]
     fn test_detect_real_frame_count_trusts_reasonable_claims() {
         let fake_path = Path::new("/nonexistent.mp4");
-        // Reasonable claims (2-50000) should be skipped without decoding
+        // Reasonable claims (LOWER_LIMIT+1 to UPPER_LIMIT) should be skipped without decoding
         assert_eq!(
             detect_real_frame_count(fake_path, 100),
             PenetrationResult::Skipped

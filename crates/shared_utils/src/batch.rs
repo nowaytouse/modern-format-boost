@@ -5,6 +5,7 @@
 //!
 //! Batch Processing Module with File Sorting
 
+use crate::ffprobe::probe_video;
 use crate::file_sorter::{SortStrategy, sort_by_size_ascending};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -292,13 +293,6 @@ pub fn calculate_directory_size_by_extensions(
     }
     total
 }
-
-pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    "jxl", "bmp",
-];
-
-pub const ANIMATED_EXTENSIONS: &[&str] = &["gif", "webp", "png"];
 
 #[derive(Debug, Clone)]
 /// Information about why a batch operation was paused.
@@ -1008,7 +1002,7 @@ fn scan_image_tree_snapshot(
 /// # Returns
 /// Tuple of (`pixel_count`, `duration_secs`, `frame_rate`, `estimated_work`)
 fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f64>, Option<u64>) {
-    let Ok(probe) = crate::probe_video(path) else {
+    let Ok(probe) = probe_video(path) else {
         return (None, None, None, None);
     };
 

@@ -4,11 +4,11 @@
 
 use std::fmt;
 
-pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
-
-pub const METADATA_MARGIN_MIN: u64 = 2048;
-
-pub const METADATA_MARGIN_MAX: u64 = 102_400;
+pub use crate::constants::{
+    METADATA_MARGIN_MAX_BYTES as METADATA_MARGIN_MAX,
+    METADATA_MARGIN_MIN_BYTES as METADATA_MARGIN_MIN,
+    METADATA_MARGIN_RATIO as METADATA_MARGIN_PERCENT,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileSize(u64);
@@ -16,9 +16,9 @@ pub struct FileSize(u64);
 impl FileSize {
     pub const ZERO: Self = Self(0);
 
-    pub const KB: u64 = 1024;
-    pub const MB: u64 = 1_048_576;
-    pub const GB: u64 = 1_048_576 * 1024;
+    pub const KB: u64 = crate::constants::KB;
+    pub const MB: u64 = crate::constants::MB;
+    pub const GB: u64 = crate::constants::GB;
 
     #[inline]
     #[must_use]
@@ -77,7 +77,7 @@ impl FileSize {
                 (crate::numeric_cast::u64_to_f64(self.0)
                     - crate::numeric_cast::u64_to_f64(original.0))
                     / crate::numeric_cast::u64_to_f64(original.0)
-                    * 100.0,
+                    * crate::constants::SCALE_100,
             )
         }
     }

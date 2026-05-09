@@ -15,6 +15,7 @@
 //! - Higher SSIM quality (≥0.98 vs `VideoToolbox` ~0.95)
 //! - Strict CPU encoding path (no GPU fallback)
 
+use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result, bail};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;

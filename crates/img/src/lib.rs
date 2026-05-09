@@ -8,7 +8,7 @@ pub use rug::Rational;
 pub use shared_utils::Rational;
 
 pub mod analyzer;
-pub mod constants;
+pub use shared_utils::constants;
 pub mod formats;
 pub mod heic_analysis;
 pub mod jpeg_analysis;
@@ -20,7 +20,6 @@ pub mod conversion_api;
 pub mod detection_api;
 
 pub use analyzer::{ImageAnalysis, analyze_image};
-pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
 pub use lossless_converter::{ConversionResult, ConvertFlags, ConvertOptions};
@@ -29,6 +28,7 @@ pub use metrics::{
     ssim_quality_description,
 };
 pub use recommender::{UpgradeRecommendation, get_recommendation};
+pub use shared_utils::constants::*;
 
 pub use conversion_api::{
     ConfigFlags, ConversionConfig, ConversionOutput, TargetFormat, determine_strategy,

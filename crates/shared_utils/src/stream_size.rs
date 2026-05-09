@@ -9,6 +9,7 @@
 //! - Calculate container overhead
 //! - Supports multiple extraction methods (direct ffprobe / bitrate calculation / estimation)
 
+use crate::builder_base::ToolBuilder;
 use rug::Rational;
 use serde::Deserialize;
 use std::path::Path;

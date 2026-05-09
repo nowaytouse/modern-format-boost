@@ -11,6 +11,7 @@
 //! - Layer 6: KNN + WeightedScore fusion
 //! - Layer 7: Conservative fallback
 
+use crate::builder_base::ToolBuilder;
 use crate::constants::{
     DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS, FILENAME_CONTEXT_POSITIVE_LOG_ODDS,
     LOCALIZED_MOTION_POSITIVE_LOG_ODDS, MODERN_MASTER_NEGATIVE_LOG_ODDS,
@@ -136,8 +137,8 @@ pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: Option<f64>,
     pub duration_tier: Option<DurationTier>, // Optional so we don't break Default, though constructor populates it
-    pub width: u32,
-    pub height: u32,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub fps: Option<f64>,
     pub frame_count: Option<u64>,
     pub file_size_bytes: u64,
@@ -245,7 +246,7 @@ impl LoopMeta {
 
         // Detect palette-based formats (limited color space)
         let palette_size = if detection.pix_fmt == "pal8" {
-            Some(256)
+            Some(crate::constants::PALETTE_MAX_COLORS)
         } else {
             None
         };
@@ -303,8 +304,8 @@ impl LoopMeta {
             loop_closure_score: loop_closure_score(&detection.pkt_sizes),
             motion_periodicity: motion_periodicity_score(&detection.mv_magnitudes),
             temporal_jitter: temporal_jitter_score(&detection.pts_deltas),
-            directory_loop_intent_score: 0.5,
-            filename_loop_intent_score: 0.5,
+            directory_loop_intent_score: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
+            filename_loop_intent_score: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
             frame_types: detection.frame_types.clone(),
             mv_magnitudes: detection.mv_magnitudes.clone(),
             cached_frame_png: None,
@@ -356,7 +357,7 @@ impl LoopMeta {
 
         // Detect palette-based formats (limited color space)
         let palette_size = if probe.pix_fmt == "pal8" {
-            Some(256)
+            Some(crate::constants::PALETTE_MAX_COLORS)
         } else {
             None
         };
@@ -364,8 +365,16 @@ impl LoopMeta {
         let mut meta = Self {
             duration_secs: probe.duration,
             duration_tier: probe.duration.map(DurationTier::from_secs),
-            width: probe.width,
-            height: probe.height,
+            width: if probe.width > 0 {
+                Some(probe.width)
+            } else {
+                None
+            },
+            height: if probe.height > 0 {
+                Some(probe.height)
+            } else {
+                None
+            },
             fps: probe.frame_rate,
             frame_count: probe.frame_count,
             file_size_bytes: probe.size,
@@ -407,8 +416,8 @@ impl LoopMeta {
             loop_closure_score: loop_closure_score(&probe.pkt_sizes),
             motion_periodicity: motion_periodicity_score(&probe.mv_magnitudes),
             temporal_jitter: temporal_jitter_score(&probe.pts_deltas),
-            directory_loop_intent_score: 0.5,
-            filename_loop_intent_score: 0.5,
+            directory_loop_intent_score: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
+            filename_loop_intent_score: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
             frame_types: probe.frame_types.clone(),
             mv_magnitudes: probe.mv_magnitudes.clone(),
             has_embedded_icc: false,
@@ -496,8 +505,8 @@ impl LoopMeta {
         let mut meta = Self {
             duration_secs: scan.duration_secs,
             duration_tier: scan.duration_secs.map(DurationTier::from_secs),
-            width,
-            height,
+            width: if width > 0 { Some(width) } else { None },
+            height: if height > 0 { Some(height) } else { None },
             fps,
             frame_count: Some(u64::from(frame_count)),
             file_size_bytes: file_size,
@@ -570,7 +579,11 @@ impl LoopMeta {
 
     #[must_use]
     pub fn should_sample_webp_compression_ratio(&self) -> bool {
-        self.width >= 64 && self.height >= 64 && self.duration_secs.is_some_and(|d| d > 0.05)
+        self.width.is_some_and(|w| w >= 64)
+            && self.height.is_some_and(|h| h >= 64)
+            && self
+                .duration_secs
+                .is_some_and(|d| d > crate::constants::LOOP_INTENT_SHORT_DURATION_THRESHOLD)
     }
 
     /// Re-run semantic scoring with dynamic keywords from the database.
@@ -637,7 +650,7 @@ impl DerivedLoopSignals {
         let iframe_ratio = if total > 0 {
             crate::numeric_cast::usize_to_f64(i_count) / crate::numeric_cast::usize_to_f64(total)
         } else {
-            0.5_f64 // neutral when no frame type data
+            crate::constants::LOOP_INTENT_NEUTRAL_SCORE // neutral when no frame type data
         };
         let bytes_per_frame = meta.frame_count.map_or_else(|| {
             tracing::debug!("Intent: Missing 'frame_count' for bytes_per_frame calculation; defaulting to 0.0");
@@ -650,8 +663,11 @@ impl DerivedLoopSignals {
                 0.0_f64
             }
         });
-        let is_portrait = if meta.width > 0 && meta.height > 0 {
-            let ratio = f64::from(meta.height) / f64::from(meta.width);
+        let is_portrait = if let (Some(w), Some(h)) = (meta.width, meta.height)
+            && w > 0
+            && h > 0
+        {
+            let ratio = f64::from(h) / f64::from(w);
             (ratio - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
                 < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
         } else {
@@ -659,7 +675,8 @@ impl DerivedLoopSignals {
         };
         Self {
             scene_cut: detect_scene_cut(&meta.pkt_sizes),
-            localized_motion: meta.mv_magnitudes.len() >= 10 && zero_motion_ratio > 0.70,
+            localized_motion: meta.mv_magnitudes.len() >= 10
+                && zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO,
             zero_motion_ratio,
             has_audible_audio: meta.has_audio
                 && !meta.audio_is_silent.unwrap_or_else(|| {
@@ -700,10 +717,9 @@ impl LoopThresholds {
                     .unwrap_or(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
                     .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
             });
-        let median_scaled = reference
-            .duration
-            .p50
-            .map_or(short_percentile, |median| median * 0.60_f64);
+        let median_scaled = reference.duration.p50.map_or(short_percentile, |median| {
+            median * crate::constants::LOOP_INTENT_MOTION_MEDIAN_SCALE
+        });
         let duration_override_secs = if duration_percentiles_available {
             short_percentile
                 .min(median_scaled.max(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_P90_SECS))
@@ -719,19 +735,36 @@ impl LoopThresholds {
             reference
                 .duration
                 .std_dev
-                .mul_add(0.25, reference.duration.mean)
-                .clamp(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS, 4.5)
+                .mul_add(
+                    crate::constants::LOOP_INTENT_DYN_THRESH_SCALING_LOW,
+                    reference.duration.mean,
+                )
+                .clamp(
+                    crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS,
+                    crate::constants::LOOP_INTENT_BASELINE_DURATION,
+                )
         };
         let short_clip_secs = reference
             .duration
             .p50
-            .or_else(|| reference.duration.p75.map(|value| value.min(8.0)))
+            .or_else(|| {
+                reference
+                    .duration
+                    .p75
+                    .map(|value| value.min(crate::constants::LOOP_INTENT_MAX_DURATION))
+            })
             .unwrap_or_else(|| {
                 reference
                     .duration
                     .std_dev
-                    .mul_add(0.50, reference.duration.mean)
-                    .clamp(duration_override_secs + 1.0, 8.0)
+                    .mul_add(
+                        crate::constants::LOOP_INTENT_DYN_THRESH_SCALING_HIGH,
+                        reference.duration.mean,
+                    )
+                    .clamp(
+                        duration_override_secs + 1.0,
+                        crate::constants::LOOP_INTENT_MAX_DURATION,
+                    )
             })
             .max(duration_override_secs + 0.5);
         let short_asset_window_secs =
@@ -900,15 +933,21 @@ fn zero_motion_ratio(mvs: &[f64]) -> f64 {
     if mvs.is_empty() {
         return 0.0;
     }
-    let zero_count = mvs.iter().filter(|&&value| value.abs() < 0.1_f64).count();
+    let zero_count = mvs
+        .iter()
+        .filter(|&&value| value.abs() < crate::constants::LOOP_INTENT_ZERO_MV_THRESHOLD)
+        .count();
     crate::numeric_cast::usize_to_f64(zero_count) / crate::numeric_cast::usize_to_f64(mvs.len())
 }
 
-fn is_near_16_by_9(width: u32, height: u32) -> bool {
-    if width == 0 || height == 0 {
+fn is_near_16_by_9(width: Option<u32>, height: Option<u32>) -> bool {
+    let (Some(w), Some(h)) = (width, height) else {
+        return false;
+    };
+    if w == 0 || h == 0 {
         return false;
     }
-    ((f64::from(width) / f64::from(height)) - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
+    ((f64::from(w) / f64::from(h)) - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
         < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
 }
 
@@ -945,10 +984,17 @@ fn evaluate_kinetics_and_physics(
         let z = thresholds.fps_z(fps);
         (z.max(0.0), (-z).max(0.0))
     });
-    let total_pixels = f64::from(meta.width) * f64::from(meta.height);
+    let total_pixels = match (meta.width, meta.height) {
+        (Some(w), Some(h)) => f64::from(w) * f64::from(h),
+        _ => 0.0_f64,
+    };
 
     if duration_positive > 0.0_f64 {
-        let short_fast = duration_positive * fps_positive.mul_add(0.5_f64, 1.0_f64);
+        let short_fast = duration_positive
+            * fps_positive.mul_add(
+                crate::constants::KINETIC_WEIGHT_ADJ,
+                crate::constants::KINETIC_WEIGHT_BASE,
+            );
         log_odds.add(
             short_fast.min(crate::constants::TREE_Z_SCORE_CAP)
                 * crate::constants::SHORT_FAST_POSITIVE_LOG_ODDS,
@@ -956,7 +1002,11 @@ fn evaluate_kinetics_and_physics(
     }
 
     if duration_negative > 0.0_f64 {
-        let long_slow = duration_negative * fps_negative.mul_add(0.5_f64, 1.0_f64);
+        let long_slow = duration_negative
+            * fps_negative.mul_add(
+                crate::constants::KINETIC_WEIGHT_ADJ,
+                crate::constants::KINETIC_WEIGHT_BASE,
+            );
         log_odds.add(
             -long_slow.min(crate::constants::TREE_Z_SCORE_CAP)
                 * crate::constants::LONG_SLOW_NEGATIVE_LOG_ODDS,
@@ -1036,59 +1086,86 @@ fn apply_structural_signals(
     // and H.264 GOP structure create false periodicity in pkt_sizes. Negative signal kept
     // universal since low autocorrelation reliably indicates scene changes.
 
-    if likely(meta.loop_closure_score.is_some_and(|c| c >= 0.82_f64) && is_short_tier) {
+    if likely(
+        meta.loop_closure_score
+            .is_some_and(|c| c >= crate::constants::LOOP_INTENT_CLOSURE_THRESHOLD)
+            && is_short_tier,
+    ) {
         if let Some(closure) = meta.loop_closure_score {
-            let strength = ((closure - 0.82) / 0.18).clamp(0.25, 1.0);
+            let strength = ((closure - crate::constants::LOOP_INTENT_CLOSURE_THRESHOLD)
+                / crate::constants::LOOP_INTENT_CLOSURE_SCALE)
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
         }
-    } else if unlikely(meta.loop_closure_score.is_some_and(|c| c <= 0.35_f64))
-        && let Some(closure) = meta.loop_closure_score
+    } else if unlikely(
+        meta.loop_closure_score
+            .is_some_and(|c| c <= crate::constants::LOOP_INTENT_CLOSURE_REJECT_THRESHOLD),
+    ) && let Some(closure) = meta.loop_closure_score
     {
-        let strength = ((0.35 - closure) / 0.35).clamp(0.25, 1.0);
+        let strength = ((crate::constants::LOOP_INTENT_CLOSURE_REJECT_THRESHOLD - closure)
+            / crate::constants::LOOP_INTENT_CLOSURE_REJECT_THRESHOLD)
+            .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
         log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
     }
 
     if let Some(periodicity) = meta.motion_periodicity {
-        if periodicity >= 0.72_f64 {
-            let strength = ((periodicity - 0.72) / 0.28).clamp(0.25, 1.0);
+        if periodicity >= crate::constants::LOOP_INTENT_PERIODICITY_THRESHOLD {
+            let strength = ((periodicity - crate::constants::LOOP_INTENT_PERIODICITY_THRESHOLD)
+                / crate::constants::LOOP_INTENT_PERIODICITY_SCALE)
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             let envelope_multiplier = if short_silent_asset || is_image || derived.localized_motion
             {
                 1.0_f64
             } else {
-                0.70_f64
+                crate::constants::LOOP_INTENT_MOTION_ENVELOPE_REDUCTION
             };
             log_odds.add(
                 strength
                     * crate::constants::FEATURE_WEIGHT_MOTION_PERIODICITY
                     * envelope_multiplier,
             );
-        } else if periodicity <= 0.32_f64 {
-            let strength = ((0.32 - periodicity) / 0.32).clamp(0.25, 1.0);
+        } else if periodicity <= crate::constants::LOOP_INTENT_PERIODICITY_REJECT_THRESHOLD {
+            let strength = ((crate::constants::LOOP_INTENT_PERIODICITY_REJECT_THRESHOLD
+                - periodicity)
+                / crate::constants::LOOP_INTENT_PERIODICITY_REJECT_THRESHOLD)
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_MOTION_PERIODICITY);
         }
     }
 
     let loop_frequency = score_loop_frequency(meta.duration_secs, meta.frame_count);
-    if loop_frequency >= 0.75_f64 {
-        let strength = ((loop_frequency - 0.75) / 0.25).clamp(0.25, 1.0);
+    if loop_frequency >= crate::constants::LOOP_INTENT_LOOP_FREQ_HIGH {
+        let strength = ((loop_frequency - crate::constants::LOOP_INTENT_LOOP_FREQ_HIGH)
+            / (1.0 - crate::constants::LOOP_INTENT_LOOP_FREQ_HIGH))
+            .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
         log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_FREQUENCY);
-    } else if loop_frequency <= 0.25_f64 {
-        let strength = ((0.25 - loop_frequency) / 0.25).clamp(0.25, 1.0);
+    } else if loop_frequency <= crate::constants::LOOP_INTENT_LOOP_FREQ_LOW {
+        let strength = ((crate::constants::LOOP_INTENT_LOOP_FREQ_LOW - loop_frequency)
+            / crate::constants::LOOP_INTENT_LOOP_FREQ_LOW)
+            .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
         log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_FREQUENCY);
     }
 
     let sparse_cadence = score_sparse_cadence(meta.duration_secs, meta.frame_count);
-    if sparse_cadence >= 0.90_f64 && (short_silent_asset || is_image) {
-        let strength = ((sparse_cadence - 0.90) / 0.10).clamp(0.25, 1.0);
+    if sparse_cadence >= crate::constants::LOOP_INTENT_SPARSE_CADENCE_THRESHOLD
+        && (short_silent_asset || is_image)
+    {
+        let strength = ((sparse_cadence - crate::constants::LOOP_INTENT_SPARSE_CADENCE_THRESHOLD)
+            / (1.0 - crate::constants::LOOP_INTENT_SPARSE_CADENCE_THRESHOLD))
+            .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
         log_odds.add(strength * crate::constants::FEATURE_WEIGHT_SPARSE_CADENCE);
     }
 
     if let Some(jitter) = meta.temporal_jitter {
-        if jitter >= 0.82_f64 && (short_silent_asset || is_image) {
-            let strength = ((jitter - 0.82) / 0.18).clamp(0.25, 1.0);
+        if jitter >= crate::constants::LOOP_INTENT_JITTER_HIGH && (short_silent_asset || is_image) {
+            let strength = ((jitter - crate::constants::LOOP_INTENT_JITTER_HIGH)
+                / (1.0 - crate::constants::LOOP_INTENT_JITTER_HIGH))
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_TEMPORAL_JITTER);
-        } else if jitter <= 0.25_f64 {
-            let strength = ((0.25 - jitter) / 0.25).clamp(0.25, 1.0);
+        } else if jitter <= crate::constants::LOOP_INTENT_JITTER_LOW {
+            let strength = ((crate::constants::LOOP_INTENT_JITTER_LOW - jitter)
+                / crate::constants::LOOP_INTENT_JITTER_LOW)
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_TEMPORAL_JITTER);
         }
     }
@@ -1099,13 +1176,19 @@ fn apply_structural_signals(
     // Real video with standard GOP (I-P-B-B-P...) has ratio ≈ 0.03–0.10.
     // Only active when frame_types data is present (ratio != 0.5 neutral default).
     if (derived.iframe_ratio - 0.5).abs() > 0.01_f64 {
-        if derived.iframe_ratio >= 0.85_f64 {
+        if derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH {
             // All-I-frame or nearly so → strong GIF/animation signal
-            let strength = ((derived.iframe_ratio - 0.85) / 0.15).clamp(0.25, 1.0);
+            let strength = ((derived.iframe_ratio
+                - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH)
+                / (1.0 - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH))
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
-        } else if derived.iframe_ratio <= 0.15_f64 {
+        } else if derived.iframe_ratio <= crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW {
             // Normal GOP structure → strong video signal
-            let strength = ((0.15 - derived.iframe_ratio) / 0.15).clamp(0.25, 1.0);
+            let strength = ((crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW
+                - derived.iframe_ratio)
+                / crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW)
+                .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
         }
     }
@@ -1114,17 +1197,23 @@ fn apply_structural_signals(
     // Use z-score against reference profile for normalization.
     if derived.bytes_per_frame > 0.0_f64 {
         let bpf_z = thresholds.file_size_z(derived.bytes_per_frame);
-        if bpf_z <= -1.5_f64 {
+        if bpf_z <= -crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD {
             // Compact frames → animation-like
-            let strength = ((-bpf_z - crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
-                / crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
-                .clamp(0.15, 1.0);
+            let strength = ((-bpf_z - crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
+                / crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
+                .clamp(
+                    crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN_RELAXED,
+                    1.0,
+                );
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
-        } else if bpf_z >= 1.5_f64 {
+        } else if bpf_z >= crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD {
             // Large frames → video-like
-            let strength = ((bpf_z - crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
-                / crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH)
-                .clamp(0.15, 1.0);
+            let strength = ((bpf_z - crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
+                / crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
+                .clamp(
+                    crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN_RELAXED,
+                    1.0,
+                );
             log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
         }
     }
@@ -1137,10 +1226,14 @@ fn apply_structural_signals(
     if is_video
         && !short_silent_asset
         && !meta.has_transparency
-        && meta.loop_closure_score.is_some_and(|c| c < 0.45_f64)
-        && meta.motion_periodicity.is_some_and(|p| p < 0.45_f64)
+        && meta
+            .loop_closure_score
+            .is_some_and(|c| c < crate::constants::LOOP_INTENT_ANTI_LOOP_THRESHOLD)
+        && meta
+            .motion_periodicity
+            .is_some_and(|p| p < crate::constants::LOOP_INTENT_ANTI_LOOP_THRESHOLD)
     {
-        log_odds.add(-0.08);
+        log_odds.add(-crate::constants::LOOP_INTENT_KNN_MIN_DELTA);
     }
 
     // ── Co-alignment bonus ──────────────────────────────────────────────────
@@ -1162,12 +1255,15 @@ fn apply_structural_signals(
     if is_near_16_by_9(meta.width, meta.height) {
         anti_loop_count += 1;
     }
-    if derived.iframe_ratio < 0.15_f64 {
+    if derived.iframe_ratio < crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW_VETO {
         anti_loop_count += 1;
     }
     // Convergence bonus: 3+ independent anti-loop signals → additional penalty
-    if anti_loop_count >= 3 {
-        let bonus = 0.06_f64 * f64::from(anti_loop_count - 2); // +0.06 per signal beyond 2
+    if anti_loop_count >= crate::constants::LOOP_INTENT_SIGNAL_THRESHOLD {
+        let bonus = crate::constants::LOOP_INTENT_BONUS_INCREMENT
+            * crate::numeric_cast::usize_to_f64(
+                usize::from(anti_loop_count) - crate::constants::LOOP_INTENT_SIGNAL_OFFSET,
+            ); // +0.06 per signal beyond 2
         log_odds.add(-bonus);
     }
 
@@ -1176,16 +1272,20 @@ fn apply_structural_signals(
     if !meta.has_audio {
         pro_loop_count += 1;
     }
-    if meta.width > 0 && meta.height > 0 && meta.width == meta.height {
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && h > 0
+        && w == h
+    {
         pro_loop_count += 1;
     }
-    if derived.iframe_ratio >= 0.85_f64 {
+    if derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH_VETO {
         pro_loop_count += 1;
     }
     if meta.loop_closure_score.unwrap_or_else(|| {
         tracing::debug!("Intent: Missing 'loop_closure_score' for bonus; defaulting to 0.0");
         0.0_f64
-    }) >= 0.82_f64
+    }) >= crate::constants::LOOP_INTENT_CLOSURE_HIGH
         && is_short_tier
     {
         pro_loop_count += 1;
@@ -1193,13 +1293,16 @@ fn apply_structural_signals(
     if meta.motion_periodicity.unwrap_or_else(|| {
         tracing::debug!("Intent: Missing 'motion_periodicity' for bonus; defaulting to 0.0");
         0.0_f64
-    }) >= 0.72_f64
+    }) >= crate::constants::LOOP_INTENT_PERIODICITY_HIGH
     {
         pro_loop_count += 1;
     }
     // Convergence bonus: 3+ independent pro-loop signals → additional bonus
-    if pro_loop_count >= 3 {
-        let bonus = 0.06_f64 * f64::from(pro_loop_count - 2); // +0.06 per signal beyond 2
+    if pro_loop_count >= crate::constants::LOOP_INTENT_SIGNAL_THRESHOLD {
+        let bonus = crate::constants::LOOP_INTENT_BONUS_INCREMENT
+            * crate::numeric_cast::usize_to_f64(
+                usize::from(pro_loop_count) - crate::constants::LOOP_INTENT_SIGNAL_OFFSET,
+            ); // +0.06 per signal beyond 2
         log_odds.add(bonus);
     }
 
@@ -1207,7 +1310,10 @@ fn apply_structural_signals(
     if meta.is_interlaced == Some(true) {
         // Interlaced video is a physical impossibility for native animation tools.
         // Apply overwhelming negative odds to kill any loop intent.
-        log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG * 2.0);
+        log_odds.add(
+            -crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG
+                * crate::constants::INTERLACED_PENALTY_MULTIPLIER,
+        );
     }
 }
 
@@ -1258,7 +1364,8 @@ fn apply_weak_heuristics(
         log_odds.add(crate::constants::SHORT_CLIP_MIN_BIAS);
     }
     if is_short_clip {
-        let range = (thresholds.short_clip_secs - thresholds.duration_override_secs).max(0.5);
+        let range = (thresholds.short_clip_secs - thresholds.duration_override_secs)
+            .max(crate::constants::HEURISTIC_SAFETY_FLOOR);
         let headroom = meta.duration_secs.map_or(0.0_f64, |dur| {
             1.0_f64 - ((dur - thresholds.duration_override_secs) / range).clamp(0.0, 1.0)
         });
@@ -1281,11 +1388,15 @@ fn apply_weak_heuristics(
         );
     }
     if is_extended_short_asset {
-        let range = (thresholds.short_asset_window_secs - thresholds.short_clip_secs).max(0.5);
+        let range = (thresholds.short_asset_window_secs - thresholds.short_clip_secs)
+            .max(crate::constants::HEURISTIC_SAFETY_FLOOR);
         let tail_headroom = meta.duration_secs.map_or(0.0, |dur| {
             1.0_f64 - ((dur - thresholds.short_clip_secs) / range).clamp(0.0, 1.0)
         });
-        let square_bonus = if meta.width > 0 && meta.width == meta.height {
+        let square_bonus = if let (Some(w), Some(h)) = (meta.width, meta.height)
+            && w > 0
+            && w == h
+        {
             crate::constants::EXTENDED_SHORT_ASSET_SQUARE_BONUS
         } else {
             0.0_f64
@@ -1341,19 +1452,19 @@ fn apply_weak_heuristics(
                         && !(short_silent_asset || is_image || derived.localized_motion))
                 {
                     // Default relief when no support data is available
-                    0.65_f64
+                    crate::constants::LOOP_INTENT_SUPPORT_RELIEF_DEFAULT
                 } else {
                     1.0_f64
                 }
             },
             |support| {
-                if z.is_sign_negative() && support >= 0.80_f64 {
-                    0.35_f64
+                if z.is_sign_negative() && support >= crate::constants::LOOP_INTENT_SUPPORT_HIGH {
+                    crate::constants::LOOP_INTENT_SUPPORT_RELIEF_STRONG
                 } else if (z.is_sign_negative() && short_silent_asset)
                     || (z.is_sign_positive()
                         && !(short_silent_asset || is_image || derived.localized_motion))
                 {
-                    0.55_f64
+                    crate::constants::LOOP_INTENT_SUPPORT_RELIEF_WEAK
                 } else {
                     1.0_f64
                 }
@@ -1383,27 +1494,32 @@ fn apply_weak_heuristics(
         );
     }
 
-    if derived.localized_motion || derived.zero_motion_ratio > 0.80_f64 {
+    if derived.localized_motion
+        || derived.zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
+    {
         log_odds.add(LOCALIZED_MOTION_POSITIVE_LOG_ODDS);
     }
 
-    if meta.directory_loop_intent_score > 0.8_f64 {
+    if meta.directory_loop_intent_score > crate::constants::LOOP_INTENT_SEMANTIC_SCORE_THRESHOLD {
         log_odds.add(DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS);
     }
-    if meta.filename_loop_intent_score > 0.8_f64 {
+    if meta.filename_loop_intent_score > crate::constants::LOOP_INTENT_SEMANTIC_SCORE_THRESHOLD {
         log_odds.add(FILENAME_CONTEXT_POSITIVE_LOG_ODDS);
     }
 
     if let Some(fc) = meta.frame_count {
-        if fc <= 8 {
+        if fc <= crate::constants::LOOP_INTENT_FRAME_COUNT_SHORT_LIMIT {
             log_odds.add(crate::constants::FRAME_COUNT_SHORT_BONUS);
-        } else if fc > 500 {
+        } else if fc > crate::constants::LOOP_INTENT_FRAME_COUNT_LONG_LIMIT {
             log_odds.add(-crate::constants::FRAME_COUNT_LONG_PENALTY);
         }
     }
 
-    if meta.width > 0 && meta.height > 0 {
-        if meta.width == meta.height {
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && h > 0
+    {
+        if w == h {
             log_odds.add(crate::constants::SQUARE_ASPECT_BONUS);
         } else if is_near_16_by_9(meta.width, meta.height) {
             log_odds.add(-crate::constants::WIDESCREEN_ASPECT_PENALTY);
@@ -1414,7 +1530,7 @@ fn apply_weak_heuristics(
     }
 
     if let Some(fps) = meta.fps
-        && fps_anomaly_score(fps) > 0.6_f64
+        && fps_anomaly_score(fps) > crate::constants::LOOP_INTENT_FPS_ANOMALY_THRESHOLD
     {
         log_odds.add(crate::constants::FPS_ANOMALY_BONUS);
     }
@@ -1697,7 +1813,7 @@ pub fn evaluate_loop_tree(
             .to_ascii_lowercase();
         let container = meta.container.as_deref().unwrap_or("").to_ascii_lowercase();
         let mut base_trust: f64 = if meta.is_native_gif || ext == "gif" || container == "gif" {
-            1.0 // GIF NETSCAPE2.0 is authoritative
+            crate::constants::METADATA_TRUST_AUTHORITATIVE // GIF NETSCAPE2.0 is authoritative
         } else if ext == "webp"
             || ext == "apng"
             || ext == "png"
@@ -1705,12 +1821,12 @@ pub fn evaluate_loop_tree(
             || container == "apng"
             || container == "png"
         {
-            0.85 // WebP ANIM chunk / APNG acTL have real loop fields
+            crate::constants::METADATA_TRUST_MODERN_ANIMATED // WebP ANIM chunk / APNG acTL have real loop fields
         } else if ext == "avif" || container == "avif" {
-            0.6 // AVIF loop semantics exist but less standardized
+            crate::constants::METADATA_TRUST_STANDARD_VIDEO // AVIF loop semantics exist but less standardized
         } else {
             // MP4, MKV, AVI, etc. — no authoritative loop metadata
-            0.2
+            crate::constants::METADATA_TRUST_UNTRUSTED
         };
 
         // ── Deep Penetration: Creator Software Validation ──
@@ -1726,7 +1842,7 @@ pub fn evaluate_loop_tree(
                 || lower.contains("avid")
                 || lower.contains("vegas")
             {
-                base_trust = base_trust.min(0.2);
+                base_trust = base_trust.min(crate::constants::METADATA_TRUST_UNTRUSTED);
             }
             // Dedicated animation/meme creation tools
             else if lower.contains("photoshop")
@@ -1737,12 +1853,12 @@ pub fn evaluate_loop_tree(
                 || lower.contains("procreate")
                 || lower.contains("clip studio")
             {
-                base_trust = base_trust.max(1.0); // Absolute trust
+                base_trust = base_trust.max(crate::constants::METADATA_TRUST_AUTHORITATIVE); // Absolute trust
             }
             // Generic FFmpeg wrapper without explicit loop intent
             else if lower.contains("lavf") && base_trust > 0.8_f64 {
                 // Slightly penalize generic FFmpeg wrappers (0.85 -> 0.75 for WebP)
-                base_trust -= 0.1_f64;
+                base_trust -= crate::constants::METADATA_TRUST_PENALTY_LAVF;
             }
         }
 
@@ -1801,11 +1917,12 @@ fn evaluate_image_tree(
             tier,
             DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
         )
-        && meta.width > 0
-        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
-        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
+        && let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && w <= crate::constants::STICKER_MAX_DIMENSION
+        && h <= crate::constants::STICKER_MAX_DIMENSION
     {
-        let px = u64::from(meta.width) * u64::from(meta.height);
+        let px = u64::from(w) * u64::from(h);
         if px <= crate::constants::STICKER_TIER_NATIVE_GIF_MAX_PIXELS {
             log_odds.add(crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS);
         }
@@ -1938,10 +2055,11 @@ fn evaluate_video_tree(
     // Layer 1-B3: Dimensional Sticker — dimensions are metadata, use as weighted bonus.
     // UltraShort duration is the real anchor; dimensions just add confidence.
     if tier == DurationTier::UltraShort
-        && meta.width > 0
-        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
-        && meta.height > 0
-        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
+        && let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && w <= crate::constants::STICKER_MAX_DIMENSION
+        && h > 0
+        && h <= crate::constants::STICKER_MAX_DIMENSION
         && (meta.pkt_sizes.len() < 3 || meta.pts_deltas.len() < 3)
     {
         log_odds.add(crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS);
@@ -2075,7 +2193,10 @@ fn logistic_regression_fusion(
     // This ensures high-confidence inputs (p ≈ 0 or p ≈ 1) are properly preserved
     // through the fusion, instead of being compressed toward 0.5.
     let logit = |p: f64| -> f64 {
-        let clamped = p.clamp(0.01, 0.99);
+        let clamped = p.clamp(
+            crate::constants::FUSED_PROB_CLAMP_LOWER,
+            crate::constants::FUSED_PROB_CLAMP_UPPER,
+        );
         (clamped / (1.0 - clamped)).ln()
     };
 
@@ -2086,7 +2207,10 @@ fn logistic_regression_fusion(
 
     // Apply sigmoid once to convert the log-odds-weighted sum back to probability
     let fused_prob = 1.0_f64 / (1.0_f64 + (-score).exp());
-    (fused_prob + nudge).clamp(0.01, 0.99)
+    (fused_prob + nudge).clamp(
+        crate::constants::FUSED_PROB_CLAMP_LOWER,
+        crate::constants::FUSED_PROB_CLAMP_UPPER,
+    )
 }
 
 fn compute_layer6_fusion(
@@ -2161,25 +2285,42 @@ fn layer6_directional_arbitration(
     let mut arbitration = DirectionalArbitration::default();
 
     if tree.tree_probability >= crate::constants::LAYER6_DIRECTIONAL_KEEP_MIN {
-        let delta = ((tree.tree_probability - 0.5) * 0.45).clamp(0.05, 0.22);
+        let delta =
+            ((tree.tree_probability - 0.5) * crate::constants::LOOP_INTENT_DIRECTIONAL_BIAS).clamp(
+                crate::constants::LOOP_INTENT_DIRECTIONAL_MIN_BONUS,
+                crate::constants::LOOP_INTENT_DIRECTIONAL_MAX_BONUS,
+            );
         arbitration.add_keep(delta, format!("tree lean {:.2}", tree.tree_probability));
     } else if tree.tree_probability <= crate::constants::LAYER6_DIRECTIONAL_WEAK_MAX {
-        let delta = ((0.5 - tree.tree_probability) * 0.45).clamp(0.05, 0.22);
+        let delta =
+            ((0.5 - tree.tree_probability) * crate::constants::LOOP_INTENT_DIRECTIONAL_BIAS).clamp(
+                crate::constants::LOOP_INTENT_DIRECTIONAL_MIN_BONUS,
+                crate::constants::LOOP_INTENT_DIRECTIONAL_MAX_BONUS,
+            );
         arbitration.add_convert(delta, format!("tree lean {:.2}", tree.tree_probability));
     }
 
     if let Some(knn_keep) = keep_prob {
         let conf = confidence
             .unwrap_or_else(|| {
-                tracing::debug!("Intent: Missing 'confidence' from KNN; defaulting to 0.55");
-                0.55_f64
+                tracing::debug!(
+                    "Intent: Missing 'confidence' from KNN; defaulting to {:.2}",
+                    crate::constants::LOOP_INTENT_DEFAULT_KNN_CONFIDENCE
+                );
+                crate::constants::LOOP_INTENT_DEFAULT_KNN_CONFIDENCE
             })
-            .clamp(0.35, 1.0);
-        if knn_keep >= 0.65_f64 {
-            let delta = (((knn_keep - 0.5) * 0.90) * conf).clamp(0.08, 0.28);
+            .clamp(crate::constants::LOOP_INTENT_KNN_LOW, 1.0);
+        if knn_keep >= crate::constants::LOOP_INTENT_KNN_HIGH {
+            let delta = (((knn_keep - 0.5) * crate::constants::LOOP_INTENT_KNN_BIAS) * conf).clamp(
+                crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                crate::constants::LOOP_INTENT_KNN_MAX_DELTA,
+            );
             arbitration.add_keep(delta, format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"));
-        } else if knn_keep <= 0.35_f64 {
-            let delta = (((0.5 - knn_keep) * 0.90) * conf).clamp(0.08, 0.28);
+        } else if knn_keep <= crate::constants::LOOP_INTENT_KNN_LOW {
+            let delta = (((0.5 - knn_keep) * crate::constants::LOOP_INTENT_KNN_BIAS) * conf).clamp(
+                crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                crate::constants::LOOP_INTENT_KNN_MAX_DELTA,
+            );
             arbitration.add_convert(delta, format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"));
         }
     }
@@ -2187,101 +2328,174 @@ fn layer6_directional_arbitration(
     if let Some(score) = fusion_score {
         let conf = confidence
             .unwrap_or_else(|| {
-                tracing::debug!("Intent: Missing 'confidence' from KNN; defaulting to 0.55");
-                0.55_f64
+                tracing::debug!(
+                    "Intent: Missing 'confidence' from KNN; defaulting to {:.2}",
+                    crate::constants::LOOP_INTENT_DEFAULT_KNN_CONFIDENCE
+                );
+                crate::constants::LOOP_INTENT_DEFAULT_KNN_CONFIDENCE
             })
-            .clamp(0.35, 1.0);
-        if score >= 0.55_f64 {
-            let delta = (((score - 0.5) * 0.95) * conf).clamp(0.06, 0.24);
+            .clamp(crate::constants::LOOP_INTENT_KNN_LOW, 1.0);
+        if score >= crate::constants::LOOP_INTENT_FUSION_KEEP_THRESHOLD {
+            let delta = (((score - 0.5) * crate::constants::LOOP_INTENT_FUSION_BIAS) * conf).clamp(
+                crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                crate::constants::LOOP_INTENT_KNN_MAX_DELTA,
+            );
             arbitration.add_keep(delta, format!("fusion score {score:.2}"));
-        } else if score <= 0.45_f64 {
-            let delta = (((0.5 - score) * 0.95) * conf).clamp(0.06, 0.24);
+        } else if score <= crate::constants::LOOP_INTENT_FUSION_REJECT_THRESHOLD {
+            let delta = (((0.5 - score) * crate::constants::LOOP_INTENT_FUSION_BIAS) * conf).clamp(
+                crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                crate::constants::LOOP_INTENT_KNN_MAX_DELTA,
+            );
             arbitration.add_convert(delta, format!("fusion score {score:.2}"));
         }
     }
 
     if platform_marker {
-        arbitration.add_keep(0.24, "platform/app marker");
+        arbitration.add_keep(
+            crate::constants::LOOP_INTENT_ARBITRATION_MARKER_BONUS,
+            "platform/app marker",
+        );
     }
     if meta.has_transparency {
-        arbitration.add_keep(0.22, "transparency");
+        arbitration.add_keep(
+            crate::constants::LOOP_INTENT_ARBITRATION_TRANSPARENCY_BONUS,
+            "transparency",
+        );
     }
     if short_silent_asset {
         let delta = if meta
             .duration_secs
             .is_some_and(|d| d <= thresholds.short_clip_secs)
         {
-            0.14_f64
+            crate::constants::LOOP_INTENT_ARBITRATION_AUDIO_BONUS
         } else {
-            0.10_f64
+            crate::constants::LOOP_INTENT_ARBITRATION_METADATA_BONUS
         };
         arbitration.add_keep(
             delta,
             format!("short silent asset {:?}s", meta.duration_secs),
         );
     }
-    if meta.width > 0 && meta.width == meta.height {
-        arbitration.add_keep(0.08, "square canvas");
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && w == h
+    {
+        arbitration.add_keep(
+            crate::constants::LOOP_INTENT_ARBITRATION_SQUARE_BONUS,
+            "square canvas",
+        );
     }
     if is_image {
-        arbitration.add_keep(0.06, "image-family container");
+        arbitration.add_keep(
+            crate::constants::LOOP_INTENT_ARBITRATION_IMAGE_BONUS,
+            "image-family container",
+        );
     }
 
     if let Some(closure) = meta.loop_closure_score {
-        if closure >= 0.80_f64 {
-            let delta = (((closure - 0.80) / 0.20) * 0.22).clamp(0.08, 0.22);
+        if closure >= crate::constants::LOOP_INTENT_CLOSURE_HIGH {
+            let delta = (((closure - crate::constants::LOOP_INTENT_CLOSURE_HIGH)
+                / crate::constants::LOOP_INTENT_CLOSURE_REDUCTION_SCALE)
+                * crate::constants::LOOP_INTENT_DIRECTIONAL_MAX_BONUS)
+                .clamp(
+                    crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                    crate::constants::LOOP_INTENT_DIRECTIONAL_MAX_BONUS,
+                );
             arbitration.add_keep(delta, format!("loop closure {closure:.2}"));
-        } else if closure <= 0.35_f64 {
-            let delta = (((0.35 - closure) / 0.35) * 0.20).clamp(0.08, 0.20);
+        } else if closure <= crate::constants::LOOP_INTENT_CLOSURE_LOW {
+            let delta = (((crate::constants::LOOP_INTENT_CLOSURE_LOW - closure)
+                / crate::constants::LOOP_INTENT_CLOSURE_LOW)
+                * crate::constants::LOOP_INTENT_CLOSURE_REJECT_DELTA)
+                .clamp(
+                    crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                    crate::constants::LOOP_INTENT_CLOSURE_REJECT_DELTA,
+                );
             arbitration.add_convert(delta, format!("loop closure {closure:.2}"));
         }
     }
 
     if let Some(periodicity) = meta.motion_periodicity {
-        if periodicity >= 0.72_f64 {
-            let delta = (((periodicity - 0.72) / 0.28) * 0.16).clamp(0.06, 0.16);
+        if periodicity >= crate::constants::LOOP_INTENT_PERIODICITY_HIGH {
+            let delta = (((periodicity - crate::constants::LOOP_INTENT_PERIODICITY_HIGH)
+                / crate::constants::LOOP_INTENT_PERIODICITY_REDUCTION_SCALE)
+                * crate::constants::LOOP_INTENT_PERIODICITY_MAX_BONUS)
+                .clamp(
+                    crate::constants::LOOP_INTENT_KNN_MIN_DELTA,
+                    crate::constants::LOOP_INTENT_PERIODICITY_MAX_BONUS,
+                );
             arbitration.add_keep(delta, format!("motion periodicity {periodicity:.2}"));
-        } else if periodicity <= 0.32_f64 {
-            let delta = (((0.32 - periodicity) / 0.32) * 0.12).clamp(0.05, 0.12);
+        } else if periodicity <= crate::constants::LOOP_INTENT_PERIODICITY_LOW {
+            let delta = (((crate::constants::LOOP_INTENT_PERIODICITY_LOW - periodicity)
+                / crate::constants::LOOP_INTENT_PERIODICITY_LOW)
+                * crate::constants::LOOP_INTENT_PERIODICITY_REJECT_DELTA)
+                .clamp(
+                    crate::constants::LOOP_INTENT_TREE_MAX_DELTA,
+                    crate::constants::LOOP_INTENT_PERIODICITY_REJECT_DELTA,
+                );
             arbitration.add_convert(delta, format!("motion periodicity {periodicity:.2}"));
         }
     }
 
     let loop_frequency = score_loop_frequency(meta.duration_secs, meta.frame_count);
-    if loop_frequency >= 0.75_f64 {
-        let delta = (((loop_frequency - 0.75) / 0.25) * 0.12).clamp(0.05, 0.12);
+    if loop_frequency >= crate::constants::LOOP_FREQUENCY_HIGH_THRESHOLD {
+        let delta = (((loop_frequency - crate::constants::LOOP_FREQUENCY_HIGH_THRESHOLD)
+            / crate::constants::LOOP_INTENT_FREQ_REDUCTION_SCALE)
+            * crate::constants::LOOP_INTENT_FREQ_MAX_BONUS)
+            .clamp(
+                crate::constants::LOOP_INTENT_TREE_MAX_DELTA,
+                crate::constants::LOOP_INTENT_FREQ_MAX_BONUS,
+            );
         arbitration.add_keep(delta, format!("loop frequency {loop_frequency:.2}"));
-    } else if loop_frequency <= 0.25_f64 {
-        let delta = (((0.25 - loop_frequency) / 0.25) * 0.10).clamp(0.04, 0.10);
+    } else if loop_frequency <= crate::constants::LOOP_FREQUENCY_LOW_THRESHOLD {
+        let delta = (((crate::constants::LOOP_FREQUENCY_LOW_THRESHOLD - loop_frequency)
+            / crate::constants::LOOP_FREQUENCY_LOW_THRESHOLD)
+            * crate::constants::LOOP_INTENT_FREQ_MAX_PENALTY)
+            .clamp(
+                crate::constants::LOOP_INTENT_FRAME_COUNT_MIN_PENALTY,
+                crate::constants::LOOP_INTENT_FREQ_MAX_PENALTY,
+            );
         arbitration.add_convert(delta, format!("loop frequency {loop_frequency:.2}"));
     }
 
     if is_video {
         let delta = if short_silent_asset {
-            0.04_f64
+            crate::constants::LOOP_INTENT_VIDEO_CONTAINER_SHORT_DELTA
         } else {
-            0.08_f64
+            crate::constants::LOOP_INTENT_VIDEO_CONTAINER_STANDARD_DELTA
         };
         arbitration.add_convert(delta, "video container");
     }
-    if meta.width > 0 && meta.height > 0 && is_near_16_by_9(meta.width, meta.height) {
-        arbitration.add_convert(0.10, "widescreen framing");
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && h > 0
+        && is_near_16_by_9(meta.width, meta.height)
+    {
+        arbitration.add_convert(
+            crate::constants::LOOP_INTENT_WIDESCREEN_DELTA,
+            "widescreen framing",
+        );
     }
     if detect_scene_cut(&meta.pkt_sizes) {
-        arbitration.add_convert(0.20, "scene cut");
+        arbitration.add_convert(crate::constants::LOOP_INTENT_SCENE_CUT_DELTA, "scene cut");
     }
     if !meta.has_audio
         && meta
             .duration_secs
             .is_some_and(|d| d > thresholds.modern_bias_duration_secs)
     {
-        arbitration.add_convert(0.14, format!("long silent clip {:?}s", meta.duration_secs));
+        arbitration.add_convert(
+            crate::constants::LOOP_INTENT_LONG_SILENT_CLIP_DELTA,
+            format!("long silent clip {:?}s", meta.duration_secs),
+        );
     }
     if is_video
         && !short_silent_asset
         && meta.file_size_bytes > crate::constants::STICKER_MAX_SIZE_BYTES
     {
-        arbitration.add_convert(0.12, "large video envelope");
+        arbitration.add_convert(
+            crate::constants::LOOP_INTENT_LARGE_VIDEO_ENVELOPE_DELTA,
+            "large video envelope",
+        );
     }
 
     // Convert-side signals missing from original implementation — added for symmetry:
@@ -2294,9 +2508,9 @@ fn layer6_directional_arbitration(
         });
     if has_audible_audio {
         let audio_weight = if short_silent_asset {
-            0.08_f64
+            crate::constants::LOOP_INTENT_AUDIBLE_AUDIO_SHORT_DELTA
         } else {
-            0.22_f64
+            crate::constants::LOOP_INTENT_AUDIBLE_AUDIO_STANDARD_DELTA
         };
         arbitration.add_convert(audio_weight, "audible audio track");
     }
@@ -2304,13 +2518,18 @@ fn layer6_directional_arbitration(
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
     if let (Some(fc), Some(dur)) = (meta.frame_count, meta.duration_secs)
-        && fc > 500
+        && fc > crate::constants::LOOP_INTENT_FRAME_COUNT_LONG_LIMIT
         && dur > 0.01_f64
     {
         let fps = crate::numeric_cast::u64_to_f64(fc) / dur;
-        if fps < 24.0_f64 {
-            let weight = (crate::numeric_cast::u64_to_f64(fc.saturating_sub(500)) / 2000.0)
-                .clamp(0.04, 0.14);
+        if fps < crate::constants::LOOP_INTENT_FRAME_COUNT_FPS_THRESHOLD {
+            let weight = (crate::numeric_cast::u64_to_f64(
+                fc.saturating_sub(crate::constants::LOOP_INTENT_FRAME_COUNT_LONG_LIMIT),
+            ) / crate::constants::LOOP_INTENT_FRAME_COUNT_PENALTY_DIVISOR)
+                .clamp(
+                    crate::constants::LOOP_INTENT_FRAME_COUNT_MIN_PENALTY,
+                    crate::constants::LOOP_INTENT_FRAME_COUNT_MAX_PENALTY,
+                );
             arbitration.add_convert(weight, format!("high frame count {fc} @ {fps:.0}fps"));
         }
     }
@@ -2536,10 +2755,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         }
 
         // 3. Frame count verification (detect metadata lies)
-        if mutable_meta
-            .frame_count
-            .is_none_or(|fc| fc <= 1 || fc > 50000)
-        {
+        if mutable_meta.frame_count.is_none_or(|fc| {
+            fc <= crate::constants::FRAME_COUNT_TRUST_LOWER_LIMIT
+                || fc > crate::constants::FRAME_COUNT_TRUST_UPPER_LIMIT
+        }) {
             let fc_for_detection = mutable_meta.frame_count.unwrap_or_else(|| {
                 tracing::debug!("Intent: Missing 'frame_count' for detection; defaulting to 0");
                 0
@@ -2965,7 +3184,8 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     } else if keep_prob >= crate::constants::LOSSLESS_DURATION_LIMIT_HIGH_PROB {
         MEME_LOSSLESS_DURATION_LIMIT
     } else {
-        let t = (keep_prob - 0.3) / 0.4;
+        let t = (keep_prob - crate::constants::KEEP_PROB_INTERPOLATION_FLOOR)
+            / crate::constants::KEEP_PROB_INTERPOLATION_RANGE;
         let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
         let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
         crate::numeric_cast::f64_to_f32_lossy(limit_high + (t * (limit_meme - limit_high)))
@@ -3087,7 +3307,7 @@ fn get_meme_keywords() -> &'static [String] {
 #[must_use]
 pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) -> f64 {
     let Some(parts) = parts else {
-        return 0.5;
+        return crate::constants::LOOP_INTENT_NEUTRAL_SCORE;
     };
     let global_keywords = get_meme_keywords();
     for part in parts {
@@ -3100,7 +3320,7 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
             return 1.0;
         }
     }
-    0.5
+    crate::constants::LOOP_INTENT_NEUTRAL_PROB
 }
 
 /// Returns `0.5` (Ambiguous) if no name is provided.
@@ -3111,7 +3331,7 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
 pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnalysis {
     let Some(name) = name else {
         return FilenameAnalysis {
-            raw: 0.5,
+            raw: crate::constants::LOOP_INTENT_AMBIGUOUS_SCORE,
             kind: FilenameKind::Ambiguous,
         };
     };
@@ -3127,7 +3347,7 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
         || global_keywords.iter().any(|keyword| stem.contains(keyword))
     {
         return FilenameAnalysis {
-            raw: 0.85,
+            raw: crate::constants::LOOP_CONFIDENCE_HIGH,
             kind: FilenameKind::HumanSemantic,
         };
     }
@@ -3149,7 +3369,7 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
     }
 
     FilenameAnalysis {
-        raw: 0.5,
+        raw: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
         kind: FilenameKind::Ambiguous,
     }
 }
@@ -3163,24 +3383,25 @@ pub fn score_loop_frequency(duration_secs: Option<f64>, frame_count: Option<u64>
         let loops_per_minute = 60.0_f64 / dur;
         let frame_density = crate::numeric_cast::u64_to_f64(fc) / dur;
 
-        let loop_score = if loops_per_minute >= 20.0_f64 {
-            1.0_f64
-        } else if loops_per_minute >= 10.0_f64 {
-            0.8_f64
-        } else if loops_per_minute >= 5.0_f64 {
-            0.6_f64
-        } else if loops_per_minute >= 2.0_f64 {
-            0.4_f64
-        } else {
-            0.2_f64
-        };
+        let loop_score =
+            if loops_per_minute >= crate::constants::LOOP_INTENT_FREQ_SCORE_VHIGH_THRESHOLD {
+                crate::constants::LOOP_INTENT_FREQ_SCORE_VHIGH
+            } else if loops_per_minute >= crate::constants::LOOP_INTENT_FREQ_SCORE_HIGH_THRESHOLD {
+                crate::constants::LOOP_INTENT_FREQ_SCORE_HIGH
+            } else if loops_per_minute >= crate::constants::LOOP_INTENT_FREQ_SCORE_MED_THRESHOLD {
+                crate::constants::LOOP_INTENT_FREQ_SCORE_MED
+            } else if loops_per_minute >= crate::constants::LOOP_INTENT_FREQ_SCORE_LOW_THRESHOLD {
+                crate::constants::LOOP_INTENT_FREQ_SCORE_LOW
+            } else {
+                crate::constants::LOOP_INTENT_FREQ_SCORE_DEFAULT
+            };
 
-        let density_adj = if frame_density < 1.2_f64 {
-            -0.35_f64
-        } else if frame_density < 3.0_f64 {
-            -0.20_f64
-        } else if frame_density < 6.0_f64 {
-            -0.08_f64
+        let density_adj = if frame_density < crate::constants::LOOP_INTENT_DENSITY_LOW_THRESHOLD {
+            crate::constants::LOOP_INTENT_DENSITY_LOW_ADJ
+        } else if frame_density < crate::constants::LOOP_INTENT_DENSITY_MED_THRESHOLD {
+            crate::constants::LOOP_INTENT_DENSITY_MED_ADJ
+        } else if frame_density < crate::constants::LOOP_INTENT_DENSITY_HIGH_THRESHOLD {
+            crate::constants::LOOP_INTENT_DENSITY_HIGH_ADJ
         } else {
             0.0_f64
         };
@@ -3188,7 +3409,7 @@ pub fn score_loop_frequency(duration_secs: Option<f64>, frame_count: Option<u64>
         let combined_score: f64 = loop_score + density_adj;
         combined_score.clamp(0.0_f64, 1.0_f64)
     } else {
-        0.5
+        crate::constants::LOOP_INTENT_FREQ_SCORE_NULL
     }
 }
 
@@ -3201,14 +3422,21 @@ pub fn score_sparse_cadence(duration_secs: Option<f64>, frame_count: Option<u64>
         let frame_density = crate::numeric_cast::u64_to_f64(fc) / dur;
         let avg_gap = dur / crate::numeric_cast::u64_to_f64(fc);
 
-        if dur <= crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH && frame_density >= 12.0_f64 {
-            return 0.98;
+        if dur <= crate::constants::LOOP_INTENT_SHORT_ANIMATION_DURATION_LIMIT
+            && frame_density >= crate::constants::LOOP_INTENT_SPARSE_CADENCE_DENSITY_THRESHOLD
+        {
+            return crate::constants::LOOP_INTENT_SPARSE_CADENCE_SHORT_SCORE;
         }
-        if dur >= crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH && avg_gap >= 0.25_f64 {
-            return 0.92;
+        if dur >= crate::constants::LOOP_INTENT_SHORT_ANIMATION_DURATION_LIMIT
+            && avg_gap >= crate::constants::LOOP_INTENT_SPARSE_CADENCE_GAP_THRESHOLD
+        {
+            return crate::constants::LOOP_INTENT_SPARSE_CADENCE_GAP_SCORE;
         }
-        if dur >= 4.0_f64 && fc <= 12 && avg_gap >= crate::constants::LOOP_INTENT_NEUTRAL_PROB {
-            return 0.95;
+        if dur >= crate::constants::LOOP_INTENT_SPARSE_CADENCE_LONG_DUR
+            && fc <= crate::constants::LOOP_INTENT_SPARSE_CADENCE_LONG_FC
+            && avg_gap >= crate::constants::LOOP_INTENT_NEUTRAL_PROB
+        {
+            return crate::constants::LOOP_INTENT_SPARSE_CADENCE_LONG_SCORE;
         }
     }
 
@@ -3237,29 +3465,52 @@ fn calculate_micro_nudges(meta: &LoopMeta) -> AuxiliaryNudge {
     let mut nudge = AuxiliaryNudge::default();
 
     // ── Tier 1: Zero-Cost Metadata ──
-    if meta.width > 0 && meta.height > 0 {
-        if meta.width == meta.height {
-            nudge.apply(0.05, "1:1 aspect ratio");
-        } else if ((f64::from(meta.width) / f64::from(meta.height)) - 1.777).abs() < 0.05_f64 {
-            nudge.apply(-0.05, "16:9 cinematic ratio");
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && w > 0
+        && h > 0
+    {
+        if w == h {
+            nudge.apply(
+                crate::constants::LOOP_INTENT_NUDGE_ASPECT_1_1,
+                "1:1 aspect ratio",
+            );
+        } else if ((f64::from(w) / f64::from(h)) - 1.777).abs() < 0.05_f64 {
+            nudge.apply(
+                crate::constants::LOOP_INTENT_NUDGE_ASPECT_16_9,
+                "16:9 cinematic ratio",
+            );
         }
     }
 
-    if (meta.width * meta.height) > (1920 * 1080) {
-        nudge.apply(-0.08, "4K+ resolution");
+    if let (Some(w), Some(h)) = (meta.width, meta.height)
+        && u64::from(w) * u64::from(h) > 1920 * 1080
+    {
+        nudge.apply(
+            crate::constants::LOOP_INTENT_NUDGE_RESOLUTION_4K,
+            "4K+ resolution",
+        );
     }
 
     // ── Tier 2: Low-Cost Bitstream ──
     if detect_scene_cut(&meta.pkt_sizes) {
-        nudge.apply(-0.08, "Scene cut detected");
+        nudge.apply(
+            crate::constants::LOOP_INTENT_NUDGE_SCENE_CUT,
+            "Scene cut detected",
+        );
     }
 
     if detect_localized_motion(&meta.mv_magnitudes) {
-        nudge.apply(0.05, "Localized motion");
+        nudge.apply(
+            crate::constants::LOOP_INTENT_NUDGE_LOCALIZED_MOTION,
+            "Localized motion",
+        );
     }
 
-    // Clamp total nudge to [-0.15, +0.15]
-    nudge.score = nudge.score.clamp(-0.15, 0.15);
+    // Clamp total nudge to limit
+    nudge.score = nudge.score.clamp(
+        -crate::constants::LOOP_INTENT_NUDGE_CLAMP,
+        crate::constants::LOOP_INTENT_NUDGE_CLAMP,
+    );
     nudge
 }
 
@@ -3272,7 +3523,7 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     }
     let inner = pkt_sizes
         .get(1..pkt_sizes.len().saturating_sub(1))
-        .expect("Required byte slice missing (out of bounds)");
+        .expect("len() >= 5 guarantees 1..len-1 is a valid sub-slice");
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
     let median = baseline
@@ -3284,15 +3535,16 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
         return false;
     }
 
-    inner
-        .iter()
-        .any(|&size| crate::numeric_cast::u64_to_f64(size) > median * 5.0_f64)
+    inner.iter().any(|&size| {
+        crate::numeric_cast::u64_to_f64(size)
+            > median * crate::constants::LOOP_INTENT_SCENE_CUT_RATIO
+    })
 }
 
 /// Detect localized motion (high concentration of motion in small area).
 /// Returns true if motion vectors suggest synthetic/sticker content.
 fn detect_localized_motion(mvs: &[f64]) -> bool {
-    mvs.len() >= 10 && zero_motion_ratio(mvs) > 0.7
+    mvs.len() >= 10 && zero_motion_ratio(mvs) > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO
 }
 
 /// Extract first frame from video to temporary `PNG` for analysis.
@@ -3340,11 +3592,14 @@ fn detect_heavy_letterboxing_from_image(img: &image::DynamicImage) -> bool {
     if h < 100 {
         return false;
     }
-    let top_band = crate::numeric_cast::f64_to_u32_sat(f64::from(h) * 0.15);
+    let top_band = crate::numeric_cast::f64_to_u32_sat(
+        f64::from(h) * crate::constants::LOOP_INTENT_LETTERBOX_THRESHOLD,
+    );
     let bottom_start = h - top_band;
     let top_var = calculate_band_variance(img, 0, top_band);
     let bottom_var = calculate_band_variance(img, bottom_start, h);
-    top_var < 100.0 && bottom_var < 100.0
+    top_var < crate::constants::LOOP_INTENT_VARIANCE_THRESHOLD
+        && bottom_var < crate::constants::LOOP_INTENT_VARIANCE_THRESHOLD
 }
 
 /// Calculate pixel variance in a horizontal band.
@@ -3357,8 +3612,11 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
         for x in 0..w.min(img.width()) {
             let pixel = img.get_pixel(x, y);
             let gray = f64::from(pixel[2]).mul_add(
-                0.114,
-                f64::from(pixel[0]).mul_add(0.299, f64::from(pixel[1]) * 0.587),
+                crate::constants::LUMA_COEFF_B_F64,
+                f64::from(pixel[0]).mul_add(
+                    crate::constants::LUMA_COEFF_R_F64,
+                    f64::from(pixel[1]) * crate::constants::LUMA_COEFF_G_F64,
+                ),
             );
             values.push(gray);
         }
@@ -3396,7 +3654,7 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
     }
 
     let edge_ratio = crate::numeric_cast::usize_to_f64(edge_count) / total_pixels;
-    edge_ratio > 0.15
+    edge_ratio > crate::constants::LOOP_INTENT_LETTERBOX_THRESHOLD
 }
 
 // ── Unit Tests ────────────────────────────────────────────────────────────────
@@ -3528,17 +3786,17 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
             let r = chunk
                 .first()
                 .copied()
-                .expect("Failed to parse integer or missing required value")
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse red channel"))?
                 >> 3_i32;
             let g = chunk
                 .get(1)
                 .copied()
-                .expect("Failed to parse integer or missing required value")
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse green channel"))?
                 >> 3_i32;
             let b = chunk
                 .get(2)
                 .copied()
-                .expect("Failed to parse integer or missing required value")
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse blue channel"))?
                 >> 3_i32;
             quantized.insert((r, g, b));
         }
@@ -3594,8 +3852,9 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
     let lag = n / 2;
     let autocorr: f64 = (0..n.saturating_sub(lag))
         .map(|i| {
-            let v1 = vals.get(i).copied().unwrap_or(mean);
-            let v2 = vals.get(i + lag).copied().unwrap_or(mean);
+            // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+            let v1 = vals[i];
+            let v2 = vals[i + lag];
             (v1 - mean) * (v2 - mean)
         })
         .sum::<f64>()
@@ -3630,8 +3889,9 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         .map(|&lag| {
             let r: f64 = (0..n.saturating_sub(lag))
                 .map(|i| {
-                    let v1 = mv_magnitudes.get(i).copied().unwrap_or(mean);
-                    let v2 = mv_magnitudes.get(i + lag).copied().unwrap_or(mean);
+                    // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+                    let v1 = mv_magnitudes[i];
+                    let v2 = mv_magnitudes[i + lag];
                     (v1 - mean) * (v2 - mean)
                 })
                 .sum::<f64>()
@@ -3667,8 +3927,9 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     // A looping animation has consistent, self-similar inter-frame timing.
     let lag1: f64 = (0..n.saturating_sub(1))
         .map(|i| {
-            let v1 = pts_deltas.get(i).copied().unwrap_or(mean);
-            let v2 = pts_deltas.get(i + 1).copied().unwrap_or(mean);
+            // i < n-1, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+            let v1 = pts_deltas[i];
+            let v2 = pts_deltas[i + 1];
             (v1 - mean) * (v2 - mean)
         })
         .sum::<f64>()
@@ -3749,8 +4010,8 @@ mod tests {
     fn base_meta() -> LoopMeta {
         LoopMeta {
             duration_secs: Some(7.9),
-            width: 640,
-            height: 640,
+            width: Some(640),
+            height: Some(640),
             fps: Some(12.0),
             frame_count: Some(96),
             file_size_bytes: 1_200_000,
@@ -3814,8 +4075,8 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         meta.duration_secs = Some(2.0_f64);
-        meta.width = 3840;
-        meta.height = 2160;
+        meta.width = Some(3840);
+        meta.height = Some(2160);
         meta.fps = Some(60.0_f64);
         meta.file_size_bytes = 30_000_000;
 
@@ -3838,8 +4099,8 @@ mod tests {
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288); // 24fps × 12s
         // Make this look like a real video: widescreen, large file, scene cuts
-        meta.width = 1920;
-        meta.height = 1080;
+        meta.width = Some(1920);
+        meta.height = Some(1080);
         meta.file_size_bytes = 8_000_000;
         meta.pkt_sizes = vec![120, 130, 1400, 150, 120, 125]; // scene cut signature
         // Remove all pro-loop signals
@@ -3882,8 +4143,8 @@ mod tests {
         meta.is_native_gif = true;
         meta.has_audio = false;
         meta.duration_secs = Some(4.0_f64);
-        meta.width = 150;
-        meta.height = 108;
+        meta.width = Some(150);
+        meta.height = Some(108);
         meta.frame_count = Some(40);
         meta.file_size_bytes = 24_000;
 
@@ -3905,8 +4166,8 @@ mod tests {
         meta.is_native_gif = true;
         meta.has_audio = false;
         meta.duration_secs = Some(4.0_f64);
-        meta.width = 500;
-        meta.height = 500;
+        meta.width = Some(500);
+        meta.height = Some(500);
         meta.frame_count = Some(40);
         meta.file_size_bytes = 400_000;
 
@@ -3928,8 +4189,8 @@ mod tests {
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288);
         // Make this look like a real video: widescreen, large file
-        meta.width = 1920;
-        meta.height = 1080;
+        meta.width = Some(1920);
+        meta.height = Some(1080);
         meta.file_size_bytes = 8_000_000;
         meta.pkt_sizes = vec![120, 130, 1400, 150, 120, 125]; // scene cut signature
         // Remove all pro-loop signals
@@ -3991,8 +4252,8 @@ mod tests {
         meta.duration_secs = Some(4.0_f64);
         meta.fps = Some(24.0_f64);
         meta.frame_count = Some(96);
-        meta.width = 320;
-        meta.height = 320;
+        meta.width = Some(320);
+        meta.height = Some(320);
         meta.file_size_bytes = 240_000;
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -4013,8 +4274,8 @@ mod tests {
         meta.fps = Some(4.0_f64);
         meta.frame_count = Some(112);
         meta.file_size_bytes = 12_000_000;
-        meta.width = 1920;
-        meta.height = 1080;
+        meta.width = Some(1920);
+        meta.height = Some(1080);
         meta.pkt_sizes = vec![120, 130, 1400, 150, 120, 125];
         meta.webp_compression_ratio = Some(3.0_f64);
         meta.motion_gini = Some(0.18_f64);
@@ -4119,8 +4380,8 @@ mod tests {
     fn legacy_meme_profile_resolves_without_layer7_fallback() {
         let meta = LoopMeta {
             duration_secs: Some(3.5),
-            width: 640,
-            height: 360,
+            width: Some(640),
+            height: Some(360),
             fps: Some(24.0),
             frame_count: Some(84),
             file_size_bytes: 2_000_000,
@@ -4144,8 +4405,8 @@ mod tests {
     fn legacy_silent_technical_profile_resolves_without_layer7_fallback() {
         let meta = LoopMeta {
             duration_secs: Some(8.5),
-            width: 1280,
-            height: 720,
+            width: Some(1280),
+            height: Some(720),
             fps: Some(30.0),
             frame_count: Some(255),
             file_size_bytes: 8_000_000,

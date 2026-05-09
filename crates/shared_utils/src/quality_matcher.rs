@@ -98,7 +98,7 @@ impl SourceCodec {
             | Self::Lagarith
             | Self::MagicYuv
             | Self::Jpeg
-            | Self::Unknown => 1.0,
+            | Self::Unknown => crate::constants::EFF_RATIO_H264,
         }
     }
 
@@ -201,29 +201,19 @@ impl SourceCodec {
     /// Complete list of all supported image extensions.
     #[must_use]
     pub const fn supported_image_extensions() -> &'static [&'static str] {
-        &[
-            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif",
-            "avif", "bmp", "ico", "svg", "jp2", "j2k", "jxl",
-        ]
+        crate::constants::IMAGE_EXTENSIONS
     }
 
     /// Image extensions that should be collected for conversion (excludes JXL/AVIF/HEIC depending on tool).
     #[must_use]
     pub const fn image_extensions_for_convert() -> &'static [&'static str] {
-        &[
-            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif",
-            "avif", "bmp", "ico", "svg", "jp2", "j2k", "jxl",
-        ]
+        crate::constants::IMAGE_EXTENSIONS
     }
 
     /// Video extensions supported by the pipeline.
     #[must_use]
     pub const fn supported_video_extensions() -> &'static [&'static str] {
-        &[
-            "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
-            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic",
-            "heif", "apng", "png", "jxl",
-        ]
+        crate::constants::VIDEO_EXTENSIONS
     }
 
     /// Returns the canonical/default file extension for this codec.
@@ -346,7 +336,7 @@ impl SourceCodec {
             && n >= 12
             && header.get(8..12) == Some(b"WEBP")
         {
-            const SCAN_LIMIT: usize = 1024 * 1024; // 1 MiB cap (safe & fast)
+            const SCAN_LIMIT: usize = crate::constants::QUALITY_MATCHER_SCAN_LIMIT;
             let mut buf = Vec::with_capacity(SCAN_LIMIT);
             buf.extend_from_slice(header_slice);
 
@@ -624,11 +614,11 @@ impl ContentType {
     #[must_use]
     pub const fn crf_adjustment(&self) -> i8 {
         match self {
-            Self::Animation => 4,
-            Self::ScreenRecording => 5,
+            Self::Animation => crate::constants::QUALITY_MATCHER_CRF_ADJ_ANIMATION,
+            Self::ScreenRecording => crate::constants::QUALITY_MATCHER_CRF_ADJ_SCREEN,
             Self::LiveAction | Self::Unknown => 0,
-            Self::Gaming => -1,
-            Self::FilmGrain => -3,
+            Self::Gaming => crate::constants::QUALITY_MATCHER_CRF_ADJ_GAMING,
+            Self::FilmGrain => crate::constants::QUALITY_MATCHER_CRF_ADJ_GRAIN,
         }
     }
 }
@@ -743,16 +733,16 @@ impl Default for AnalysisDetails {
 }
 
 /// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF is still clamped to [0, 51] for maximum flexibility.
-const SAFE_BPP_MIN: f64 = 1e-6;
-const SAFE_BPP_MAX: f64 = 50.0;
+const SAFE_BPP_MIN: f64 = crate::constants::SAFE_BPP_MIN;
+const SAFE_BPP_MAX: f64 = crate::constants::SAFE_BPP_MAX;
 
 /// AV1 CRF output range; final clamp is the last line of defense for extreme BPP or content/bias adjustments.
-const AV1_CRF_CLAMP_MIN: f32 = 0.0;
-const AV1_CRF_CLAMP_MAX: f32 = 51.0;
+const AV1_CRF_CLAMP_MIN: f32 = crate::constants::AV1_CRF_CLAMP_MIN;
+const AV1_CRF_CLAMP_MAX: f32 = crate::constants::AV1_CRF_CLAMP_MAX;
 
 /// HEVC CRF output range (x265 0–51, we use 0–51 to allow full range in ultimate mode).
-const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
-const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
+const HEVC_CRF_CLAMP_MIN: f32 = crate::constants::HEVC_CRF_CLAMP_MIN;
+const HEVC_CRF_CLAMP_MAX: f32 = crate::constants::HEVC_CRF_CLAMP_MAX;
 
 /// Calculate AV1 CRF.
 ///
@@ -775,9 +765,10 @@ pub fn calculate_av1_crf_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Av1, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
-        let conf_str = details
-            .confidence
-            .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let conf_str = details.confidence.map_or_else(
+            || "N/A".to_string(),
+            |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+        );
         return Err(format!(
             "❌ Cannot calculate AV1 CRF: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -789,9 +780,10 @@ pub fn calculate_av1_crf_with_options(
         ));
     }
     if !effective_bpp.is_finite() {
-        let conf_str = details
-            .confidence
-            .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let conf_str = details.confidence.map_or_else(
+            || "N/A".to_string(),
+            |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+        );
         return Err(format!(
             "❌ Cannot calculate AV1 CRF: effective_bpp is non-finite (NaN/Inf)\n\
              💡 Confidence: {conf_str}"
@@ -801,18 +793,22 @@ pub fn calculate_av1_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < crate::constants::BPP_LOW_GATE_HEVC {
-        crate::constants::CRF_EST_H26X_MAX.min(crate::constants::CRF_EST_H26X_SLOPE.mul_add(
-            -(effective_bpp * 100.0).max(0.001).log2(),
-            crate::constants::CRF_EST_H26X_INTERCEPT,
-        ))
-    } else if effective_bpp > 2.0_f64 {
+        crate::constants::CRF_EST_H26X_MAX.min(
+            crate::constants::CRF_EST_H26X_SLOPE.mul_add(
+                -(effective_bpp * crate::constants::PERCENTAGE_FACTOR)
+                    .max(crate::constants::LOG2_SAFETY_FLOOR)
+                    .log2(),
+                crate::constants::CRF_EST_H26X_INTERCEPT,
+            ),
+        )
+    } else if effective_bpp > crate::constants::BPP_UPPER_CAP {
         crate::constants::CRF_EST_H26X_MIN.max(crate::constants::CRF_EST_H26X_SLOPE.mul_add(
-            -(effective_bpp * 100.0).log2(),
+            -(effective_bpp * crate::constants::PERCENTAGE_FACTOR).log2(),
             crate::constants::CRF_EST_H26X_INTERCEPT,
         ))
     } else {
         crate::constants::CRF_EST_H26X_SLOPE.mul_add(
-            -(effective_bpp * 100.0).log2(),
+            -(effective_bpp * crate::constants::PERCENTAGE_FACTOR).log2(),
             crate::constants::CRF_EST_H26X_INTERCEPT,
         )
     };
@@ -860,9 +856,10 @@ pub fn calculate_hevc_crf_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Hevc, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
-        let conf_str = details
-            .confidence
-            .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let conf_str = details.confidence.map_or_else(
+            || "N/A".to_string(),
+            |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+        );
         return Err(format!(
             "❌ Cannot calculate HEVC CRF: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -874,9 +871,10 @@ pub fn calculate_hevc_crf_with_options(
         ));
     }
     if !effective_bpp.is_finite() {
-        let conf_str = details
-            .confidence
-            .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let conf_str = details.confidence.map_or_else(
+            || "N/A".to_string(),
+            |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+        );
         return Err(format!(
             "❌ Cannot calculate HEVC CRF: effective_bpp is non-finite (NaN/Inf)\n\
              💡 Confidence: {conf_str}"
@@ -885,18 +883,22 @@ pub fn calculate_hevc_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < crate::constants::BPP_LOW_GATE_AV1 {
-        crate::constants::CRF_EST_AV1_MAX.min(crate::constants::CRF_EST_AV1_SLOPE.mul_add(
-            -(effective_bpp * 100.0).max(0.001).log2(),
-            crate::constants::CRF_EST_AV1_INTERCEPT,
-        ))
-    } else if effective_bpp > 2.0_f64 {
+        crate::constants::CRF_EST_AV1_MAX.min(
+            crate::constants::CRF_EST_AV1_SLOPE.mul_add(
+                -(effective_bpp * crate::constants::PERCENTAGE_FACTOR)
+                    .max(crate::constants::LOG2_SAFETY_FLOOR)
+                    .log2(),
+                crate::constants::CRF_EST_AV1_INTERCEPT,
+            ),
+        )
+    } else if effective_bpp > crate::constants::BPP_UPPER_CAP {
         crate::constants::CRF_EST_AV1_MIN.max(crate::constants::CRF_EST_AV1_SLOPE.mul_add(
-            -(effective_bpp * 100.0).log2(),
+            -(effective_bpp * crate::constants::PERCENTAGE_FACTOR).log2(),
             crate::constants::CRF_EST_AV1_INTERCEPT,
         ))
     } else {
         crate::constants::CRF_EST_AV1_SLOPE.mul_add(
-            -(effective_bpp * 100.0).log2(),
+            -(effective_bpp * crate::constants::PERCENTAGE_FACTOR).log2(),
             crate::constants::CRF_EST_AV1_INTERCEPT,
         )
     };
@@ -941,7 +943,9 @@ pub fn calculate_jxl_distance_with_options(
 ) -> Result<MatchedQuality, String> {
     if let Some(quality) = analysis.estimated_quality {
         let base_distance =
-            (100.0 - f32::from(quality)) / crate::constants::JXL_QUALITY_MAP_DIVISOR;
+            (crate::numeric_cast::f64_to_f32_lossy(crate::constants::PERCENTAGE_FACTOR)
+                - f32::from(quality))
+                / crate::constants::JXL_QUALITY_MAP_DIVISOR;
 
         let biased_distance = match bias {
             QualityBias::Conservative => {
@@ -975,9 +979,10 @@ pub fn calculate_jxl_distance_with_options(
         calculate_effective_bpp_with_options(analysis, EncoderType::Jxl, mode, bias)?;
 
     if effective_bpp <= 0.0_f64 {
-        let conf_str = details
-            .confidence
-            .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let conf_str = details.confidence.map_or_else(
+            || "N/A".to_string(),
+            |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+        );
         return Err(format!(
             "❌ Cannot calculate JXL distance: effective_bpp is {effective_bpp} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -990,14 +995,15 @@ pub fn calculate_jxl_distance_with_options(
 
     let estimated_quality = crate::constants::JXL_QUAL_EST_SLOPE.mul_add(
         (effective_bpp * crate::constants::JXL_QUAL_EST_BPP_SCALE)
-            .max(0.001)
+            .max(crate::constants::LOG2_SAFETY_FLOOR)
             .log2(),
         crate::constants::JXL_QUAL_EST_INTERCEPT,
     );
 
-    let clamped_quality = estimated_quality.clamp(50.0, 100.0);
+    let clamped_quality = estimated_quality.clamp(50.0, crate::constants::PERCENTAGE_FACTOR);
     let base_distance = crate::numeric_cast::f64_to_f32_lossy(
-        (100.0 - clamped_quality) / f64::from(crate::constants::JXL_QUALITY_MAP_DIVISOR),
+        (crate::constants::PERCENTAGE_FACTOR - clamped_quality)
+            / f64::from(crate::constants::JXL_QUALITY_MAP_DIVISOR),
     );
 
     let content_adj =
@@ -1065,7 +1071,11 @@ pub fn calculate_effective_bpp_with_options(
 
     let resolution_factor = calculate_resolution_factor(pixels);
 
-    let alpha_factor = if analysis.has_alpha { 0.9_f64 } else { 1.0_f64 };
+    let alpha_factor = if analysis.has_alpha {
+        crate::constants::ALPHA_FACTOR_TRUE
+    } else {
+        1.0_f64
+    };
 
     let color_depth_factor = calculate_color_depth_factor(analysis.bit_depth, source_codec);
 
@@ -1079,21 +1089,21 @@ pub fn calculate_effective_bpp_with_options(
     );
 
     let grain_factor = if analysis.has_film_grain == Some(true) {
-        1.20_f64
+        crate::constants::GRAIN_FACTOR_TRUE
     } else {
         1.0_f64
     };
 
     let target_adjustment = match target_encoder {
-        EncoderType::Av1 => 0.5_f64,
-        EncoderType::Hevc => 0.7_f64,
-        EncoderType::Jxl => 0.8_f64,
+        EncoderType::Av1 => crate::constants::TARGET_ENCODER_AV1_FACTOR,
+        EncoderType::Hevc => crate::constants::TARGET_ENCODER_HEVC_FACTOR,
+        EncoderType::Jxl => crate::constants::TARGET_ENCODER_JXL_FACTOR,
     };
 
     let mode_adjustment = match mode {
-        MatchMode::Quality => 1.0_f64,
-        MatchMode::Size => 0.8_f64,
-        MatchMode::Speed => 0.9_f64,
+        MatchMode::Quality => crate::constants::MATCH_MODE_QUALITY_FACTOR,
+        MatchMode::Size => crate::constants::MATCH_MODE_SIZE_FACTOR,
+        MatchMode::Speed => crate::constants::MATCH_MODE_SPEED_FACTOR,
     };
 
     let effective_bpp = {
@@ -1226,9 +1236,10 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
             }
             #[cfg(not(feature = "high-precision"))]
             {
-                let bits_per_frame = (crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0)
+                let bits_per_frame = (crate::numeric_cast::u64_to_f64(analysis.file_size)
+                    * crate::constants::BITS_PER_BYTE)
                     / crate::numeric_cast::u64_to_f64(total_frames);
-                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
+                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(total_frames));
             }
         }
 
@@ -1249,7 +1260,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         }
         #[cfg(not(feature = "high-precision"))]
         {
-            return Ok((crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0)
+            return Ok((crate::numeric_cast::u64_to_f64(analysis.file_size)
+                * crate::constants::BITS_PER_BYTE)
                 / crate::numeric_cast::u64_to_f64(pixels));
         }
     }
@@ -1285,11 +1297,11 @@ fn calculate_chroma_factor(pix_fmt: Option<&str>) -> f64 {
     pix_fmt.map_or(1.0, |fmt| {
         let fmt_lower = fmt.to_lowercase();
         if fmt_lower.contains("444") {
-            1.15_f64
+            crate::constants::CHROMA_FACTOR_YUV444
         } else if fmt_lower.contains("422") {
-            1.05_f64
+            crate::constants::CHROMA_FACTOR_YUV422
         } else if fmt_lower.contains("rgb") || fmt_lower.contains("gbr") {
-            1.20_f64
+            crate::constants::CHROMA_FACTOR_RGB
         } else {
             1.0_f64
         }
@@ -1298,13 +1310,13 @@ fn calculate_chroma_factor(pix_fmt: Option<&str>) -> f64 {
 
 fn calculate_hdr_factor(is_hdr: Option<bool>, color_space: Option<&str>) -> f64 {
     if is_hdr == Some(true) {
-        return 1.25;
+        return crate::constants::HDR_ADJUSTMENT_FACTOR;
     }
 
     if let Some(cs) = color_space {
         let cs_lower = cs.to_lowercase();
         if cs_lower.contains("bt2020") || cs_lower.contains("2020") {
-            return 1.15;
+            return crate::constants::BT2020_ADJUSTMENT_FACTOR;
         }
     }
 
@@ -1347,7 +1359,7 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 }
 
 fn calculate_resolution_factor(pixels: u64) -> f64 {
-    let megapixels = crate::numeric_cast::u64_to_f64(pixels) / 1_000_000.0_f64;
+    let megapixels = crate::numeric_cast::u64_to_f64(pixels) / crate::constants::MEGAPIXEL_FACTOR;
     if megapixels > crate::constants::RES_FACTOR_THRESHOLD_ULTRA_HD {
         crate::constants::RES_FACTOR_SLOPE.mul_add(
             (crate::constants::RES_FACTOR_THRESHOLD_ULTRA_HD / megapixels).min(1.0),
@@ -1402,21 +1414,21 @@ fn calculate_aspect_factor(width: u32, height: u32) -> f64 {
 
 fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, pixels: u64) -> f64 {
     if let (Some(si_val), Some(temporal)) = (si, ti) {
-        let si_ratio = si_val / 50.0_f64;
-        let ti_ratio = temporal / 20.0_f64;
+        let si_ratio = si_val / crate::constants::SI_DIVISOR;
+        let ti_ratio = temporal / crate::constants::TI_DIVISOR;
 
-        let spatial_factor = if si_ratio > 1.3_f64 {
-            1.15_f64
-        } else if si_ratio < 0.7_f64 {
-            0.85_f64
+        let spatial_factor = if si_ratio > crate::constants::SI_RATIO_HIGH_THRESHOLD {
+            crate::constants::SI_FACTOR_HIGH
+        } else if si_ratio < crate::constants::SI_RATIO_LOW_THRESHOLD {
+            crate::constants::SI_FACTOR_LOW
         } else {
             1.0_f64
         };
 
-        let temporal_factor = if ti_ratio > 1.5_f64 {
-            1.10_f64
-        } else if ti_ratio < 0.5_f64 {
-            0.90_f64
+        let temporal_factor = if ti_ratio > crate::constants::TI_RATIO_HIGH_THRESHOLD {
+            crate::constants::TI_FACTOR_HIGH
+        } else if ti_ratio < crate::constants::TI_RATIO_LOW_THRESHOLD {
+            crate::constants::TI_FACTOR_LOW
         } else {
             1.0_f64
         };
@@ -1534,7 +1546,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs)
         && fps > 0.0_f64
         && duration > 0.0_f64
-        && (1.0_f64..=240.0_f64).contains(&fps)
+        && (crate::constants::CONF_FPS_MIN..=crate::constants::CONF_FPS_MAX).contains(&fps)
     {
         score += crate::constants::MATCHER_SCORE_BITRATE_WEIGHT;
         max_score += crate::constants::MATCHER_SCORE_BITRATE_WEIGHT;
@@ -1546,7 +1558,9 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
             // Use u64 throughout to prevent saturation at 4 Gbps (u32::MAX = ~4.3 Gbps)
             let bpp_estimate = crate::numeric_cast::u64_to_f64(video_bitrate)
                 / (crate::numeric_cast::u64_to_f64(pixels) * fps);
-            if (0.01_f64..=5.0_f64).contains(&bpp_estimate) {
+            if (crate::constants::CONF_BPP_MIN..=crate::constants::CONF_BPP_MAX)
+                .contains(&bpp_estimate)
+            {
                 score += crate::constants::MATCHER_SCORE_BITRATE_WEIGHT;
                 max_score += crate::constants::MATCHER_SCORE_BITRATE_WEIGHT;
             }
@@ -1557,37 +1571,46 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
 }
 
 fn parse_modern_codecs(codec_lower: &str) -> Option<SourceCodec> {
-    if codec_lower.contains("vvc") || codec_lower.contains("h266") || codec_lower.contains("h.266")
+    if crate::constants::SIG_VVC
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::Vvc);
     }
-    if codec_lower.contains("av2") || codec_lower.contains("avm") {
+    if crate::constants::SIG_AV2
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+    {
         return Some(SourceCodec::Av2);
     }
-    if codec_lower.contains("av1")
-        || codec_lower.contains("svt")
-        || codec_lower.contains("aom")
-        || codec_lower.contains("libaom")
+    if crate::constants::SIG_AV1
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::Av1);
     }
-    if codec_lower.contains("h265")
-        || codec_lower.contains("hevc")
-        || codec_lower.contains("x265")
-        || codec_lower.contains("h.265")
+    if crate::constants::SIG_HEVC
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::H265);
     }
-    if codec_lower.contains("vp9") {
+    if crate::constants::SIG_VP9
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+    {
         return Some(SourceCodec::Vp9);
     }
-    if codec_lower.contains("vp8") || codec_lower == "libvpx" {
+    if crate::constants::SIG_VP8
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+        || codec_lower == "libvpx"
+    {
         return Some(SourceCodec::Vp8);
     }
-    if codec_lower.contains("h264")
-        || codec_lower.contains("avc")
-        || codec_lower.contains("x264")
-        || codec_lower.contains("h.264")
+    if crate::constants::SIG_H264
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::H264);
     }
@@ -1595,34 +1618,47 @@ fn parse_modern_codecs(codec_lower: &str) -> Option<SourceCodec> {
 }
 
 fn parse_legacy_codecs(codec_lower: &str) -> Option<SourceCodec> {
-    if codec_lower.contains("mpeg4")
-        || codec_lower.contains("xvid")
-        || codec_lower.contains("divx")
-        || codec_lower.contains("mp4v")
+    if crate::constants::SIG_MPEG4
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::Mpeg4);
     }
-    if codec_lower.contains("mpeg2") || codec_lower == "mpeg2video" {
+    if crate::constants::SIG_MPEG2
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+        || codec_lower == "mpeg2video"
+    {
         return Some(SourceCodec::Mpeg2);
     }
-    if codec_lower.contains("mpeg1") || codec_lower == "mpeg1video" {
+    if crate::constants::SIG_MPEG1
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+        || codec_lower == "mpeg1video"
+    {
         return Some(SourceCodec::Mpeg1);
     }
-    if codec_lower.contains("wmv") || codec_lower.contains("vc1") || codec_lower.contains("vc-1") {
+    if crate::constants::SIG_WMV
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+    {
         return Some(SourceCodec::Wmv);
     }
-    if codec_lower.contains("theora") {
+    if crate::constants::SIG_THEORA
+        .iter()
+        .any(|&s| codec_lower.contains(s))
+    {
         return Some(SourceCodec::Theora);
     }
-    if codec_lower.contains("rv10")
-        || codec_lower.contains("rv20")
-        || codec_lower.contains("rv30")
-        || codec_lower.contains("rv40")
-        || codec_lower.contains("realvideo")
+    if crate::constants::SIG_REALVIDEO
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::RealVideo);
     }
-    if codec_lower.contains("flv") || codec_lower.contains("vp6") || codec_lower.contains("flashsv")
+    if crate::constants::SIG_FLASH
+        .iter()
+        .any(|&s| codec_lower.contains(s))
     {
         return Some(SourceCodec::FlashVideo);
     }
@@ -1727,9 +1763,10 @@ fn log_analysis_header(encoder_name: &str, d: &AnalysisDetails) {
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
     );
-    let conf_str = d
-        .confidence
-        .map_or_else(|| "N/A".to_string(), |c| format!("{:.0}%", c * 100.0));
+    let conf_str = d.confidence.map_or_else(
+        || "N/A".to_string(),
+        |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
+    );
     eprintln!("      Confidence: {conf_str}");
     eprintln!();
 }
@@ -2122,7 +2159,8 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
         return false;
     }
     request.total_file_compressed
-        || (request.allow_size_tolerance && request.total_size_ratio < 1.01)
+        || (request.allow_size_tolerance
+            && request.total_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
 }
 
 #[must_use]

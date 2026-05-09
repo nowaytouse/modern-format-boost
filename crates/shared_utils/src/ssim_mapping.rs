@@ -26,7 +26,7 @@ pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
     // The overestimate at lower PSNR is acceptable because this is only used as a
     // fallback when actual SSIM measurement fails; the important property is monotonicity
     // and separation between quality levels.
-    (1.0 - 10_f64.powf(-psnr_db / 10.0)).clamp(0.0, 0.99999)
+    (1.0 - 10_f64.powf(-psnr_db / 10.0)).clamp(0.0, crate::constants::SSIM_MAPPING_CLAMP_MAX)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +154,7 @@ impl PsnrSsimMapping {
     }
 
     pub fn update(&mut self, psnr: f64, actual_ssim: f64) {
-        const PSNR_TOLERANCE: f64 = 0.5;
+        const PSNR_TOLERANCE: f64 = crate::constants::SSIM_MAPPING_PSNR_TOLERANCE;
         if let Some(point) = self
             .points
             .iter_mut()

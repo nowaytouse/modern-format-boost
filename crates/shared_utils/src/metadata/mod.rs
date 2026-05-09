@@ -5,6 +5,7 @@
 //! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`,
 //! Avoids redundant implementations. `ExifTool` rewrites files, so timestamps are always set after write operations.
 
+use crate::builder_base::ToolBuilder;
 use std::io;
 use std::path::Path;
 

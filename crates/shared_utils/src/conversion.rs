@@ -25,9 +25,14 @@
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
 use crate::Rational;
+use crate::builder_base::ToolBuilder;
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::conversion_types::SelectedCodec;
+use crate::ffprobe::probe_video;
+use crate::metadata::preserve_metadata;
 use crate::modern_ui::{colors, symbols};
+use crate::quality_matcher::is_apple_native_format;
+use crate::smart_file_copier::copy_on_skip_or_fail;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -56,7 +61,7 @@ pub fn next_temp_output_suffix() -> String {
         .as_nanos();
     let pid = u128::from(std::process::id());
     let counter = u128::from(TEMP_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed));
-    let mut value = timestamp ^ (pid << 32u128) ^ counter;
+    let mut value = timestamp ^ (pid << crate::constants::PID_SHIFT_FOR_HASH) ^ counter;
     let mut suffix = [b'0'; 10];
 
     for slot in suffix.iter_mut().rev() {
@@ -157,7 +162,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let mut resolved = candidate;
-    let mut collision_index = 1usize;
+    let mut collision_index = crate::constants::COLLISION_INDEX_START;
 
     loop {
         let output_key = stable_path_key(&resolved);
@@ -329,7 +334,7 @@ pub struct VideoExplorationMetrics<'a> {
 impl VideoExplorationMetrics<'_> {
     #[must_use]
     pub fn format_message(&self, reduction_pct: f64) -> String {
-        let reduction = reduction_pct / 100.0_f64;
+        let reduction = reduction_pct / crate::constants::PERCENTAGE_FACTOR;
         let size_tag = if reduction >= 0.0_f64 {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
@@ -347,7 +352,7 @@ impl VideoExplorationMetrics<'_> {
         };
 
         let explored_msg = match self.explored_from_crf {
-            Some(from) if (self.crf - from).abs() > 0.1 => {
+            Some(from) if (self.crf - from).abs() > crate::constants::CRF_COMPARISON_EPSILON => {
                 format!(" (explored from CRF {from:.1})")
             }
             _ => String::new(),
@@ -681,7 +686,7 @@ impl ConversionResult {
             (1.0_f64
                 - (crate::numeric_cast::u64_to_f64(output_size)
                     / crate::numeric_cast::u64_to_f64(input_size)))
-                * 100.0_f64
+                * crate::constants::PERCENTAGE_FACTOR
         };
 
         Self {
@@ -716,7 +721,7 @@ impl ConversionResult {
                 - (crate::numeric_cast::u64_to_f64(output_size)
                     / crate::numeric_cast::u64_to_f64(input_size))
         };
-        let reduction_pct = reduction * 100.0_f64;
+        let reduction_pct = reduction * crate::constants::PERCENTAGE_FACTOR;
 
         // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
         let size_tag = if reduction >= 0.0_f64 {
@@ -785,7 +790,7 @@ impl ConversionResult {
             (1.0_f64
                 - (crate::numeric_cast::u64_to_f64(metrics.output_size)
                     / crate::numeric_cast::u64_to_f64(metrics.input_size)))
-                * 100.0_f64
+                * crate::constants::PERCENTAGE_FACTOR
         };
 
         let message = metrics.format_message(reduction_pct);
@@ -906,7 +911,7 @@ impl ConvertOptions {
             .and_then(|ext| ext.to_str())
             .map(str::to_lowercase)
             .unwrap_or_default();
-        crate::is_apple_native_format(&input_ext)
+        is_apple_native_format(&input_ext)
     }
 
     #[must_use]
@@ -1066,7 +1071,7 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     } else {
         (Rational::from(1) - (Rational::from(output_size) / Rational::from(input_size))).to_f64()
     };
-    let reduction_pct = reduction * 100.0_f64;
+    let reduction_pct = reduction * crate::constants::PERCENTAGE_FACTOR;
 
     if reduction >= 0.0 {
         format!("size reduced {reduction_pct:.1}%")
@@ -1157,7 +1162,7 @@ pub fn post_conversion_actions(
     output: &Path,
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
-    if let Err(e) = crate::preserve_metadata(input, output) {
+    if let Err(e) = preserve_metadata(input, output) {
         eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
 
@@ -1315,7 +1320,7 @@ pub fn commit_temp_to_output_with_metadata(
 /// Media info fallback chain that does NOT invoke ffprobe.
 ///
 /// Tries the `image` crate first, then `ImageMagick identify` with extended format strings
-/// to extract REAL metadata (width, height, channel_type, depth) directly from the bitstream.
+/// to extract REAL metadata (width, height, `channel_type`, depth) directly from the bitstream.
 /// This fulfills the "Zero-Forgery" mandate by using actual measured data.
 #[must_use]
 pub fn media_info_without_ffprobe(input: &Path) -> Option<(u32, u32, String, u8)> {
@@ -1356,7 +1361,8 @@ pub fn media_info_without_ffprobe(input: &Path) -> Option<(u32, u32, String, u8)
     }
 
     // Stage 2: Fast in-process image crate (as last resort, only for dimensions)
-    if let Ok(img) = image::ImageReader::open(input).and_then(|r| r.with_guessed_format())
+    if let Ok(img) =
+        image::ImageReader::open(input).and_then(image::ImageReader::with_guessed_format)
         && let Ok(dims) = img.into_dimensions()
     {
         let (w, h) = dims;
@@ -1370,7 +1376,7 @@ pub fn media_info_without_ffprobe(input: &Path) -> Option<(u32, u32, String, u8)
 }
 
 /// Dimension fallback chain that does NOT invoke ffprobe.
-/// (Maintained for backward compatibility, redirects to media_info_without_ffprobe)
+/// (Maintained for backward compatibility, redirects to `media_info_without_ffprobe`)
 #[must_use]
 pub fn dimensions_without_ffprobe(input: &Path) -> Option<(u32, u32)> {
     media_info_without_ffprobe(input).map(|(w, h, _, _)| (w, h))
@@ -1381,7 +1387,7 @@ pub fn dimensions_without_ffprobe(input: &Path) -> Option<(u32, u32)> {
 /// # Errors
 /// Returns an error message if every method fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
-    if let Ok(probe) = crate::probe_video(input)
+    if let Ok(probe) = probe_video(input)
         && probe.width > 0
         && probe.height > 0
     {
@@ -1660,7 +1666,7 @@ impl SizeToleranceCheck<'_> {
     }
 
     fn preserve_original(&self, failure: SizeGuardFailure) {
-        match crate::copy_on_skip_or_fail(
+        match copy_on_skip_or_fail(
             self.input,
             self.options.output_dir.as_deref(),
             self.options.base_dir.as_deref(),
@@ -1927,7 +1933,7 @@ mod tests {
             let expected_calc = (1.0_f64
                 - (crate::numeric_cast::u64_to_f64(output)
                     / crate::numeric_cast::u64_to_f64(input)))
-                * 100.0_f64;
+                * crate::constants::PERCENTAGE_FACTOR;
 
             assert!(
                 (result - expected).abs() < 0.001_f64,

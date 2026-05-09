@@ -9,6 +9,7 @@
 use crate::Rational;
 use crate::loop_intent::LoopMeta;
 use crate::media_meta_utils::scan_gif_headers;
+use crate::probe_video;
 use crate::progress_mode::emit_stderr;
 use anyhow::{Context, Result};
 use blake3::Hasher;
@@ -350,16 +351,16 @@ impl Default for GlobalCollectionStats {
             DEFAULT_LOOP_BASELINE_DURATION_SECS, MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
         };
         Self {
-            duration_min: Some(0.1),
+            duration_min: Some(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_MIN_SECS),
             duration_avg: Some(DEFAULT_LOOP_BASELINE_DURATION_SECS),
-            duration_max: Some(30.0),
+            duration_max: Some(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_MAX_SECS),
             duration_p90: Some(MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS),
 
             size_min: 1000.0,
             size_avg: 1_000_000.0,
             size_max: 5_000_000.0,
 
-            bitrate_min: 10_000.0,
+            bitrate_min: crate::constants::DB_BITRATE_MIN_DEFAULT,
             bitrate_avg: 500_000.0,
             bitrate_max: 2_000_000.0,
 
@@ -426,8 +427,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             fps: DistributionStats {
-                mean: 12.0,
-                std_dev: 8.0,
+                mean: crate::constants::KNN_STATS_FPS_MEAN,
+                std_dev: crate::constants::KNN_STATS_FPS_STD_DEV,
                 p10: Some(4.0),
                 p25: Some(8.0),
                 p50: Some(12.0),
@@ -436,8 +437,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             frame_density: DistributionStats {
-                mean: 12.0,
-                std_dev: 8.0,
+                mean: crate::constants::KNN_STATS_FPS_MEAN,
+                std_dev: crate::constants::KNN_STATS_FPS_STD_DEV,
                 p10: Some(4.0),
                 p25: Some(8.0),
                 p50: Some(12.0),
@@ -466,8 +467,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             temporal_bpp: DistributionStats {
-                mean: 0.05,
-                std_dev: 0.05,
+                mean: crate::constants::KNN_STATS_BPP_MEAN,
+                std_dev: crate::constants::KNN_STATS_BPP_STD_DEV,
                 p10: Some(0.01),
                 p25: Some(0.02),
                 p50: Some(0.05),
@@ -476,8 +477,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             spatial_bpp: DistributionStats {
-                mean: 4.0,
-                std_dev: 3.0,
+                mean: crate::constants::KNN_STATS_SPATIAL_BPP_MEAN,
+                std_dev: crate::constants::KNN_STATS_SPATIAL_BPP_STD_DEV,
                 p10: Some(1.0),
                 p25: Some(2.0),
                 p50: Some(4.0),
@@ -486,8 +487,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             payload_variation: DistributionStats {
-                mean: 0.5,
-                std_dev: 0.2,
+                mean: crate::constants::KNN_STATS_VARIATION_MEAN,
+                std_dev: crate::constants::KNN_STATS_VARIATION_STD_DEV,
                 p10: Some(0.2),
                 p25: Some(0.35),
                 p50: Some(0.5),
@@ -497,7 +498,7 @@ impl Default for LoopReferenceProfile {
             },
             delay_variation: DistributionStats {
                 mean: 0.25,
-                std_dev: 0.15,
+                std_dev: crate::constants::DB_HEURISTIC_STD_DEV_DEFAULT,
                 p10: Some(0.05),
                 p25: Some(0.12),
                 p50: Some(0.25),
@@ -516,8 +517,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             motion_gini: DistributionStats {
-                mean: 0.55,
-                std_dev: 0.18,
+                mean: crate::constants::KNN_STATS_GINI_MEAN,
+                std_dev: crate::constants::KNN_STATS_GINI_STD_DEV,
                 p10: Some(0.2),
                 p25: Some(0.4),
                 p50: Some(0.55),
@@ -536,8 +537,8 @@ impl Default for LoopReferenceProfile {
                 weight: None,
             },
             webp_ratio: DistributionStats {
-                mean: 10.0,
-                std_dev: 4.0,
+                mean: crate::constants::KNN_STATS_WEBP_RATIO_MEAN,
+                std_dev: crate::constants::KNN_STATS_WEBP_RATIO_STD_DEV,
                 p10: Some(4.0),
                 p25: Some(7.0),
                 p50: Some(10.0),
@@ -912,7 +913,11 @@ fn lookup_similar_samples_inner(
     // Map the incoming LoopMeta into a SampleRow to compute its HNSW search vector
     let (target_temporal_bpp, target_spatial_bpp) = bpp_from_meta(meta);
 
-    let target_sample = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
+    let Some(target_sample) = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp)
+    else {
+        tracing::warn!("KNN: target LoopMeta missing width/height; skipping KNN lookup");
+        return Ok(None);
+    };
 
     let feature_stats = fetch_feature_map(&mut conn)?;
     let Some(target_vector) =
@@ -1023,7 +1028,9 @@ fn lookup_similar_samples_inner(
 
         let relative_distance = (*distance - min_distance).max(0.0);
         let Some(rel_dist_r) = rug::Rational::from_f64(
-            1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0),
+            1.0_f64
+                / (relative_distance * relative_distance)
+                    .mul_add(crate::constants::KNN_DISTANCE_WEIGHT_SCALE, 1.0),
         ) else {
             tracing::warn!(
                 distance,
@@ -1076,7 +1083,10 @@ fn lookup_similar_samples_inner(
     let local_keep_probability = (weighted_keep / divisor).to_f64();
     let eff_n = effective_sample_size(weight_squares_sum.to_f64(), total_weight.to_f64());
     // With higher imbalance, require stronger local evidence before moving away from global prior.
-    let prior_strength = 2.0f64.mul_add(global_imbalance_ratio.ln_1p(), 3.0);
+    let prior_strength = crate::constants::KNN_PRIOR_STRENGTH_SLOPE.mul_add(
+        global_imbalance_ratio.ln_1p(),
+        crate::constants::KNN_PRIOR_STRENGTH_BASE,
+    );
     let shrink = (eff_n / (eff_n + prior_strength)).clamp(0.0, 1.0);
     let keep_probability = global_keep_prior
         .mul_add(1.0 - shrink, local_keep_probability * shrink)
@@ -1106,9 +1116,10 @@ fn lookup_similar_samples_inner(
         1.0_f64
     };
     // Penalize confidence under severe class imbalance and low effective sample size.
-    let balance_penalty = (1.0 / global_imbalance_ratio.sqrt()).clamp(0.45, 1.0);
+    let balance_penalty = (1.0 / global_imbalance_ratio.sqrt())
+        .clamp(crate::constants::KNN_BALANCE_PENALTY_FLOOR, 1.0);
     confidence *= balance_penalty;
-    confidence *= (eff_n / (eff_n + 2.0)).clamp(0.25, 1.0);
+    confidence *= (eff_n / (eff_n + 2.0)).clamp(crate::constants::KNN_CONFIDENCE_MIN_LIMIT, 1.0);
     tracing::debug!(
         local_keep_probability = local_keep_probability,
         keep_probability = keep_probability,
@@ -1174,15 +1185,17 @@ fn lookup_similar_samples_inner(
 fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     use crate::constants::{HIGH_VALUE_LOSSLESS_DURATION_LIMIT, MEME_LOSSLESS_DURATION_LIMIT};
 
-    if keep_prob <= 0.3 {
+    if keep_prob <= crate::constants::KNN_KEEP_PROB_HIGH_VALUE_THRESHOLD {
         HIGH_VALUE_LOSSLESS_DURATION_LIMIT
-    } else if keep_prob >= 0.7 {
+    } else if keep_prob >= crate::constants::KNN_KEEP_PROB_MEME_THRESHOLD {
         MEME_LOSSLESS_DURATION_LIMIT
     } else {
-        let t = (keep_prob - 0.3) / 0.4;
+        let t = (keep_prob - crate::constants::KNN_KEEP_PROB_HIGH_VALUE_THRESHOLD)
+            / (crate::constants::KNN_KEEP_PROB_MEME_THRESHOLD
+                - crate::constants::KNN_KEEP_PROB_HIGH_VALUE_THRESHOLD);
         let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
         let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
-        crate::numeric_cast::f64_to_f32_lossy(limit_high + (t * (limit_meme - limit_high)))
+        crate::numeric_cast::f64_to_f32_lossy(t.mul_add(limit_meme - limit_high, limit_high))
     }
 }
 
@@ -1665,7 +1678,7 @@ fn determine_loss_tolerance(
 /// file cannot be probed.
 #[must_use]
 fn gather_sample_metadata(path: &Path) -> Option<LoopMeta> {
-    let probe = match crate::probe_video(path) {
+    let probe = match probe_video(path) {
         Ok(probe) => probe,
         Err(e) => {
             tracing::warn!(
@@ -1707,6 +1720,14 @@ pub fn sample_from_path(
 ) -> Option<SampleInsert> {
     let mut meta = gather_sample_metadata(path)?;
 
+    let (Some(width), Some(height)) = (meta.width, meta.height) else {
+        tracing::warn!(
+            path = %path.display(),
+            "sample_from_path: missing width/height; skipping training sample (DB requires NOT NULL)"
+        );
+        return None;
+    };
+
     let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
 
     let loss_tolerance = if let Some(label) = label_override {
@@ -1727,13 +1748,13 @@ pub fn sample_from_path(
         meta.is_native_gif = false;
     }
 
-    let aspect_ratio = if meta.height > 0 {
-        Some(f64::from(meta.width) / f64::from(meta.height))
+    let aspect_ratio = if height > 0 {
+        Some(f64::from(width) / f64::from(height))
     } else {
         None
     };
 
-    let total_pixels = u64::from(meta.width) * u64::from(meta.height);
+    let total_pixels = u64::from(width) * u64::from(height);
     let loop_frequency =
         crate::loop_intent::score_loop_frequency(meta.duration_secs, meta.frame_count);
     let (is_human_semantic_name, directory_loop_intent_score, cadence_score) = {
@@ -1765,8 +1786,8 @@ pub fn sample_from_path(
         source_path: path.display().to_string(),
         file_name: meta.file_name.clone(),
         source_ext: meta.source_extension.clone(),
-        width: meta.width,
-        height: meta.height,
+        width,
+        height,
         duration_secs: meta.duration_secs,
         frame_count: meta.frame_count,
         file_size_bytes: meta.file_size_bytes,
@@ -1826,11 +1847,13 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 /// Compute a 31-dimensional pgvector encoding for a sample using pre-calculated std deviations.
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
-fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) -> SampleRow {
-    SampleRow {
+fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) -> Option<SampleRow> {
+    let width = meta.width?;
+    let height = meta.height?;
+    Some(SampleRow {
         _loss_tolerance: None,
-        width: meta.width,
-        height: meta.height,
+        width,
+        height,
         duration_secs: meta.duration_secs,
         frame_count: meta.frame_count,
         file_size_bytes: meta.file_size_bytes,
@@ -1843,8 +1866,8 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
         palette_size: meta.palette_size,
         frame_payload_variation: meta.frame_payload_variation,
         frame_delay_variation: meta.frame_delay_variation,
-        aspect_ratio: (meta.height > 0).then(|| f64::from(meta.width) / f64::from(meta.height)),
-        _total_pixels: Some(u64::from(meta.width) * u64::from(meta.height)),
+        aspect_ratio: (height > 0).then(|| f64::from(width) / f64::from(height)),
+        _total_pixels: Some(u64::from(width) * u64::from(height)),
         loop_frequency: Some(crate::loop_intent::score_loop_frequency(
             meta.duration_secs,
             meta.frame_count,
@@ -1876,11 +1899,14 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
         temporal_jitter: meta.temporal_jitter,
         webp_compression_ratio: meta.webp_compression_ratio,
         _labeled_by: None,
-    }
+    })
 }
 
 fn bpp_from_meta(meta: &LoopMeta) -> (f64, f64) {
-    let pixel_count = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
+    let pixel_count = match (meta.width, meta.height) {
+        (Some(w), Some(h)) => (f64::from(w) * f64::from(h)).max(1.0),
+        _ => 1.0,
+    };
     let file_size = crate::numeric_cast::u64_to_f64(meta.file_size_bytes);
     let frame_count = meta.frame_count.map_or_else(
         || {
@@ -1916,7 +1942,8 @@ fn sample_distance(
     target_spatial_bpp: f64,
     stats_map: &FeatureMap,
 ) -> f64 {
-    let target = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
+    let target = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp)
+        .expect("sample_distance test fixture: meta must have width/height");
     let target_vector = crate::database_vector::compute_sample_vector(&target, stats_map)
         .expect("KNN: Target search vector computation failed during distance calculation");
     let sample_vector = crate::database_vector::compute_sample_vector(sample, stats_map)
@@ -3222,8 +3249,8 @@ mod tests {
         LoopMeta {
             duration_secs: Some(duration),
             duration_tier: Some(crate::loop_intent::DurationTier::from_secs(duration)),
-            width: 320,
-            height: 320,
+            width: Some(320),
+            height: Some(320),
             fps: Some(12.0),
             frame_count: Some(frames),
             file_size_bytes: size,
@@ -3353,7 +3380,7 @@ mod tests {
             motion_gini: Some(0.2_f64),
             block_skew: Some(0.1_f64),
             temporal_flatness: Some(0.1_f64),
-            loop_closure_score: Some(0.15_f64),
+            loop_closure_score: Some(crate::constants::DB_LOOP_CLOSURE_SCORE_DEFAULT),
             motion_periodicity: Some(0.20_f64),
             temporal_jitter: Some(0.18_f64),
             webp_compression_ratio: Some(0.1_f64),
@@ -3403,13 +3430,16 @@ mod tests {
     #[test]
     fn bpp_from_meta_divides_temporal_density_by_frame_count() {
         let mut meta = base_meta();
-        meta.width = 1200;
-        meta.height = 1200;
+        meta.width = Some(1200);
+        meta.height = Some(1200);
         meta.frame_count = Some(36);
         meta.file_size_bytes = 2_391_699;
 
         let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
-        let pixel_count = f64::from(meta.width) * f64::from(meta.height);
+        let pixel_count = match (meta.width, meta.height) {
+            (Some(w), Some(h)) => f64::from(w) * f64::from(h),
+            _ => 1.0,
+        };
         let expected_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
             / (pixel_count
                 * crate::numeric_cast::u64_to_f64(meta.frame_count.expect("fixture has frames")));

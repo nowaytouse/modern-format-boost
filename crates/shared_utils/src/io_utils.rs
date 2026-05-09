@@ -32,7 +32,9 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
 
                 last_err = Some(e);
                 if i < 2_i32 {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        crate::constants::RETRY_DELAY_LONG_MS,
+                    ));
                 }
             }
         }

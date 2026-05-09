@@ -41,12 +41,14 @@ impl CacheStatistics {
 
     #[must_use]
     pub fn db_size_mb(&self) -> f64 {
-        crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(self.db_size_bytes)
+            / crate::numeric_cast::u64_to_f64(crate::constants::BYTES_PER_MB)
     }
 
     #[must_use]
     pub fn db_size_gb(&self) -> f64 {
-        crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(self.db_size_bytes)
+            / crate::numeric_cast::u64_to_f64(crate::constants::BYTES_PER_GB)
     }
 
     #[must_use]
@@ -59,7 +61,7 @@ impl CacheStatistics {
     }
 }
 
-pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
+pub const CACHE_SIZE_LIMIT_BYTES: u64 = crate::constants::CACHE_SIZE_LIMIT_BYTES;
 
 /// Opens a connection to the `PostgreSQL` database.
 fn open_pg_client() -> Result<Client> {
@@ -363,7 +365,7 @@ impl AnalysisCache {
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
                 && calculate_checksum(&data)
                     != u32::try_from(stored_checksum)
-                        .expect("Failed to parse integer or missing required value")
+                        .expect("checksum stored as i64 but always originated from u32; fits by construction")
             {
                 warn!(
                     "Cache: Data corruption detected for {}; checksum mismatch (hash index)",
@@ -523,7 +525,7 @@ impl AnalysisCache {
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
                 && calculate_checksum(&data)
                     != u32::try_from(stored_checksum)
-                        .expect("Failed to parse integer or missing required value")
+                        .expect("checksum stored as i64 but always originated from u32; fits by construction")
             {
                 warn!(
                     "Cache: Data corruption detected for {}; video checksum mismatch (hash index)",
@@ -689,7 +691,7 @@ impl AnalysisCache {
 fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
-    let mut buffer = vec![0u8; 65536];
+    let mut buffer = vec![0u8; crate::constants::IO_BUFFER_SIZE_LARGE];
     loop {
         let bytes_read = file.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -698,7 +700,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
         hasher.update(
             buffer
                 .get(..bytes_read)
-                .expect("Required byte slice missing (out of bounds)"),
+                .expect("bytes_read <= buffer.len() by read() contract"),
         );
     }
     Ok(hasher.finalize())
@@ -708,12 +710,12 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
 fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
-    let mut buffer = vec![0u8; 65536];
+    let mut buffer = vec![0u8; crate::constants::IO_BUFFER_SIZE_LARGE];
     let bytes_read = file.read(&mut buffer)?;
     hasher.update(
         buffer
             .get(..bytes_read)
-            .expect("Required byte slice missing (out of bounds)"),
+            .expect("bytes_read <= buffer.len() by read() contract"),
     );
     Ok(*hasher.finalize().as_bytes())
 }

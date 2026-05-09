@@ -8,6 +8,8 @@
 //! - Quality threshold validation
 //! - Lossless integrity checks (CRF=0 fast-path: frame count + file size only)
 
+use crate::FfmpegBuilder;
+use crate::builder_base::ToolBuilder;
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -37,9 +39,9 @@ pub struct QualityThresholds {
 impl Default for QualityThresholds {
     fn default() -> Self {
         Self {
-            min_ssim: 0.95,
-            min_psnr: 35.0,
-            min_ms_ssim: 0.90,
+            min_ssim: crate::constants::STREAM_ANALYSIS_MIN_SSIM,
+            min_psnr: crate::constants::STREAM_ANALYSIS_MIN_PSNR,
+            min_ms_ssim: crate::constants::STREAM_ANALYSIS_MIN_MS_SSIM,
             validation: QualityValidationFlags {
                 metrics: MetricValidationFlags {
                     validate_ssim: true,
@@ -53,7 +55,7 @@ impl Default for QualityThresholds {
 }
 
 pub fn get_video_duration(input: &Path) -> Option<f64> {
-    let output = crate::tool_builders::FfprobeBuilder::new()
+    let output = crate::FfprobeBuilder::new()
         .input(input)
         .arg("-v")
         .arg("error")
@@ -125,10 +127,10 @@ fn count_video_frames(path: &Path) -> Option<u64> {
     }
 
     let try_ffprobe_count = |mode: &str, entry: &str| -> Option<u64> {
-        let out = match crate::tool_builders::FfprobeBuilder::new()
+        let out = match crate::FfprobeBuilder::new()
             .input(path)
             .loglevel("error")
-            .select_stream(crate::tool_builders::StreamType::Video, 0)
+            .select_stream(crate::StreamType::Video, 0)
             .show_entries(entry)
             .print_format("default=noprint_wrappers=1:nokey=1")
             .arg(mode)
@@ -185,44 +187,38 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     // stream into the same raw pixel layout as the HEVC output.
     let is_gif = is_gif_magic(input);
 
-    let gif_filters: &[(&str, &str)] = &[
-        // Best attempt: align timing with settb/setpts, ensure even dimensions via padding (to match encoder),
-        // and normalize to yuv420p. This is the most robust sync for irregular GIFs.
-        (
-            "gif_sync",
-            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim",
-        ),
-        // Optimized: match encoder's rgb24 -> yuv420p path exactly
-        (
-            "gif_palette",
-            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
-        ),
-        // Simplest fallback: just pad to even
-        (
-            "gif_pad_even",
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
-        ),
-    ];
-
-    let generic_filters: &[(&str, &str)] = &[
-        (
-            "standard",
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[ref][1:v]ssim",
-        ),
-        (
-            "format_convert",
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
-        ),
-        ("simple", "ssim"),
-    ];
-
-    let filters = if is_gif { gif_filters } else { generic_filters };
+    let mut filters: Vec<(String, String)> = Vec::new();
+    if is_gif {
+        let ms = crate::numeric_cast::f64_to_u64_sat(crate::constants::MS_PER_SEC_F64);
+        filters.push((
+            "gif_sync".to_string(),
+            format!("[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"),
+        ));
+        filters.push((
+            "gif_palette".to_string(),
+            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+        ));
+        filters.push((
+            "gif_pad_even".to_string(),
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+        ));
+    } else {
+        filters.push((
+            "standard".to_string(),
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[ref][1:v]ssim".to_string(),
+        ));
+        filters.push((
+            "format_convert".to_string(),
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+        ));
+        filters.push(("simple".to_string(), "ssim".to_string()));
+    }
 
     for (name, filter) in filters {
-        let result = crate::tool_builders::FfmpegBuilder::new()
+        let result = FfmpegBuilder::new()
             .input(input)
             .input(output)
-            .filter_complex(*filter)
+            .filter_complex(filter)
             .format("null")
             .output_pipe()
             .build()
@@ -251,7 +247,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 
 /// Run ffmpeg with the given lavfi filter and parse SSIM Y/U/V/All from stderr.
 fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64, f64, f64, f64)> {
-    let ffmpeg_output = match crate::tool_builders::FfmpegBuilder::new()
+    let ffmpeg_output = match FfmpegBuilder::new()
         .input(input)
         .input(output)
         .filter_complex(lavfi)
@@ -304,7 +300,6 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     // GIF-specific chains: render palette → rgb24 → yuv420p before comparing.
     // Use padding (upward to even) to match encoder's padding logic, and use settb/setpts to sync pts.
-    const GIF_SYNC: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim";
     const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
     const GIF_NORM: &str = "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
 
@@ -316,10 +311,15 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     // swscale path) then convert to yuv420p for comparison.
     const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
 
+    let ms = crate::numeric_cast::f64_to_u64_sat(crate::constants::MS_PER_SEC_F64);
+    let gif_sync = format!(
+        "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"
+    );
+
     let is_gif = is_gif_magic(input);
 
     if is_gif {
-        run_ssim_all_filter(input, output, GIF_SYNC)
+        run_ssim_all_filter(input, output, &gif_sync)
             .or_else(|| run_ssim_all_filter(input, output, GIF_RGB24))
             .or_else(|| run_ssim_all_filter(input, output, GIF_NORM))
             .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
@@ -442,7 +442,7 @@ pub fn check_lossless_integrity(
 
                 let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
 
-                if dur_ratio >= 0.95 {
+                if dur_ratio >= crate::constants::STREAM_ANALYSIS_DURATION_MATCH_THRESHOLD {
                     warn!(
                         input_frames = i,
                         output_frames = o,

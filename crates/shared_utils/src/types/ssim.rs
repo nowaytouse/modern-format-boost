@@ -6,11 +6,11 @@ use std::fmt;
 
 pub use crate::float_compare::SSIM_EPSILON;
 
-pub const SSIM_MIN: f64 = 0.0_f64;
+pub const SSIM_MIN: f64 = crate::constants::SSIM_MIN;
 
-pub const SSIM_MAX: f64 = 1.0_f64;
+pub const SSIM_MAX: f64 = crate::constants::SSIM_MAX;
 
-pub const SSIM_DISPLAY_PRECISION: usize = 6;
+pub const SSIM_DISPLAY_PRECISION: usize = crate::constants::SSIM_DISPLAY_PRECISION_FULL;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SsimError {
@@ -97,15 +97,19 @@ impl Ssim {
 
     #[must_use]
     pub fn quality_description(&self) -> &'static str {
-        if self.0 >= 0.999_f64 {
+        use crate::constants::{
+            SSIM_LEVEL_EXCELLENT, SSIM_LEVEL_FAIR, SSIM_LEVEL_GOOD, SSIM_LEVEL_PERFECT,
+            SSIM_LEVEL_VERY_GOOD,
+        };
+        if self.0 >= SSIM_LEVEL_PERFECT {
             "Identical"
-        } else if self.0 >= 0.98_f64 {
+        } else if self.0 >= SSIM_LEVEL_EXCELLENT {
             "Excellent - virtually lossless"
-        } else if self.0 >= 0.93_f64 {
+        } else if self.0 >= SSIM_LEVEL_VERY_GOOD {
             "Very good - minimal visible difference"
-        } else if self.0 >= 0.89_f64 {
+        } else if self.0 >= SSIM_LEVEL_GOOD {
             "Good - acceptable quality"
-        } else if self.0 >= 0.82_f64 {
+        } else if self.0 >= SSIM_LEVEL_FAIR {
             "Fair - noticeable degradation"
         } else {
             "Poor - significant quality loss"

@@ -265,6 +265,7 @@ impl std::ops::DivAssign for Rational {
 pub mod analysis_cache;
 /// Batch processing engine for handling multiple files.
 pub mod batch;
+pub mod builder_base;
 /// Unified candidate ranking and quality comparators.
 pub mod candidate_comparator;
 /// Checkpoint and integrity management for conversions.
@@ -297,10 +298,22 @@ pub mod float_compare;
 pub mod gpu_accel;
 /// High-level builders for image processing tools.
 pub mod image_builders;
+pub mod process_runner;
+pub mod tool_builders;
+
+pub use builder_base::ToolBuilder;
+pub use image_builders::{
+    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, IdentifyBuilder, MagickBuilder,
+    SipsBuilder, WebpmuxBuilder,
+};
+pub use tool_builders::{
+    HostnameBuilder, KillBuilder, PsBuilder, RsyncBuilder, VmafBuilder, X265Builder,
+};
 /// Image quality analytics and scoring.
 pub mod image_quality_detector;
 /// High-level builder for `cjxl` and `djxl` commands.
 pub mod jxl_builder;
+pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 /// JXL distance exploration engine for Ultimate Mode.
 pub mod jxl_explorer;
 /// Thread-safe `LRU` cache implementation.
@@ -373,11 +386,8 @@ pub mod smart_file_copier;
 pub mod stream_size;
 /// System resources and memory monitoring.
 pub mod system_memory;
-/// Low-level tool process builders.
-pub mod tool_builders;
 /// Shared data types and structures.
 pub mod types;
-pub use tool_builders::X265Builder;
 
 /// User-facing progress mode configuration.
 pub mod progress_mode;
@@ -572,8 +582,7 @@ pub use video_explorer::{
 pub use checkpoint::{CheckpointManager, safe_delete_original, verify_output_integrity};
 
 pub use quality_verifier_enhanced::{
-    DEFAULT_MIN_FILE_SIZE, EnhancedVerifyResult, VerifyOptions, verify_after_encode,
-    verify_output_file,
+    EnhancedVerifyResult, VerifyOptions, verify_after_encode, verify_output_file,
 };
 
 pub use xmp_merger::{
@@ -628,12 +637,6 @@ pub use ffmpeg_builder::{
 pub use ffmpeg_process::{
     FfmpegProcess, FfmpegProgressParser, format_ffmpeg_error, is_recoverable_error,
 };
-pub use image_builders::{
-    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder,
-    WebpmuxBuilder,
-};
-pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
-
 pub use float_compare::{
     CRF_EPSILON, F32_EPSILON, F64_EPSILON, PSNR_EPSILON, SSIM_EPSILON as FLOAT_SSIM_EPSILON,
     approx_eq_crf, approx_eq_f32, approx_eq_f64, approx_eq_psnr, approx_eq_ssim, approx_ge_f64,

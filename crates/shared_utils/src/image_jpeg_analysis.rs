@@ -30,20 +30,29 @@ const IJG_LUMINANCE_BASE: [[u16; 8]; 8] = crate::constants::JPEG_IJG_LUMINANCE_B
 const IJG_CHROMINANCE_BASE: [[u16; 8]; 8] = crate::constants::JPEG_IJG_CHROMINANCE_BASE;
 
 fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8] {
+    use crate::constants::{
+        JPEG_IJG_ROUNDING_DIVISOR, JPEG_IJG_ROUNDING_OFFSET, JPEG_IJG_SCALE_FACTOR_HIGH_A,
+        JPEG_IJG_SCALE_FACTOR_HIGH_B, JPEG_IJG_SCALE_FACTOR_LOW, JPEG_IJG_SCALE_THRESHOLD,
+    };
     let q = f64::from(quality.clamp(1, 100));
 
-    let scale = if q < 50.0_f64 {
-        5_000.0_f64 / q
+    let scale = if q < JPEG_IJG_SCALE_THRESHOLD {
+        JPEG_IJG_SCALE_FACTOR_LOW / q
     } else {
-        2.0f64.mul_add(-q, 200.0)
+        JPEG_IJG_SCALE_FACTOR_HIGH_A.mul_add(-q, JPEG_IJG_SCALE_FACTOR_HIGH_B)
     };
 
     let mut result = [[0u16; 8]; 8];
 
     for (row, base_row) in result.iter_mut().zip(base_table.iter()) {
         for (cell, &base_value) in row.iter_mut().zip(base_row.iter()) {
-            let value = ((scale * f64::from(base_value)) + 50.0_f64) / 100.0_f64;
-            *cell = crate::numeric_cast::f64_to_u16_sat(value.floor().clamp(1.0, 255.0));
+            let value = ((scale * f64::from(base_value)) + JPEG_IJG_ROUNDING_OFFSET)
+                / JPEG_IJG_ROUNDING_DIVISOR;
+            *cell = crate::numeric_cast::f64_to_u16_sat(
+                value
+                    .floor()
+                    .clamp(1.0, crate::constants::MAX_8BIT_VALUE_F64),
+            );
         }
     }
 
@@ -170,15 +179,21 @@ fn calculate_confidence(
         {
             return 1.0;
         }
-        return 0.98;
+        return crate::constants::JPEG_CONFIDENCE_LUMA_ONLY;
     }
 
-    let luma_confidence = 1.0_f64 / luma_estimate.weighted_sse.mul_add(0.01, 1.0);
+    let luma_confidence = 1.0_f64
+        / luma_estimate
+            .weighted_sse
+            .mul_add(crate::constants::JPEG_CONFIDENCE_SSE_SCALE, 1.0);
 
     chroma_estimate.map_or_else(
         || luma_confidence.clamp(0.0, 1.0),
         |chroma| {
-            let chroma_confidence = 1.0_f64 / chroma.weighted_sse.mul_add(0.01, 1.0);
+            let chroma_confidence = 1.0_f64
+                / chroma
+                    .weighted_sse
+                    .mul_add(crate::constants::JPEG_CONFIDENCE_SSE_SCALE, 1.0);
             crate::constants::JPEG_LUMA_WEIGHT
                 .mul_add(
                     luma_confidence,
@@ -207,10 +222,26 @@ fn detect_encoder(
     let luma = tables.first()?;
 
     if let Some(c_sse) = chroma_sse {
-        if (720.0_f64..735.0_f64).contains(&luma_sse) && (5.0_f64..12.0_f64).contains(&c_sse) {
+        use crate::constants::{
+            JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MAX, JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MIN,
+            JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MAX, JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MIN,
+            JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MAX,
+            JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MIN, JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MAX,
+            JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MIN,
+        };
+        if (JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MIN..JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MAX)
+            .contains(&luma_sse)
+            && (JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MIN..JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MAX)
+                .contains(&c_sse)
+        {
             return Some("Apple iOS Camera (high quality)".to_string());
         }
-        if (150.0_f64..165.0_f64).contains(&luma_sse) && (2.0_f64..10.0_f64).contains(&c_sse) {
+        if (JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MIN..JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MAX)
+            .contains(&luma_sse)
+            && (JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MIN
+                ..JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MAX)
+                .contains(&c_sse)
+        {
             return Some("Apple iOS Camera (very high quality)".to_string());
         }
     }
@@ -223,17 +254,24 @@ fn detect_encoder(
     }
 
     if let Some(c_sse) = chroma_sse
-        && (200.0_f64..400.0_f64).contains(&luma_sse)
-        && (10.0_f64..50.0_f64).contains(&c_sse)
+        && (crate::constants::JPEG_FINGERPRINT_ANDROID_LUMA_MIN
+            ..crate::constants::JPEG_FINGERPRINT_ANDROID_LUMA_MAX)
+            .contains(&luma_sse)
+        && (crate::constants::JPEG_FINGERPRINT_ANDROID_CHROMA_MIN
+            ..crate::constants::JPEG_FINGERPRINT_ANDROID_CHROMA_MAX)
+            .contains(&c_sse)
     {
         return Some("Android Camera".to_string());
     }
 
-    if (500.0_f64..700.0_f64).contains(&luma_sse) {
+    if (crate::constants::JPEG_FINGERPRINT_SAMSUNG_LUMA_MIN
+        ..crate::constants::JPEG_FINGERPRINT_SAMSUNG_LUMA_MAX)
+        .contains(&luma_sse)
+    {
         return Some("Samsung Camera".to_string());
     }
 
-    if luma_sse > 1_000.0_f64 {
+    if luma_sse > crate::constants::JPEG_FINGERPRINT_CUSTOM_THRESHOLD {
         return Some("Non-standard encoder (highly custom)".to_string());
     }
 
@@ -433,7 +471,9 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         .map_or(luma_estimate.quality, |chroma| {
             if luma_estimate.is_exact_match && chroma.is_exact_match {
                 luma_estimate.quality
-            } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
+            } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs()
+                <= i16::from(crate::constants::JPEG_QUALITY_MISMATCH_TOLERANCE)
+            {
                 let weighted = luma_estimate.interpolated_quality.mul_add(
                     crate::constants::JPEG_LUMA_WEIGHT,
                     chroma.interpolated_quality * crate::constants::JPEG_CHROMA_WEIGHT,
@@ -456,15 +496,17 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     );
 
     let quality_description = match final_quality {
-        95..=100 => "Very high quality (near lossless)".to_string(),
-        90..=94 => "High quality (professional)".to_string(),
-        80..=89 => "Good quality (standard photo)".to_string(),
-        70..=79 => "Medium quality (web optimized)".to_string(),
-        60..=69 => "Lower quality (high compression)".to_string(),
+        crate::constants::QUALITY_LEVEL_ULTRA..=100 => {
+            "Very high quality (near lossless)".to_string()
+        }
+        crate::constants::QUALITY_LEVEL_HIGH..=94 => "High quality (professional)".to_string(),
+        crate::constants::QUALITY_LEVEL_GOOD..=89 => "Good quality (standard photo)".to_string(),
+        crate::constants::QUALITY_LEVEL_MEDIUM..=79 => "Medium quality (web optimized)".to_string(),
+        crate::constants::QUALITY_LEVEL_LOW..=69 => "Lower quality (high compression)".to_string(),
         _ => "Low quality (visible compression artifacts)".to_string(),
     };
 
-    let is_high_quality_original = final_quality >= 90
+    let is_high_quality_original = final_quality >= crate::constants::JPEG_HIGH_QUALITY_THRESHOLD
         && is_standard_table
         && confidence >= crate::constants::JPEG_CONFIDENCE_THRESHOLD_STANDARD;
     let is_complete = is_jpeg_complete(data);
@@ -810,25 +852,25 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
 /// MPF (Multi-Picture Format) structure constants
 mod mpf {
     // MPF identifier: "MPF\0"
-    pub const MPF_IDENTIFIER: &[u8] = b"MPF\0";
+    pub const MPF_IDENTIFIER: &[u8] = crate::constants::JPEG_MPF_IDENTIFIER;
     // Some devices use a non-standard APP2 identifier while keeping the MPF TIFF layout.
-    pub const XMPF_IDENTIFIER: &[u8] = b"XMPF";
+    pub const XMPF_IDENTIFIER: &[u8] = crate::constants::JPEG_XMPF_IDENTIFIER;
 
     // TIFF big-endian marker: "MM\0*"
-    pub const TIFF_BIG_ENDIAN: &[u8] = b"MM\0*";
+    pub const TIFF_BIG_ENDIAN: &[u8] = crate::constants::TIFF_BIG_ENDIAN;
     // TIFF little-endian marker: "II*\0"
-    pub const TIFF_LITTLE_ENDIAN: &[u8] = b"II*\0";
+    pub const TIFF_LITTLE_ENDIAN: &[u8] = crate::constants::TIFF_LITTLE_ENDIAN;
 
     // MPF tags
-    pub const TAG_NUMBER_OF_IMAGES: u16 = 0xB001;
-    pub const TAG_MP_ENTRY: u16 = 0xB002;
+    pub const TAG_NUMBER_OF_IMAGES: u16 = crate::constants::JPEG_TAG_NUMBER_OF_IMAGES;
+    pub const TAG_MP_ENTRY: u16 = crate::constants::JPEG_TAG_MP_ENTRY;
 }
 
 const JPEG_SOI_BYTES: [u8; 3] = [0xFF, 0xD8, 0xFF];
 const JPEG_EOI_BYTES: [u8; 2] = [0xFF, 0xD9];
-const GAINMAP_SCAN_WINDOW_MIN: usize = 4_096;
-const GAINMAP_SCAN_WINDOW_MAX: usize = 131_072;
-const MAX_GAINMAP_SCAN_CANDIDATES: usize = 48;
+const GAINMAP_SCAN_WINDOW_MIN: usize = crate::constants::JPEG_GAINMAP_SCAN_WINDOW_MIN;
+const GAINMAP_SCAN_WINDOW_MAX: usize = crate::constants::JPEG_GAINMAP_SCAN_WINDOW_MAX;
+const MAX_GAINMAP_SCAN_CANDIDATES: usize = crate::constants::JPEG_MAX_GAINMAP_SCAN_CANDIDATES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GainmapCandidateSource {
@@ -1035,10 +1077,14 @@ fn gainmap_candidate_score(
     repaired_eoi: bool,
 ) -> f64 {
     let source_weight = match source {
-        GainmapCandidateSource::RelativeOffset => 4_000.0_f64,
-        GainmapCandidateSource::AbsoluteOffset => 3_500.0_f64,
-        GainmapCandidateSource::NearbyScan => 2_500.0_f64,
-        GainmapCandidateSource::TailScan => 1_500.0_f64,
+        GainmapCandidateSource::RelativeOffset => {
+            crate::constants::JPEG_GAINMAP_SCORE_RELATIVE_OFFSET
+        }
+        GainmapCandidateSource::AbsoluteOffset => {
+            crate::constants::JPEG_GAINMAP_SCORE_ABSOLUTE_OFFSET
+        }
+        GainmapCandidateSource::NearbyScan => crate::constants::JPEG_GAINMAP_SCORE_NEARBY_SCAN,
+        GainmapCandidateSource::TailScan => crate::constants::JPEG_GAINMAP_SCORE_TAIL_SCAN,
     };
     let aspect_penalty = aspect_diff.map_or_else(|| {
             warn!("☢️ [ANOMALY] Gainmap candidate aspect ratio missing; using moderate penalty fallback");
@@ -1887,8 +1933,12 @@ mod tests {
             f64::from(params.gamma),
             1.0
         ));
-        assert!((params.offset_sdr - 1.0 / 64.0).abs() < f32::EPSILON);
-        assert!((params.offset_hdr - 1.0 / 64.0).abs() < f32::EPSILON);
+        assert!(
+            (params.offset_sdr - crate::constants::GAINMAP_OFFSET_DEFAULT).abs() < f32::EPSILON
+        );
+        assert!(
+            (params.offset_hdr - crate::constants::GAINMAP_OFFSET_DEFAULT).abs() < f32::EPSILON
+        );
     }
 
     #[test]

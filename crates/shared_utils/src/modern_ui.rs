@@ -187,7 +187,7 @@ pub mod progress_style {
     pub const PROGRESS_CHARS: &str = "=#-";
 
     /// Default width of the progress bar in characters.
-    pub const BAR_WIDTH: usize = 35;
+    pub const BAR_WIDTH: usize = crate::constants::UI_BAR_WIDTH;
 
     /// Character displayed at the left edge of the progress bar.
     pub const BAR_LEFT: &str = "[";
@@ -319,11 +319,11 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
     let bar = render_progress_bar(progress, width, ProgressStyle::Modern);
     let pct = crate::numeric_cast::f64_to_u32_sat(progress * 100.0);
 
-    let color = if pct >= 80 {
+    let color = if pct >= crate::constants::UI_PROGRESS_BAR_HIGH_THRESHOLD {
         BRIGHT_GREEN
-    } else if pct >= 50 {
+    } else if pct >= crate::constants::UI_PROGRESS_BAR_MEDIUM_THRESHOLD {
         BRIGHT_CYAN
-    } else if pct >= 25 {
+    } else if pct >= crate::constants::UI_PROGRESS_BAR_LOW_THRESHOLD {
         BRIGHT_YELLOW
     } else {
         BRIGHT_RED
@@ -438,9 +438,15 @@ impl ExploreProgressState {
         eprint!("\r\x1b[K");
 
         let (ssim_str, ssim_rating) = match final_ssim {
-            Some(s) if s >= 0.99_f64 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Excellent")),
-            Some(s) if s >= 0.98_f64 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Very Good")),
-            Some(s) if s >= 0.95_f64 => (format!("SSIM {s:.4}"), format!("{CHECK}  Good")),
+            Some(s) if s >= crate::constants::UI_QUALITY_EXCELLENT_THRESHOLD => {
+                (format!("SSIM {s:.4}"), format!("{SUCCESS} Excellent"))
+            }
+            Some(s) if s >= crate::constants::UI_QUALITY_VERY_GOOD_THRESHOLD => {
+                (format!("SSIM {s:.4}"), format!("{SUCCESS} Very Good"))
+            }
+            Some(s) if s >= crate::constants::UI_QUALITY_GOOD_THRESHOLD => {
+                (format!("SSIM {s:.4}"), format!("{CHECK}  Good"))
+            }
             Some(s) => (format!("SSIM {s:.4}"), format!("{WARNING}  Fair")),
             None => (String::new(), String::new()),
         };
@@ -626,14 +632,25 @@ pub fn format_size(bytes: u64) -> String {
 /// Formats a duration in seconds into a human-readable string (e.g., "1h 01m 05s").
 #[must_use]
 pub fn format_duration(secs: f64) -> String {
-    if secs >= 3600.0 {
-        let h = crate::numeric_cast::f64_to_u32_sat((secs / 3600.0).floor());
-        let m = crate::numeric_cast::f64_to_u32_sat(((secs % 3600.0) / 60.0).floor());
-        let s = crate::numeric_cast::f64_to_u32_sat((secs % 60.0).floor());
+    if secs >= crate::constants::SECS_PER_HOUR_F64 {
+        let h = crate::numeric_cast::f64_to_u32_sat(
+            (secs / crate::constants::SECS_PER_HOUR_F64).floor(),
+        );
+        let m = crate::numeric_cast::f64_to_u32_sat(
+            ((secs % crate::constants::SECS_PER_HOUR_F64) / crate::constants::SECS_PER_MIN_F64)
+                .floor(),
+        );
+        let s = crate::numeric_cast::f64_to_u32_sat(
+            (secs % crate::constants::SECS_PER_MIN_F64).floor(),
+        );
         format!("{h}h {m:02}m {s:02}s")
-    } else if secs >= 60.0 {
-        let m = crate::numeric_cast::f64_to_u32_sat((secs / 60.0).floor());
-        let s = crate::numeric_cast::f64_to_u32_sat((secs % 60.0).floor());
+    } else if secs >= crate::constants::SECS_PER_MIN_F64 {
+        let m = crate::numeric_cast::f64_to_u32_sat(
+            (secs / crate::constants::SECS_PER_MIN_F64).floor(),
+        );
+        let s = crate::numeric_cast::f64_to_u32_sat(
+            (secs % crate::constants::SECS_PER_MIN_F64).floor(),
+        );
         format!("{m}m {s:02}s")
     } else {
         format!("{secs:.1}s")

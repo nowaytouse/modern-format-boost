@@ -1,5 +1,7 @@
 //! Video precheck and processing recommendation
 
+use crate::FfprobeBuilder;
+use crate::builder_base::ToolBuilder;
 use crate::quality_matcher::parse_source_codec;
 use crate::unified_error::UnifiedError;
 use anyhow::{Context, Result, bail};
@@ -119,14 +121,14 @@ const LEGACY_CODECS_STRONGLY_RECOMMENDED: &[&str] = &[
 
 const OPTIMAL_CODECS: &[&str] = &["hevc", "h265", "x265", "hvc1", "av1", "av01", "libaom-av1"];
 
-const FPS_RANGE_NORMAL: (f64, f64) = (1.0, 240.0);
-const FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
-const FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0);
-const FPS_THRESHOLD_INVALID: f64 = 10000.0;
+const FPS_RANGE_NORMAL: (f64, f64) = crate::constants::PRECHECK_FPS_RANGE_NORMAL;
+const FPS_RANGE_EXTENDED: (f64, f64) = crate::constants::PRECHECK_FPS_RANGE_EXTENDED;
+const FPS_RANGE_EXTREME: (f64, f64) = crate::constants::PRECHECK_FPS_RANGE_EXTREME;
+const FPS_THRESHOLD_INVALID: f64 = crate::constants::PRECHECK_FPS_THRESHOLD_INVALID;
 
 /// Single ffprobe run for precheck: stream (codec, size, duration, fps, `bit_rate`, color) + format.duration.
 fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
-    let output = crate::tool_builders::FfprobeBuilder::new()
+    let output = FfprobeBuilder::new()
         .input(input)
         .arg("-v")
         .arg("error")
@@ -179,7 +181,10 @@ fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
 
 /// If fps looks like `time_base` (e.g. 90000) rather than real FPS, derive from `frame_count/duration`.
 fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: u64) -> f64 {
-    if fps > FPS_THRESHOLD_INVALID && frame_count > 0 && duration >= 0.001_f64 {
+    if fps > FPS_THRESHOLD_INVALID
+        && frame_count > 0
+        && duration >= crate::constants::DURATION_MIN_VALID
+    {
         let inferred = crate::numeric_cast::u64_to_f64(frame_count) / duration;
         if inferred > 0.0_f64 && inferred <= FPS_THRESHOLD_INVALID {
             return inferred;
@@ -346,7 +351,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
 /// # Errors
 /// Returns an error if duration detection fails.
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
-    let output = crate::tool_builders::FfprobeBuilder::new()
+    let output = FfprobeBuilder::new()
         .input(input)
         .arg("-v")
         .arg("error")
@@ -684,7 +689,7 @@ fn evaluate_processing_recommendation(
         };
     }
 
-    if duration < 0.001_f64 {
+    if duration < crate::constants::DURATION_MIN_VALID {
         return ProcessingRecommendation::CannotProcess {
             reason: format!(
                 "Duration read as {duration:.3}s (possible metadata issue, will attempt conversion)"

@@ -1,3 +1,5 @@
+use crate::ExiftoolBuilder;
+use crate::builder_base::ToolBuilder;
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{Context, Result, bail};
 use quick_xml::events::Event;
@@ -112,7 +114,7 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if exiftool is not found.
     pub fn check_exiftool() -> Result<()> {
-        if !crate::tool_builders::ExiftoolBuilder::check_available() {
+        if !ExiftoolBuilder::check_available() {
             bail!("ExifTool not found. Install with: brew install exiftool");
         }
         Ok(())
@@ -229,7 +231,7 @@ impl XmpMerger {
             && xmp_info.derived_from.is_none()
             && xmp_info.source.is_none()
         {
-            let output = crate::tool_builders::ExiftoolBuilder::new()
+            let output = crate::ExiftoolBuilder::new()
                 .arg("-charset")
                 .arg("filename=utf8")
                 .arg("-api")
@@ -427,7 +429,7 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match crate::tool_builders::ExiftoolBuilder::new()
+            let output = match crate::ExiftoolBuilder::new()
                 .arg("-s3")
                 .arg("-SidecarForExtension")
                 .arg("-XMPFileRef")
@@ -596,7 +598,7 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match crate::tool_builders::ExiftoolBuilder::new()
+            let output = match crate::ExiftoolBuilder::new()
                 .arg("-s3")
                 .arg("-DocumentID")
                 .arg(exiftool_path_arg(&path).as_ref())
@@ -747,7 +749,7 @@ impl XmpMerger {
         let xmp_file = std::fs::File::open(xmp_path)
             .with_context(|| format!("Failed to open XMP file: {}", xmp_path.display()))?;
 
-        let mut builder = crate::tool_builders::ExiftoolBuilder::new();
+        let mut builder = crate::ExiftoolBuilder::new();
         builder
             .use_stdin()
             .preserve_date()

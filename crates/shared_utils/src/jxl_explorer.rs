@@ -28,7 +28,7 @@ use crate::constants::{
 use rug::Rational;
 use std::collections::HashSet;
 
-const JXL_FINALIST_LIMIT: usize = 8;
+const JXL_FINALIST_LIMIT: usize = crate::constants::JXL_FINALIST_LIMIT;
 const JXL_NEAR_BEST_MARGIN_RATIO: f64 = crate::constants::JXL_DISTANCE_PLATEAU;
 const JXL_BOUNDARY_LOW_RATIO: f64 = crate::constants::JXL_BOUNDARY_LOW_RATIO;
 const JXL_BOUNDARY_HIGH_RATIO: f64 = crate::constants::JXL_BOUNDARY_HIGH_RATIO;
@@ -444,23 +444,23 @@ const fn profile_anchor_distances(profile: JxlExplorationProfile) -> &'static [f
         JxlExplorationProfile::MicroAdjust => &[JXL_DISTANCE_CEILING_PLATEAU_MAX],
         JxlExplorationProfile::BoundaryPush => &[
             JXL_DISTANCE_CEILING_PLATEAU_MAX,
-            0.03,
-            0.06,
+            crate::constants::JXL_ANCHOR_DIST_0_03,
+            crate::constants::JXL_ANCHOR_DIST_0_06,
             JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
         ],
         JxlExplorationProfile::WidePush => &[
             JXL_DISTANCE_CEILING_PLATEAU_MAX,
             JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
-            0.15,
-            0.2,
+            crate::constants::JXL_ANCHOR_DIST_0_15,
+            crate::constants::JXL_ANCHOR_DIST_0_20,
             JXL_DISTANCE_BALANCED_MAX,
         ],
         JxlExplorationProfile::CeilingSweep => &[
             JXL_DISTANCE_CEILING_PLATEAU_MAX,
             JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
             JXL_DISTANCE_BALANCED_MAX,
-            0.5,
-            0.75,
+            crate::constants::JXL_ANCHOR_DIST_0_50,
+            crate::constants::JXL_ANCHOR_DIST_0_75,
         ],
     }
 }
@@ -565,13 +565,25 @@ fn build_exploration_plan(
         .max(1.0)
         .log2();
     let (min_probes, max_probes) = match profile {
-        JxlExplorationProfile::MicroAdjust => (4usize, 6usize),
-        JxlExplorationProfile::BoundaryPush => (5usize, 8usize),
-        JxlExplorationProfile::WidePush => (6usize, 10usize),
-        JxlExplorationProfile::CeilingSweep => (8usize, 14usize),
+        JxlExplorationProfile::MicroAdjust => (
+            crate::constants::JXL_PROBE_COUNT_MIN_MICRO,
+            crate::constants::JXL_PROBE_COUNT_MAX_MICRO,
+        ),
+        JxlExplorationProfile::BoundaryPush => (
+            crate::constants::JXL_PROBE_COUNT_MIN_BOUNDARY,
+            crate::constants::JXL_PROBE_COUNT_MAX_BOUNDARY,
+        ),
+        JxlExplorationProfile::WidePush => (
+            crate::constants::JXL_PROBE_COUNT_MIN_WIDE,
+            crate::constants::JXL_PROBE_COUNT_MAX_WIDE,
+        ),
+        JxlExplorationProfile::CeilingSweep => (
+            crate::constants::JXL_PROBE_COUNT_MIN_CEILING,
+            crate::constants::JXL_PROBE_COUNT_MAX_CEILING,
+        ),
     };
     let probe_count = crate::numeric_cast::f64_to_usize_sat(distance_span.ceil())
-        .saturating_add(3)
+        .saturating_add(crate::constants::JXL_PROBE_COUNT_BONUS)
         .clamp(min_probes, max_probes);
     let ladder = build_adaptive_ladder(profile, target_distance, probe_count)?;
 

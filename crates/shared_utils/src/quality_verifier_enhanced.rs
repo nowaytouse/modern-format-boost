@@ -5,19 +5,16 @@
 //! - Optional input vs output sanity (duration match, video codec present)
 //! - Integration with [`crate::checkpoint::verify_output_integrity`] and [`crate::ffprobe`].
 
-use std::path::Path;
-
 use crate::checkpoint::verify_output_integrity;
 use crate::ffprobe;
+use std::path::Path;
 
-/// Minimum file size (bytes) for "valid" output when not specified.
-pub const DEFAULT_MIN_FILE_SIZE: u64 = 32;
+// Global constant moved to crate::constants::DEFAULT_MIN_FILE_SIZE
 
 /// Options for enhanced post-encode verification.
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct VerifyOptions {
-    /// Minimum output file size in bytes. If 0, uses [`DEFAULT_MIN_FILE_SIZE`].
     pub min_file_size: u64,
     /// If true, require input and output duration to match within tolerance.
     pub require_duration_match: bool,
@@ -30,9 +27,9 @@ pub struct VerifyOptions {
 impl VerifyOptions {
     pub const fn strict_video() -> Self {
         Self {
-            min_file_size: DEFAULT_MIN_FILE_SIZE,
+            min_file_size: crate::constants::DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
-            duration_tolerance_secs: 1.0,
+            duration_tolerance_secs: crate::constants::VERIFY_DURATION_TOLERANCE_STRICT,
             require_video_stream: true,
         }
     }
@@ -41,16 +38,16 @@ impl VerifyOptions {
     /// Uses a larger duration tolerance to accommodate frame timing variations during conversion.
     pub const fn relaxed_animated_image() -> Self {
         Self {
-            min_file_size: DEFAULT_MIN_FILE_SIZE,
+            min_file_size: crate::constants::DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
-            duration_tolerance_secs: 3.0, // More tolerant for GIF variable frame delays
+            duration_tolerance_secs: crate::constants::VERIFY_DURATION_TOLERANCE_RELAXED_ANIMATED, // More tolerant for GIF variable frame delays
             require_video_stream: true,
         }
     }
 
     pub const fn minimal() -> Self {
         Self {
-            min_file_size: DEFAULT_MIN_FILE_SIZE,
+            min_file_size: crate::constants::DEFAULT_MIN_FILE_SIZE,
             require_duration_match: false,
             duration_tolerance_secs: 0.0,
             require_video_stream: false,
@@ -61,7 +58,7 @@ impl VerifyOptions {
         if self.min_file_size > 0 {
             self.min_file_size
         } else {
-            DEFAULT_MIN_FILE_SIZE
+            crate::constants::DEFAULT_MIN_FILE_SIZE
         }
     }
 }
@@ -103,7 +100,7 @@ impl EnhancedVerifyResult {
 /// Returns an error if the output file is missing, empty, too small, or unreadable.
 pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
     let size = if min_size == 0 {
-        DEFAULT_MIN_FILE_SIZE
+        crate::constants::DEFAULT_MIN_FILE_SIZE
     } else {
         min_size
     };
@@ -277,7 +274,10 @@ mod tests {
     #[test]
     fn test_verify_options_defaults() {
         let o = VerifyOptions::default();
-        assert_eq!(o.effective_min_size(), DEFAULT_MIN_FILE_SIZE);
+        assert_eq!(
+            o.effective_min_size(),
+            crate::constants::DEFAULT_MIN_FILE_SIZE
+        );
         let m = VerifyOptions {
             min_file_size: 100,
             ..VerifyOptions::default()
@@ -292,7 +292,8 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_output_file_empty_or_small() {
+    fn test_verify_output_file_empty_or_small()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir();
         let empty = dir.join("quality_verifier_test_empty");
         let _ = std::fs::File::create(&empty).and_then(|f| f.sync_all());
@@ -301,14 +302,14 @@ mod tests {
         let _ = crate::io_utils::safe_remove_file(&empty);
 
         let small = dir.join("quality_verifier_test_small");
-        let mut f = std::fs::File::create(&small).unwrap_or_else(|e| panic!("error: {e:?}"));
-        f.write_all(&[0u8; 64])
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
-        f.sync_all().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let mut f = std::fs::File::create(&small)?;
+        f.write_all(&[0u8; 64])?;
+        f.sync_all()?;
         drop(f);
         let r = verify_output_file(&small, 32);
         assert!(r.is_ok());
         let _ = crate::io_utils::safe_remove_file(&small);
+        Ok(())
     }
 
     #[test]
@@ -341,13 +342,17 @@ mod tests {
 
     /// Regression: use only temp copies (no original folder). When input/output are not valid video, probe fails and `enhanced_verify_fail_reason` is set.
     #[test]
-    fn test_verify_after_encode_with_temp_copies_probe_fails() {
+    fn test_verify_after_encode_with_temp_copies_probe_fails()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir();
         let input_copy = dir.join("enhanced_verify_test_input_copy");
         let output_copy = dir.join("enhanced_verify_test_output_copy");
-        let minimal: [u8; 64] = [0u8; 64];
-        std::fs::write(&input_copy, minimal).unwrap_or_else(|e| panic!("error: {e:?}"));
-        std::fs::write(&output_copy, minimal).unwrap_or_else(|e| panic!("error: {e:?}"));
+        // Pad beyond DEFAULT_MIN_FILE_SIZE so the size gate passes and probe runs.
+        let min_size = usize::try_from(crate::constants::DEFAULT_MIN_FILE_SIZE)
+            .expect("DEFAULT_MIN_FILE_SIZE fits in usize on supported targets");
+        let minimal = vec![0u8; min_size * 2];
+        std::fs::write(&input_copy, &minimal)?;
+        std::fs::write(&output_copy, &minimal)?;
         let result = verify_after_encode(&input_copy, &output_copy, &VerifyOptions::strict_video());
         let _ = crate::io_utils::safe_remove_file(&input_copy);
         let _ = crate::io_utils::safe_remove_file(&output_copy);
@@ -360,5 +365,6 @@ mod tests {
             "expected probe-related message, got: {}",
             result.message
         );
+        Ok(())
     }
 }

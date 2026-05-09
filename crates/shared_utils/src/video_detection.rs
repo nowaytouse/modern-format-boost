@@ -191,8 +191,8 @@ pub struct VideoDetectionResult {
     pub codec: DetectedCodec,
     pub codec_long: String,
     pub compression: CompressionType,
-    pub width: u32,
-    pub height: u32,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub frame_count: Option<u64>,
     pub fps: Option<f64>,
     pub duration_secs: Option<f64>,
@@ -353,22 +353,22 @@ pub fn calculate_quality_score(
     height: u32,
 ) -> u8 {
     let base_score: u8 = match compression {
-        CompressionType::Lossless => 100,
-        CompressionType::VisuallyLossless => 95,
-        CompressionType::HighQuality => 80,
-        CompressionType::Standard => 60,
-        CompressionType::LowQuality => 40,
+        CompressionType::Lossless => crate::constants::VIDEO_QUALITY_SCORE_LOSSLESS,
+        CompressionType::VisuallyLossless => {
+            crate::constants::VIDEO_QUALITY_SCORE_VISUALLY_LOSSLESS
+        }
+        CompressionType::HighQuality => crate::constants::VIDEO_QUALITY_SCORE_HIGH,
+        CompressionType::Standard => crate::constants::VIDEO_QUALITY_SCORE_STANDARD,
+        CompressionType::LowQuality => crate::constants::VIDEO_QUALITY_SCORE_LOW,
     };
-    let depth_bonus = if bit_depth.is_some_and(|d| {
-        d >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD)
-    }) {
-        crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_QUALITY_BONUS)
+    let depth_bonus = if bit_depth.is_some_and(|d| d >= crate::constants::HDR_BIT_DEPTH_THRESHOLD) {
+        crate::constants::HDR_QUALITY_BONUS
     } else {
         0
     };
     let res_bonus =
         if width >= crate::constants::WIDTH_UHD_4K || height >= crate::constants::HEIGHT_UHD_4K {
-            3
+            crate::constants::VIDEO_QUALITY_RESOLUTION_BONUS_UHD
         } else {
             0
         };
@@ -483,7 +483,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
                 })?;
 
             crate::ffprobe::FFprobeResult {
-                format_name: path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_string(),
+                format_name: path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
                 duration: None,
                 size: file_size,
                 bit_rate: None,
@@ -597,8 +601,16 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         codec,
         codec_long: probe.video_codec_long,
         compression,
-        width: probe.width,
-        height: probe.height,
+        width: if probe.width > 0 {
+            Some(probe.width)
+        } else {
+            None
+        },
+        height: if probe.height > 0 {
+            Some(probe.height)
+        } else {
+            None
+        },
         frame_count: probe.frame_count,
         fps: probe.frame_rate,
         duration_secs: probe.duration,
@@ -670,7 +682,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     }
 
     if let Some(fc_val) = result.frame_count
-        && (fc_val <= 1 || fc_val > 50000)
+        && (fc_val <= 1 || fc_val > crate::constants::FRAME_COUNT_TRUST_UPPER_LIMIT)
         && let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(path, fc_val)
         && real_count != fc_val

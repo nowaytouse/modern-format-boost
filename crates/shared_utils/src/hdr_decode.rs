@@ -4,6 +4,7 @@
 //! Standard Rust image decoders (image crate, libheif-rs) decode to 8-bit RGB,
 //! losing HDR information. This module uses `FFmpeg` to decode HDR images to 16-bit PNG.
 
+use crate::builder_base::ToolBuilder;
 use crate::ffprobe_json::ColorInfo;
 use crate::hdr_utils::{get_hdr_pix_fmt, should_use_hdr_decode};
 use crate::img_errors::{ImgQualityError, Result};
@@ -62,7 +63,7 @@ pub fn decode_hdr_image_to_png16(
 
     // FFmpeg command: decode to 16-bit RGB PNG
     // -i input.heic -pix_fmt rgb48le -frames:v 1 output.png
-    let output = crate::tool_builders::FfmpegBuilder::new()
+    let output = crate::FfmpegBuilder::new()
         .overwrite()
         .input(input)
         .pix_fmt_str(pix_fmt)

@@ -18,6 +18,7 @@
 //! 5. **CRF**: Prefer lower/more aggressive (tiebreaker)
 //! 6. **Preset**: Prefer higher rank = slower/better quality (tiebreaker)
 
+use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -47,36 +48,20 @@ use crate::modern_ui::colors::{
 };
 use crate::types::EncoderPreset;
 
-const VMAF_Y_SANITY_FLOOR: f64 = 86.0;
-const PSNR_UV_SANITY_FLOOR: f64 = 30.0;
-const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
-const MAX_CONSECUTIVE_FAILURES: u32 = 2;
-const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
-const DECAY_FACTOR: f32 = 0.4;
-const MIN_STEP: f32 = 0.1;
-const CAMBI_MAX: f64 = 6.0;
-const VMAF_Y_ALLOWED_DROP_FROM_BASELINE: f64 = 2.0;
-const PSNR_UV_ALLOWED_DROP_FROM_BASELINE: f64 = 1.5;
-const CAMBI_CLEAN_ALLOWED_RISE: f64 = 1.0;
-const CAMBI_BANDED_ALLOWED_RISE: f64 = 1.5;
-const CAMBI_BANDED_ALLOWED_GROWTH_RATIO: f64 = 0.15;
-const MS_SSIM_WEIGHT: f64 = 0.6;
-const SSIM_ALL_WEIGHT: f64 = 0.4;
-const NORMAL_FUSION_SANITY_FLOOR: f64 = 0.88;
-const NORMAL_ALLOWED_DROP_FROM_BASELINE: f64 = 0.04;
-const PHASE3_DOWNWARD_STEP: f32 = 0.1;
-const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = 2;
-const PHASE4_MAX_BACKTRACK_RETRIES: u32 = 3;
-const PHASE4_MAX_ATTEMPTS: u32 = 32;
-const PHASE4_CRF0_PROBE_MAX_DISTANCE: f32 = 1.0;
+const MAX_CONSECUTIVE_COMPRESSIONS: u32 = crate::constants::GPU_COARSE_MAX_CONSECUTIVE_COMPRESSIONS;
+const MAX_CONSECUTIVE_FAILURES: u32 = crate::constants::GPU_COARSE_MAX_CONSECUTIVE_FAILURES;
+const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = crate::constants::PHASE4_ULTIMATE_MAX_FINE_FAILURES;
+const PHASE4_MAX_BACKTRACK_RETRIES: u32 = crate::constants::PHASE4_MAX_BACKTRACK_RETRIES;
+const PHASE4_MAX_ATTEMPTS: u32 = crate::constants::PHASE4_MAX_ATTEMPTS;
 /// Maximum number of consecutive non-improving encodes Phase 5 may perform.
 /// This acts as a patience counter (lookahead) to find local minima.
-const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = crate::constants::PHASE5_MAX_CONSECUTIVE_FAILURES;
 /// Absolute cap to prevent an infinite march to CRF 0.0 for monotonically decreasing files.
-const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = 10;
-const UPWARD_JOG_MIN_STEP: f32 = 0.5;
-const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
-const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
+const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = crate::constants::PHASE5_MAX_TOTAL_ATTEMPTS;
+const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 =
+    crate::constants::GPU_COARSE_UPWARD_SIZE_STAGNATION_THRESHOLD;
+const UPWARD_DIRECTION_SWITCH_LIMIT: u32 =
+    crate::constants::GPU_COARSE_UPWARD_DIRECTION_SWITCH_LIMIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpwardSearchCadence {
@@ -128,46 +113,60 @@ fn ultimate_final_sample_rate(duration_secs: f64) -> usize {
 }
 
 fn adaptive_vmaf_floor(search_baseline: Option<f64>) -> f64 {
-    search_baseline.map_or(VMAF_Y_SANITY_FLOOR, |baseline| {
-        (baseline - VMAF_Y_ALLOWED_DROP_FROM_BASELINE).max(VMAF_Y_SANITY_FLOOR)
-    })
+    search_baseline.map_or(
+        crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR,
+        |baseline| {
+            (baseline - crate::constants::EXPLORATION_VMAF_ALLOWED_DROP)
+                .max(crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR)
+        },
+    )
 }
 
 fn adaptive_psnr_uv_floor(search_baseline: Option<(f64, f64)>) -> (f64, f64) {
-    search_baseline.map_or((PSNR_UV_SANITY_FLOOR, PSNR_UV_SANITY_FLOOR), |(u, v)| {
+    search_baseline.map_or(
         (
-            (u - PSNR_UV_ALLOWED_DROP_FROM_BASELINE).max(PSNR_UV_SANITY_FLOOR),
-            (v - PSNR_UV_ALLOWED_DROP_FROM_BASELINE).max(PSNR_UV_SANITY_FLOOR),
-        )
-    })
+            crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR,
+            crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR,
+        ),
+        |(u, v)| {
+            (
+                (u - crate::constants::EXPLORATION_PSNR_ALLOWED_DROP)
+                    .max(crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR),
+                (v - crate::constants::EXPLORATION_PSNR_ALLOWED_DROP)
+                    .max(crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR),
+            )
+        },
+    )
 }
 
 fn adaptive_cambi_ceiling(source_baseline: Option<f64>) -> f64 {
     match source_baseline {
-        None => CAMBI_MAX,
-        Some(baseline) if baseline <= CAMBI_MAX => {
-            (baseline + CAMBI_CLEAN_ALLOWED_RISE).max(CAMBI_MAX)
-        }
+        None => crate::constants::EXPLORATION_CAMBI_MAX,
+        Some(baseline) if baseline <= crate::constants::EXPLORATION_CAMBI_MAX => (baseline
+            + crate::constants::EXPLORATION_CAMBI_CLEAN_ALLOWED_RISE)
+            .max(crate::constants::EXPLORATION_CAMBI_MAX),
         Some(baseline) => {
             baseline
                 + f64::max(
-                    CAMBI_BANDED_ALLOWED_RISE,
-                    baseline * CAMBI_BANDED_ALLOWED_GROWTH_RATIO,
+                    crate::constants::EXPLORATION_CAMBI_BANDED_ALLOWED_RISE,
+                    baseline * crate::constants::EXPLORATION_CAMBI_BANDED_GROWTH_RATIO,
                 )
         }
     }
 }
 
 fn should_probe_crf_zero_from_phase4(best_crf: f32) -> bool {
-    best_crf > 0.0 && best_crf <= PHASE4_CRF0_PROBE_MAX_DISTANCE
+    best_crf > 0.0 && best_crf <= crate::constants::EXPLORATION_PHASE4_MAX_DISTANCE
 }
 
 fn metrics_below_ultimate_sanity_floor(vmaf_y: f64, psnr_uv: (f64, f64)) -> bool {
-    vmaf_y < VMAF_Y_SANITY_FLOOR || psnr_uv.0.min(psnr_uv.1) < PSNR_UV_SANITY_FLOOR
+    vmaf_y < crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR
+        || psnr_uv.0.min(psnr_uv.1) < crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR
 }
 
 fn both_metrics_below_ultimate_sanity_floor(vmaf_y: f64, psnr_uv: (f64, f64)) -> bool {
-    vmaf_y < VMAF_Y_SANITY_FLOOR && psnr_uv.0.min(psnr_uv.1) < PSNR_UV_SANITY_FLOOR
+    vmaf_y < crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR
+        && psnr_uv.0.min(psnr_uv.1) < crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR
 }
 
 fn evaluate_ultimate_quality_gate(
@@ -229,7 +228,10 @@ fn build_normal_quality_evaluation(
     measurement: NormalQualityMeasurement,
 ) -> NormalQualityEvaluation {
     let fusion_score = match (measurement.ms_ssim_avg, measurement.ssim_all) {
-        (Some(ms), Some(ss)) => Some(MS_SSIM_WEIGHT.mul_add(ms, SSIM_ALL_WEIGHT * ss)),
+        (Some(ms), Some(ss)) => Some(
+            crate::constants::EXPLORATION_MS_SSIM_WEIGHT
+                .mul_add(ms, crate::constants::EXPLORATION_SSIM_ALL_WEIGHT * ss),
+        ),
         (Some(ms), None) => Some(ms),
         (None, Some(ss)) => Some(ss),
         (None, None) => None,
@@ -238,11 +240,15 @@ fn build_normal_quality_evaluation(
     // Use the explore-phase SSIM as the reference: allow a fixed drop below it,
     // but never go below the config floor or the hard sanity floor.
     let fusion_floor = baseline.explore_ssim.map_or_else(
-        || baseline.min_ssim_config.max(NORMAL_FUSION_SANITY_FLOOR),
+        || {
+            baseline
+                .min_ssim_config
+                .max(crate::constants::EXPLORATION_FUSION_SANITY_FLOOR)
+        },
         |ref_ssim| {
-            (ref_ssim - NORMAL_ALLOWED_DROP_FROM_BASELINE)
+            (ref_ssim - crate::constants::EXPLORATION_FUSION_ALLOWED_DROP)
                 .max(baseline.min_ssim_config)
-                .max(NORMAL_FUSION_SANITY_FLOOR)
+                .max(crate::constants::EXPLORATION_FUSION_SANITY_FLOOR)
         },
     );
 
@@ -930,25 +936,25 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
         // Display quality metrics that triggered early insight
         if let Some(vmaf) = tracking.best_vmaf {
-            let vmaf_pass = vmaf >= VMAF_Y_SANITY_FLOOR;
+            let vmaf_pass = vmaf >= crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR;
             crate::log_eprintln!(
                 "   VMAF-Y: {:.2} {} {:.1} {} (sanity floor)",
                 vmaf,
                 if vmaf_pass { "≥" } else { "<" },
-                VMAF_Y_SANITY_FLOOR,
+                crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR,
                 if vmaf_pass { "✅" } else { "❌" }
             );
         }
         if let Some((u, v)) = tracking.best_psnr_uv {
-            let u_pass = u >= PSNR_UV_SANITY_FLOOR;
-            let v_pass = v >= PSNR_UV_SANITY_FLOOR;
+            let u_pass = u >= crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR;
+            let v_pass = v >= crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR;
             crate::log_eprintln!(
                 "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (sanity floor ≥ {:.1} dB)",
                 u,
                 if u_pass { "✅" } else { "❌" },
                 v,
                 if v_pass { "✅" } else { "❌" },
-                PSNR_UV_SANITY_FLOOR
+                crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR
             );
         }
 
@@ -1279,14 +1285,14 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     crate::log_eprintln!("   FUSION SCORE: {}", score_str);
                     crate::log_eprintln!(
                         "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
-                        MS_SSIM_WEIGHT,
-                        SSIM_ALL_WEIGHT
+                        crate::constants::EXPLORATION_MS_SSIM_WEIGHT,
+                        crate::constants::EXPLORATION_SSIM_ALL_WEIGHT
                     );
                     crate::log_eprintln!(
                         "      = {:.1}×{:.4} + {:.1}×{:.4}",
-                        MS_SSIM_WEIGHT,
+                        crate::constants::EXPLORATION_MS_SSIM_WEIGHT,
                         ms,
-                        SSIM_ALL_WEIGHT,
+                        crate::constants::EXPLORATION_SSIM_ALL_WEIGHT,
                         ss
                     );
                 }
@@ -1591,7 +1597,9 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
     if vf_args.len() >= 2 && vf_args.first().is_some_and(|s| s == "-vf") {
         let merged = format!(
             "{prefix},{}",
-            vf_args.get(1).expect("Required string property missing")
+            vf_args
+                .get(1)
+                .expect("len() >= 2 guarantees index 1 exists")
         );
         vec!["-vf".to_string(), merged]
     } else {
@@ -2508,14 +2516,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
             }
             if test_crf < search_floor {
-                if current_step > MIN_STEP + 0.01 {
+                if current_step > crate::constants::EXPLORATION_MIN_STEP + 0.01 {
                     crate::verbose_eprintln!(
                         "   {}Reached search floor, fine tuning from CRF {:.2}{}",
                         BRIGHT_CYAN,
                         last_good_crf,
                         RESET
                     );
-                    current_step = MIN_STEP;
+                    current_step = crate::constants::EXPLORATION_MIN_STEP;
                     test_crf = last_good_crf - current_step;
                     if test_crf < search_floor {
                         break;
@@ -2621,7 +2629,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             && !psnr_improved;
                     }
 
-                    if current_step <= MIN_STEP + 0.01 {
+                    if current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01 {
                         if quality_plateau {
                             consecutive_zero_gains += 1;
                         } else {
@@ -2630,7 +2638,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
 
                     let quality_wall_triggered = metrics_measured
-                        && current_step <= MIN_STEP + 0.01
+                        && current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
                         && consecutive_zero_gains >= required_zero_gains;
 
                     if quality_wall_triggered {
@@ -2653,8 +2661,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                             bail!("Quality wall hit but PSNR UV not measured");
                         };
 
-                        if vmaf_metric < VMAF_Y_SANITY_FLOOR
-                            || psnr_uv_min_channel < PSNR_UV_SANITY_FLOOR
+                        if vmaf_metric < crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR
+                            || psnr_uv_min_channel
+                                < crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR
                         {
                             crate::log_eprintln!(
                                 "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below sanity floor. Aborting.",
@@ -2667,7 +2676,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
 
                     let sat_status = if consecutive_zero_gains > 0
-                        && current_step <= MIN_STEP + 0.01
+                        && current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
                     {
                         format!(
                             " {BRIGHT_MAGENTA}[SAT:{consecutive_zero_gains}/{required_zero_gains}]{RESET}"
@@ -2718,19 +2727,20 @@ fn cpu_fine_tune_from_gpu_boundary(
                         };
                     }
 
-                    if current_step <= MIN_STEP + 0.01 {
-                        if ssim_gain.abs() < ZERO_GAIN_THRESHOLD {
+                    if current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01 {
+                        if ssim_gain.abs() < crate::constants::EXPLORATION_ZERO_GAIN_THRESHOLD {
                             consecutive_zero_gains += 1;
                         } else {
                             consecutive_zero_gains = 0;
                         }
                     }
 
-                    let quality_wall_triggered = current_step <= MIN_STEP + 0.01
+                    let quality_wall_triggered = current_step
+                        <= crate::constants::EXPLORATION_MIN_STEP + 0.01
                         && consecutive_zero_gains >= required_zero_gains;
 
                     let sat_status = if consecutive_zero_gains > 0
-                        && current_step <= MIN_STEP + 0.01
+                        && current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
                     {
                         format!(" {DIM}[SAT:{consecutive_zero_gains}/{required_zero_gains}]{RESET}")
                     } else {
@@ -2816,29 +2826,31 @@ fn cpu_fine_tune_from_gpu_boundary(
                 wall_hits += 1;
 
                 let _total_file_diff = crate::format_size_diff(
-                    i64::try_from(size).expect("Failed to parse integer or missing required value")
+                    i64::try_from(size)
+                        .expect("file size <= i64::MAX (~9 PiB) on any real storage")
                         - i64::try_from(input_size)
-                            .expect("Failed to parse integer or missing required value"),
+                            .expect("file size <= i64::MAX (~9 PiB) on any real storage"),
                 );
 
                 // Calculate new_step first for phase_info
                 let curve_step = initial_step
-                    * DECAY_FACTOR.powi(
+                    * crate::constants::EXPLORATION_DECAY_FACTOR.powi(
                         i32::try_from(wall_hits)
                             .expect("Failed to parse integer or missing required value"),
                     );
                 let new_step = if curve_step < 1.0 {
-                    MIN_STEP
+                    crate::constants::EXPLORATION_MIN_STEP
                 } else {
                     curve_step
                 };
 
+                let decay_val = crate::constants::EXPLORATION_DECAY_FACTOR;
                 let phase_info = if wall_hits == 1 {
-                    format!("decay ×{DECAY_FACTOR:.1}")
-                } else if new_step <= MIN_STEP + 0.01 {
+                    format!("decay ×{decay_val:.1}")
+                } else if new_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01 {
                     "→ FINE TUNING".to_string()
                 } else {
-                    format!("decay {DIM}×{DECAY_FACTOR:.1}^{wall_hits}")
+                    format!("decay {DIM}×{decay_val:.1}^{wall_hits}")
                 };
 
                 crate::log_eprintln!(
@@ -2859,7 +2871,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     phase_info
                 );
 
-                if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
+                if current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
+                    && new_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
+                {
                     // We hit a physical capacity boundary at the minimum step size.
                     // Since CRF vs File Size is strictly monotonic, stepping downward further
                     // will only yield even larger files, guaranteeing consecutive failures.
@@ -3165,7 +3179,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 } else if size_delta > 2.5_f64 && total_size_pct < 110.0_f64 {
                     // Deceleration: Slope detected AND nearing compression boundary
                     if current_step > step_size_upward {
-                        let jog_step = UPWARD_JOG_MIN_STEP.max(step_size_upward);
+                        let jog_step =
+                            crate::constants::EXPLORATION_UPWARD_JOG_MIN_STEP.max(step_size_upward);
                         if current_step > jog_step + f32::EPSILON {
                             crate::log_eprintln!(
                                 "   {}💧 Search Decelerating (slope Δ{:.1} detected, step: {:.2} → {:.2}, entering jog){}",
@@ -3375,12 +3390,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             crate::log_eprintln!(
                 "{}Phase 3: [CPU] Search DOWNWARD with Sprint & Backtrack (min step {:.2}){}",
                 BRIGHT_CYAN,
-                PHASE3_DOWNWARD_STEP,
+                crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP,
                 RESET
             );
 
             let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
-            let mut current_step = PHASE3_DOWNWARD_STEP;
+            let mut current_step = crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP;
             let mut last_size_pct = if input_size > 0 {
                 (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size))
                     / crate::numeric_cast::u64_to_f64(input_size.max(1))
@@ -3569,10 +3584,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let decelerate_multiplier = if ultimate_mode { 1.0 } else { 2.0 };
                     let boundary_nearing = distance_to_floor < current_step * decelerate_multiplier;
 
-                    if size_delta > 1.0_f64 && current_step > PHASE3_DOWNWARD_STEP {
+                    if size_delta > 1.0_f64
+                        && current_step > crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP
+                    {
                         // Slope-Aware Deceleration (⚡ -> 💧)
                         let old_step = current_step;
-                        current_step = PHASE3_DOWNWARD_STEP;
+                        current_step = crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP;
                         consecutive_successes = 0_i32;
                         crate::log_eprintln!(
                             "   {}💧 Search Decelerating (slope Δ{:.1} detected, step reset: {:.2} → {:.2}){}",
@@ -3582,10 +3599,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                             current_step,
                             RESET
                         );
-                    } else if boundary_nearing && current_step > PHASE3_DOWNWARD_STEP + 0.001 {
+                    } else if boundary_nearing
+                        && current_step > crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP + 0.001
+                    {
                         // Boundary-Aware Deceleration
                         let old_step = current_step;
-                        current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
+                        current_step = (current_step / 2.0)
+                            .max(crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP);
                         consecutive_successes = 0_i32;
                         crate::log_eprintln!(
                             "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
@@ -3650,9 +3670,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     );
 
                     // Unified Anti-Oscillation Backtrack
-                    if current_step > PHASE3_DOWNWARD_STEP + 0.01 && backtrack_count < 2 {
+                    if current_step > crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP + 0.01
+                        && backtrack_count < 2
+                    {
                         let old_step = current_step;
-                        current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
+                        current_step = (current_step / 2.0)
+                            .max(crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP);
                         backtrack_count += 1;
                         consecutive_successes = 0_i32;
                         crate::log_eprintln!(
@@ -3673,14 +3696,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                         crate::log_eprintln!(
                             "   {}Capacity exceeded at step {:.2}. Stopping.{}",
                             BRIGHT_YELLOW,
-                            PHASE3_DOWNWARD_STEP,
+                            crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP,
                             RESET
                         );
                         break;
                     }
 
                     // For ultimate mode, continue stepping down to see if quality metric overrides
-                    current_step = PHASE3_DOWNWARD_STEP;
+                    current_step = crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP;
                     test_crf -= current_step;
 
                     // Insight mechanism: only count as credible failure if quality actually degraded
@@ -4072,7 +4095,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                     }
                 }
-            } else if current_best > PHASE4_CRF0_PROBE_MAX_DISTANCE {
+            } else if current_best > crate::constants::EXPLORATION_PHASE4_MAX_DISTANCE {
                 crate::log_eprintln!(
                     "   {}Skipping CRF 0.00 probe: best CRF {:.2} is not near the floor.{}",
                     DIM,
@@ -4418,7 +4441,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     let ssim_confidence = if ultimate_mode {
         match (tracking.best_vmaf, tracking.best_psnr_uv) {
             (Some(v), Some((u, vv)))
-                if v >= VMAF_Y_SANITY_FLOOR && u.min(vv) >= PSNR_UV_SANITY_FLOOR =>
+                if v >= crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR
+                    && u.min(vv) >= crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR =>
             {
                 0.9_f64
             }
@@ -4713,12 +4737,13 @@ pub fn explore_av1_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ABSOLUTE_MIN_CRF, CAMBI_MAX, PSNR_UV_SANITY_FLOOR, UltimateQualityBaselines,
-        UltimateQualityMetrics, VMAF_Y_SANITY_FLOOR, adaptive_cambi_ceiling,
+        UltimateQualityBaselines, UltimateQualityMetrics, adaptive_cambi_ceiling,
         adaptive_psnr_uv_floor, adaptive_vmaf_floor, evaluate_ultimate_quality_gate,
         hevc_preset_plan, search_anchor_crf, should_probe_crf_zero_from_phase4,
     };
+    use crate::constants::EXPLORATION_CAMBI_MAX;
     use crate::types::EncoderPreset;
+    const ABSOLUTE_MIN_CRF: f32 = super::ABSOLUTE_MIN_CRF;
 
     #[test]
     fn test_search_anchor_crf_uses_warm_start_backoff_and_clamp() {
@@ -4763,21 +4788,30 @@ mod tests {
     #[test]
     fn test_adaptive_quality_floors_follow_search_baseline() {
         assert!((adaptive_vmaf_floor(Some(95.0_f64)) - 93.0).abs() < f64::EPSILON);
-        assert!((adaptive_vmaf_floor(None) - VMAF_Y_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!(
+            (adaptive_vmaf_floor(None) - crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR).abs()
+                < f64::EPSILON
+        );
 
         let psnr = adaptive_psnr_uv_floor(Some((36.5_f64, 35.0_f64)));
         assert!((psnr.0 - 35.0).abs() < f64::EPSILON);
         assert!((psnr.1 - 33.5).abs() < f64::EPSILON);
 
         let null_psnr = adaptive_psnr_uv_floor(None);
-        assert!((null_psnr.0 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
-        assert!((null_psnr.1 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!(
+            (null_psnr.0 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON
+        );
+        assert!(
+            (null_psnr.1 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_adaptive_cambi_ceiling_respects_source_banding_level() {
-        assert!((adaptive_cambi_ceiling(None) - CAMBI_MAX).abs() < f64::EPSILON);
-        assert!((adaptive_cambi_ceiling(Some(2.5_f64)) - CAMBI_MAX).abs() < f64::EPSILON);
+        assert!((adaptive_cambi_ceiling(None) - EXPLORATION_CAMBI_MAX).abs() < f64::EPSILON);
+        assert!(
+            (adaptive_cambi_ceiling(Some(2.5_f64)) - EXPLORATION_CAMBI_MAX).abs() < f64::EPSILON
+        );
         assert!((adaptive_cambi_ceiling(Some(5.5_f64)) - 6.5).abs() < f64::EPSILON);
         assert!((adaptive_cambi_ceiling(Some(10.0_f64)) - 11.5).abs() < f64::EPSILON);
         assert!((adaptive_cambi_ceiling(Some(20.0_f64)) - 23.0).abs() < f64::EPSILON);
@@ -5068,21 +5102,26 @@ mod tests {
     #[test]
     fn test_adaptive_vmaf_floor_clamps_to_sanity() {
         // baseline 88.0 - 2.0 = 86.0, matching the sanity floor
-        assert!((adaptive_vmaf_floor(Some(88.0_f64)) - VMAF_Y_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!(
+            (adaptive_vmaf_floor(Some(88.0_f64))
+                - crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR)
+                .abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_adaptive_psnr_floor_clamps_to_sanity() {
         // baseline 31.0/31.2 - 1.5 would fall below 30.0, so both clamp to the sanity floor
         let psnr = adaptive_psnr_uv_floor(Some((31.0_f64, 31.2_f64)));
-        assert!((psnr.0 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
-        assert!((psnr.1 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!((psnr.0 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!((psnr.1 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_adaptive_cambi_ceiling_borderline_clean() {
-        // Source CAMBI exactly at CAMBI_MAX boundary gets the clean-source rise.
-        let ceil = adaptive_cambi_ceiling(Some(CAMBI_MAX));
+        // Source CAMBI exactly at EXPLORATION_CAMBI_MAX boundary gets the clean-source rise.
+        let ceil = adaptive_cambi_ceiling(Some(EXPLORATION_CAMBI_MAX));
         assert!((ceil - 7.0).abs() < 1e-6_f64);
     }
 

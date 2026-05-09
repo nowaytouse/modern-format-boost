@@ -175,17 +175,26 @@ pub fn analyze_image_quality(
 
     let color_diversity = precision.palette_size.map_or_else(
         || calculate_color_diversity(rgba_data, width, height),
-        |p_size| Some((crate::numeric_cast::usize_to_f64(p_size) / 256.0).min(1.0)),
+        |p_size| {
+            Some(
+                (crate::numeric_cast::usize_to_f64(p_size)
+                    / crate::constants::PALETTE_MAX_DENSITY_F64)
+                    .min(1.0),
+            )
+        },
     );
 
     let texture_variance = calculate_texture_variance(rgba_data, width, height);
 
-    let noise_level =
-        if precision.is_lossless_deterministic && precision.bit_depth.is_some_and(|bd| bd >= 10) {
-            Some(0.0_f64)
-        } else {
-            calculate_noise_level(rgba_data, width, height)
-        };
+    let noise_level = if precision.is_lossless_deterministic
+        && precision
+            .bit_depth
+            .is_some_and(|bd| bd >= crate::constants::HDR_BIT_DEPTH_THRESHOLD)
+    {
+        Some(0.0_f64)
+    } else {
+        calculate_noise_level(rgba_data, width, height)
+    };
     let sharpness = calculate_sharpness(rgba_data, width, height);
     let contrast = calculate_contrast(rgba_data, width, height);
     let has_alpha = detect_alpha_usage(rgba_data);
@@ -327,16 +336,16 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> Option<f64
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
-        20
+        crate::constants::COLOR_DIVERSITY_STEP_LARGE
     } else if pixels
         > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
     {
-        10
+        crate::constants::COLOR_DIVERSITY_STEP_MEDIUM
     } else {
-        1
+        crate::constants::COLOR_DIVERSITY_STEP_NORMAL
     };
 
-    let quantize_step = 4u8;
+    let quantize_step = crate::constants::COLOR_DIVERSITY_QUANTIZE_STEP;
     let mut colors = HashSet::new();
     let mut sample_count = 0usize;
 
@@ -355,7 +364,9 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> Option<f64
         return None;
     }
 
-    let max_colors = crate::numeric_cast::usize_to_f64(sample_count.min(10000));
+    let max_colors = crate::numeric_cast::usize_to_f64(
+        sample_count.min(crate::constants::COLOR_DIVERSITY_MAX_SAMPLES),
+    );
     Some((crate::numeric_cast::usize_to_f64(colors.len()) / max_colors).min(1.0))
 }
 
@@ -381,13 +392,13 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
-        10
+        crate::constants::TEXTURE_VARIANCE_STEP_LARGE
     } else if pixels
         > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
     {
-        5
+        crate::constants::TEXTURE_VARIANCE_STEP_MEDIUM
     } else {
-        2
+        crate::constants::TEXTURE_VARIANCE_STEP_NORMAL
     };
 
     let mut variance_sum = 0.0_f64;
@@ -408,17 +419,20 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
                     );
                     let idx = (py * crate::numeric_cast::u32_to_usize_sat(width) + px) * 4;
 
-                    let gray = (i32::from(rgba[idx]) * 299_i32
-                        + i32::from(rgba[idx + 1]) * 587_i32
-                        + i32::from(rgba[idx + 2]) * 114_i32)
-                        / 1_000_i32;
+                    let gray = (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
+                        + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
+                        + i32::from(rgba[idx + 2]) * crate::constants::LUMA_COEFF_B)
+                        / crate::constants::LUMA_DIVISOR;
                     sum += gray;
                     sq_sum += i64::from(gray) * i64::from(gray);
                 }
             }
 
-            let mean = f64::from(sum) / 9.0_f64;
-            let variance = mean.mul_add(-mean, crate::numeric_cast::i64_to_f64(sq_sum) / 9.0_f64);
+            let mean = f64::from(sum) / crate::constants::KERNEL_SIZE_3X3;
+            let variance = mean.mul_add(
+                -mean,
+                crate::numeric_cast::i64_to_f64(sq_sum) / crate::constants::KERNEL_SIZE_3X3,
+            );
             variance_sum += variance.sqrt();
             sample_count += 1;
         }
@@ -454,11 +468,11 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
-        10
+        crate::constants::NOISE_LEVEL_STEP_LARGE
     } else if pixels
         > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
     {
-        5
+        crate::constants::NOISE_LEVEL_STEP_MEDIUM
     } else {
         crate::constants::IMAGE_SAMPLING_STEP_NORMAL
     };
@@ -637,8 +651,8 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
 /// `true` if alpha channel is used, `false` otherwise
 fn detect_alpha_usage(rgba: &[u8]) -> bool {
     for i in (0..rgba.len()).step_by(crate::constants::IMAGE_ALPHA_SAMPLING_STEP) {
-        let alpha_idx = i + 3;
-        if alpha_idx < rgba.len() && rgba[alpha_idx] < 255 {
+        let alpha_idx = i + crate::constants::RGBA_ALPHA_OFFSET;
+        if alpha_idx < rgba.len() && rgba[alpha_idx] < crate::constants::ALPHA_OPAQUE {
             return true;
         }
     }

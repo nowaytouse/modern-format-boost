@@ -79,12 +79,12 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
         // Truncated/malformed GIF data causes a clean break rather than a panic.
         let Some(&block_id) = buf.get(pos) else { break };
         match block_id {
-            0x21 if pos + 1 < buf.len() => {
+            crate::constants::GIF_BLOCK_EXTENSION_INTRODUCER if pos + 1 < buf.len() => {
                 let Some(&ext_type) = buf.get(pos + 1) else {
                     break;
                 };
                 match ext_type {
-                    0xFF => {
+                    crate::constants::GIF_BLOCK_APPLICATION_EXTENSION => {
                         let Some(&block_size) = buf.get(pos + 2) else {
                             break;
                         };
@@ -120,7 +120,9 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                         pos = pos.saturating_add(3).saturating_add(block_size);
                         pos = skip_sub_blocks(&buf, pos);
                     }
-                    0xF9 if pos + 7 < buf.len() => {
+                    crate::constants::GIF_BLOCK_GRAPHICS_CONTROL_EXTENSION
+                        if pos + 7 < buf.len() =>
+                    {
                         let Some(&gce_size) = buf.get(pos + 2) else {
                             break;
                         };
@@ -153,7 +155,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                     }
                 }
             }
-            0x2C => {
+            crate::constants::GIF_BLOCK_IMAGE_DESCRIPTOR => {
                 // Direct count of image descriptors
                 frame_count_direct += 1;
 
@@ -181,7 +183,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 // Always count frames when we encounter an image descriptor
                 frame_payload_sizes.push(payload_size.max(1));
             }
-            0x3B => break,
+            crate::constants::GIF_BLOCK_TRAILER => break,
             _ => {
                 pos += 1;
             }
@@ -237,7 +239,10 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let total_duration_secs = if frame_delays_cs.is_empty() {
         None
     } else {
-        Some(frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>() / 100.0_f64)
+        Some(
+            frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>()
+                / crate::constants::GIF_CENTISECONDS_PER_SECOND,
+        )
     };
 
     // A GIF with >4 billion frames would require ~4TB of data; `u32::try_from` here

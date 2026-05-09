@@ -17,6 +17,7 @@
 //! The `cjxl` CLI does not support `--extra-channel` parameters.
 //! This module uses `jpegxl-rs` crate for direct libjxl FFI encoding.
 
+use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result, anyhow};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
 use jpegxl_rs::encode::EncoderSpeed;
@@ -338,7 +339,7 @@ pub fn encode_jxl_depth_fallback(
         .context("Failed to save temp depth PNG")?;
 
     // Use cjxl to encode main image
-    let status = crate::tool_builders::CjxlBuilder::new()
+    let status = crate::CjxlBuilder::new()
         .input(temp_main.path())
         .output(output)
         .distance(actual_dist)

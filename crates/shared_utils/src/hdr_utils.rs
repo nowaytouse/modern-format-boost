@@ -5,6 +5,7 @@
 //! - `FFmpeg` HDR parameter generation for video encoding
 //! - Color space and transfer function conversions
 
+use crate::builder_base::ToolBuilder;
 use crate::ffprobe_json::ColorInfo;
 use std::path::{Path, PathBuf};
 
@@ -235,7 +236,7 @@ pub fn is_hdr10plus_tool_available() -> bool {
 /// Returns an error if `ffmpeg` fails or the bitstream extraction fails.
 pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
     let raw_hevc = temp_dir.join("raw.hevc");
-    let status = crate::tool_builders::FfmpegBuilder::new()
+    let status = crate::FfmpegBuilder::new()
         .overwrite()
         .input(input)
         .arg("-c:v")

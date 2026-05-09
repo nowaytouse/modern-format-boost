@@ -1,5 +1,6 @@
 //! Dynamic GPU-to-CPU CRF mapping
 
+use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -44,25 +45,38 @@ impl DynamicCrfMapper {
     }
 
     fn calculate_offset_from_ratio(size_ratio: f64) -> f32 {
+        use crate::constants::{
+            DYNAMIC_MAPPING_OFFSET_DEFAULT, DYNAMIC_MAPPING_OFFSET_TIER_1,
+            DYNAMIC_MAPPING_OFFSET_TIER_2, DYNAMIC_MAPPING_OFFSET_TIER_3,
+            DYNAMIC_MAPPING_RATIO_TIER_1, DYNAMIC_MAPPING_RATIO_TIER_2,
+            DYNAMIC_MAPPING_RATIO_TIER_3,
+        };
         if size_ratio >= 1.0 {
             // CPU output larger than GPU at same CRF; don't add positive offset.
             0.0
-        } else if size_ratio < 0.70 {
-            4.0
-        } else if size_ratio < 0.80 {
-            3.5
-        } else if size_ratio < 0.90 {
-            3.0
+        } else if size_ratio < DYNAMIC_MAPPING_RATIO_TIER_1 {
+            DYNAMIC_MAPPING_OFFSET_TIER_1
+        } else if size_ratio < DYNAMIC_MAPPING_RATIO_TIER_2 {
+            DYNAMIC_MAPPING_OFFSET_TIER_2
+        } else if size_ratio < DYNAMIC_MAPPING_RATIO_TIER_3 {
+            DYNAMIC_MAPPING_OFFSET_TIER_3
         } else {
-            2.5
+            DYNAMIC_MAPPING_OFFSET_DEFAULT
         }
     }
 
     /// Maps GPU CRF to CPU CRF. `max_crf`: HEVC/H264 use 51.0, AV1 use 63.0.
     #[must_use]
     pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32, max_crf: f32) -> (f32, f64) {
+        use crate::constants::{
+            DYNAMIC_MAPPING_CONFIDENCE_LOW, DYNAMIC_MAPPING_CONFIDENCE_MEDIUM,
+            DYNAMIC_MAPPING_MIN_CPU_CRF,
+        };
         if self.anchors.is_empty() {
-            return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
+            return (
+                (gpu_crf + base_offset).clamp(DYNAMIC_MAPPING_MIN_CPU_CRF, max_crf),
+                DYNAMIC_MAPPING_CONFIDENCE_LOW,
+            );
         }
 
         if self.anchors.len() == 1 {
@@ -70,7 +84,10 @@ impl DynamicCrfMapper {
                 .anchors
                 .first()
                 .map_or(0.0, |a| Self::calculate_offset_from_ratio(a.size_ratio));
-            return ((gpu_crf + offset).clamp(10.0, max_crf), 0.75);
+            return (
+                (gpu_crf + offset).clamp(DYNAMIC_MAPPING_MIN_CPU_CRF, max_crf),
+                DYNAMIC_MAPPING_CONFIDENCE_MEDIUM,
+            );
         }
 
         // Multi-anchor interpolation (currently unused: quick_calibrate stops after first success).
@@ -88,10 +105,11 @@ impl DynamicCrfMapper {
         };
 
         let interpolated_offset = offset1 + t * (offset2 - offset1);
-        let confidence = 0.85_f64;
+        let confidence = crate::constants::DYNAMIC_MAPPING_CONFIDENCE_HIGH;
 
         (
-            (gpu_crf + interpolated_offset).clamp(10.0, max_crf),
+            (gpu_crf + interpolated_offset)
+                .clamp(crate::constants::DYNAMIC_MAPPING_MIN_CPU_CRF, max_crf),
             confidence,
         )
     }
@@ -210,7 +228,7 @@ pub fn quick_calibrate(
         );
     }
 
-    let calibration_crfs = vec![20.0_f32, 18.0, 22.0];
+    let calibration_crfs = crate::constants::DYNAMIC_MAPPING_CALIBRATION_CRFS;
     let mut calibration_success = false;
     let use_multi_segment =
         crate::gpu_accel::build_multi_segment_sampling_filter(input_duration, ultimate_mode)

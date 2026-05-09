@@ -6,6 +6,7 @@
 //! - Reduces parallelism when system memory is low (avoids OOM kills)
 //! - Allows environment-based configuration (`MFB_LOW_MEMORY`, `MFB_MULTI_INSTANCE`)
 
+use crate::{RsyncBuilder, ToolBuilder};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,7 +25,7 @@ pub struct ThreadConfig {
 impl Default for ThreadConfig {
     fn default() -> Self {
         Self {
-            core_percentage: 70,
+            core_percentage: crate::constants::THREAD_PERCENTAGE_DEFAULT,
             min_threads: 2,
             max_threads: 16,
             multi_instance_aware: true,
@@ -36,7 +37,7 @@ impl ThreadConfig {
     #[must_use]
     pub const fn conservative() -> Self {
         Self {
-            core_percentage: 50,
+            core_percentage: crate::constants::THREAD_PERCENTAGE_CONSERVATIVE,
             min_threads: 1,
             max_threads: 8,
             multi_instance_aware: true,
@@ -46,7 +47,7 @@ impl ThreadConfig {
     #[must_use]
     pub const fn aggressive() -> Self {
         Self {
-            core_percentage: 90,
+            core_percentage: crate::constants::THREAD_PERCENTAGE_AGGRESSIVE,
             min_threads: 4,
             max_threads: 32,
             multi_instance_aware: false,
@@ -56,7 +57,7 @@ impl ThreadConfig {
     #[must_use]
     pub const fn video_processing() -> Self {
         Self {
-            core_percentage: 60,
+            core_percentage: crate::constants::THREAD_PERCENTAGE_VIDEO,
             min_threads: 2,
             max_threads: 12,
             multi_instance_aware: true,
@@ -104,9 +105,9 @@ fn current_memory_profile() -> X265MemoryProfile {
 fn reserve_headroom_cores(total_cores: usize, profile: X265MemoryProfile) -> usize {
     let upper = total_cores.saturating_sub(1).max(1);
     let (fraction, min_reserved, max_reserved) = match profile {
-        X265MemoryProfile::Default => (0.15_f64, 1, 2),
-        X265MemoryProfile::Moderate => (0.25_f64, 2, 4),
-        X265MemoryProfile::LowMemory => (0.40_f64, 3, 6),
+        X265MemoryProfile::Default => (crate::constants::X265_MEM_RATIO_DEFAULT, 1, 2),
+        X265MemoryProfile::Moderate => (crate::constants::X265_MEM_RATIO_MODERATE, 2, 4),
+        X265MemoryProfile::LowMemory => (crate::constants::X265_MEM_RATIO_LOW, 3, 6),
     };
     let calculated = crate::numeric_cast::f64_to_usize_sat(
         (crate::numeric_cast::usize_to_f64(total_cores) * fraction).ceil(),
@@ -271,7 +272,7 @@ pub fn get_rsync_path() -> &'static str {
 
 #[must_use]
 pub fn get_rsync_version() -> Option<String> {
-    let output = crate::tool_builders::RsyncBuilder::new()
+    let output = RsyncBuilder::new()
         .executable(get_rsync_path())
         .arg("--version")
         .build()

@@ -147,14 +147,20 @@ fn extract_record(path: &Path, b3: &str, root: &Path) -> Result<MediaIndexRow> {
     if is_video {
         let v = detect_video(path).context("Video ffprobe failed")?;
         // 🚨 Filter: ONLY long videos (1 minute minimum)
-        if v.duration_secs.unwrap_or(0.0) < 60.0 {
-            let dur = v.duration_secs.unwrap_or(0.0);
+        let dur = v
+            .duration_secs
+            .ok_or_else(|| anyhow::anyhow!("Skipping video: ffprobe returned no duration"))?;
+        if dur < 60.0 {
             anyhow::bail!("Skipping video: shorter than 1 minute (Current: {dur:.2}s)");
         }
-        row.width = v.width;
-        row.height = v.height;
+        row.width = v
+            .width
+            .ok_or_else(|| anyhow::anyhow!("Skipping video: ffprobe returned no width"))?;
+        row.height = v
+            .height
+            .ok_or_else(|| anyhow::anyhow!("Skipping video: ffprobe returned no height"))?;
         row.format.clone_from(&v.format);
-        row.duration = v.duration_secs.unwrap_or(0.0);
+        row.duration = dur;
         row.has_hdr = v.is_hdr();
         row.raw_features_json = serde_json::to_string(&v)?;
     } else {

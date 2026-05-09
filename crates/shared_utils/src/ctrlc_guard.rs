@@ -41,10 +41,14 @@ pub fn is_prompt_active() -> bool {
 pub fn wait_if_prompt_active() {
     if is_prompt_active() {
         while PROMPT_ACTIVE.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(
+                crate::constants::CTRLC_WATCHER_SLEEP_MS,
+            ));
         }
         // Small delay after prompt dismissal to ensure logs format cleanly
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(
+            crate::constants::CTRLC_WATCHER_RESUME_SLEEP_MS,
+        ));
     }
 }
 
@@ -71,7 +75,7 @@ pub fn init() {
         // Re-entrant guard: if the prompt is already showing, a second Ctrl+C
         // means the user REALLY wants to exit now.
         if PROMPT_ACTIVE.load(Ordering::Acquire) {
-            std::process::exit(130);
+            std::process::exit(crate::constants::EXIT_CODE_SIGINT);
         }
         // Set the shared flag and the global flag.
         signal_received_clone.store(true, Ordering::Release);
@@ -99,8 +103,10 @@ pub fn init() {
 
 fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
     loop {
-        // Poll at 100 ms intervals — very cheap, avoids condvar complexity.
-        std::thread::sleep(Duration::from_millis(100));
+        // Poll at intervals — very cheap, avoids condvar complexity.
+        std::thread::sleep(Duration::from_millis(
+            crate::constants::CTRLC_WATCHER_POLL_MS,
+        ));
 
         if !signal_flag.swap(false, Ordering::AcqRel) {
             continue; // No signal yet.
@@ -108,10 +114,10 @@ fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
 
         let elapsed_secs = START_INSTANT.get().map_or(0, |t| t.elapsed().as_secs());
 
-        if elapsed_secs < 10 {
-            // Under 10 seconds → exit immediately (user made a deliberate Ctrl+C).
+        if elapsed_secs < crate::constants::CTRLC_CONFIRM_THRESHOLD_SECS {
+            // Under threshold → exit immediately (user made a deliberate Ctrl+C).
             eprintln!("\n  ⚠️  Interrupted by user.");
-            std::process::exit(130);
+            std::process::exit(crate::constants::EXIT_CODE_SIGINT);
         }
 
         // 10 seconds+: show confirmation prompt.
@@ -165,8 +171,9 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             events: libc::POLLIN,
             revents: 0,
         };
-        // Wait up to 10,000 milliseconds for input
-        let res = unsafe { libc::poll(&raw mut pfd, 1, 10_000) };
+        // Wait up to N milliseconds for input
+        let timeout_ms = i32::try_from(crate::constants::CTRLC_PROMPT_TIMEOUT_MS).unwrap_or(10_000);
+        let res = unsafe { libc::poll(&raw mut pfd, 1, timeout_ms) };
         if res > 0_i32 && (pfd.revents & libc::POLLIN) != 0 {
             let mut line = String::new();
             if io::stdin().read_line(&mut line).is_ok() {
@@ -204,7 +211,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
     PROMPT_ACTIVE.store(false, Ordering::Release);
 
     if should_exit {
-        std::process::exit(130);
+        std::process::exit(crate::constants::EXIT_CODE_SIGINT);
     }
 }
 

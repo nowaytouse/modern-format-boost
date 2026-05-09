@@ -84,7 +84,7 @@ static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
 /// - v1: Initial schema
 /// - v2: Added `algorithm_version` column + enhanced file signature tracking
 /// - v3: Added `content_fingerprint_hash` (BLOB) and `data_checksum` (INTEGER) for integrity verification
-pub const CACHE_SCHEMA_VERSION: i32 = 3;
+pub const CACHE_SCHEMA_VERSION: i32 = crate::constants::CACHE_SCHEMA_VERSION;
 
 /// 📊 Get cache algorithm version
 ///

@@ -3,6 +3,7 @@
 //! Primary entry: `calculate_ms_ssim_yuv` (used by `gpu_coarse_search` Phase 3).
 //! `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback for other callers.
 
+use crate::builder_base::ToolBuilder;
 use std::path::Path;
 
 fn common_even_metric_dimensions(

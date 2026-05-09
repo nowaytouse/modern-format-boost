@@ -3,6 +3,7 @@
 //! Shared `FFprobe` functionality for video analysis.
 //! Used by the `vid` pipeline.
 
+use crate::builder_base::ToolBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -165,7 +166,9 @@ fn detect_vfr_enhanced(
     }
 
     // Slow-motion detection (separate logic for reliability)
-    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_fr >= 60.0_f64 {
+    if (format_name.contains("mov") || format_name.contains("mp4"))
+        && avg_fr >= crate::constants::VFR_SLOWMO_FPS_THRESHOLD
+    {
         // Check for Apple's slow-mo tag (most reliable indicator)
         if video_stream
             .get("tags")
@@ -176,14 +179,14 @@ fn detect_vfr_enhanced(
         }
 
         // Check for significant frame rate ratio (recording vs playback)
-        if r_fr / avg_fr > 2.0_f64 {
+        if r_fr / avg_fr > crate::constants::VFR_SLOWMO_RATIO_THRESHOLD {
             return true;
         }
     }
 
-    // Standard VFR detection with 2% threshold
+    // Standard VFR detection with threshold
     let diff_ratio = (r_fr - avg_fr).abs() / r_fr;
-    diff_ratio > 0.02
+    diff_ratio > crate::constants::VFR_STANDARD_DIFF_THRESHOLD
 }
 
 #[derive(Debug)]
@@ -795,7 +798,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     }
 
     if let Some(fc_val) = result.frame_count
-        && (fc_val <= 1 || fc_val > 50000)
+        && (fc_val <= crate::constants::FRAME_COUNT_TRUST_LOWER_LIMIT
+            || fc_val > crate::constants::FRAME_COUNT_TRUST_UPPER_LIMIT)
         && let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(path, fc_val)
         && real_count > 0
@@ -980,7 +984,7 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
 }
 
 /// Convert a rational string like "13250/50000" to a u64 numerator (for ffmpeg master-display format).
-/// ffmpeg expects values multiplied by 50000 for chromaticity coordinates.
+/// ffmpeg expects values multiplied by [`crate::constants::HDR_COORD_SCALING_FACTOR`] for chromaticity coordinates.
 fn parse_rational_to_50k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = crate::numeric_cast::parse_strict(num.trim(), "hdr_num")?;
@@ -989,14 +993,17 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
             return None;
         }
         // Normalise to denominator 50000
-        let val = crate::numeric_cast::f64_to_u64_sat((n / d) * 50000.0);
+        let val = crate::numeric_cast::f64_to_u64_sat(
+            (n / d) * crate::constants::HDR_COORD_SCALING_FACTOR,
+        );
         Some(val)
     } else {
         // plain float
         let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
         // Already normalised value (some ffprobe versions give 0.265 style)
         if v <= 1.0 {
-            let val = crate::numeric_cast::f64_to_u64_sat(v * 50000.0);
+            let val =
+                crate::numeric_cast::f64_to_u64_sat(v * crate::constants::HDR_COORD_SCALING_FACTOR);
             Some(val)
         } else {
             // raw integer-style already in 50k units
@@ -1007,6 +1014,7 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
 }
 
 /// Convert a rational luminance string to 10000-unit integer (cd/m² × 10000).
+/// ffmpeg expects values multiplied by [`crate::constants::HDR_LUMA_SCALING_FACTOR`] for luminance.
 fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = crate::numeric_cast::parse_strict(num.trim(), "hdr_num")?;
@@ -1014,12 +1022,15 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
         if d == 0.0 {
             return None;
         }
-        let val = crate::numeric_cast::f64_to_u64_sat((n / d) * 10000.0);
+        let val = crate::numeric_cast::f64_to_u64_sat(
+            (n / d) * crate::constants::HDR_LUMA_SCALING_FACTOR,
+        );
         Some(val)
     } else {
         let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
-        if v <= 10000.0 {
-            let val = crate::numeric_cast::f64_to_u64_sat(v * 10000.0);
+        if v <= crate::constants::HDR_LUMA_SCALING_FACTOR {
+            let val =
+                crate::numeric_cast::f64_to_u64_sat(v * crate::constants::HDR_LUMA_SCALING_FACTOR);
             Some(val)
         } else {
             let val = crate::numeric_cast::f64_to_u64_sat(v);
@@ -1036,9 +1047,11 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_rational_to_50k)
             .or_else(|| {
-                sd[field]
-                    .as_f64()
-                    .map(|v| crate::numeric_cast::f64_to_u64_sat(v * 50000.0))
+                sd[field].as_f64().map(|v| {
+                    crate::numeric_cast::f64_to_u64_sat(
+                        v * crate::constants::HDR_COORD_SCALING_FACTOR,
+                    )
+                })
             })
     };
     let get_lum = |field: &str| -> Option<u64> {
@@ -1046,9 +1059,11 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_luminance_to_10k)
             .or_else(|| {
-                sd[field]
-                    .as_f64()
-                    .map(|v| crate::numeric_cast::f64_to_u64_sat(v * 10000.0))
+                sd[field].as_f64().map(|v| {
+                    crate::numeric_cast::f64_to_u64_sat(
+                        v * crate::constants::HDR_LUMA_SCALING_FACTOR,
+                    )
+                })
             })
     };
 

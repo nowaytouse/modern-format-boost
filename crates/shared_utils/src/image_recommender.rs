@@ -44,7 +44,11 @@ fn format_recommendation(
             current_format: format.to_string(),
             recommended_format: "JXL".to_string(),
             reason: indicator.reason.clone(),
-            expected_size_reduction: if is_lossless { 45.0 } else { 20.0 },
+            expected_size_reduction: if is_lossless {
+                crate::constants::EXPECTED_REDUCTION_LOSSLESS_JXL
+            } else {
+                crate::constants::EXPECTED_REDUCTION_LOSSY_JXL
+            },
             quality_preservation: if is_lossless {
                 "Mathematically Lossless".to_string()
             } else {
@@ -78,7 +82,7 @@ fn jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> Jx
             command: format!(
                 "cjxl '{rel_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
             ),
-            benefit: "30-60% size reduction while preserving full quality".to_string(),
+            benefit: crate::constants::JXL_BENEFIT_DESCRIPTION.to_string(),
         },
         DetectedFormat::JPEG => JxlIndicator {
             should_convert: true,
@@ -137,7 +141,7 @@ mod tests {
                 should_convert: true,
                 reason: "Lossless image; strongly recommend converting to JXL".to_string(),
                 command: "cjxl 'test.png' 'test.jxl' -d 0.0 -e 7".to_string(),
-                benefit: "May reduce size by 30–60%".to_string(),
+                benefit: crate::constants::JXL_BENEFIT_DESCRIPTION.to_string(),
             },
             psnr: None,
             ssim: None,

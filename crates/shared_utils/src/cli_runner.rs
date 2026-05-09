@@ -216,8 +216,9 @@ where
             .sum();
         let check_path = config.output.as_deref().unwrap_or(input);
         if let Some(avail) = crate::system_memory::get_available_disk_bytes(check_path) {
-            // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
-            let required = total_input_size.saturating_add(1024 * 1024 * 1024);
+            // Reserve safety headroom on top of total input size (temp files, partial encodes, etc.)
+            let required =
+                total_input_size.saturating_add(crate::constants::DISK_SAFETY_HEADROOM_BYTES);
             if avail < required {
                 let avail_gb = crate::numeric_cast::u64_to_f64(avail)
                     / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64);
@@ -446,7 +447,7 @@ where
                 Err(err) => {
                     let error_msg = err.to_string();
                     let maybe_ue = err.downcast_ref::<crate::unified_error::UnifiedError>();
-                    
+
                     // Fallback: search the error chain if direct downcast fails (handles multiple wrapping layers)
                     let ue_from_chain = if maybe_ue.is_none() {
                         err.chain().find_map(|e| e.downcast_ref::<crate::unified_error::UnifiedError>())
@@ -456,10 +457,11 @@ where
 
                     let is_skip = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::is_skip)
                         || error_msg.contains("Iteration limit exceeded")
+                        || error_msg.contains("Optimization target not met")
                         || error_msg.contains("Quality validation failed")
                         || error_msg.contains("Compression failed")
                         || error_msg.contains("already exists");
-                    
+
                     let should_copy = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::should_copy_original)
                         || (is_skip && !error_msg.contains("already exists")); // Don't copy if it already exists in output
 

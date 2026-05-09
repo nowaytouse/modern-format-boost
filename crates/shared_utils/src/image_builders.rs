@@ -1,5 +1,6 @@
 //! Type-safe builders for imaging tools (ImageMagick, webpmux, gifski, avifenc, sips, exiftool).
 
+use crate::builder_base::ToolBuilder;
 use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,6 +24,11 @@ impl MagickBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -84,11 +90,16 @@ impl MagickBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for MagickBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_MAGICK
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_MAGICK);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(input) = &self.input {
             cmd.arg("--")
@@ -113,7 +124,7 @@ impl MagickBuilder {
         }
 
         if let Some(cs) = &self.colorspace {
-            cmd.arg("-colorspace").arg(cs);
+            cmd.arg(constants::MAGICK_ARG_COLORSPACE).arg(cs);
         }
 
         if let Some(d) = self.depth {
@@ -121,7 +132,7 @@ impl MagickBuilder {
         }
 
         if let Some(fmt) = &self.format {
-            cmd.arg("-format").arg(fmt);
+            cmd.arg(constants::MAGICK_ARG_FORMAT).arg(fmt);
         }
 
         if self.use_stdout {
@@ -135,14 +146,6 @@ impl MagickBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_MAGICK)
-            .arg("-version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -160,6 +163,11 @@ impl IdentifyBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -187,23 +195,37 @@ impl IdentifyBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = if self.use_magick {
-            let mut c = Command::new(constants::TOOL_MAGICK);
-            c.arg("identify");
-            c
+impl ToolBuilder for IdentifyBuilder {
+    fn get_command_name(&self) -> &str {
+        if self.use_magick {
+            constants::TOOL_MAGICK
         } else {
-            Command::new(constants::TOOL_IDENTIFY)
-        };
+            constants::TOOL_IDENTIFY
+        }
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        if self.use_magick {
+            &[constants::MAGICK_ARG_IDENTIFY, constants::ARG_VERSION]
+        } else {
+            &[constants::ARG_VERSION]
+        }
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
+        if self.use_magick {
+            cmd.arg(constants::MAGICK_ARG_IDENTIFY);
+        }
 
         if let Some(fmt) = &self.format {
-            cmd.arg("-format").arg(fmt);
+            cmd.arg(constants::MAGICK_ARG_FORMAT).arg(fmt);
         }
 
         if self.verbose {
-            cmd.arg("-verbose");
+            cmd.arg(constants::FFMPEG_ARG_VERBOSE);
         }
 
         for arg in &self.extra_args {
@@ -217,21 +239,27 @@ impl IdentifyBuilder {
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_IDENTIFY)
-            .arg("-version")
-            .output()
-            .map_or_else(
-                |_| {
-                    Command::new(constants::TOOL_MAGICK)
-                        .arg("identify")
-                        .arg("-version")
-                        .output()
-                        .is_ok_and(|o| o.status.success())
-                },
-                |o| o.status.success(),
-            )
+    fn check_available(&self) -> bool {
+        let mut cmd = Command::new(self.get_command_name());
+        if self.use_magick {
+            cmd.arg(constants::MAGICK_ARG_IDENTIFY);
+        }
+        cmd.arg(constants::ARG_VERSION);
+
+        cmd.output().map_or_else(
+            |_| {
+                if self.use_magick {
+                    false
+                } else {
+                    let mut fallback = Command::new(constants::TOOL_MAGICK);
+                    fallback
+                        .arg(constants::MAGICK_ARG_IDENTIFY)
+                        .arg(constants::ARG_VERSION);
+                    fallback.output().is_ok_and(|o| o.status.success())
+                }
+            },
+            |o| o.status.success(),
+        )
     }
 }
 
@@ -252,6 +280,11 @@ impl WebpmuxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -301,18 +334,25 @@ impl WebpmuxBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for WebpmuxBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_WEBPMUX
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_WEBPMUX);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.info {
-            cmd.arg("-info");
+            cmd.arg(constants::WEBPMUX_ARG_INFO);
         }
 
         if let Some(i) = self.get_frame {
-            cmd.arg("-get").arg("frame").arg(i.to_string());
+            cmd.arg(constants::WEBPMUX_ARG_GET)
+                .arg(constants::WEBPMUX_ARG_FRAME)
+                .arg(i.to_string());
         }
 
         for arg in &self.extra_args {
@@ -331,26 +371,19 @@ impl WebpmuxBuilder {
         }
 
         if let Some(count) = self.loop_count {
-            cmd.arg("-loop").arg(count.to_string());
+            cmd.arg(constants::WEBPMUX_ARG_LOOP).arg(count.to_string());
         }
 
         if let Some(bg) = &self.bgcolor {
-            cmd.arg("-bgcolor").arg(bg);
+            cmd.arg(constants::WEBPMUX_ARG_BGCOLOR).arg(bg);
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_WEBPMUX)
-            .arg("-version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -374,6 +407,11 @@ impl GifskiBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -426,41 +464,48 @@ impl GifskiBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for GifskiBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_GIFSKI
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_GIFSKI);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(fps) = self.fps {
-            cmd.arg("--fps").arg(format!("{fps:.3}"));
+            cmd.arg(constants::GIFSKI_ARG_FPS).arg(format!("{fps:.3}"));
         }
 
         if let Some(q) = self.quality {
-            cmd.arg("--quality").arg(q.to_string());
+            cmd.arg(constants::GIFSKI_ARG_QUALITY).arg(q.to_string());
         }
 
         if let Some(q) = self.motion_quality {
-            cmd.arg("--motion-quality").arg(q.to_string());
+            cmd.arg(constants::GIFSKI_ARG_MOTION_QUALITY)
+                .arg(q.to_string());
         }
 
         if let Some(q) = self.lossy_quality {
-            cmd.arg("--lossy-quality").arg(q.to_string());
+            cmd.arg(constants::GIFSKI_ARG_LOSSY_QUALITY)
+                .arg(q.to_string());
         }
 
         if let (Some(w), Some(h)) = (self.width, self.height) {
-            cmd.arg("--width")
+            cmd.arg(constants::GIFSKI_ARG_WIDTH)
                 .arg(w.to_string())
-                .arg("--height")
+                .arg(constants::GIFSKI_ARG_HEIGHT)
                 .arg(h.to_string());
         }
 
         if let Some(r) = self.repeat {
-            cmd.arg("--repeat").arg(r.to_string());
+            cmd.arg(constants::GIFSKI_ARG_REPEAT).arg(r.to_string());
         }
 
         if self.fast {
-            cmd.arg("--fast");
+            cmd.arg(constants::GIFSKI_ARG_FAST);
         }
 
         for arg in &self.extra_args {
@@ -468,7 +513,8 @@ impl GifskiBuilder {
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         for input in &self.inputs {
@@ -476,14 +522,6 @@ impl GifskiBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_GIFSKI)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -506,6 +544,11 @@ impl AvifencBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -553,37 +596,42 @@ impl AvifencBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_AVIFENC);
+impl ToolBuilder for AvifencBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_AVIFENC
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.lossless {
-            cmd.arg("--lossless");
+            cmd.arg(constants::AVIFENC_ARG_LOSSLESS);
         }
 
         if let Some(s) = self.speed {
-            cmd.arg("--speed").arg(s.to_string());
+            cmd.arg(constants::AVIFENC_ARG_SPEED).arg(s.to_string());
         }
 
         if let Some(j) = &self.threads {
-            cmd.arg("-j").arg(j);
+            cmd.arg(constants::AVIFENC_ARG_JOBS).arg(j);
         }
 
         if let Some(q) = self.max_quality {
-            cmd.arg("--max").arg(q.to_string());
+            cmd.arg(constants::AVIFENC_ARG_MAX).arg(q.to_string());
         }
 
         if let Some(q) = self.min_quality {
-            cmd.arg("--min").arg(q.to_string());
+            cmd.arg(constants::AVIFENC_ARG_MIN).arg(q.to_string());
         }
 
         if let Some(d) = self.depth {
-            cmd.arg("--depth").arg(d.to_string());
+            cmd.arg(constants::AVIFENC_ARG_DEPTH).arg(d.to_string());
         }
 
         if let Some(yuv) = &self.yuv {
-            cmd.arg("--yuv").arg(yuv);
+            cmd.arg(constants::AVIFENC_ARG_YUV).arg(yuv);
         }
 
         for arg in &self.extra_args {
@@ -599,14 +647,6 @@ impl AvifencBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("avifenc")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -624,6 +664,11 @@ impl SipsBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -651,17 +696,30 @@ impl SipsBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_SIPS);
+impl ToolBuilder for SipsBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_SIPS
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        &[constants::ARG_V]
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(fmt) = &self.format {
-            cmd.arg("-s").arg("format").arg(fmt);
+            cmd.arg(constants::SIPS_ARG_S)
+                .arg(constants::SIPS_ARG_FORMAT)
+                .arg(fmt);
         }
 
         if let Some(q) = self.quality {
-            cmd.arg("-s").arg("formatOptions").arg(q.to_string());
+            cmd.arg(constants::SIPS_ARG_S)
+                .arg(constants::SIPS_ARG_FORMAT_OPTIONS)
+                .arg(q.to_string());
         }
 
         for arg in &self.extra_args {
@@ -673,18 +731,18 @@ impl SipsBuilder {
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("--out").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg(constants::SIPS_ARG_OUT)
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         cmd
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
+    fn check_available(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new(constants::TOOL_SIPS)
-                .arg("-v")
+            Command::new(self.get_command_name())
+                .arg(constants::ARG_V)
                 .output()
                 .is_ok_and(|o| o.status.success())
         }
@@ -710,13 +768,18 @@ impl ExiftoolBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.input = Some(path.as_ref().to_path_buf());
         self
     }
 
     pub fn tags_from_file<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.arg("-tagsfromfile");
+        self.arg(constants::EXIFTOOL_ARG_TAGS_FROM_FILE);
         // ExifTool format-interprets % in tagsfromfile argument, so we must double them.
         self.arg(crate::path_safety::property_safe_path(path.as_ref()));
         self
@@ -744,7 +807,8 @@ impl ExiftoolBuilder {
     }
 
     pub fn extract_icc_profile(&mut self) -> &mut Self {
-        self.arg("-icc_profile").arg("-b");
+        self.arg(constants::EXIFTOOL_ARG_ICC_PROFILE)
+            .arg(constants::EXIFTOOL_ARG_B);
         self
     }
 
@@ -756,44 +820,52 @@ impl ExiftoolBuilder {
     /// Strips all metadata tags from the file.
     /// Equivalent to `exiftool -all=`.
     pub fn strip_all(&mut self) -> &mut Self {
-        self.arg("-all=");
+        self.arg(constants::EXIFTOOL_ARG_ALL);
         self
     }
 
     /// Ignores minor errors and warnings.
     /// Equivalent to `exiftool -m`.
     pub fn ignore_minor(&mut self) -> &mut Self {
-        self.arg("-m");
+        self.arg(constants::EXIFTOOL_ARG_M);
         self
     }
 
     /// Suppresses warnings and logs.
     /// Equivalent to `exiftool -q`. Call twice for absolute silence.
     pub fn quiet(&mut self) -> &mut Self {
-        self.arg("-q");
+        self.arg(constants::EXIFTOOL_ARG_Q);
         self
     }
 
     /// Preserves file modification date/time.
     /// Equivalent to `exiftool -P`.
     pub fn preserve_date(&mut self) -> &mut Self {
-        self.arg("-P");
+        self.arg(constants::EXIFTOOL_ARG_P);
         self
     }
 
     /// Allows processing of 'unsafe' tags.
     /// Equivalent to `exiftool -unsafe`.
     pub fn unsafe_tags(&mut self) -> &mut Self {
-        self.arg("-unsafe");
+        self.arg(constants::EXIFTOOL_ARG_UNSAFE);
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_EXIFTOOL);
+impl ToolBuilder for ExiftoolBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_EXIFTOOL
+    }
 
+    fn get_check_args(&self) -> &[&str] {
+        &[constants::ARG_VER]
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
         if self.overwrite_original {
-            cmd.arg("-overwrite_original");
+            cmd.arg(constants::EXIFTOOL_ARG_OVERWRITE_ORIGINAL);
         }
 
         for arg in &self.args {
@@ -809,14 +881,6 @@ impl ExiftoolBuilder {
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new("exiftool")
-            .arg("-ver")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -834,6 +898,11 @@ impl DwebpBuilder {
         Self::default()
     }
 
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.input = Some(path.as_ref().to_path_buf());
         self
@@ -848,10 +917,15 @@ impl DwebpBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
 
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(crate::constants::TOOL_DWEBP);
+impl ToolBuilder for DwebpBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_DWEBP
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
@@ -862,17 +936,10 @@ impl DwebpBuilder {
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         cmd
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(crate::constants::TOOL_DWEBP)
-            .arg("-version")
-            .output()
-            .is_ok_and(|o| o.status.success())
     }
 }

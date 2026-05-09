@@ -134,18 +134,25 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
             // Dimension 0: chromaFormatIdc — direct chroma subsampling
             // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
-            if chroma_format_idc == 1 || chroma_format_idc == 2 {
+            if chroma_format_idc == crate::constants::HEIC_CHROMA_420
+                || chroma_format_idc == crate::constants::HEIC_CHROMA_422
+            {
                 return Ok(false);
             }
 
             // Dimension 1: Main/Main10/MainStillPicture → always 4:2:0 → always lossy
-            if profile_idc == 1 || profile_idc == 2 || profile_idc == 3 {
+            if profile_idc == crate::constants::HEIC_PROFILE_MAIN
+                || profile_idc == crate::constants::HEIC_PROFILE_MAIN10
+                || profile_idc == crate::constants::HEIC_PROFILE_MAIN_STILL
+            {
                 return Ok(false);
             }
 
             // Dimension 2: RExt (4) or SCC (9) profiles can be lossless
-            if profile_idc == 4 || profile_idc == 9 {
-                let is_444 = chroma_format_idc == 3;
+            if profile_idc == crate::constants::HEIC_PROFILE_REXT
+                || profile_idc == crate::constants::HEIC_PROFILE_SCC
+            {
+                let is_444 = chroma_format_idc == crate::constants::HEIC_CHROMA_444;
 
                 // Check colr box for Identity matrix (RGB = lossless indicator for RExt)
                 let has_rgb_identity_matrix = find_box_payload_by_magic(data, *b"colr")
@@ -186,14 +193,17 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                             }
                         }
                     })
-                    .is_some_and(|max_depth| max_depth >= 12);
+                    .is_some_and(|max_depth| max_depth >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH);
 
                 if has_high_bitdepth {
                     return Ok(true);
                 }
 
                 // High bit depth from hvcC itself
-                if is_444 && (bit_depth_luma >= 12 || bit_depth_chroma >= 12) {
+                if is_444
+                    && (bit_depth_luma >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH
+                        || bit_depth_chroma >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH)
+                {
                     return Ok(true);
                 }
 
@@ -211,8 +221,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             }
 
             // Dimension 4: Check profile compatibility flags — bit 4 = RExt compatible
-            if (compat_flags & (1 << (31_i32 - 4_i32))) != 0 {
-                if chroma_format_idc == 3 {
+            if (compat_flags & (1 << (31_i32 - i32::from(crate::constants::HEIC_PROFILE_REXT))))
+                != 0
+            {
+                if chroma_format_idc == crate::constants::HEIC_CHROMA_444 {
                     return Ok(true);
                 }
                 return Err(ImgQualityError::AnalysisError(format!(
@@ -291,7 +303,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
         };
         let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
         pos += 3;
-        if nal_unit_type == 33 {
+        if nal_unit_type == crate::constants::HEIC_NAL_UNIT_TYPE_SPS {
             for _ in 0..num_nalus {
                 if pos + 2 > hvcc_data.len() {
                     return None;
@@ -454,7 +466,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
         // Increase ipco box child limit from default 100 to 50000
         // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
-        limits.set_max_children_per_box(50000);
+        limits.set_max_children_per_box(crate::constants::HEIC_MAX_CHILDREN_PER_BOX);
 
         // Increase other limits for complex HEIC files
         limits.set_max_items(crate::constants::HEIC_MAX_ITEMS);
@@ -674,7 +686,7 @@ pub fn is_heic_file(path: &Path) -> bool {
 #[must_use]
 pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent timeouts
-    if data.len() > 100 * 1024 * 1024 {
+    if crate::numeric_cast::usize_to_u64(data.len()) > crate::constants::HEIC_MAX_XMP_SCAN_BYTES {
         return None;
     }
 
@@ -683,7 +695,7 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     for marker in markers {
         if let Some(start) = data.windows(marker.len()).position(|w| w == *marker) {
             // XMP is always UTF-8; grab up to 64 KB from the start marker
-            let end = (start + 65536).min(data.len());
+            let end = (start + crate::constants::HEIC_XMP_GRAB_BYTES).min(data.len());
             return String::from_utf8_lossy(data.get(start..end)?)
                 .into_owned()
                 .into();

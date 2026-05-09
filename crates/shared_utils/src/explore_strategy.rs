@@ -32,6 +32,7 @@
 //! assert_eq!(strategy.name(), "CompressOnly");
 //! ```
 
+use crate::builder_base::ToolBuilder;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -336,7 +337,7 @@ impl ExploreContext {
         ((crate::numeric_cast::u64_to_f64(output_size)
             / crate::numeric_cast::u64_to_f64(self.input_size))
             - 1.0_f64)
-            * 100.0_f64
+            * crate::constants::EXPLORATION_PERCENTAGE_MULTIPLIER
     }
 
     #[inline]
@@ -866,7 +867,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
             } else {
                 break;
             }
-            crf -= 1.0;
+            crf -= crate::numeric_cast::f64_to_f32_lossy(crate::constants::EXPLORATION_CRF_STEP);
         }
 
         ctx.progress_done();

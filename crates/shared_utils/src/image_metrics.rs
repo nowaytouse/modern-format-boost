@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 const K1: f64 = 0.01;
 const K2: f64 = 0.03;
-const L: f64 = 255.0;
+const L: f64 = crate::constants::MAX_8BIT_VALUE_F64;
 /// Wang et al. SSIM stability constants: (`k_i` * L)^2 to avoid division-by-zero in low-contrast regions.
 const C1: f64 = (K1 * L) * (K1 * L);
 const C2: f64 = (K2 * L) * (K2 * L);

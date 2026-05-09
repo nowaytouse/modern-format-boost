@@ -39,11 +39,11 @@ pub fn fmt_crf(crf: f32) -> String {
 }
 
 pub fn fmt_ssim(ssim: f64) -> String {
-    let (color_ssim, grade) = if ssim >= 0.99 {
+    let (color_ssim, grade) = if ssim >= crate::constants::SSIM_GRADE_EXCELLENT {
         (style(format!("{:.4}", ssim)).green().bold(), "🟢")
-    } else if ssim >= 0.97 {
+    } else if ssim >= crate::constants::SSIM_GRADE_VERY_GOOD {
         (style(format!("{:.4}", ssim)).green(), "🟡")
-    } else if ssim >= 0.95 {
+    } else if ssim >= crate::constants::SSIM_GRADE_GOOD {
         (style(format!("{:.4}", ssim)).yellow(), "🟠")
     } else {
         (style(format!("{:.4}", ssim)).red(), "🔴")
@@ -54,7 +54,7 @@ pub fn fmt_ssim(ssim: f64) -> String {
 pub fn fmt_size_pct(pct: f64) -> String {
     if pct < 0.0 {
         format!("{}", style(format!("{:+.1}%", pct)).green().bold())
-    } else if pct < 5.0 {
+    } else if pct < crate::constants::UI_SIZE_REDUCTION_THRESHOLD {
         format!("{}", style(format!("{:+.1}%", pct)).yellow())
     } else {
         format!("{}", style(format!("{:+.1}%", pct)).red())
@@ -66,12 +66,12 @@ pub fn fmt_compress_status(compressed: bool) -> &'static str {
 }
 
 pub fn fmt_size(bytes: u64) -> String {
-    let (value, unit) = if bytes >= 1024 * 1024 * 1024 {
-        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0 / 1024.0 / 1024.0, "GB")
-    } else if bytes >= 1024 * 1024 {
-        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0 / 1024.0, "MB")
-    } else if bytes >= 1024 {
-        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0, "KB")
+    let (value, unit) = if bytes >= crate::constants::GB {
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / crate::constants::KB_DIVISOR / crate::constants::KB_DIVISOR / crate::constants::KB_DIVISOR, "GB")
+    } else if bytes >= crate::constants::MB {
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / crate::constants::KB_DIVISOR / crate::constants::KB_DIVISOR, "MB")
+    } else if bytes >= crate::constants::KB {
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / crate::constants::KB_DIVISOR, "KB")
     } else {
         (shared_utils::numeric_cast::u64_to_f64(bytes), "B")
     };
@@ -79,9 +79,9 @@ pub fn fmt_size(bytes: u64) -> String {
 }
 
 pub fn fmt_duration(secs: f64) -> String {
-    if secs >= 60.0 {
-        let mins = (secs / 60.0).floor();
-        let remaining = secs - mins * 60.0;
+    if secs >= crate::constants::SECS_PER_MIN_F64 {
+        let mins = (secs / crate::constants::SECS_PER_MIN_F64).floor();
+        let remaining = secs - mins * crate::constants::SECS_PER_MIN_F64;
         format!("{}", style(format!("{:.0}m {:.1}s", mins, remaining)).cyan())
     } else {
         format!("{}", style(format!("{:.1}s", secs)).cyan())
@@ -90,9 +90,9 @@ pub fn fmt_duration(secs: f64) -> String {
 
 pub fn fmt_iterations(iter: u32, max: u32) -> String {
     let ratio = f64::from(iter) / f64::from(max);
-    if ratio <= 0.5 {
+    if ratio <= crate::constants::UI_ITERATION_RATIO_OK {
         format!("{}", style(format!("{}/{}", iter, max)).green())
-    } else if ratio <= 0.8 {
+    } else if ratio <= crate::constants::UI_ITERATION_RATIO_WARN {
         format!("{}", style(format!("{}/{}", iter, max)).yellow())
     } else {
         format!("{}", style(format!("{}/{}", iter, max)).red())

@@ -24,6 +24,7 @@ use std::env;
 use std::path::Path;
 use tracing::{info, warn};
 
+use crate::builder_base::ToolBuilder;
 use crate::image_builders::ExiftoolBuilder;
 use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
 use crate::jxl_builder::CjxlBuilder;
@@ -64,8 +65,8 @@ impl Default for GainMapParams {
             gain_map_max: 1.0, // 2x gain
             gain_map_min: 0.0,
             gamma: 1.0,
-            offset_sdr: 1.0 / 64.0,
-            offset_hdr: 1.0 / 64.0,
+            offset_sdr: crate::constants::HDR_GAINMAP_OFFSET_SDR,
+            offset_hdr: crate::constants::HDR_GAINMAP_OFFSET_HDR,
             use_base_color_space: true,
             base_rendition_is_hdr: false,
         }
@@ -195,19 +196,27 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
             write_exr(&hdr_pixels, sdr.width(), sdr.height(), &tmp_exr)
                 .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
             // intensity_target = 203 * 2^GainMapMax
-            (tmp_exr, 203.0 * params.gain_map_max.exp2())
+            (
+                tmp_exr,
+                f64::from(crate::constants::HDR_REFERENCE_WHITE_NITS)
+                    * f64::from(params.gain_map_max.exp2()),
+            )
         }
         HdrIntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
             write_png16(&hdr_pixels, sdr.width(), sdr.height(), &tmp_png)
                 .context("Failed to write intermediate 16-bit PNG buffer")?;
-            (tmp_png, 203.0 * params.gain_map_max.exp2())
+            (
+                tmp_png,
+                f64::from(crate::constants::HDR_REFERENCE_WHITE_NITS)
+                    * f64::from(params.gain_map_max.exp2()),
+            )
         }
     };
 
     // 7. Invoke cjxl
     // 7. Invoke cjxl
-    let mut builder = crate::tool_builders::CjxlBuilder::new();
+    let mut builder = crate::CjxlBuilder::new();
     builder
         .input(&tmp_file)
         .output(output)
@@ -217,7 +226,9 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
-    if let Some(it) = resolve_intensity_target(intensity_target) {
+    if let Some(it) =
+        resolve_intensity_target(crate::numeric_cast::f64_to_f32_sat(intensity_target))
+    {
         builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
         info!("Applying intensity_target {} for HDR synthesis", it);
     } else {
@@ -336,7 +347,11 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
                 &tmp_exr,
             )
             .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
-            (tmp_exr, 203.0 * params.gain_map_max.exp2())
+            (
+                tmp_exr,
+                f64::from(crate::constants::HDR_REFERENCE_WHITE_NITS)
+                    * f64::from(params.gain_map_max.exp2()),
+            )
         }
         HdrIntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
@@ -347,12 +362,16 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
                 &tmp_png,
             )
             .context("Failed to write intermediate 16-bit PNG buffer")?;
-            (tmp_png, 203.0 * params.gain_map_max.exp2())
+            (
+                tmp_png,
+                f64::from(crate::constants::HDR_REFERENCE_WHITE_NITS)
+                    * f64::from(params.gain_map_max.exp2()),
+            )
         }
     };
 
     // 7. Invoke cjxl
-    let mut builder = crate::tool_builders::CjxlBuilder::new();
+    let mut builder = crate::CjxlBuilder::new();
     builder
         .input(&tmp_file)
         .output(output)
@@ -362,7 +381,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
-    if let Some(it) = resolve_intensity_target(intensity_target) {
+    if let Some(it) =
+        resolve_intensity_target(crate::numeric_cast::f64_to_f32_sat(intensity_target))
+    {
         builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
         info!("Applying intensity_target {} for UltraHDR synthesis", it);
     } else {
@@ -592,12 +613,12 @@ fn is_display_p3(data: &[u8]) -> bool {
         // flavour: nclx
         // colour_primaries: bytes 8-9 (u16 BE)
         let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-        return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
+        return primaries == crate::constants::COLOR_PRIMARY_P3; // 12 = Display P3, 1 = Rec.709/sRGB
     }
 
     // 2. Fallback: Search for "Display P3" or "P3" in raw data (Heuristic for ICC)
     // We search the whole buffer for the signature of Display P3 ICC profile
-    let search_limit = 1024 * 1024; // limit search to first 1MB for performance
+    let search_limit = crate::constants::ICC_SEARCH_LIMIT_BYTES; // limit search to first 1MB for performance
     let end = data.len().min(search_limit);
     let slice = if let Some(s) = data.get(..end) {
         s
@@ -763,7 +784,12 @@ pub fn synthesize_hdr(
         &gain_resized_storage
     };
 
-    let total_pixels = (width * height * 3) as usize;
+    let total_pixels_u64 = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|px| px.checked_mul(3))
+        .ok_or_else(|| anyhow!("HDR buffer size overflow: {width}x{height}x3 exceeds u64"))?;
+    let total_pixels = usize::try_from(total_pixels_u64)
+        .map_err(|_| anyhow!("HDR buffer size {total_pixels_u64} exceeds host usize"))?;
     let mut hdr_pixels = vec![0.0f32; total_pixels];
 
     // Get typed buffers to avoid scale-to-u8 bug in GenericImageView::get_pixel
@@ -803,7 +829,9 @@ pub fn synthesize_hdr(
 
     for y in 0..height {
         for x in 0..width {
-            let idx = ((y * width + x) * 3) as usize;
+            let idx_u64 = (u64::from(y) * u64::from(width) + u64::from(x)) * 3;
+            let idx = usize::try_from(idx_u64)
+                .map_err(|_| anyhow!("HDR pixel index {idx_u64} exceeds host usize"))?;
             // 1. Get Normalized SDR (Linearized later)
             let (r_norm, g_norm, b_norm) = sdr_16.as_ref().map_or_else(
                 || {
@@ -946,7 +974,10 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
     if let Ok(ov) = env::var("MFB_JXL_INTENSITY_TARGET") {
         match ov.parse::<f32>() {
             Ok(v) if v.is_finite() && v > 0.0 => {
-                let clamped = v.clamp(100.0_f32, 1_000_000.0_f32);
+                let clamped = v.clamp(
+                    crate::constants::HDR_INTENSITY_TARGET_MIN,
+                    crate::constants::HDR_INTENSITY_TARGET_MAX,
+                );
                 if (clamped - v).abs() > f32::EPSILON {
                     warn!("MFB_JXL_INTENSITY_TARGET value {v} clamped to {clamped}");
                 }
@@ -966,7 +997,10 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
         return None;
     }
 
-    let clamped = derived.clamp(100.0_f32, 1_000_000.0_f32);
+    let clamped = derived.clamp(
+        crate::constants::HDR_INTENSITY_TARGET_MIN,
+        crate::constants::HDR_INTENSITY_TARGET_MAX,
+    );
     if (clamped - derived).abs() > f32::EPSILON {
         warn!(
             "Derived intensity_target {} clamped to {}",
@@ -977,26 +1011,27 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
 }
 
 fn srgb_to_linear(v: f32) -> f32 {
-    if v <= 0.04045 {
-        v / 12.92
+    if v <= crate::constants::SRGB_LINEAR_THRESHOLD {
+        v / crate::constants::SRGB_LINEAR_SLOPE
     } else {
-        ((v + 0.055) / 1.055).powf(2.4)
+        ((v + crate::constants::SRGB_GAMMA_OFFSET) / crate::constants::SRGB_GAMMA_SCALE)
+            .powf(crate::constants::SRGB_GAMMA_EXP)
     }
 }
 
 fn linear_to_pq(linear: f32) -> f32 {
-    let l = (linear * 203.0) / 10000.0;
+    let l = (linear * crate::constants::HDR_DIFFUSE_WHITE_NITS) / crate::constants::HDR_MAX_NITS;
     let l = l.clamp(0.0, 1.0);
 
-    let m1 = 2610.0 / 16384.0;
-    let m2 = 2523.0 / 32.0;
-    let c1 = 3424.0 / 4096.0;
-    let c2 = 2413.0 / 128.0;
-    let c3 = 2392.0 / 128.0;
+    let m1 = crate::constants::PQ_M1;
+    let m2 = crate::constants::PQ_M2;
+    let c1 = crate::constants::PQ_C1;
+    let c2 = crate::constants::PQ_C2;
+    let c3 = crate::constants::PQ_C3;
 
     let lm = l.powf(m1);
-    let num = c1 + c2 * lm;
-    let den = 1.0 + c3 * lm;
+    let num = c2.mul_add(lm, c1);
+    let den = c3.mul_add(lm, 1.0);
     (num / den).powf(m2)
 }
 

@@ -36,33 +36,33 @@ pub trait EncoderBounds: Clone + Copy {
 
 impl EncoderBounds for HevcEncoder {
     const MIN: f32 = 0.0;
-    const MAX: f32 = 51.0;
-    const DEFAULT: f32 = 23.0;
-    const VISUALLY_LOSSLESS: f32 = 18.0;
+    const MAX: f32 = crate::constants::CRF_HEVC_MAX;
+    const DEFAULT: f32 = crate::constants::CRF_HEVC_DEFAULT;
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_HEVC_VISUALLY_LOSSLESS;
     const NAME: &'static str = "HEVC";
 }
 
 impl EncoderBounds for Av1Encoder {
     const MIN: f32 = 0.0;
-    const MAX: f32 = 63.0;
-    const DEFAULT: f32 = 30.0;
-    const VISUALLY_LOSSLESS: f32 = 20.0;
+    const MAX: f32 = crate::constants::CRF_AV1_MAX;
+    const DEFAULT: f32 = crate::constants::CRF_AV1_DEFAULT;
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_AV1_VISUALLY_LOSSLESS;
     const NAME: &'static str = "AV1";
 }
 
 impl EncoderBounds for Vp9Encoder {
     const MIN: f32 = 0.0;
-    const MAX: f32 = 63.0;
-    const DEFAULT: f32 = 31.0;
-    const VISUALLY_LOSSLESS: f32 = 20.0;
+    const MAX: f32 = crate::constants::CRF_VP9_MAX;
+    const DEFAULT: f32 = crate::constants::CRF_VP9_DEFAULT;
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_VP9_VISUALLY_LOSSLESS;
     const NAME: &'static str = "VP9";
 }
 
 impl EncoderBounds for X264Encoder {
     const MIN: f32 = 0.0;
-    const MAX: f32 = 51.0;
-    const DEFAULT: f32 = 23.0;
-    const VISUALLY_LOSSLESS: f32 = 18.0;
+    const MAX: f32 = crate::constants::CRF_X264_MAX;
+    const DEFAULT: f32 = crate::constants::CRF_X264_DEFAULT;
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_X264_VISUALLY_LOSSLESS;
     const NAME: &'static str = "x264";
 }
 

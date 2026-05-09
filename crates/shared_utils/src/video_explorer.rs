@@ -28,12 +28,10 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
-const PHI: f32 = 0.618;
-const WINDOW_SIZE: usize = 3;
-const VARIANCE_THRESHOLD: f64 = 1e-6;
-const CHANGE_RATE_THRESHOLD: f64 = 0.005;
-const MIN_ITERATIONS_BEFORE_VARIANCE_EXIT: u32 = 6;
+const WINDOW_SIZE: usize = crate::constants::EXPLORE_WINDOW_SIZE;
+const VARIANCE_THRESHOLD: f64 = crate::constants::EXPLORE_VARIANCE_THRESHOLD;
+const MIN_ITERATIONS_BEFORE_VARIANCE_EXIT: u32 = crate::constants::EXPLORE_MIN_ITERATIONS_VARIANCE;
+use crate::builder_base::ToolBuilder;
 use crate::explore_strategy::CrfCache;
 
 use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
@@ -180,17 +178,17 @@ pub const fn verify_compression_simple(
 pub use precision::*;
 
 /// Minimum consecutive wall-clock hits required for saturation detection in ultimate mode.
-pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
+pub const ULTIMATE_MIN_WALL_HITS: u32 = crate::constants::ULTIMATE_MIN_WALL_HITS;
 
 /// Maximum consecutive wall-clock hits allowed for saturation detection in ultimate mode.
-pub const ULTIMATE_MAX_WALL_HITS: u32 = 100;
+pub const ULTIMATE_MAX_WALL_HITS: u32 = crate::constants::ULTIMATE_MAX_WALL_HITS;
 
 /// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
 use crate::constants::{
     ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION,
-    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE, LONG_VIDEO_THRESHOLD_SECS,
-    MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS,
-    VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
+    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE, CHANGE_RATE_THRESHOLD,
+    LONG_VIDEO_THRESHOLD_SECS, MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS, PHI,
+    SSIM_PLATEAU_THRESHOLD, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 
 /// Required consecutive zero-gain encodes for saturation detection in ultimate mode.
@@ -204,11 +202,12 @@ pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = crate::constants::NORMAL_REQUIRED_ZE
 
 /// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
 /// encode/decode test is more expensive; this is an intentional cost vs. precision tradeoff.
-pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = crate::constants::LONG_VIDEO_FALLBACK_ITERATIONS;
 
 /// Max iterations for ≥10 min videos. Lower than `LONG_VIDEO_FALLBACK_ITERATIONS`: longer videos
 /// cost more per iteration, so we cap iterations to keep total runtime reasonable.
-pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 =
+    crate::constants::VERY_LONG_VIDEO_FALLBACK_ITERATIONS;
 
 /// Required consecutive zero-gain encodes for saturation detection in long videos (5-10 min).
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = crate::constants::LONG_VIDEO_REQUIRED_ZERO_GAINS;
@@ -223,16 +222,20 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
         LONG_VIDEO_FALLBACK_ITERATIONS
     } else if ultimate_mode {
-        crate::constants::GPU_ABSOLUTE_MAX_ITERATIONS
+        crate::constants::GLOBAL_MAX_ITERATIONS
     } else {
-        100
+        crate::constants::EXPLORE_DEFAULT_MAX_ITERATIONS
     }
 }
 
 /// Calculates the required zero-gain encodes for saturation detection based on video duration.
 #[must_use]
 pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
-    calculate_zero_gains_for_duration_and_range(duration_secs, 41.0, ultimate_mode)
+    calculate_zero_gains_for_duration_and_range(
+        duration_secs,
+        crate::constants::SATURATION_CRF_RANGE_THRESHOLD,
+        ultimate_mode,
+    )
 }
 
 /// Calculates the required zero-gain encodes for saturation detection, with explicit CRF range.
@@ -252,8 +255,8 @@ pub fn calculate_zero_gains_for_duration_and_range(
         NORMAL_REQUIRED_ZERO_GAINS
     };
 
-    let factor = if crf_range < 20.0 {
-        (crf_range / 20.0).clamp(0.5, 1.0)
+    let factor = if crf_range < crate::constants::CRF_RANGE_SCALING_DIVISOR {
+        (crf_range / crate::constants::CRF_RANGE_SCALING_DIVISOR).clamp(0.5, 1.0)
     } else {
         1.0
     };
@@ -261,12 +264,16 @@ pub fn calculate_zero_gains_for_duration_and_range(
     let scaled = crate::numeric_cast::f32_to_u32_sat(
         (crate::numeric_cast::u32_to_f32(base) * factor).round(),
     );
-    let min_gains = if ultimate_mode { 15 } else { 3 };
+    let min_gains = if ultimate_mode {
+        crate::constants::ULTIMATE_MIN_GAINS
+    } else {
+        crate::constants::NORMAL_MIN_GAINS
+    };
     scaled.max(min_gains)
 }
 
 /// Logarithmic base constant used in adaptive wall-hit calculations.
-pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
+pub const ADAPTIVE_WALL_LOG_BASE: u32 = crate::constants::ADAPTIVE_WALL_LOG_BASE;
 
 /// Calculates the adaptive maximum wall-clock hits based on CRF search range.
 ///
@@ -282,37 +289,37 @@ pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
 }
 
 /// Minimum number of threads to use for video encoding.
-pub const MIN_ENCODE_THREADS: usize = 1;
+pub const MIN_ENCODE_THREADS: usize = crate::constants::MIN_ENCODE_THREADS;
 
 /// Default maximum number of encoding threads for typical machines.
-pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
+pub const DEFAULT_MAX_ENCODE_THREADS: usize = crate::constants::DEFAULT_MAX_ENCODE_THREADS;
 
 /// Maximum number of encoding threads for server-class machines.
-pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
+pub const SERVER_MAX_ENCODE_THREADS: usize = crate::constants::SERVER_MAX_ENCODE_THREADS;
 
 /// Default initial CRF for exploration (starting point for search).
-pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
+pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = crate::constants::EXPLORE_DEFAULT_INITIAL_CRF;
 
 /// Default minimum CRF allowed in exploration (lossless boundary).
-pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 0.0;
+pub const EXPLORE_DEFAULT_MIN_CRF: f32 = crate::constants::EXPLORE_DEFAULT_MIN_CRF;
 
 /// Default maximum CRF allowed in exploration (HEVC limit).
-pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 51.0;
+pub const EXPLORE_DEFAULT_MAX_CRF: f32 = crate::constants::EXPLORE_DEFAULT_MAX_CRF;
 
 /// Default target size ratio (1.0 = same size as input).
-pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = 1.0;
+pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = crate::constants::EXPLORE_DEFAULT_TARGET_RATIO;
 
 /// Default maximum number of exploration iterations.
-pub const EXPLORE_DEFAULT_MAX_ITERATIONS: u32 = 12;
+pub const EXPLORE_DEFAULT_MAX_ITERATIONS: u32 = crate::constants::EXPLORE_DEFAULT_MAX_ITERATIONS;
 
 /// Default minimum SSIM threshold for quality validation.
-pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = 0.95;
+pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = crate::constants::DEFAULT_MIN_SSIM;
 
 /// Default minimum PSNR threshold for quality validation.
-pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = 35.0;
+pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
 
 /// Default minimum MS-SSIM threshold for quality validation.
-pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = 0.90;
+pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = crate::constants::DEFAULT_MIN_MS_SSIM;
 
 /// Calculates the optimal number of encoding threads based on CPU count and resolution.
 ///
@@ -322,9 +329,11 @@ pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -
     let half_cpus = cpu_count / 2;
 
     let resolution_limit = match resolution_pixels {
-        Some(pixels) if pixels < 1280 * 720 => 4,
-        Some(pixels) if pixels < 1920 * 1080 => 8,
-        Some(pixels) if pixels < 3840 * 2160 => 12,
+        Some(pixels) if pixels < crate::constants::PIXELS_720P => crate::constants::THREADS_LOW_RES,
+        Some(pixels) if pixels < crate::constants::PIXELS_1080P => {
+            crate::constants::THREADS_MEDIUM_RES
+        }
+        Some(pixels) if pixels < crate::constants::PIXELS_4K => crate::constants::THREADS_HIGH_RES,
         Some(_) => SERVER_MAX_ENCODE_THREADS,
         None => DEFAULT_MAX_ENCODE_THREADS,
     };
@@ -368,13 +377,13 @@ pub struct ConfidenceBreakdown {
 }
 
 /// Weight for sampling coverage in the overall confidence calculation.
-pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
+pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = crate::constants::CONFIDENCE_WEIGHT_SAMPLING;
 /// Weight for prediction accuracy in the overall confidence calculation.
-pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
+pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = crate::constants::CONFIDENCE_WEIGHT_PREDICTION;
 /// Weight for margin safety in the overall confidence calculation.
-pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
+pub const CONFIDENCE_WEIGHT_MARGIN: f64 = crate::constants::CONFIDENCE_WEIGHT_MARGIN;
 /// Weight for SSIM reliability in the overall confidence calculation.
-pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
+pub const CONFIDENCE_WEIGHT_SSIM: f64 = crate::constants::CONFIDENCE_WEIGHT_SSIM;
 
 /// A specific state in the GPU-accelerated CRF exploration.
 ///
@@ -421,9 +430,9 @@ impl ConfidenceBreakdown {
         let overall = self.overall();
         let grade = if overall >= 0.9_f64 {
             "Excellent"
-        } else if overall >= 0.75_f64 {
+        } else if overall >= crate::constants::CONFIDENCE_DEFAULT_HIGH {
             "Good"
-        } else if overall >= 0.5_f64 {
+        } else if overall >= crate::constants::HEURISTIC_SAFETY_FLOOR {
             "Fair"
         } else {
             "Low"
@@ -434,25 +443,25 @@ impl ConfidenceBreakdown {
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
         crate::log_eprintln!(
             "│ Overall Confidence: {:.0}% ({})",
-            overall * 100.0_f64,
+            overall * crate::constants::SCALE_100,
             grade
         );
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
         crate::log_eprintln!(
             "│ Sampling Coverage: {:.0}% (weight 30%)",
-            self.sampling_coverage * 100.0_f64
+            self.sampling_coverage * crate::constants::SCALE_100
         );
         crate::log_eprintln!(
             "│ Prediction Accuracy: {:.0}% (weight 30%)",
-            self.prediction_accuracy * 100.0_f64
+            self.prediction_accuracy * crate::constants::SCALE_100
         );
         crate::log_eprintln!(
             "│ Safety Margin: {:.0}% (weight 20%)",
-            self.margin_safety * 100.0_f64
+            self.margin_safety * crate::constants::SCALE_100
         );
         crate::log_eprintln!(
             "│ SSIM Reliability: {:.0}% (weight 20%)",
-            self.ssim_confidence * 100.0_f64
+            self.ssim_confidence * crate::constants::SCALE_100
         );
         crate::log_eprintln!("└─────────────────────────────────────────────────────");
     }
@@ -530,7 +539,7 @@ impl Default for ExploreResult {
             log: Vec::new(),
             confidence: 0.0,
             confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: 0.95,
+            actual_min_ssim: crate::constants::EXPLORE_DEFAULT_MIN_SSIM,
             input_video_stream_size: 0,
             output_video_stream_size: 0,
             container_overhead: 0,
@@ -727,8 +736,8 @@ impl ExploreConfig {
             max_crf,
             quality_thresholds: QualityThresholds {
                 min_ssim,
-                min_psnr: 40.0,
-                min_ms_ssim: 90.0,
+                min_psnr: crate::constants::EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: crate::constants::EXPLORE_DEFAULT_MIN_MS_SSIM,
                 validation: QualityValidationFlags {
                     metrics: MetricValidationFlags {
                         validate_ssim: true,
@@ -755,8 +764,8 @@ impl ExploreConfig {
             max_crf,
             quality_thresholds: QualityThresholds {
                 min_ssim,
-                min_psnr: 40.0,
-                min_ms_ssim: 90.0,
+                min_psnr: crate::constants::EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: crate::constants::EXPLORE_DEFAULT_MIN_MS_SSIM,
                 validation: QualityValidationFlags {
                     metrics: MetricValidationFlags {
                         validate_ssim: true,
@@ -803,7 +812,7 @@ impl ExploreConfig {
             initial_crf,
             max_crf,
             quality_thresholds: QualityThresholds {
-                min_ssim: 0.95,
+                min_ssim: crate::constants::EXPLORE_DEFAULT_MIN_SSIM,
                 min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
                 min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
                 validation: QualityValidationFlags {
@@ -1386,7 +1395,9 @@ impl VideoExplorer {
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
                 crate::numeric_cast::f64_to_f32_lossy(
-                    crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                    crate::numeric_cast::u64_to_f64(self.input_size)
+                        / crate::constants::KB_F64
+                        / crate::constants::KB_F64
                 )
             );
         });
@@ -1538,7 +1549,9 @@ impl VideoExplorer {
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
                 crate::numeric_cast::f64_to_f32_lossy(
-                    crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                    crate::numeric_cast::u64_to_f64(self.input_size)
+                        / crate::constants::KB_F64
+                        / crate::constants::KB_F64
                 )
             );
         });
@@ -1699,7 +1712,8 @@ impl VideoExplorer {
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
 
-        while high - low > precision::SEARCH_STEP_COARSE / 2.0
+        while high - low
+            > precision::SEARCH_STEP_COARSE / crate::constants::SEARCH_ROUNDING_MULTIPLIER
             && iterations < self.config.max_iterations
         {
             let mid = f32::midpoint(low, high).round();
@@ -1836,7 +1850,9 @@ impl VideoExplorer {
             "   📁 Input: {} bytes ({:.2} MB)",
             self.input_size,
             crate::numeric_cast::f64_to_f32_lossy(
-                crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                crate::numeric_cast::u64_to_f64(self.input_size)
+                    / crate::constants::KB_F64
+                    / crate::constants::KB_F64
             )
         );
         log_realtime!(
@@ -1848,7 +1864,8 @@ impl VideoExplorer {
         log_realtime!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
-        let crf_range = (self.config.max_crf - self.config.min_crf).max(1.0);
+        let crf_range =
+            (self.config.max_crf - self.config.min_crf).max(crate::constants::CRF_SEARCH_STEP);
         let dynamic_max_iterations =
             crate::numeric_cast::f64_to_u32_sat(f64::from(crf_range).log2().ceil())
                 .saturating_add(6)
@@ -1943,7 +1960,8 @@ impl VideoExplorer {
             let mut high = self.config.max_crf;
             let mut prev_ssim = min_ssim;
 
-            while high - low > 0.5 && iterations < max_iterations {
+            while high - low > crate::constants::SEARCH_OFFSET_NORMAL && iterations < max_iterations
+            {
                 if iterations >= EMERGENCY_MAX_ITERATIONS {
                     crate::log_eprintln!(
                         "   ⚠️ EMERGENCY LIMIT: Reached {} iterations, stopping search!",
@@ -1957,7 +1975,8 @@ impl VideoExplorer {
                 }
 
                 let mid = (high - low).mul_add(PHI, low);
-                let mid_rounded = (mid * 2.0).round() / 2.0;
+                let mid_rounded = (mid * crate::constants::SEARCH_ROUNDING_MULTIPLIER).round()
+                    / crate::constants::SEARCH_ROUNDING_MULTIPLIER;
 
                 log_realtime!("   🔄 Testing CRF {:.1}...", mid_rounded);
                 let (size, quality) =
@@ -1981,7 +2000,9 @@ impl VideoExplorer {
                     best_ssim = ssim;
                 }
 
-                if prev_ssim - ssim > SSIM_PLATEAU_THRESHOLD * 2.0_f64 {
+                if prev_ssim - ssim
+                    > SSIM_PLATEAU_THRESHOLD * crate::constants::SEARCH_PLATEAU_MULTIPLIER
+                {
                     high = mid_rounded;
                     log_realtime!("      ↓ SSIM drop, narrowing to [{:.1}, {:.1}]", low, high);
                 } else {
@@ -1993,7 +2014,10 @@ impl VideoExplorer {
             if iterations < max_iterations {
                 log_realtime!("   📍 Phase 3: Fine-tune around CRF {:.1}", best_crf);
 
-                for offset in [-0.5_f32, 0.5] {
+                for offset in [
+                    -crate::constants::SEARCH_OFFSET_NORMAL,
+                    crate::constants::SEARCH_OFFSET_NORMAL,
+                ] {
                     let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                     if iterations >= max_iterations {
                         break;
@@ -2019,7 +2043,12 @@ impl VideoExplorer {
                 }
 
                 if iterations < max_iterations {
-                    for offset in [-0.25_f32, 0.25, -0.5, 0.5] {
+                    for offset in [
+                        -crate::constants::SEARCH_OFFSET_FINE,
+                        crate::constants::SEARCH_OFFSET_FINE,
+                        -crate::constants::SEARCH_OFFSET_NORMAL,
+                        crate::constants::SEARCH_OFFSET_NORMAL,
+                    ] {
                         let crf =
                             (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                         if cache.contains_key(crf) {
@@ -2066,13 +2095,13 @@ impl VideoExplorer {
 
         let size_change_pct = self.calc_change_pct(final_size);
 
-        let status = if best_ssim >= 0.999_9_f64 {
+        let status = if best_ssim >= crate::constants::SSIM_LEVEL_NEAR_LOSSLESS {
             "✅ Near-Lossless"
-        } else if best_ssim >= 0.999_f64 {
+        } else if best_ssim >= crate::constants::SSIM_LEVEL_PERFECT {
             "✅ Excellent"
-        } else if best_ssim >= 0.98_f64 {
+        } else if best_ssim >= crate::constants::SSIM_LEVEL_EXCELLENT {
             "✅ Very Good"
-        } else if best_ssim >= 0.93_f64 {
+        } else if best_ssim >= crate::constants::SSIM_LEVEL_VERY_GOOD {
             "✅ Good"
         } else {
             "✅ Acceptable"
@@ -2316,7 +2345,9 @@ impl VideoExplorer {
                 status,
                 self.calc_change_pct(best_size),
                 crate::numeric_cast::f64_to_f32_lossy(
-                    crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0
+                    crate::numeric_cast::u64_to_f64(saved)
+                        / crate::constants::KB_F64
+                        / crate::constants::KB_F64
                 ),
                 iterations,
                 elapsed.as_secs_f64()
@@ -4290,15 +4321,16 @@ mod tests {
             "CRF precision should be ±0.25"
         );
         assert!(
-            (precision::SEARCH_STEP_COARSE - 2.0).abs() < 0.01,
+            (precision::SEARCH_STEP_COARSE - 2.0).abs() < crate::constants::EPSILON_DEFAULT_F32,
             "Coarse step should be 2.0"
         );
         assert!(
-            (precision::SEARCH_STEP_FINE - 0.5).abs() < 0.01,
+            (precision::SEARCH_STEP_FINE - 0.5).abs() < crate::constants::EPSILON_DEFAULT_F32,
             "Fine step should be 0.5"
         );
         assert!(
-            (precision::SEARCH_STEP_ULTRA_FINE - 0.25).abs() < 0.01,
+            (precision::SEARCH_STEP_ULTRA_FINE - 0.25).abs()
+                < crate::constants::EPSILON_DEFAULT_F32,
             "Ultra fine step should be 0.25"
         );
         assert_eq!(SSIM_DISPLAY_PRECISION, 4);

@@ -18,6 +18,7 @@ pub mod codecs;
 pub mod conversion_api;
 pub mod detection_api;
 pub mod ffprobe;
+pub use shared_utils::constants;
 
 pub use conversion_api::{
     auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat,

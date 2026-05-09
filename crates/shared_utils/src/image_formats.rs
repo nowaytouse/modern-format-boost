@@ -233,13 +233,13 @@ pub mod jpeg {
                     {
                         let q_value = u32::from(q_byte);
                         return match q_value {
-                            0..=2 => 98,
-                            3..=5 => 95,
-                            6..=10 => 90,
-                            11..=20 => 85,
-                            21..=40 => 75,
-                            41..=60 => 65,
-                            _ => 50,
+                            0..=2 => crate::constants::JPEG_EST_Q_EXCELLENT,
+                            3..=5 => crate::constants::JPEG_EST_Q_ULTRA,
+                            6..=10 => crate::constants::JPEG_EST_Q_VERY_HIGH,
+                            11..=20 => crate::constants::JPEG_EST_Q_HIGH,
+                            21..=40 => crate::constants::JPEG_EST_Q_MEDIUM,
+                            41..=60 => crate::constants::JPEG_EST_Q_LOW,
+                            _ => crate::constants::JPEG_EST_Q_LOWEST,
                         };
                     }
                 }
@@ -492,7 +492,7 @@ pub mod webp {
             return None;
         }
         Some(crate::numeric_cast::f64_to_f32_lossy(
-            crate::numeric_cast::u64_to_f64(total_ms) / 1000.0,
+            crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64,
         ))
     }
 
@@ -710,7 +710,7 @@ pub mod gif {
         }
 
         Some(crate::numeric_cast::f64_to_f32_lossy(
-            crate::numeric_cast::u64_to_f64(total_100ths) / 100.0,
+            crate::numeric_cast::u64_to_f64(total_100ths) / crate::constants::CENTISECS_PER_SEC_F64,
         ))
     }
 

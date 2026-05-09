@@ -3,45 +3,45 @@
 //! Unified CRF (Constant Rate Factor) range constants for all video encoders.
 //! Unified CRF constants definition to avoid duplication across multiple files.
 
-pub const HEVC_CRF_MIN: f64 = 0.0;
+pub const HEVC_CRF_MIN: f64 = crate::constants::HEVC_CRF_MIN_F64;
 
-pub const HEVC_CRF_MAX: f64 = 51.0;
+pub const HEVC_CRF_MAX: f64 = crate::constants::HEVC_CRF_MAX_F64;
 
-pub const HEVC_CRF_DEFAULT: f64 = 23.0;
+pub const HEVC_CRF_DEFAULT: f64 = crate::constants::HEVC_CRF_DEFAULT_F64;
 
-pub const HEVC_CRF_VISUALLY_LOSSLESS: f64 = 18.0;
+pub const HEVC_CRF_VISUALLY_LOSSLESS: f64 = crate::constants::HEVC_CRF_VISUALLY_LOSSLESS_F64;
 
-pub const HEVC_CRF_PRACTICAL_MAX: f64 = 32.0;
+pub const HEVC_CRF_PRACTICAL_MAX: f64 = crate::constants::HEVC_CRF_PRACTICAL_MAX_F64;
 
-pub const AV1_CRF_MIN: f64 = 0.0;
+pub const AV1_CRF_MIN: f64 = crate::constants::AV1_CRF_MIN_F64;
 
-pub const AV1_CRF_MAX: f64 = 63.0;
+pub const AV1_CRF_MAX: f64 = crate::constants::AV1_CRF_MAX_F64;
 
-pub const AV1_CRF_DEFAULT: f64 = 30.0;
+pub const AV1_CRF_DEFAULT: f64 = crate::constants::AV1_CRF_DEFAULT_F64;
 
-pub const AV1_CRF_VISUALLY_LOSSLESS: f64 = 20.0;
+pub const AV1_CRF_VISUALLY_LOSSLESS: f64 = crate::constants::AV1_CRF_VISUALLY_LOSSLESS_F64;
 
-pub const AV1_CRF_PRACTICAL_MAX: f64 = 45.0;
+pub const AV1_CRF_PRACTICAL_MAX: f64 = crate::constants::AV1_CRF_PRACTICAL_MAX_F64;
 
-pub const VP9_CRF_MIN: f64 = 0.0;
+pub const VP9_CRF_MIN: f64 = crate::constants::VP9_CRF_MIN_F64;
 
-pub const VP9_CRF_MAX: f64 = 63.0;
+pub const VP9_CRF_MAX: f64 = crate::constants::VP9_CRF_MAX_F64;
 
-pub const VP9_CRF_DEFAULT: f64 = 31.0;
+pub const VP9_CRF_DEFAULT: f64 = crate::constants::VP9_CRF_DEFAULT_F64;
 
-pub const X264_CRF_MIN: f64 = 0.0;
+pub const X264_CRF_MIN: f64 = crate::constants::X264_CRF_MIN_F64;
 
-pub const X264_CRF_MAX: f64 = 51.0;
+pub const X264_CRF_MAX: f64 = crate::constants::X264_CRF_MAX_F64;
 
-pub const X264_CRF_DEFAULT: f64 = 23.0;
+pub const X264_CRF_DEFAULT: f64 = crate::constants::X264_CRF_DEFAULT_F64;
 
-pub const CRF_CACHE_KEY_MULTIPLIER: f64 = 100.0;
+pub const CRF_CACHE_KEY_MULTIPLIER: f64 = crate::constants::CRF_CACHE_KEY_MULTIPLIER;
 
-pub const CRF_CACHE_MAX_VALID: f64 = 63.99;
+pub const CRF_CACHE_MAX_VALID: f64 = crate::constants::CRF_CACHE_MAX_VALID;
 
-pub const NORMAL_MAX_ITERATIONS: u32 = 60;
+pub const NORMAL_MAX_ITERATIONS: u32 = crate::constants::NORMAL_MAX_ITERATIONS;
 
-pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
+pub const EMERGENCY_MAX_ITERATIONS: u32 = crate::constants::EMERGENCY_MAX_ITERATIONS;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

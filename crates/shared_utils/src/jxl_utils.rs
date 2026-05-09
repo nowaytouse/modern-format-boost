@@ -6,6 +6,8 @@
 //! - Fallback encoding pipelines (`ImageMagick`, `FFmpeg`)
 //! - ICC Profile extraction and preservation
 
+use crate::VmafBuilder;
+use crate::builder_base::ToolBuilder;
 use std::path::Path;
 
 /// Extract ICC Profile from source image and return temp file path
@@ -78,14 +80,14 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> Option<tempfile::NamedTempFile>
 
     if output.status.success() && !output.stdout.is_empty() {
         let mut icc_data = output.stdout;
-        if icc_data.len() >= 80 {
+        if icc_data.len() >= crate::constants::ICC_D50_ILLUMINANT_OFFSET_END {
             // Apply D50 illuminant rounding patch (Capture One / some cameras emit 0x...D32B
             // instead of the ICC-spec 0x...D32D, causing cjxl <= v0.10 to reject the profile)
-            let d50_standard = [
-                0x00, 0x00, 0xf6, 0xd6, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xd3, 0x2d,
-            ];
-            if let Some(slice) = icc_data.get_mut(68..80) {
-                slice.copy_from_slice(&d50_standard);
+            if let Some(slice) = icc_data.get_mut(
+                crate::constants::ICC_D50_ILLUMINANT_OFFSET_START
+                    ..crate::constants::ICC_D50_ILLUMINANT_OFFSET_END,
+            ) {
+                slice.copy_from_slice(&crate::constants::ICC_D50_STANDARD_BYTES);
             }
         }
         std::fs::write(temp_icc.path(), &icc_data).ok()?;
@@ -110,7 +112,7 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
         return Err("Invalid JXL file signature".to_string());
     }
 
-    if crate::tool_builders::JxlinfoBuilder::check_available() {
+    if crate::tool_builders::JxlinfoBuilder::new().check_available() {
         let result = crate::tool_builders::JxlinfoBuilder::new()
             .input(path)
             .build()
@@ -128,6 +130,11 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[must_use]
+pub fn is_vmaf_available() -> bool {
+    VmafBuilder::new().check_available()
 }
 
 /// Check whether a JXL file already contains an embedded ICC profile.
@@ -346,7 +353,10 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         std::thread::spawn(move || {
             use std::io::Read;
             let mut s = String::new();
-            if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
+            if let Err(err) = stderr
+                .take(crate::constants::STDERR_DRAIN_LIMIT as u64)
+                .read_to_string(&mut s)
+            {
                 crate::log_rare_error!("Stderr Pipe", "Failed to read ImageMagick stderr: {err}");
             }
             s
@@ -384,7 +394,10 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         std::thread::spawn(move || {
             use std::io::Read;
             let mut s = String::new();
-            if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
+            if let Err(err) = stderr
+                .take(crate::constants::STDERR_DRAIN_LIMIT as u64)
+                .read_to_string(&mut s)
+            {
                 crate::log_rare_error!("Stderr Pipe", "Failed to read cjxl stderr: {err}");
             }
             s.trim().to_string()
@@ -871,7 +884,7 @@ pub fn strip_jpeg_tail_to_temp(
     std::fs::write(
         temp.path(),
         data.get(..end)
-            .expect("Required byte slice missing (out of bounds)"),
+            .expect("end is bounded by data.len() from earlier validation"),
     )?;
     let temp_path = temp.path().to_path_buf();
     Ok(Some((temp_path, temp)))

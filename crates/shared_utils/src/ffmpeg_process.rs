@@ -37,6 +37,8 @@
 //! }
 //! ```
 
+use crate::builder_base::ToolBuilder;
+use crate::ffmpeg_builder::FfmpegBuilder;
 use anyhow::{Context, Result};
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader};
@@ -116,7 +118,7 @@ impl FfmpegProcess {
             thread::spawn(move || {
                 use std::io::Read;
                 let mut reader = BufReader::new(stdout);
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; crate::constants::IO_BUFFER_SIZE_SMALL];
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => return None::<String>,
@@ -254,7 +256,10 @@ impl FfmpegProgressParser {
         let minutes: f64 = crate::numeric_cast::parse_strict(parts.get(1)?, "ffmpeg_time_minutes")?;
         let seconds: f64 = crate::numeric_cast::parse_strict(parts.get(2)?, "ffmpeg_time_seconds")?;
 
-        Some(hours.mul_add(3600.0, minutes.mul_add(60.0, seconds)))
+        Some(hours.mul_add(
+            crate::constants::SECS_PER_HOUR_F64,
+            minutes.mul_add(crate::constants::SECS_PER_MIN_F64, seconds),
+        ))
     }
 
     fn calculate_progress(&self) -> Option<f64> {
@@ -413,7 +418,7 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
 /// # Errors
 /// Returns error if command fails, also prints error details to stderr.
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
-    let mut builder = crate::tool_builders::FfmpegBuilder::new();
+    let mut builder = FfmpegBuilder::new();
     for arg in args {
         builder.arg(arg);
     }
@@ -548,8 +553,8 @@ mod prop_tests {
 
             if current > 0 {
                 let expected = {
-                    let p = u32::try_from((u128::from(current) * 10_000) / u128::from(total.max(1))).expect("Value overflowed or is missing, cannot process ratio");
-                    (f64::from(p) / 10_000.0).min(1.0)
+                    let p = u32::try_from((u128::from(current) * crate::constants::DIAGNOSTIC_SCALING_FACTOR) / u128::from(total.max(1))).expect("Value overflowed or is missing, cannot process ratio");
+                    (f64::from(p) / crate::constants::DIAGNOSTIC_SCALING_FACTOR_F64).min(1.0)
                 };
                 prop_assert!(progress.is_some());
                 let actual = progress.unwrap_or_else(|| panic!("missing progress"));
@@ -569,7 +574,7 @@ mod prop_tests {
             let line = format!("time={hours:02}:{minutes:02}:{seconds:02}.00");
             let progress = parser.parse_line(&line);
 
-            let current_seconds = f64::from(hours).mul_add(3600.0, f64::from(minutes) * 60.0) + f64::from(seconds);
+            let current_seconds = f64::from(hours).mul_add(crate::constants::SECS_PER_HOUR_F64, f64::from(minutes) * crate::constants::SECS_PER_MIN_F64) + f64::from(seconds);
             if current_seconds > 0.0 {
                 let expected = (current_seconds / total_duration).min(1.0);
                 prop_assert!(progress.is_some());

@@ -11,6 +11,7 @@
 
 use crate::Rational;
 use crate::{ImgQualityError, Result};
+use shared_utils::ToolBuilder;
 use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -579,7 +580,7 @@ pub fn convert_to_jxl(
                                         ffmpeg_proc.stderr.take().map(|stderr| {
                                             std::thread::spawn(move || {
                                                 use std::io::Read;
-                                                let mut buf = String::with_capacity(64 * 1024);
+                                                let mut buf = String::with_capacity(crate::constants::STDERR_BUFFER_INITIAL);
                                                 if let Err(err) = stderr
                                                     .take(shared_utils::numeric_cast::usize_to_u64(crate::constants::STDERR_BUFFER_MAX))
                                                     .read_to_string(&mut buf)
@@ -598,7 +599,9 @@ pub fn convert_to_jxl(
                                         cjxl_proc.stderr.take().map(|stderr| {
                                             std::thread::spawn(move || {
                                                 use std::io::Read;
-                                                let mut buf = String::with_capacity(64 * 1024);
+                                                let mut buf = String::with_capacity(
+                                                    crate::constants::STDERR_BUFFER_INITIAL,
+                                                );
                                                 if let Err(err) = stderr
                                                     .take(shared_utils::numeric_cast::usize_to_u64(
                                                         crate::constants::STDERR_BUFFER_MAX,
@@ -1748,7 +1751,7 @@ fn describe_jxl_finalist_pass(
         "rechecking the required floor"
     } else if (finalist.distance - screening.best_distance).abs() < f32::EPSILON {
         "rechecking the screened leader"
-    } else if ratio_pct <= 105.0 {
+    } else if ratio_pct <= shared_utils::constants::JXL_BREAK_EVEN_RATIO_PCT {
         "verifying a break-even candidate"
     } else {
         "sampling a shortlist branch"
@@ -1863,10 +1866,12 @@ fn try_explore_ultimate_jxl_distance(
                         input_size,
                         finalist.distance,
                         size,
-                        screening
-                            .finalists
-                            .get(*best_idx)
-                            .map_or(0.01, |f| f.distance),
+                        screening.finalists.get(*best_idx).map_or(
+                            shared_utils::numeric_cast::f64_to_f32_lossy(
+                                shared_utils::constants::JXL_DISTANCE_PLATEAU,
+                            ),
+                            |f| f.distance,
+                        ),
                         *best_size,
                     ) == std::cmp::Ordering::Less
                 });

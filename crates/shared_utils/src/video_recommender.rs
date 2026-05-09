@@ -34,8 +34,10 @@ fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecomm
         features.codec,
         DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG
     );
-    let is_high_bitrate_h264 =
-        features.codec == DetectedCodec::H264 && features.bitrate.is_some_and(|b| b > 50_000_000);
+    let is_high_bitrate_h264 = features.codec == DetectedCodec::H264
+        && features
+            .bitrate
+            .is_some_and(|b| b > crate::constants::VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD);
 
     if is_old_lossless || is_high_bitrate_h264 {
         recommended_codec = "AV1 (SVT-AV1)".to_string();
@@ -46,8 +48,10 @@ fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecomm
             "High-bitrate H.264 detected; recommend AV1 for 50%+ size reduction".to_string()
         };
         command_hint = format!(
-            "ffmpeg -i '{}' -c:v libsvtav1 -preset 6 -crf 20 output.mp4",
-            features.file_path
+            "ffmpeg -i '{}' -c:v libsvtav1 -preset {} -crf {} output.mp4",
+            features.file_path,
+            crate::constants::VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT,
+            crate::constants::VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT
         );
     }
 

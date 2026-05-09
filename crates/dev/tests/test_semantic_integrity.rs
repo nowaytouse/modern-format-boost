@@ -18,7 +18,7 @@ impl CliProcessingResult for MockResult {
     fn skip_reason(&self) -> Option<&str> {
         None
     }
-    fn input_path(&self) -> &str {
+    fn input_path(&self) -> &'static str {
         ""
     }
     fn output_path(&self) -> Option<&str> {
@@ -30,7 +30,7 @@ impl CliProcessingResult for MockResult {
     fn output_size(&self) -> Option<u64> {
         None
     }
-    fn message(&self) -> &str {
+    fn message(&self) -> &'static str {
         ""
     }
     fn blake3(&self) -> Option<&str> {
@@ -42,20 +42,24 @@ impl CliProcessingResult for MockResult {
 fn test_semantic_integrity_skips_vs_errors() -> Result<()> {
     let input_dir = tempdir()?;
     let output_dir = tempdir()?;
+    let input_dir_path = input_dir.path().canonicalize()?;
+    let output_dir_path = output_dir.path().canonicalize()?;
 
-    // Create two test files with video extensions so they are collected by the runner
-    let file1_path = input_dir.path().join("skip_me.mp4");
-    fs::write(&file1_path, "dummy video data for skip")?;
+    // Create two test files with valid MP4 headers (ftyp) so they are collected by the runner
+    let valid_mp4_header = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2avc1mp41";
 
-    let file2_path = input_dir.path().join("error_me.mp4");
-    fs::write(&file2_path, "dummy video data for error")?;
+    let file1_path = input_dir_path.join("skip_me.mp4");
+    fs::write(&file1_path, valid_mp4_header)?;
+
+    let file2_path = input_dir_path.join("error_me.mp4");
+    fs::write(&file2_path, valid_mp4_header)?;
 
     let config = CliRunnerConfig {
-        input: input_dir.path().to_path_buf(),
-        output: Some(output_dir.path().to_path_buf()),
+        input: input_dir_path.clone(),
+        output: Some(output_dir_path),
         recursive: false,
         label: "integrity-test".to_string(),
-        base_dir: Some(input_dir.path().to_path_buf()),
+        base_dir: Some(input_dir_path),
         resume: false,
         protect_destructive_dirs: false,
     };
@@ -65,12 +69,14 @@ fn test_semantic_integrity_skips_vs_errors() -> Result<()> {
         let name = path.file_name().unwrap().to_str().unwrap();
         if name == "skip_me.mp4" {
             // Optimization failure (IterationLimitExceeded) -> SHOULD BE SKIPPED AND COPIED
-            Err(UnifiedError::IterationLimitExceeded(shared_utils::IterationError {
-                current: 10,
-                max: 10,
-                context: "search".to_string(),
-            })
-            .into())
+            Err(
+                UnifiedError::IterationLimitExceeded(shared_utils::IterationError {
+                    current: 10,
+                    max: 10,
+                    context: "search".to_string(),
+                })
+                .into(),
+            )
         } else {
             // Recoverable error (e.g. AnalysisError) -> SHOULD BE FAILED AND NOT COPIED
             // (We use a non-fatal error so the batch doesn't stop immediately)
@@ -92,7 +98,9 @@ fn test_semantic_integrity_skips_vs_errors() -> Result<()> {
         "ERROR: Hard/Recoverable errors (AnalysisError) must NOT result in a copy to the output directory. They should remain as honest errors. Semantic integrity violated."
     );
 
-    println!("✅ Semantic integrity test passed: Skips correctly copied, Errors correctly withheld.");
+    println!(
+        "✅ Semantic integrity test passed: Skips correctly copied, Errors correctly withheld."
+    );
 
     Ok(())
 }

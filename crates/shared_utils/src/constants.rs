@@ -4,14 +4,60 @@
 //! environment variable toggles to ensure consistency across the workspace.
 
 // --- Size & Storage Defaults ---
-/// Default size tolerance (1MB) = 1,048,576 bytes
-pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = 1_048_576;
+pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = MB;
 /// Default size tolerance percentage (1%)
 pub const DEFAULT_SIZE_TOLERANCE_RATIO: f64 = 0.01;
 /// Minimum output size for images to be considered valid for deletion of original.
-pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = 1024;
+pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = KB;
 /// Minimum output size for videos to be considered valid for deletion of original.
-pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 4096;
+pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 4 * KB;
+/// Maximum memory allocation for image decoding (2GB).
+pub const IMAGE_DECODE_MAX_ALLOC_BYTES: u64 = 2 * GB;
+/// Default minimum file size (bytes) for a "valid" output file.
+pub const DEFAULT_MIN_FILE_SIZE: u64 = KB;
+pub const DISK_CHECK_INTERVAL_MS: u64 = 5000;
+pub const VIDEO_FILE_RETRY_COUNT: u32 = 3;
+
+// --- Dynamic Mapping Constants ---
+pub const DYNAMIC_MAPPING_RATIO_TIER_1: f64 = 0.70;
+pub const DYNAMIC_MAPPING_RATIO_TIER_2: f64 = 0.80;
+pub const DYNAMIC_MAPPING_RATIO_TIER_3: f64 = 0.90;
+
+pub const DYNAMIC_MAPPING_OFFSET_TIER_1: f32 = 4.0;
+pub const DYNAMIC_MAPPING_OFFSET_TIER_2: f32 = 3.5;
+pub const DYNAMIC_MAPPING_OFFSET_TIER_3: f32 = 3.0;
+pub const DYNAMIC_MAPPING_OFFSET_DEFAULT: f32 = 2.5;
+
+pub const DYNAMIC_MAPPING_CONFIDENCE_LOW: f64 = 0.5;
+pub const DYNAMIC_MAPPING_CONFIDENCE_MEDIUM: f64 = 0.75;
+pub const DYNAMIC_MAPPING_CONFIDENCE_HIGH: f64 = 0.85;
+
+pub const DYNAMIC_MAPPING_MIN_CPU_CRF: f32 = 10.0;
+pub const DYNAMIC_MAPPING_CALIBRATION_CRFS: &[f32] = &[20.0, 18.0, 22.0];
+
+// --- Thread Allocation Constants ---
+pub const THREAD_PERCENTAGE_DEFAULT: usize = 70;
+pub const THREAD_PERCENTAGE_CONSERVATIVE: usize = 50;
+pub const THREAD_PERCENTAGE_AGGRESSIVE: usize = 90;
+pub const THREAD_PERCENTAGE_VIDEO: usize = 60;
+
+// --- Metadata Margins ---
+pub const METADATA_MARGIN_RATIO: f64 = 0.005;
+pub const METADATA_MARGIN_MIN_BYTES: u64 = 2048;
+pub const METADATA_MARGIN_MAX_BYTES: u64 = 102_400;
+
+// --- Data Units ---
+pub const BYTES_PER_KB: u64 = 1024;
+pub const BYTES_PER_MB: u64 = 1024 * 1024;
+pub const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
+
+pub const KB: u64 = BYTES_PER_KB;
+pub const MB: u64 = BYTES_PER_MB;
+pub const GB: u64 = BYTES_PER_GB;
+
+// --- Time Conversion Factors ---
+pub const MS_PER_SEC_F64: f64 = 1000.0;
+pub const CENTISECS_PER_SEC_F64: f64 = 100.0;
 // --- Unified Video Duration Thresholds ---
 /// Animation and short clip threshold (30s).
 pub const ANIMATION_CLIP_THRESHOLD_SECS: f32 = 30.0;
@@ -19,6 +65,12 @@ pub const ANIMATION_CLIP_THRESHOLD_SECS: f32 = 30.0;
 pub const MEME_LOSSLESS_DURATION_LIMIT: f32 = 120.0;
 pub const HIGH_VALUE_LOSSLESS_DURATION_LIMIT: f32 = 30.0;
 /// Video length categories
+pub const VIDEO_DURATION_LONG_SECS: f32 = 600.0;
+pub const VIDEO_DURATION_VERY_LONG_SECS: f32 = 3600.0;
+
+// --- Time Units ---
+pub const SECS_PER_MIN_F64: f64 = 60.0;
+pub const SECS_PER_HOUR_F64: f64 = 3600.0;
 pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
 pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 pub const HEAVY_VIDEO_THRESHOLD_SECS: f32 = 1200.0;
@@ -33,6 +85,10 @@ pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 =
     ANIMATION_CLIP_THRESHOLD_SECS;
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
+pub const UI_SIZE_REDUCTION_THRESHOLD: f64 = 5.0;
+pub const UI_ITERATION_RATIO_OK: f64 = 0.5;
+pub const UI_ITERATION_RATIO_WARN: f64 = 0.8;
+
 /// Fraction of total duration per segment (start / mid / end) for animated exploration sampling.
 pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION: f64 = 0.15;
 /// Ultimate mode: wider segments.
@@ -77,7 +133,99 @@ pub const DURATION_TIER_ULTRA_SHORT_LIMIT: f64 = 2.0;
 pub const DURATION_TIER_SHORT_LIMIT: f64 = 5.0;
 pub const DURATION_TIER_MEDIUM_LONG_LIMIT: f64 = 8.0;
 pub const DURATION_TIER_LONG_LIMIT: f64 = 15.0;
+
+// --- HDR Normalization (SMPTE ST 2086) ---
+pub const HDR_COORD_SCALING_FACTOR: f64 = 50000.0;
+pub const HDR_LUMA_SCALING_FACTOR: f64 = 10000.0;
+
+// --- KNN Classifier Hyperparameters ---
+pub const KNN_BALANCE_PENALTY_FLOOR: f64 = 0.45;
+pub const KNN_CONFIDENCE_MIN_LIMIT: f64 = 0.25;
+pub const KNN_KEEP_PROB_HIGH_VALUE_THRESHOLD: f64 = 0.3;
+pub const KNN_KEEP_PROB_MEME_THRESHOLD: f64 = 0.7;
+pub const KNN_DISTANCE_WEIGHT_SCALE: f64 = 3.0;
+pub const KNN_PRIOR_STRENGTH_BASE: f64 = 3.0;
+pub const KNN_PRIOR_STRENGTH_SLOPE: f64 = 2.0;
+
+// --- Imaging & Color ---
+pub const PALETTE_MAX_DENSITY_F64: f64 = 256.0;
+pub const GAINMAP_OFFSET_DEFAULT: f32 = 1.0 / 64.0;
 pub const DURATION_TIER_VERY_LONG_LIMIT: f64 = 18.0;
+
+// --- Process & Signal Control ---
+pub const EXIT_CODE_SIGINT: i32 = 130;
+pub const CTRLC_CONFIRM_THRESHOLD_SECS: u64 = 10;
+pub const CTRLC_PROMPT_TIMEOUT_MS: u32 = 10_000;
+pub const CTRLC_WATCHER_POLL_MS: u64 = 100;
+pub const CTRLC_WATCHER_SLEEP_MS: u64 = 50;
+pub const CTRLC_WATCHER_RESUME_SLEEP_MS: u64 = 10;
+
+// --- System & Hardware ---
+pub const PAGE_SIZE_FALLBACK: u64 = 4096;
+
+// --- Video Encoding (CRF Limits) ---
+pub const CRF_HEVC_MAX: f32 = 51.0;
+pub const CRF_HEVC_DEFAULT: f32 = 23.0;
+pub const CRF_HEVC_VISUALLY_LOSSLESS: f32 = 18.0;
+
+pub const CRF_AV1_MAX: f32 = 63.0;
+pub const CRF_AV1_DEFAULT: f32 = 30.0;
+pub const CRF_AV1_VISUALLY_LOSSLESS: f32 = 20.0;
+
+pub const CRF_VP9_MAX: f32 = 63.0;
+pub const CRF_VP9_DEFAULT: f32 = 31.0;
+pub const CRF_VP9_VISUALLY_LOSSLESS: f32 = 20.0;
+
+pub const CRF_X264_MAX: f32 = 51.0;
+pub const CRF_X264_DEFAULT: f32 = 23.0;
+pub const CRF_X264_VISUALLY_LOSSLESS: f32 = 18.0;
+
+// --- Frame Rate & VFR Heuristics ---
+pub const VFR_SLOWMO_FPS_THRESHOLD: f64 = 60.0;
+pub const VFR_SLOWMO_RATIO_THRESHOLD: f64 = 2.0;
+pub const VFR_STANDARD_DIFF_THRESHOLD: f64 = 0.02;
+
+// --- Image Optimization Heuristics ---
+pub const EXPECTED_REDUCTION_LOSSLESS_JXL: f64 = 45.0;
+pub const EXPECTED_REDUCTION_LOSSY_JXL: f64 = 20.0;
+pub const JXL_BENEFIT_DESCRIPTION: &str = "30-60% size reduction while preserving full quality";
+
+// --- UI Quality Ratings & Thresholds ---
+pub const UI_QUALITY_EXCELLENT_THRESHOLD: f64 = 0.99;
+pub const UI_QUALITY_VERY_GOOD_THRESHOLD: f64 = 0.98;
+pub const UI_QUALITY_GOOD_THRESHOLD: f64 = 0.95;
+pub const UI_PROGRESS_BAR_HIGH_THRESHOLD: u32 = 80;
+pub const UI_PROGRESS_BAR_MEDIUM_THRESHOLD: u32 = 50;
+pub const UI_PROGRESS_BAR_LOW_THRESHOLD: u32 = 25;
+
+// --- JPEG Quality Tiers ---
+pub const JPEG_QUALITY_TIER_HIGH: u8 = 95;
+pub const JPEG_QUALITY_TIER_MEDIUM_HIGH: u8 = 85;
+pub const JPEG_QUALITY_TIER_MEDIUM: u8 = 75;
+pub const JPEG_QUALITY_TIER_LOW: u8 = 60;
+
+// --- Cache & Storage ---
+pub const CACHE_PRUNE_AGE_SECS: i64 = 30 * 24 * 3600; // 30 days
+pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
+pub const CACHE_USAGE_WARNING_THRESHOLD: f64 = 80.0;
+
+// --- I/O & Buffers ---
+pub const IO_BUFFER_SIZE_SMALL: usize = 4096;
+pub const IO_BUFFER_SIZE_LARGE: usize = 65536;
+pub const STDERR_DRAIN_LIMIT: usize = 1024 * 1024; // 1 MB
+
+// --- Quality Defaults ---
+pub const MIN_SSIM_DEFAULT: f64 = 0.95;
+pub const VIDEO_QUALITY_GATE_THRESHOLD: f64 = 0.90;
+pub const VIDEO_BITS_PER_PIXEL_STANDARD: f64 = 0.1;
+pub const VIDEO_BITS_PER_PIXEL_LOW: f64 = 0.04;
+pub const VIDEO_BITS_PER_PIXEL_HIGH: f64 = 0.15;
+
+// --- Exit Codes ---
+pub const EXIT_CODE_SUCCESS: i32 = 0;
+pub const EXIT_CODE_ERROR: i32 = 1;
+pub const EXIT_CODE_LOCK_FAILURE: i32 = 3;
+
 pub const LOG_ODDS_BIAS_ULTRA_SHORT: f64 = 1.5;
 pub const LOG_ODDS_BIAS_SHORT: f64 = 0.5;
 pub const LOG_ODDS_BIAS_MEDIUM_LONG: f64 = -0.25;
@@ -401,6 +549,18 @@ pub const DENSITY_TO_CRF_LUT: &[(f64, u8)] = &[
     (0.15, 28),
     (0.08, 32),
 ];
+/// Target CRF for high-quality (archival-grade) sources.
+pub const CRF_TARGET_VISUALLY_LOSSLESS: f32 = 18.0;
+/// Target CRF for standard quality sources.
+pub const CRF_TARGET_STANDARD: f32 = 20.0;
+/// Minimum quality score (0-100) to be considered a high-quality master candidate.
+pub const QUALITY_SCORE_HIGH_THRESHOLD: u8 = 90;
+/// Expected size reduction (%) for JPEG to JXL lossless reconstruction.
+pub const EXPECTED_REDUCTION_JXL_LOSSLESS_JPEG: f32 = 15.0;
+/// Expected size reduction (%) for general lossless image to JXL conversion.
+pub const EXPECTED_REDUCTION_JXL_LOSSLESS_STATIC: f32 = 45.0;
+/// Expected size reduction (%) for lossy image to AVIF conversion.
+pub const EXPECTED_REDUCTION_AVIF_LOSSY_STATIC: f32 = 25.0;
 /// CRF threshold for "Visually Lossless" classification.
 pub const CRF_THRESHOLD_VISUALLY_LOSSLESS: f32 = 15.0;
 /// CRF threshold for "High Quality" classification.
@@ -409,6 +569,16 @@ pub const CRF_THRESHOLD_HIGH_QUALITY: f32 = 23.0;
 pub const CRF_THRESHOLD_STANDARD: f32 = 30.0;
 /// Bits Per Pixel (BPP) threshold for "Visually Lossless" classification.
 pub const BPP_THRESHOLD_VISUALLY_LOSSLESS: f64 = 2.0;
+/// Default minimum SSIM threshold for quality validation.
+pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = crate::constants::DEFAULT_MIN_SSIM;
+
+/// Default minimum PSNR threshold for quality validation.
+pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
+
+/// Default minimum MS-SSIM threshold for quality validation.
+pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = crate::constants::DEFAULT_MIN_MS_SSIM;
+/// Default maximum iterations for a single CRF exploration.
+pub const EXPLORE_DEFAULT_MAX_ITERATIONS: u32 = 12;
 /// Bits Per Pixel (BPP) threshold for "High Quality" classification.
 pub const BPP_THRESHOLD_HIGH_QUALITY: f64 = 0.5;
 /// Bits Per Pixel (BPP) threshold for "Standard Quality" classification.
@@ -459,14 +629,15 @@ pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
 pub const STAGE_B_BIDIRECTIONAL_MAX_ITERATIONS: u32 = 18;
 pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 pub const GLOBAL_MAX_ITERATIONS: u32 = 500;
+/// SSIM delta below which the search is considered to have plateaued (converged).
+pub const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
+/// The Golden Ratio (phi) used in search optimization.
+pub const PHI: f32 = 0.618;
+/// Minimum CRF change rate allowed before search deceleration triggers.
+pub const CHANGE_RATE_THRESHOLD: f64 = 0.005;
 /// Files below this size are considered "small" for compression verification (10MB).
 pub const SMALL_FILE_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
-/// Minimum absolute metadata margin allowed (2KB).
-pub const METADATA_MARGIN_MIN_BYTES: u64 = 2048;
-/// Maximum absolute metadata margin allowed (100KB).
-pub const METADATA_MARGIN_MAX_BYTES: u64 = 102_400;
-/// Target metadata overhead percentage (0.5%).
-pub const METADATA_MARGIN_RATIO: f64 = 0.005;
+
 pub const MOV_OVERHEAD_PERCENT: f64 = 0.005;
 pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
 pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
@@ -506,17 +677,21 @@ pub const TOOL_GIFSKI: &str = "gifski";
 pub const TOOL_MAGICK: &str = "magick";
 pub const TOOL_IDENTIFY: &str = "identify";
 pub const TOOL_SIPS: &str = "sips";
+pub const TOOL_VMAF: &str = "vmaf";
 pub const TOOL_EXIFTOOL: &str = "exiftool";
+pub const TOOL_EXIV2: &str = "exiv2";
 pub const TOOL_DWEBP: &str = "dwebp";
 pub const TOOL_X265: &str = "x265";
 pub const TOOL_AVIFENC: &str = "avifenc";
 pub const TOOL_DOVI: &str = "dovi_tool";
 pub const TOOL_HDR10PLUS: &str = "hdr10plus_tool";
+pub const TOOL_OSASCRIPT: &str = "osascript";
 // --- SVT-AV1 Defaults ---
 /// Default preset for SVT-AV1 (6 = Balanced).
 pub const FFMPEG_SVTAV1_DEFAULT_PRESET: &str = "6";
 // --- FFmpeg Command Flags & Arguments ---
 pub const FFMPEG_ARG_OVERWRITE: &str = "-y";
+pub const FFMPEG_ARG_VERBOSE: &str = "-verbose";
 pub const FFMPEG_ARG_HIDE_BANNER: &str = "-hide_banner";
 pub const FFMPEG_ARG_THREADS: &str = "-threads";
 pub const FFMPEG_ARG_INPUT: &str = "-i";
@@ -650,9 +825,9 @@ pub const GPU_SEARCH_DECEL_ULTIMATE: f32 = 1.0;
 pub const GPU_SEARCH_DECEL_NORMAL: f32 = 2.0;
 // --- Video Detection & Quality Bonuses ---
 /// Bit depth threshold for HDR/Extended Dynamic Range (10-bit).
-pub const HDR_BIT_DEPTH_THRESHOLD: u32 = 10;
+pub const HDR_BIT_DEPTH_THRESHOLD: u8 = 10;
 /// Quality scoring bonus for HDR/10-bit content.
-pub const HDR_QUALITY_BONUS: u32 = 5;
+pub const HDR_QUALITY_BONUS: u8 = 5;
 // --- Convergence & Minimum Gain Thresholds ---
 /// Minimum consecutive gainless iterations before exit (Ultimate).
 pub const ULTIMATE_MIN_GAINS: u32 = 15;
@@ -660,6 +835,48 @@ pub const ULTIMATE_MIN_GAINS: u32 = 15;
 pub const NORMAL_MIN_GAINS: u32 = 3;
 /// Default SSIM fallback value when measurement fails (0.0 = Minimum).
 pub const DEFAULT_SSIM_PRIOR: f64 = 0.0;
+/// Threshold for "Screen Recording" classification based on BPP.
+pub const BPP_THRESHOLD_SCREEN_RECORDING: f64 = 0.1;
+/// Threshold for "Animation" classification based on BPP.
+pub const BPP_THRESHOLD_ANIMATION_HEURISTIC: f64 = 0.05;
+/// Threshold for "Film Grain" classification based on BPP.
+pub const BPP_THRESHOLD_FILM_GRAIN: f64 = 0.5;
+/// Lower BPP threshold for "Gaming" classification.
+pub const BPP_THRESHOLD_GAMING_LOW: f64 = 0.08;
+/// Upper BPP threshold for "Gaming" classification.
+pub const BPP_THRESHOLD_GAMING_HIGH: f64 = 0.5;
+/// Lower BPP threshold for "Live Action" classification.
+pub const BPP_THRESHOLD_LIVE_ACTION_LOW: f64 = 0.05;
+/// Upper BPP threshold for "Live Action" classification.
+pub const BPP_THRESHOLD_LIVE_ACTION_HIGH: f64 = 0.6;
+/// FPS threshold for "Gaming" classification.
+pub const FPS_THRESHOLD_GAMING: f64 = 50.0;
+/// Multiplier for calculating default GOP size from FPS.
+pub const GOP_CALC_FPS_MULTIPLIER: f64 = 2.5;
+/// Minimum allowed GOP size for default calculation.
+pub const GOP_CALC_MIN_LIMIT: f64 = 12.0;
+/// Maximum allowed GOP size for default calculation.
+pub const GOP_CALC_MAX_LIMIT: f64 = 250.0;
+/// Quality score for lossless compression.
+pub const QUALITY_SCORE_LOSSLESS: u8 = 100;
+/// Quality score for visually lossless compression.
+pub const QUALITY_SCORE_VISUALLY_LOSSLESS: u8 = 95;
+/// Quality score for high quality compression.
+pub const QUALITY_SCORE_HIGH: u8 = 80;
+/// Quality score for standard quality compression.
+pub const QUALITY_SCORE_STANDARD: u8 = 60;
+/// Quality score for low quality compression.
+pub const QUALITY_SCORE_LOW: u8 = 40;
+/// Quality score bonus for modern efficient codecs.
+pub const QUALITY_SCORE_MODERN_CODEC_BONUS: u8 = 3;
+/// Silence threshold for audio penetration (dB).
+pub const AUDIO_SILENCE_THRESHOLD_DB: f64 = -70.0;
+/// Duration threshold for 1-point transparency sampling.
+pub const TRANSPARENCY_SAMPLE_POINTS_SHORT_LIMIT: f64 = 1.0;
+/// Duration threshold for 2-point transparency sampling.
+pub const TRANSPARENCY_SAMPLE_POINTS_MEDIUM_LIMIT: f64 = 5.0;
+/// Upper limit for trusting frame count metadata without verification.
+pub const FRAME_COUNT_TRUST_UPPER_LIMIT: u64 = 50000;
 pub const IMAGE_CONFIDENCE_MIN_EDGE_DENSITY: f64 = 0.01;
 pub const IMAGE_CONFIDENCE_MAX_EDGE_DENSITY: f64 = 0.90;
 pub const IMAGE_CONFIDENCE_MIN_COLOR_DIVERSITY: f64 = 0.01;
@@ -678,6 +895,238 @@ pub const CONTRAST_SAMPLING_STEP_NORMAL: usize = 1;
 pub const MEMORY_PRESSURE_LOW_RATIO: f64 = 0.30;
 pub const MEMORY_PRESSURE_LOW_MIN_MB: u64 = 3072;
 pub const MEMORY_PRESSURE_NORMAL_RATIO: f64 = 0.15;
+/// Minimum duration for a video to be considered "long" for loop intent (0.05s).
+pub const LOOP_INTENT_SHORT_DURATION_THRESHOLD: f64 = 0.05;
+/// Default baseline duration for loop inference (4.5s).
+pub const LOOP_INTENT_BASELINE_DURATION: f64 = 4.5;
+/// Absolute maximum duration for a loop candidate (8.0s).
+pub const LOOP_INTENT_MAX_DURATION: f64 = 8.0;
+/// Confidence threshold for loop closure detection (0.82).
+pub const LOOP_INTENT_CLOSURE_THRESHOLD: f64 = 0.82;
+/// Scaling factor for loop closure confidence (1.0 - 0.82 = 0.18).
+pub const LOOP_INTENT_CLOSURE_SCALE: f64 = 0.18;
+/// Negative threshold for loop closure rejection (0.35).
+pub const LOOP_INTENT_CLOSURE_REJECT_THRESHOLD: f64 = 0.35;
+/// Confidence threshold for periodicity detection (0.72).
+pub const LOOP_INTENT_PERIODICITY_THRESHOLD: f64 = 0.72;
+/// Scaling factor for periodicity confidence (1.0 - 0.72 = 0.28).
+pub const LOOP_INTENT_PERIODICITY_SCALE: f64 = 0.28;
+/// Motion ratio threshold for localized motion detection (0.70).
+pub const LOOP_INTENT_ZERO_MOTION_RATIO: f64 = 0.70;
+/// Median scaling factor for motion magnitude analysis (0.60).
+pub const LOOP_INTENT_MOTION_MEDIAN_SCALE: f64 = 0.60;
+/// PNG entropy ratio threshold for high confidence (0.55).
+pub const PNG_ENTROPY_RATIO_HIGH_CONFIDENCE: f64 = 0.55;
+/// PNG entropy ratio threshold for medium confidence (0.65).
+pub const PNG_ENTROPY_RATIO_MEDIUM_CONFIDENCE: f64 = 0.65;
+/// Palette size threshold for indexed PNG anomaly detection (64 colors).
+pub const PNG_PALETTE_SIZE_ANOMALY_THRESHOLD: f64 = 64.0;
+/// Base confidence for high-score image detections (0.9).
+pub const IMAGE_DETECTION_CONFIDENCE_BASE_HIGH: f64 = 0.9;
+/// Base confidence for low-score image detections (0.5).
+pub const IMAGE_DETECTION_CONFIDENCE_BASE_LOW: f64 = 0.5;
+/// Bonus increment for each additional positive loop signal (0.06).
+pub const LOOP_INTENT_BONUS_INCREMENT: f64 = 0.06;
+/// Default negative bias for loop intent when signals are weak (-0.08).
+pub const LOOP_INTENT_NEGATIVE_BIAS_DEFAULT: f64 = -0.08;
+/// I-frame ratio threshold for "Static/Loop" classification (0.85).
+pub const LOOP_INTENT_IFRAME_RATIO_HIGH: f64 = 0.85;
+/// I-frame ratio threshold for "Complex Video" classification (0.15).
+pub const LOOP_INTENT_IFRAME_RATIO_LOW: f64 = 0.15;
+/// Threshold for rejecting periodicity based on low score (0.32).
+pub const LOOP_INTENT_PERIODICITY_REJECT_THRESHOLD: f64 = 0.32;
+/// Threshold for high loop frequency confidence (0.75).
+pub const LOOP_INTENT_LOOP_FREQ_HIGH: f64 = 0.75;
+/// Threshold for low loop frequency rejection (0.25).
+pub const LOOP_INTENT_LOOP_FREQ_LOW: f64 = 0.25;
+/// Threshold for detecting sparse cadence in packet deltas (0.90).
+pub const LOOP_INTENT_SPARSE_CADENCE_THRESHOLD: f64 = 0.90;
+/// High jitter threshold for loop intent (0.82).
+pub const LOOP_INTENT_JITTER_HIGH: f64 = 0.82;
+/// Low jitter threshold for loop intent (0.25).
+pub const LOOP_INTENT_JITTER_LOW: f64 = 0.25;
+/// Z-score threshold for Bytes-Per-Frame (BPF) analysis (1.5).
+pub const LOOP_INTENT_BPF_Z_THRESHOLD: f64 = 1.5;
+/// Duration limit for identifying short animation loops (1.5s).
+pub const LOOP_INTENT_SHORT_ANIMATION_DURATION_LIMIT: f64 = 1.5;
+/// Luminance weight for Red channel (ITU-R BT.601).
+pub const RGB_LUMINANCE_WEIGHT_R: f64 = 0.30;
+/// Luminance weight for Green channel (ITU-R BT.601).
+pub const RGB_LUMINANCE_WEIGHT_G: f64 = 0.59;
+/// Luminance weight for Blue channel (ITU-R BT.601).
+pub const RGB_LUMINANCE_WEIGHT_B: f64 = 0.11;
+/// Lower bound for banding artifact detection ratio (0.08).
+pub const PNG_BANDING_RATIO_LOW: f64 = 0.08;
+/// Upper bound for banding artifact detection ratio (0.5).
+pub const PNG_BANDING_RATIO_HIGH: f64 = 0.5;
+/// Ultra-low coverage ratio for color distribution (0.05).
+pub const PNG_COVERAGE_RATIO_ULTRA_LOW: f64 = 0.05;
+/// Low coverage ratio for color distribution (0.10).
+pub const PNG_COVERAGE_RATIO_LOW: f64 = 0.10;
+/// Medium coverage ratio for color distribution (0.20).
+pub const PNG_COVERAGE_RATIO_MEDIUM: f64 = 0.20;
+/// High coverage ratio for color distribution (0.35).
+pub const PNG_COVERAGE_RATIO_HIGH: f64 = 0.35;
+/// CRF adjustment for Animation content type (+4).
+pub const QUALITY_MATCHER_CRF_ADJ_ANIMATION: i8 = 4;
+/// CRF adjustment for Screen Recording content type (+5).
+pub const QUALITY_MATCHER_CRF_ADJ_SCREEN: i8 = 5;
+/// CRF adjustment for Gaming content type (-1).
+pub const QUALITY_MATCHER_CRF_ADJ_GAMING: i8 = -1;
+/// CRF adjustment for Film Grain content type (-3).
+pub const QUALITY_MATCHER_CRF_ADJ_GRAIN: i8 = -3;
+/// Minimum safe Bits-Per-Pixel (BPP) for CRF formulas (1e-6).
+pub const SAFE_BPP_MIN: f64 = 1e-6;
+/// Maximum safe Bits-Per-Pixel (BPP) for CRF formulas (50.0).
+pub const SAFE_BPP_MAX: f64 = 50.0;
+/// Minimum CRF value for AV1 encoding (0.0).
+pub const AV1_CRF_CLAMP_MIN: f32 = 0.0;
+/// Maximum CRF value for AV1 encoding (51.0).
+pub const AV1_CRF_CLAMP_MAX: f32 = 51.0;
+/// Minimum CRF value for HEVC encoding (0.0).
+pub const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
+/// Maximum CRF value for HEVC encoding (51.0).
+pub const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
+/// Safety offset when sampling near the end of a file (0.1s).
+pub const PENETRATION_SAMPLING_EOF_OFFSET: f64 = 0.1;
+/// Minimum duration required to perform stratified sampling (1.0s).
+pub const PENETRATION_MIN_SAMPLING_DURATION: f64 = 1.0;
+/// Minimum standard deviation for KNN vector normalization (1e-6).
+pub const KNN_VECTOR_MIN_STD_DEV: f64 = 1e-6;
+/// Minimum feature weight for KNN vector normalization (0.01).
+pub const KNN_VECTOR_MIN_WEIGHT: f64 = 0.01;
+/// Minimum duration used for frame density calculation in KNN vectors (0.05s).
+pub const KNN_VECTOR_MIN_DURATION_FOR_DENSITY: f64 = 0.05;
+/// Lower limit for FPS normalization in KNN vectors (1e-3).
+pub const KNN_VECTOR_FPS_MIN_LIMIT: f64 = 1e-3;
+/// VMAF Y-channel sanity floor for high-quality exploration (86.0).
+pub const EXPLORATION_VMAF_Y_SANITY_FLOOR: f64 = 86.0;
+/// PSNR UV-channel sanity floor for high-quality exploration (30.0).
+pub const EXPLORATION_PSNR_UV_SANITY_FLOOR: f64 = 30.0;
+/// Gain threshold for stopping exploration when improvement is negligible (0.00005).
+pub const EXPLORATION_ZERO_GAIN_THRESHOLD: f64 = 0.00005;
+/// Decay factor for step adjustments during binary search (0.4).
+pub const EXPLORATION_DECAY_FACTOR: f32 = 0.4;
+/// Minimum step size for CRF/distance adjustments (0.1).
+pub const EXPLORATION_MIN_STEP: f32 = 0.1;
+/// Maximum CAMBI score allowed before rejecting as 'banded' (6.0).
+pub const EXPLORATION_CAMBI_MAX: f64 = 6.0;
+/// Allowed VMAF drop from baseline for 'High Quality' status (2.0).
+pub const EXPLORATION_VMAF_ALLOWED_DROP: f64 = 2.0;
+/// Allowed PSNR UV drop from baseline for 'High Quality' status (1.5).
+pub const EXPLORATION_PSNR_ALLOWED_DROP: f64 = 1.5;
+/// Allowed CAMBI rise for clean sources (1.0).
+pub const EXPLORATION_CAMBI_CLEAN_ALLOWED_RISE: f64 = 1.0;
+/// Allowed CAMBI rise for banded sources (1.5).
+pub const EXPLORATION_CAMBI_BANDED_ALLOWED_RISE: f64 = 1.5;
+/// Allowed growth ratio in CAMBI for banded sources (0.15).
+pub const EXPLORATION_CAMBI_BANDED_GROWTH_RATIO: f64 = 0.15;
+/// Weight of MS-SSIM in quality fusion calculation (0.6).
+pub const EXPLORATION_MS_SSIM_WEIGHT: f64 = 0.6;
+/// Weight of SSIM-All in quality fusion calculation (0.4).
+pub const EXPLORATION_SSIM_ALL_WEIGHT: f64 = 0.4;
+/// Fusion score sanity floor for acceptable quality (0.88).
+pub const EXPLORATION_FUSION_SANITY_FLOOR: f64 = 0.88;
+/// Allowed fusion score drop from baseline (0.04).
+pub const EXPLORATION_FUSION_ALLOWED_DROP: f64 = 0.04;
+/// Phase 3 downward step for finding quality floors (0.1).
+pub const EXPLORATION_PHASE3_DOWNWARD_STEP: f32 = 0.1;
+/// Phase 4 maximum probe distance for CRF 0 checks (1.0).
+pub const EXPLORATION_PHASE4_MAX_DISTANCE: f32 = 1.0;
+/// Minimum step for upward jog when quality targets are missed (0.5).
+pub const EXPLORATION_UPWARD_JOG_MIN_STEP: f32 = 0.5;
+/// Minimum acceptable SSIM for stream analysis (0.95).
+pub const STREAM_ANALYSIS_MIN_SSIM: f64 = 0.95;
+
+// --- JPEG Analysis Constants ---
+pub const JPEG_IJG_SCALE_THRESHOLD: f64 = 50.0;
+pub const JPEG_IJG_SCALE_FACTOR_LOW: f64 = 5000.0;
+pub const JPEG_IJG_SCALE_FACTOR_HIGH_A: f64 = 2.0;
+pub const JPEG_IJG_SCALE_FACTOR_HIGH_B: f64 = 200.0;
+pub const JPEG_IJG_ROUNDING_OFFSET: f64 = 50.0;
+pub const JPEG_IJG_ROUNDING_DIVISOR: f64 = 100.0;
+
+pub const JPEG_CONFIDENCE_LUMA_ONLY: f64 = 0.98;
+pub const JPEG_CONFIDENCE_SSE_SCALE: f64 = 0.01;
+pub const JPEG_QUALITY_MISMATCH_TOLERANCE: u8 = 2;
+pub const JPEG_HIGH_QUALITY_THRESHOLD: u8 = 90;
+
+// --- JPEG Device Fingerprints ---
+pub const JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MIN: f64 = 720.0;
+pub const JPEG_FINGERPRINT_APPLE_HIGH_LUMA_MAX: f64 = 735.0;
+pub const JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MIN: f64 = 5.0;
+pub const JPEG_FINGERPRINT_APPLE_HIGH_CHROMA_MAX: f64 = 12.0;
+
+pub const JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MIN: f64 = 150.0;
+pub const JPEG_FINGERPRINT_APPLE_VERY_HIGH_LUMA_MAX: f64 = 165.0;
+pub const JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MIN: f64 = 2.0;
+pub const JPEG_FINGERPRINT_APPLE_VERY_HIGH_CHROMA_MAX: f64 = 10.0;
+
+pub const JPEG_FINGERPRINT_ANDROID_LUMA_MIN: f64 = 200.0;
+pub const JPEG_FINGERPRINT_ANDROID_LUMA_MAX: f64 = 400.0;
+pub const JPEG_FINGERPRINT_ANDROID_CHROMA_MIN: f64 = 10.0;
+pub const JPEG_FINGERPRINT_ANDROID_CHROMA_MAX: f64 = 50.0;
+
+pub const JPEG_FINGERPRINT_SAMSUNG_LUMA_MIN: f64 = 500.0;
+pub const JPEG_FINGERPRINT_SAMSUNG_LUMA_MAX: f64 = 700.0;
+
+pub const JPEG_FINGERPRINT_CUSTOM_THRESHOLD: f64 = 1000.0;
+/// Minimum acceptable PSNR for stream analysis (35.0).
+pub const STREAM_ANALYSIS_MIN_PSNR: f64 = 35.0;
+/// Minimum acceptable MS-SSIM for stream analysis (0.90).
+pub const STREAM_ANALYSIS_MIN_MS_SSIM: f64 = 0.90;
+/// Duration match threshold for stream integrity verification (0.95).
+pub const STREAM_ANALYSIS_DURATION_MATCH_THRESHOLD: f64 = 0.95;
+/// Base quality score for Lossless compression (100).
+pub const VIDEO_QUALITY_SCORE_LOSSLESS: u8 = 100;
+/// Base quality score for Visually Lossless compression (95).
+pub const VIDEO_QUALITY_SCORE_VISUALLY_LOSSLESS: u8 = 95;
+/// Base quality score for High Quality compression (80).
+pub const VIDEO_QUALITY_SCORE_HIGH: u8 = 80;
+/// Base quality score for Standard compression (60).
+pub const VIDEO_QUALITY_SCORE_STANDARD: u8 = 60;
+/// Base quality score for Low Quality compression (40).
+pub const VIDEO_QUALITY_SCORE_LOW: u8 = 40;
+/// Bonus score for UHD/4K resolution (+3).
+pub const VIDEO_QUALITY_RESOLUTION_BONUS_UHD: u8 = 3;
+/// Bitrate threshold for high-bitrate H.264 recommendation (50 Mbps).
+pub const VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD: u64 = 50_000_000;
+/// Default recommended CRF for AV1 transcode hints (20).
+pub const VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT: f32 = 20.0;
+/// Default recommended preset for AV1 transcode hints (6).
+pub const VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT: u8 = 6;
+/// Maximum number of finalist candidates promoted for JXL e10 finalization (8).
+pub const JXL_FINALIST_LIMIT: usize = 8;
+/// Perceptual probe anchor at distance 0.03.
+pub const JXL_ANCHOR_DIST_0_03: f64 = 0.03;
+/// Perceptual probe anchor at distance 0.06.
+pub const JXL_ANCHOR_DIST_0_06: f64 = 0.06;
+/// Perceptual probe anchor at distance 0.15.
+pub const JXL_ANCHOR_DIST_0_15: f64 = 0.15;
+/// Perceptual probe anchor at distance 0.20.
+pub const JXL_ANCHOR_DIST_0_20: f64 = 0.20;
+/// Perceptual probe anchor at distance 0.50.
+pub const JXL_ANCHOR_DIST_0_50: f64 = 0.50;
+/// Perceptual probe anchor at distance 0.75.
+pub const JXL_ANCHOR_DIST_0_75: f64 = 0.75;
+/// Minimum probe count for JXL `MicroAdjust` profile (4).
+pub const JXL_PROBE_COUNT_MIN_MICRO: usize = 4;
+/// Maximum probe count for JXL `MicroAdjust` profile (6).
+pub const JXL_PROBE_COUNT_MAX_MICRO: usize = 6;
+/// Minimum probe count for JXL `BoundaryPush` profile (5).
+pub const JXL_PROBE_COUNT_MIN_BOUNDARY: usize = 5;
+/// Maximum probe count for JXL `BoundaryPush` profile (8).
+pub const JXL_PROBE_COUNT_MAX_BOUNDARY: usize = 8;
+/// Minimum probe count for JXL `WidePush` profile (6).
+pub const JXL_PROBE_COUNT_MIN_WIDE: usize = 6;
+/// Maximum probe count for JXL `WidePush` profile (10).
+pub const JXL_PROBE_COUNT_MAX_WIDE: usize = 10;
+/// Minimum probe count for JXL `CeilingSweep` profile (8).
+pub const JXL_PROBE_COUNT_MIN_CEILING: usize = 8;
+/// Maximum probe count for JXL `CeilingSweep` profile (14).
+pub const JXL_PROBE_COUNT_MAX_CEILING: usize = 14;
+/// Baseline probe count bonus for JXL adaptive ladder (3).
+pub const JXL_PROBE_COUNT_BONUS: usize = 3;
 pub const MEMORY_PRESSURE_NORMAL_MIN_MB: u64 = 1536;
 pub const INTERLACE_DETECTION_MIN_DURATION_SECS: f64 = 4.0;
 pub const INTERLACE_DETECTION_MAX_DURATION_SECS: f64 = 18.0;
@@ -714,7 +1163,23 @@ pub const JXL_MICRO_PRESSURE_LIMIT: f64 = 0.070_389_327_9;
 pub const HEIC_MAX_ITEMS: u32 = 500_000;
 pub const HEIC_MAX_COMPONENTS: u32 = 50_000;
 pub const HEIC_MAX_EXTENTS: u32 = 50_000;
+pub const HEIC_MAX_CHILDREN_PER_BOX: u32 = 50000;
 pub const HEIC_MAX_MEMORY_LIMIT: u64 = 15 * 1024 * 1024 * 1024;
+pub const HEIC_MAX_XMP_SCAN_BYTES: u64 = 100 * MB;
+pub const HEIC_XMP_GRAB_BYTES: usize = 65536;
+
+pub const HEIC_PROFILE_MAIN: u8 = 1;
+pub const HEIC_PROFILE_MAIN10: u8 = 2;
+pub const HEIC_PROFILE_MAIN_STILL: u8 = 3;
+pub const HEIC_PROFILE_REXT: u8 = 4;
+pub const HEIC_PROFILE_SCC: u8 = 9;
+
+pub const HEIC_CHROMA_420: u8 = 1;
+pub const HEIC_CHROMA_422: u8 = 2;
+pub const HEIC_CHROMA_444: u8 = 3;
+
+pub const HEIC_LOSSLESS_MIN_BIT_DEPTH: u8 = 12;
+pub const HEIC_NAL_UNIT_TYPE_SPS: u8 = 33;
 pub const NEGLIGIBLE_DURATION_F32: f32 = 0.01;
 pub const GPU_COARSE_SEARCH_DEFAULT_AUDIO_BITRATE: u64 = 128_000;
 pub const LOOP_INTENT_NEUTRAL_CONFIDENCE: f64 = 0.55;
@@ -723,11 +1188,7 @@ pub const LOOP_INTENT_CLOSURE_LOW: f64 = 0.35;
 pub const LOOP_INTENT_PERIODICITY_HIGH: f64 = 0.72;
 pub const LOOP_INTENT_PERIODICITY_LOW: f64 = 0.32;
 pub const LOOP_INTENT_IFRAME_RATIO_TARGET: f64 = 0.50;
-pub const LOOP_INTENT_IFRAME_RATIO_HIGH: f64 = 0.85;
-pub const LOOP_INTENT_IFRAME_RATIO_LOW: f64 = 0.15;
-pub const LOOP_INTENT_Z_SCORE_STRENGTH: f64 = 1.5;
 pub const LOOP_INTENT_ANTI_LOOP_THRESHOLD: f64 = 0.45;
-pub const LOOP_INTENT_SIGNAL_BONUS: f64 = 0.06;
 pub const LOOP_INTENT_KNN_HIGH: f64 = 0.65;
 pub const LOOP_INTENT_KNN_LOW: f64 = 0.35;
 pub const LOOP_INTENT_KNN_SCALE: f64 = 0.90;
@@ -833,6 +1294,394 @@ pub const F32_EPSILON: f32 = 1e-4;
 pub const SSIM_EPSILON: f64 = 1e-4;
 pub const CRF_EPSILON: f32 = 0.01;
 pub const PSNR_EPSILON: f64 = 0.1;
+// --- Loop Intent Decision Tree Thresholds (Wave 7) ---
+/// Per-MV magnitude threshold for identifying 'zero motion' vectors (0.1).
+pub const LOOP_INTENT_ZERO_MV_THRESHOLD: f64 = 0.1;
+/// Log-odds bonus for extremely short frame counts (<= 8).
+pub const LOOP_INTENT_FRAME_COUNT_SHORT_LIMIT: u64 = 8;
+/// Log-odds penalty for extremely long frame counts (> 500).
+pub const LOOP_INTENT_FRAME_COUNT_LONG_LIMIT: u64 = 500;
+/// Motion periodicity envelope reduction for non-ideal assets (0.70).
+pub const LOOP_INTENT_MOTION_ENVELOPE_REDUCTION: f64 = 0.70;
+/// I-frame ratio low-veto threshold for identifying real video (0.15).
+pub const LOOP_INTENT_IFRAME_RATIO_LOW_VETO: f64 = 0.15;
+/// I-frame ratio high-veto threshold for identifying transcoded animations (0.85).
+pub const LOOP_INTENT_IFRAME_RATIO_HIGH_VETO: f64 = 0.85;
+/// Support relief multiplier for motion gini when loop/periodicity is strong (0.35).
+pub const LOOP_INTENT_SUPPORT_RELIEF_STRONG: f64 = 0.35;
+/// Support relief multiplier for motion gini in short silent assets (0.55).
+pub const LOOP_INTENT_SUPPORT_RELIEF_WEAK: f64 = 0.55;
+/// Default support relief multiplier for motion gini (0.65).
+pub const LOOP_INTENT_SUPPORT_RELIEF_DEFAULT: f64 = 0.65;
+/// Semantic score threshold for directory/filename context (0.8).
+pub const LOOP_INTENT_SEMANTIC_SCORE_THRESHOLD: f64 = 0.8;
+/// FPS anomaly score threshold for loop intent bonus (0.6).
+pub const LOOP_INTENT_FPS_ANOMALY_THRESHOLD: f64 = 0.6;
+pub const LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD: f64 = 0.80;
+/// Max color count anomaly score (0.80).
+pub const IMAGE_DETECTION_COLOR_COUNT_ANOMALY_MAX: f64 = 0.80;
+/// Base confidence for quantized images (0.85).
+pub const IMAGE_DETECTION_CONFIDENCE_QUANTIZED: f64 = 0.85;
+/// Keep threshold for fusion score (0.45).
+pub const LOOP_INTENT_FUSION_KEEP_THRESHOLD: f64 = 0.45;
+/// Reject threshold for fusion score (0.35).
+pub const LOOP_INTENT_FUSION_REJECT_THRESHOLD: f64 = 0.35;
+/// Maximum log-odds bonus for periodicity (0.28).
+pub const LOOP_INTENT_PERIODICITY_MAX_BONUS: f64 = 0.28;
+
+// --- Loop Intent Arbitration Deltas (Wave 9) ---
+pub const LOOP_INTENT_CLOSURE_REJECT_DELTA: f64 = 0.20;
+pub const LOOP_INTENT_PERIODICITY_REJECT_DELTA: f64 = 0.12;
+pub const LOOP_INTENT_VIDEO_CONTAINER_SHORT_DELTA: f64 = 0.04;
+pub const LOOP_INTENT_VIDEO_CONTAINER_STANDARD_DELTA: f64 = 0.08;
+pub const LOOP_INTENT_WIDESCREEN_DELTA: f64 = 0.10;
+pub const LOOP_INTENT_SCENE_CUT_DELTA: f64 = 0.20;
+pub const LOOP_INTENT_LONG_SILENT_CLIP_DELTA: f64 = 0.14;
+pub const LOOP_INTENT_LARGE_VIDEO_ENVELOPE_DELTA: f64 = 0.12;
+pub const LOOP_INTENT_AUDIBLE_AUDIO_SHORT_DELTA: f64 = 0.08;
+pub const LOOP_INTENT_AUDIBLE_AUDIO_STANDARD_DELTA: f64 = 0.22;
+pub const LOOP_INTENT_DEFAULT_KNN_CONFIDENCE: f64 = 0.55;
+
+// --- Encoder Efficiency Ratios (Wave 7/8) ---
+pub const EFF_RATIO_H264: f64 = 1.0;
+
+// --- KNN Feature Baseline Stats (Wave 8) ---
+pub const KNN_STATS_FPS_MEAN: f64 = 12.0;
+pub const KNN_STATS_FPS_STD_DEV: f64 = 8.0;
+pub const KNN_STATS_BPP_MEAN: f64 = 0.05;
+pub const KNN_STATS_BPP_STD_DEV: f64 = 0.05;
+pub const KNN_STATS_SPATIAL_BPP_MEAN: f64 = 4.0;
+pub const KNN_STATS_SPATIAL_BPP_STD_DEV: f64 = 3.0;
+pub const KNN_STATS_VARIATION_MEAN: f64 = 0.5;
+pub const KNN_STATS_VARIATION_STD_DEV: f64 = 0.2;
+pub const KNN_STATS_WEBP_RATIO_MEAN: f64 = 10.0;
+pub const KNN_STATS_WEBP_RATIO_STD_DEV: f64 = 4.0;
+pub const KNN_STATS_GINI_MEAN: f64 = 0.55;
+pub const KNN_STATS_GINI_STD_DEV: f64 = 0.18;
+
+// --- HDR Synthesis & Color Space (Wave 8) ---
+/// Reference white luminance in nits for HDR synthesis (203.0).
+pub const HDR_REFERENCE_WHITE_NITS: f32 = 203.0;
+/// ISO 21496-1 `GainMap` default offset for SDR (1/64).
+pub const HDR_GAINMAP_OFFSET_SDR: f32 = 1.0 / 64.0;
+/// ISO 21496-1 `GainMap` default offset for HDR (1/64).
+pub const HDR_GAINMAP_OFFSET_HDR: f32 = 1.0 / 64.0;
+/// CICP Color Primary ID for Display P3 (12).
+pub const COLOR_PRIMARY_P3: u16 = 12;
+/// CICP Color Primary ID for BT.709 / sRGB (1).
+pub const COLOR_PRIMARY_BT709: u16 = 1;
+/// ICC search limit for gainmap detection (1MB).
+pub const ICC_SEARCH_LIMIT_BYTES: usize = 1024 * 1024;
+
+// --- Quality Scoring & Tweak Heuristics (Wave 8) ---
+/// Neutral quality score for unknown compression (50).
+pub const VIDEO_QUALITY_SCORE_NEUTRAL: u8 = 50;
+/// BPP threshold for standard-tier quality tweak (0.1).
+pub const QUALITY_TWEAK_BPP_STANDARD_MIN: f64 = 0.1;
+/// BPP threshold for high-tier quality tweak (0.3).
+pub const QUALITY_TWEAK_BPP_HIGH_MIN: f64 = 0.3;
+/// Max bonus for BPP quality tweak (+5).
+pub const QUALITY_TWEAK_MAX_BONUS: u8 = 5;
+
+// --- Systemic Divisors & Thresholds (Wave 8) ---
+/// Standard KB divisor (1024.0).
+pub const KB_DIVISOR: f64 = 1024.0;
+/// SSIM grade threshold for 'Excellent' (0.98 - explorer calibrated).
+pub const SSIM_GRADE_EXCELLENT: f64 = 0.98;
+/// SSIM grade threshold for 'Very Good' (0.97).
+pub const SSIM_GRADE_VERY_GOOD: f64 = 0.97;
+// --- GIF Block IDs & Conversions (Wave 8) ---
+pub const GIF_BLOCK_EXTENSION_INTRODUCER: u8 = 0x21;
+pub const GIF_BLOCK_APPLICATION_EXTENSION: u8 = 0xFF;
+pub const GIF_BLOCK_GRAPHICS_CONTROL_EXTENSION: u8 = 0xF9;
+pub const GIF_BLOCK_IMAGE_DESCRIPTOR: u8 = 0x2C;
+pub const GIF_BLOCK_TRAILER: u8 = 0x3B;
+pub const GIF_CENTISECONDS_PER_SECOND: f64 = 100.0;
+
+// --- System Safety & Precision (Wave 8) ---
+/// Safety headroom for disk space checks (1GB).
+pub const DISK_SAFETY_HEADROOM_BYTES: u64 = 1024 * 1024 * 1024;
+/// Epsilon for comparing CRF values (0.1).
+pub const CRF_COMPARISON_EPSILON: f32 = 0.1;
+/// Scaling factor for percentage calculations (100.0).
+pub const PERCENTAGE_FACTOR: f64 = 100.0;
+
+// --- Image Analysis & Penetration (Wave 9) ---
+/// Max 8-bit value (opaque alpha).
+pub const MAX_8BIT_VALUE_F64: f64 = 255.0;
+/// Number of channels for YUV/RGB averaging.
+pub const CHANNELS_COUNT_F64: f64 = 3.0;
+/// Sampling point for mid-point checks (0.5).
+pub const SAMPLING_POINT_MID_F64: f64 = 0.5;
+/// Interlace detection sample frames (24).
+pub const INTERLACE_DETECTION_SAMPLE_FRAMES: u32 = 24;
+/// Banding detection horizontal weight (0.70).
+pub const PNG_BANDING_WEIGHT_HORIZONTAL: f64 = 0.70;
+/// Banding detection diagonal weight (0.30).
+pub const PNG_BANDING_WEIGHT_DIAGONAL: f64 = 0.30;
+/// Banding detection gradient length threshold (20).
+pub const PNG_BANDING_GRADIENT_LENGTH_THRESHOLD: u32 = 20;
+/// Banding detection step width threshold (3).
+pub const PNG_BANDING_STEP_WIDTH_THRESHOLD: u32 = 3;
+/// Banding detection pixel diff threshold (20).
+pub const PNG_BANDING_DIFF_THRESHOLD: i16 = 20;
+/// Color frequency concentration target (85%).
+pub const PNG_COLOR_CONCENTRATION_TARGET_RATIO: f64 = 0.85;
+/// Coverage ratio tier 1 threshold (0.10).
+pub const PNG_COVERAGE_TIER1_THRESHOLD: f64 = 0.10;
+/// Coverage ratio tier 2 threshold (0.20).
+pub const PNG_COVERAGE_TIER2_THRESHOLD: f64 = 0.20;
+/// Coverage ratio tier 3 threshold (0.35).
+pub const PNG_COVERAGE_TIER3_THRESHOLD: f64 = 0.35;
+/// Coverage ratio score tier 1 (0.70).
+pub const PNG_COVERAGE_TIER1_SCORE: f64 = 0.70;
+/// Coverage ratio score tier 2 (0.50).
+pub const PNG_COVERAGE_TIER2_SCORE: f64 = 0.50;
+/// Coverage ratio score tier 3 (0.25).
+pub const PNG_COVERAGE_TIER3_SCORE: f64 = 0.25;
+/// Coverage ratio score ultra low (0.85).
+pub const PNG_COVERAGE_ULTRA_LOW_SCORE: f64 = 0.85;
+
+// --- Quality Matcher & Complexity (Wave 10) ---
+/// Divisor for Spatial Information (SI) calculation (50.0).
+pub const SI_DIVISOR: f64 = 50.0;
+/// Divisor for Temporal Information (TI) calculation (20.0).
+pub const TI_DIVISOR: f64 = 20.0;
+/// SI ratio high threshold (1.3).
+pub const SI_RATIO_HIGH_THRESHOLD: f64 = 1.3;
+/// SI ratio low threshold (0.7).
+pub const SI_RATIO_LOW_THRESHOLD: f64 = 0.7;
+/// SI adjustment factor for high complexity (1.15).
+pub const SI_FACTOR_HIGH: f64 = 1.15;
+/// SI adjustment factor for low complexity (0.85).
+pub const SI_FACTOR_LOW: f64 = 0.85;
+/// TI ratio high threshold (1.5).
+pub const TI_RATIO_HIGH_THRESHOLD: f64 = 1.5;
+/// TI ratio low threshold (0.5).
+pub const TI_RATIO_LOW_THRESHOLD: f64 = 0.5;
+/// TI adjustment factor for high complexity (1.10).
+pub const TI_FACTOR_HIGH: f64 = 1.10;
+/// TI adjustment factor for low complexity (0.90).
+pub const TI_FACTOR_LOW: f64 = 0.90;
+/// Confidence check: minimum reasonable FPS (1.0).
+pub const CONF_FPS_MIN: f64 = 1.0;
+/// Confidence check: maximum reasonable FPS (240.0).
+pub const CONF_FPS_MAX: f64 = 240.0;
+/// Confidence check: minimum reasonable BPP (0.01).
+pub const CONF_BPP_MIN: f64 = 0.01;
+/// Confidence check: maximum reasonable BPP (5.0).
+pub const CONF_BPP_MAX: f64 = 5.0;
+/// Chroma factor for 4:4:4 sampling (1.15).
+pub const CHROMA_444_FACTOR: f64 = 1.15;
+/// Megapixel factor for resolution calculations (1,000,000.0).
+pub const MEGAPIXEL_FACTOR: f64 = 1_000_000.0;
+/// Neutral score bias for PNG quantization (0.5).
+pub const PNG_SCORER_NEUTRAL_BIAS: f64 = 0.5;
+/// High-confidence bias for PNG quantization (0.7).
+pub const PNG_SCORER_HIGH_CONF_BIAS: f64 = 0.7;
+/// Dithering sampling factor (10000.0).
+pub const PNG_DITHER_SAMPLING_FACTOR: f64 = 10000.0;
+/// Pixel threshold for large image analysis (100,000).
+pub const IMAGE_DETECTION_LARGE_PIXEL_THRESHOLD: u64 = 100_000;
+/// Pixel threshold for small image analysis (`10_000`).
+pub const IMAGE_DETECTION_SMALL_PIXEL_THRESHOLD: u64 = 10_000;
+/// Default sample size for image color analysis (`10_000`).
+pub const IMAGE_DETECTION_SAMPLING_SIZE: usize = 10_000;
+/// Confidence slope for truecolor quantization detection (0.15).
+pub const IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE: f64 = 0.15;
+/// Threshold for a "strong signal" in image analysis (0.50).
+pub const IMAGE_DETECTION_STRONG_SIGNAL_THRESHOLD: f64 = 0.50;
+/// Standard 8-bit palette size limit (256).
+pub const PNG_PALETTE_SIZE_LIMIT: usize = 256;
+/// Extended palette size limit for heuristic checks (512).
+pub const PNG_PALETTE_EXTENDED_LIMIT: usize = 512;
+/// HDR quality adjustment factor (1.25).
+pub const HDR_ADJUSTMENT_FACTOR: f64 = 1.25;
+/// BT.2020 color space adjustment factor (1.15).
+pub const BT2020_ADJUSTMENT_FACTOR: f64 = 1.15;
+/// Default minimum bitrate for database diagnostics (10,000.0).
+pub const DB_BITRATE_MIN_DEFAULT: f64 = 10_000.0;
+/// Default standard deviation for database heuristics (0.15).
+pub const DB_HEURISTIC_STD_DEV_DEFAULT: f64 = 0.15;
+/// Default loop closure score for database entries (0.15).
+pub const DB_LOOP_CLOSURE_SCORE_DEFAULT: f64 = 0.15;
+/// Default memory ratio for x265 profiles (0.15).
+pub const X265_MEM_RATIO_DEFAULT: f64 = 0.15;
+/// Moderate memory ratio for x265 profiles (0.25).
+pub const X265_MEM_RATIO_MODERATE: f64 = 0.25;
+/// Low-memory ratio for x265 profiles (0.40).
+pub const X265_MEM_RATIO_LOW: f64 = 0.40;
+/// Factor for permille/percentage scaling in diagnostics (10,000).
+pub const DIAGNOSTIC_SCALING_FACTOR: u128 = 10_000;
+/// Floating point equivalent of `DIAGNOSTIC_SCALING_FACTOR` (10,000.0).
+pub const DIAGNOSTIC_SCALING_FACTOR_F64: f64 = 10_000.0;
+/// Standard bits per byte (8.0).
+pub const BITS_PER_BYTE: f64 = 8.0;
+/// Bits per byte as u64.
+pub const BITS_PER_BYTE_U64: u64 = 8;
+/// Standard 512MB file size limit for image analysis.
+pub const IMAGE_ANALYSIS_FILE_SIZE_LIMIT: u64 = 512 * 1024 * 1024;
+/// Standard 10MB text chunk limit for PNG analysis.
+pub const PNG_TEXT_CHUNK_SIZE_LIMIT: usize = 10 * 1024 * 1024;
+/// Log-odds bias factor for directional arbitration (0.45).
+pub const LOOP_INTENT_DIRECTIONAL_BIAS: f64 = 0.45;
+/// Log-odds bias factor for KNN arbitration (0.90).
+pub const LOOP_INTENT_KNN_BIAS: f64 = 0.90;
+/// Log-odds bias factor for fusion score arbitration (0.95).
+pub const LOOP_INTENT_FUSION_BIAS: f64 = 0.95;
+/// Minimum log-odds bonus for directional arbitration (0.05).
+pub const LOOP_INTENT_DIRECTIONAL_MIN_BONUS: f64 = 0.05;
+/// Maximum log-odds bonus for directional arbitration (0.22).
+pub const LOOP_INTENT_DIRECTIONAL_MAX_BONUS: f64 = 0.22;
+/// Arbitration bonus for square canvas assets (0.08).
+pub const LOOP_INTENT_ARBITRATION_SQUARE_BONUS: f64 = 0.08;
+/// Arbitration bonus for image-family containers (0.06).
+pub const LOOP_INTENT_ARBITRATION_IMAGE_BONUS: f64 = 0.06;
+/// Closure reduction scale for directional arbitration (0.20).
+pub const LOOP_INTENT_CLOSURE_REDUCTION_SCALE: f64 = 0.20;
+/// Periodicity reduction scale for directional arbitration (0.28).
+pub const LOOP_INTENT_PERIODICITY_REDUCTION_SCALE: f64 = 0.28;
+/// Frequency reduction scale for directional arbitration (0.25).
+pub const LOOP_INTENT_FREQ_REDUCTION_SCALE: f64 = 0.25;
+/// Maximum log-odds bonus for loop frequency in arbitration (0.12).
+pub const LOOP_INTENT_FREQ_MAX_BONUS: f64 = 0.12;
+/// Maximum log-odds penalty for loop frequency in arbitration (0.10).
+pub const LOOP_INTENT_FREQ_MAX_PENALTY: f64 = 0.10;
+/// Minimum log-odds penalty for high frame count assets (0.04).
+pub const LOOP_INTENT_FRAME_COUNT_MIN_PENALTY: f64 = 0.04;
+/// Maximum log-odds penalty for high frame count assets (0.14).
+pub const LOOP_INTENT_FRAME_COUNT_MAX_PENALTY: f64 = 0.14;
+/// Divisor for frame count penalty scaling (2000.0).
+pub const LOOP_INTENT_FRAME_COUNT_PENALTY_DIVISOR: f64 = 2000.0;
+/// FPS threshold for frame count penalty (24.0).
+pub const LOOP_INTENT_FRAME_COUNT_FPS_THRESHOLD: f64 = 24.0;
+
+// --- Resolution Presets (Wave 14) ---
+pub const RES_FULL_HD_W: u32 = 1920;
+pub const RES_FULL_HD_H: u32 = 1080;
+pub const RES_QHD_W: u32 = 2560;
+pub const RES_QHD_H: u32 = 1440;
+pub const RES_4K_W: u32 = 3840;
+pub const RES_4K_H: u32 = 2160;
+pub const RES_HD_W: u32 = 1280;
+pub const RES_HD_H: u32 = 720;
+pub const RES_SD_HEIGHT_THRESHOLD: u32 = 576;
+
+// --- Quality Tweak Constants ---
+pub const QUALITY_TWEAK_BPP_RANGE: f64 = 0.2;
+pub const QUALITY_TWEAK_STANDARD_MAX_TICK: u32 = 5;
+pub const QUALITY_TWEAK_HIGH_MAX_TICK: u32 = 3;
+pub const QUALITY_TWEAK_HIGH_SCALE: f64 = 3.0;
+
+// --- Exploration & Progress Defaults ---
+pub const EXPLORATION_CRF_STEP: f64 = 1.0;
+pub const EXPLORATION_PERCENTAGE_MULTIPLIER: f64 = 100.0;
+pub const PROGRESS_DEFAULT_DURATION: f64 = 120.0;
+pub const PROGRESS_DEFAULT_FRAMES: u64 = 3000;
+
+// --- Fallback & Safety Defaults ---
+pub const FALLBACK_CRF_BPP_HEURISTIC: u8 = 35;
+pub const VIDEO_NEGLIGIBLE_DURATION: f64 = 0.1;
+
+// --- System & Hash Constants ---
+pub const PID_SHIFT_FOR_HASH: u128 = 32;
+pub const COLLISION_INDEX_START: usize = 1;
+
+// --- Image Detection Heuristics (Wave 6) ---
+/// Max possible color count for indexed PNG (256.0).
+pub const PNG_MAX_INDEXED_COLORS: f64 = 256.0;
+/// Max possible entropy for RGB images (8.0).
+pub const PNG_MAX_RGB_ENTROPY: f64 = 8.0;
+/// Entropy anomaly threshold for low-confidence quantization (0.4).
+pub const PNG_ENTROPY_ANOMALY_THRESHOLD_LOW: f64 = 0.4;
+/// Entropy floor for identifying low-texture images (5.0).
+pub const PNG_ENTROPY_LOW_LIMIT: f64 = 5.0;
+/// Entropy ratio threshold for high-confidence quantization (0.70).
+pub const PNG_ENTROPY_RATIO_HIGH: f64 = 0.70;
+/// Minimum pixel count for large entropy analysis (10,000).
+pub const PNG_ENTROPY_PIXEL_COUNT_LARGE: u64 = 10_000;
+/// Minimum pixel count for medium entropy analysis (5,000).
+pub const PNG_ENTROPY_PIXEL_COUNT_MEDIUM: u64 = 5_000;
+/// Pixel count threshold for PNG efficiency anomaly detection (100,000).
+pub const PNG_EFFICIENCY_PIXEL_COUNT_THRESHOLD: u32 = 100_000;
+
+/// Pixel count threshold for large sampled color expected count (500,000).
+pub const SAMPLED_COLORS_PIXELS_LARGE: usize = 500_000;
+/// Pixel count threshold for medium sampled color expected count (100,000).
+pub const SAMPLED_COLORS_PIXELS_MEDIUM: usize = 100_000;
+/// Expected color count for large images (10,000).
+pub const SAMPLED_COLORS_EXPECTED_LARGE: usize = 10_000;
+/// Expected color count for medium images (5,000).
+pub const SAMPLED_COLORS_EXPECTED_MEDIUM: usize = 5_000;
+/// Expected color count for small images (1,000).
+pub const SAMPLED_COLORS_EXPECTED_SMALL: usize = 1_000;
+
+/// Minimum pixel count for color distribution analysis (100).
+pub const COLOR_DIST_MIN_PIXELS: usize = 100;
+/// Target sample count for color distribution analysis (50,000).
+pub const COLOR_DIST_TARGET_SAMPLES: usize = 50_000;
+
+/// Minimum dimension for gradient banding detection (16).
+pub const BANDING_MIN_DIM: u32 = 16;
+/// Scan step for horizontal/vertical banding detection (4).
+pub const BANDING_SCAN_STEP: usize = 4;
+/// Minimum pixel difference for banding step detection (3).
+pub const BANDING_DIFF_MIN: i16 = 3;
+/// Scan step for diagonal banding detection (8).
+pub const BANDING_DIAG_SCAN_STEP: usize = 8;
+
+/// Small PNG file threshold (500KB).
+/// PNG files smaller than this will be skipped to avoid overhead.
+pub const SMALL_PNG_THRESHOLD_BYTES: u64 = 500 * KB;
+
+/// Initial buffer size for stderr capture (64KB).
+pub const STDERR_BUFFER_INITIAL: usize = 64 * 1024;
+
+/// Maximum buffer size for stderr capture (1MB).
+pub const STDERR_BUFFER_MAX: usize = 1024 * 1024;
+
+/// Maximum number of stderr lines to capture.
+pub const STDERR_MAX_LINES: usize = 100_000;
+
+/// Animation duration threshold (3.0 seconds).
+/// Animations shorter than this may be converted to static images.
+pub const ANIMATION_DURATION_THRESHOLD_SECS: f32 = 3.0;
+
+/// Default number of threads for fallback.
+pub const DEFAULT_FALLBACK_THREADS: usize = 2;
+
+/// Default JXL distance for conservative encoding.
+pub const DEFAULT_JXL_DISTANCE: f32 = 1.0;
+
+/// High quality CRF value for HEVC encoding (18.0).
+pub const CRF_HIGH_QUALITY: f32 = CRF_TARGET_VISUALLY_LOSSLESS;
+/// Standard quality CRF value for HEVC encoding (20.0).
+pub const CRF_STANDARD_QUALITY: f32 = CRF_TARGET_STANDARD;
+/// Default animation frame delay (100ms).
+pub const DEFAULT_ANIMATION_DELAY_MS: u32 = 100;
+
+/// Entropy ratio threshold for medium-confidence quantization (0.40).
+pub const PNG_ENTROPY_RATIO_MEDIUM: f64 = 0.40;
+/// Base confidence for identified tool signatures in image detection (0.99).
+pub const IMAGE_DETECTION_CONFIDENCE_TOOL_SIGNATURE: f64 = 0.99;
+/// Base confidence for identified truecolor quantization (0.70).
+pub const IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT: f64 = 0.70;
+/// Base confidence for truecolor lossless classification (0.65).
+pub const IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_LOSSLESS: f64 = 0.65;
+/// Base confidence for truecolor assets with no quantization indicators (0.90).
+pub const IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_INDICATORS_NONE: f64 = 0.90;
+/// High final score threshold for image detection (0.70).
+pub const IMAGE_DETECTION_FINAL_SCORE_HIGH: f64 = 0.70;
+/// Medium final score threshold for image detection (0.30).
+pub const IMAGE_DETECTION_FINAL_SCORE_MEDIUM: f64 = 0.30;
+/// Confidence scaling factor for high-scoring image detection (0.33).
+pub const IMAGE_DETECTION_CONFIDENCE_SCALING_HIGH: f64 = 0.33;
+/// Confidence scaling factor for medium-scoring image detection (0.67).
+pub const IMAGE_DETECTION_CONFIDENCE_SCALING_MEDIUM: f64 = 0.67;
+/// Confidence offset for medium-scoring image detection (0.8).
+pub const IMAGE_DETECTION_CONFIDENCE_OFFSET_MEDIUM: f64 = 0.8;
+/// Divisor for statistical image detection score fusion (4.0).
+pub const DETECTION_STATISTICAL_DIVISOR: f64 = 4.0;
 // --- JXL Distance Mapping Constants ---
 /// Scaling factor to map 0-100 quality to 0-10 distance.
 pub const JXL_QUALITY_MAP_DIVISOR: f32 = 10.0;
@@ -939,8 +1788,6 @@ pub const GOP_FACTOR_EXTREME: f64 = 1.25;
 pub const B_FRAME_BONUS_1: f64 = 1.05;
 pub const B_FRAME_BONUS_2: f64 = 1.08;
 pub const B_FRAME_BONUS_MANY: f64 = 1.12;
-pub const CHROMA_FACTOR_444: f64 = 1.15;
-pub const CHROMA_FACTOR_422: f64 = 1.08;
 pub const HDR_FACTOR_TRUE: f64 = 1.20;
 pub const HDR_FACTOR_BT2020: f64 = 1.15;
 // --- Complexity BPP Ratio Factors ---
@@ -1055,12 +1902,635 @@ pub const PNG_PALETTE_SCORE_HIGH: f64 = 0.3;
 // Video Metadata Thresholds
 pub const VIDEO_NEGLIGIBLE_DURATION_SECS: f64 = 0.1;
 
+// --- SSIM Semantic Levels ---
+pub const SSIM_LEVEL_NEAR_LOSSLESS: f64 = 0.999_9;
+pub const SSIM_LEVEL_PERFECT: f64 = 0.999;
+pub const SSIM_LEVEL_EXCELLENT: f64 = 0.98;
+pub const SSIM_LEVEL_VERY_GOOD: f64 = 0.93;
+pub const SSIM_LEVEL_GOOD: f64 = 0.89;
+pub const SSIM_LEVEL_FAIR: f64 = 0.82;
+pub const SSIM_LEVEL_POOR: f64 = 0.70;
+
+// --- Image Detection Estimation Factors ---
+pub const JXL_DISTANCE_EST_BPP_FACTOR: f64 = 1.5;
+pub const JXL_DISTANCE_EST_OFFSET: f64 = 60.0;
+pub const ENTROPY_ANOMALY_MUL_ADD_FACTOR: f64 = 0.08;
+pub const ENTROPY_ANOMALY_MUL_ADD_OFFSET: f64 = 0.5;
+pub const LOG2_SAFETY_FLOOR: f64 = 0.001;
+
+pub const HEVC_EFFICIENCY_FACTOR: f64 = 3.0;
+pub const AVIF_EFFICIENCY_FACTOR: f64 = 3.0;
+pub const WEBP_EFFICIENCY_FACTOR: f64 = 1.5;
+pub const JPEG_EFFICIENCY_FACTOR: f64 = 1.0;
+
+pub const ENTROPY_QUALITY_BASE: f64 = 7.5;
+pub const ENTROPY_ADJ_MIN: f64 = 0.7;
+pub const ENTROPY_ADJ_MAX: f64 = 1.3;
+
+pub const LOOP_FREQUENCY_HIGH_THRESHOLD: f64 = 0.75;
+pub const LOOP_FREQUENCY_LOW_THRESHOLD: f64 = 0.25;
+
+/// Color diversity quantization step (4).
+pub const COLOR_DIVERSITY_QUANTIZE_STEP: u8 = 4;
+/// Maximum samples for color diversity calculation (10,000).
+pub const COLOR_DIVERSITY_MAX_SAMPLES: usize = 10_000;
+
+// --- Frame Probing Limits ---
+/// Minimum frame count below which we suspect metadata forgery (usually 1).
+pub const FRAME_COUNT_TRUST_LOWER_LIMIT: u64 = 1;
+// FRAME_COUNT_TRUST_UPPER_LIMIT is defined elsewhere in this file.
+
+pub const CONTAINER_OVERHEAD_REPORT_THRESHOLD: u64 = 10_000;
+
+// --- Loop Intent Scoring Engine ---
+pub const LOOP_INTENT_FREQ_SCORE_VHIGH_THRESHOLD: f64 = 20.0;
+pub const LOOP_INTENT_FREQ_SCORE_HIGH_THRESHOLD: f64 = 10.0;
+pub const LOOP_INTENT_FREQ_SCORE_MED_THRESHOLD: f64 = 5.0;
+pub const LOOP_INTENT_FREQ_SCORE_LOW_THRESHOLD: f64 = 2.0;
+pub const LOOP_INTENT_FREQ_SCORE_VHIGH: f64 = 1.0;
+pub const LOOP_INTENT_FREQ_SCORE_HIGH: f64 = 0.8;
+pub const LOOP_INTENT_FREQ_SCORE_MED: f64 = 0.6;
+pub const LOOP_INTENT_FREQ_SCORE_LOW: f64 = 0.4;
+pub const LOOP_INTENT_FREQ_SCORE_DEFAULT: f64 = 0.2;
+pub const LOOP_INTENT_FREQ_SCORE_NULL: f64 = 0.5;
+
+pub const LOOP_INTENT_DENSITY_LOW_THRESHOLD: f64 = 1.2;
+pub const LOOP_INTENT_DENSITY_MED_THRESHOLD: f64 = 3.0;
+pub const LOOP_INTENT_DENSITY_HIGH_THRESHOLD: f64 = 6.0;
+pub const LOOP_INTENT_DENSITY_LOW_ADJ: f64 = -0.35;
+pub const LOOP_INTENT_DENSITY_MED_ADJ: f64 = -0.20;
+pub const LOOP_INTENT_DENSITY_HIGH_ADJ: f64 = -0.08;
+
+pub const LOOP_INTENT_SPARSE_CADENCE_DENSITY_THRESHOLD: f64 = 12.0;
+pub const LOOP_INTENT_SPARSE_CADENCE_SHORT_SCORE: f64 = 0.98;
+pub const LOOP_INTENT_SPARSE_CADENCE_GAP_THRESHOLD: f64 = 0.25;
+pub const LOOP_INTENT_SPARSE_CADENCE_GAP_SCORE: f64 = 0.92;
+pub const LOOP_INTENT_SPARSE_CADENCE_LONG_DUR: f64 = 4.0;
+pub const LOOP_INTENT_SPARSE_CADENCE_LONG_FC: u64 = 12;
+pub const LOOP_INTENT_SPARSE_CADENCE_LONG_SCORE: f64 = 0.95;
+
+pub const LOOP_INTENT_SIGNAL_STRENGTH_MIN: f64 = 0.25;
+pub const LOOP_INTENT_SIGNAL_STRENGTH_MIN_RELAXED: f64 = 0.15;
+
+pub const LOOP_INTENT_DYN_THRESH_SCALING_LOW: f64 = 0.25;
+pub const LOOP_INTENT_DYN_THRESH_SCALING_HIGH: f64 = 0.50;
+
+pub const LOOP_INTENT_NUDGE_ASPECT_1_1: f64 = 0.05;
+pub const LOOP_INTENT_NUDGE_ASPECT_16_9: f64 = -0.05;
+pub const LOOP_INTENT_NUDGE_RESOLUTION_4K: f64 = -0.08;
+pub const LOOP_INTENT_NUDGE_SCENE_CUT: f64 = -0.08;
+pub const LOOP_INTENT_NUDGE_LOCALIZED_MOTION: f64 = 0.05;
+pub const LOOP_INTENT_NUDGE_CLAMP: f64 = 0.15;
+
+pub const LOOP_INTENT_SCENE_CUT_RATIO: f64 = 5.0;
+pub const LOOP_INTENT_LOCALIZED_MOTION_RATIO: f64 = 0.7;
+pub const LOOP_INTENT_LETTERBOX_THRESHOLD: f64 = 0.15;
+pub const LOOP_INTENT_VARIANCE_THRESHOLD: f64 = 100.0;
+
+pub const LOOP_CONFIDENCE_AUTHORITATIVE: f64 = 1.0;
+pub const LOOP_CONFIDENCE_HIGH: f64 = 0.85;
+pub const LOOP_CONFIDENCE_MED: f64 = 0.6;
+pub const LOOP_CONFIDENCE_LOW: f64 = 0.2;
+
+pub const LOOP_CONFIDENCE_THRESHOLD_FFMPEG: f64 = 0.8;
+pub const LOOP_CONFIDENCE_PENALTY_FFMPEG: f64 = 0.1;
+
+pub const FLOAT_EPSILON: f64 = 0.01;
+
+// --- Quality Verification Tolerances ---
+pub const VERIFY_DURATION_TOLERANCE_STRICT: f64 = 1.0;
+pub const VERIFY_DURATION_TOLERANCE_RELAXED_ANIMATED: f64 = 3.0;
+
+// --- Quality Matcher Adjustment Factors ---
+pub const GRAIN_FACTOR_TRUE: f64 = 1.20;
+pub const ALPHA_FACTOR_TRUE: f64 = 0.90;
+pub const MATCH_MODE_QUALITY_FACTOR: f64 = 1.0;
+pub const MATCH_MODE_SIZE_FACTOR: f64 = 0.80;
+pub const MATCH_MODE_SPEED_FACTOR: f64 = 0.90;
+pub const TARGET_ENCODER_AV1_FACTOR: f64 = 0.50;
+pub const TARGET_ENCODER_HEVC_FACTOR: f64 = 0.70;
+pub const TARGET_ENCODER_JXL_FACTOR: f64 = 0.80;
+
+// --- Quality Grade Thresholds (Wave 9) ---
+pub const SSIM_GRADE_GOOD: f64 = 0.95;
+pub const SSIM_GRADE_ACCEPTABLE: f64 = 0.90;
+pub const SSIM_GRADE_FAIR: f64 = 0.85;
+
+pub const PSNR_GRADE_EXCELLENT: f64 = 45.0;
+pub const PSNR_GRADE_GOOD: f64 = 40.0;
+pub const PSNR_GRADE_ACCEPTABLE: f64 = 35.0;
+pub const PSNR_GRADE_FAIR: f64 = 30.0;
+
+pub const MS_SSIM_GRADE_EXCELLENT: f64 = 0.95;
+pub const MS_SSIM_GRADE_GOOD: f64 = 0.90;
+pub const MS_SSIM_GRADE_ACCEPTABLE: f64 = 0.85;
+pub const MS_SSIM_GRADE_FAIR: f64 = 0.80;
+
+// --- GPU Acceleration Thresholds ---
+pub const GPU_LARGE_FILE_THRESHOLD_BYTES: u64 = 500 * MB;
+pub const GPU_VERY_LARGE_FILE_THRESHOLD_BYTES: u64 = 2 * GB;
+
+// --- SSIM Mapping Constants ---
+pub const SSIM_MAPPING_PSNR_TOLERANCE: f64 = 0.5;
+pub const SSIM_MAPPING_CLAMP_MAX: f64 = 0.99999;
+
+// --- JPEG Quality Estimation Mapping ---
+pub const JPEG_EST_Q_LOWEST: u8 = 50;
+pub const JPEG_EST_Q_LOW: u8 = 65;
+pub const JPEG_EST_Q_MEDIUM: u8 = 75;
+pub const JPEG_EST_Q_HIGH: u8 = 85;
+pub const JPEG_EST_Q_VERY_HIGH: u8 = 90;
+pub const JPEG_EST_Q_ULTRA: u8 = 95;
+pub const JPEG_EST_Q_EXCELLENT: u8 = 98;
+
+// --- JPEG Gainmap Candidate Scores ---
+pub const JPEG_GAINMAP_SCORE_RELATIVE_OFFSET: f64 = 4000.0;
+pub const JPEG_GAINMAP_SCORE_ABSOLUTE_OFFSET: f64 = 3500.0;
+pub const JPEG_GAINMAP_SCORE_NEARBY_SCAN: f64 = 2500.0;
+pub const JPEG_GAINMAP_SCORE_TAIL_SCAN: f64 = 1500.0;
+
+// --- MS-SSIM Sampling Defaults ---
+pub const MSSSIM_DEFAULT_SAMPLED_FRAMES: usize = 1000;
+
+// --- Quality Level Boundaries ---
+pub const QUALITY_LEVEL_ULTRA: u8 = 95;
+pub const QUALITY_LEVEL_HIGH: u8 = 90;
+pub const QUALITY_LEVEL_GOOD: u8 = 80;
+pub const QUALITY_LEVEL_MEDIUM: u8 = 70;
+pub const QUALITY_LEVEL_LOW: u8 = 60;
+
+// --- Quality Description Thresholds ---
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Checked limit for 32-bit platforms"
+)]
+pub const QUALITY_MATCHER_SCAN_LIMIT: usize = MB as usize;
+
+// --- HDR Synthesis & PQ Transfer ---
+pub const HDR_INTENSITY_TARGET_MIN: f32 = 100.0;
+pub const HDR_INTENSITY_TARGET_MAX: f32 = 1_000_000.0;
+pub const HDR_DIFFUSE_WHITE_NITS: f32 = 203.0;
+pub const HDR_MAX_NITS: f32 = 10000.0;
+
+// PQ transfer function constants (ST 2084)
+pub const PQ_M1: f32 = 2610.0 / 16384.0;
+pub const PQ_M2: f32 = 2523.0 / 32.0;
+pub const PQ_C1: f32 = 3424.0 / 4096.0;
+pub const PQ_C2: f32 = 2413.0 / 128.0;
+pub const PQ_C3: f32 = 2392.0 / 128.0;
+
+// sRGB transfer function constants
+pub const SRGB_LINEAR_THRESHOLD: f32 = 0.04045;
+pub const SRGB_LINEAR_SLOPE: f32 = 12.92;
+pub const SRGB_GAMMA_OFFSET: f32 = 0.055;
+pub const SRGB_GAMMA_SCALE: f32 = 1.055;
+pub const SRGB_GAMMA_EXP: f32 = 2.4;
+
+// --- ICC Profile / JXL Patching ---
+pub const ICC_D50_ILLUMINANT_OFFSET_START: usize = 68;
+pub const ICC_D50_ILLUMINANT_OFFSET_END: usize = 80;
+pub const ICC_D50_STANDARD_BYTES: [u8; 12] = [
+    0x00, 0x00, 0xf6, 0xd6, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xd3, 0x2d,
+];
+
+// --- Exploration / Iteration Limits ---
+pub const EXPLORATION_ITERATION_LIMIT: u32 = 255;
+
+// --- Video Explorer & Exploration Limits (Wave 11) ---
+pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
+pub const ULTIMATE_MAX_WALL_HITS: u32 = 100;
+pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
+pub const MIN_ENCODE_THREADS: usize = 1;
+pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
+pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
+pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
+pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 0.0;
+pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 51.0;
+pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = 1.0;
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
+
+// --- Exploration Confidence Weights (Wave 11) ---
+pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
+pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
+pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
+pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
+
+// --- GPU Sampling Positions (Wave 11) ---
+pub const GPU_SAMPLE_POS_START: f64 = 0.0;
+pub const GPU_SAMPLE_POS_QUARTER: f64 = 0.25;
+pub const GPU_SAMPLE_POS_HALF: f64 = 0.50;
+pub const GPU_SAMPLE_POS_THREE_QUARTERS: f64 = 0.75;
+pub const GPU_SAMPLE_POS_TAIL: f64 = 0.90;
+pub const GPU_SAMPLE_SEGMENTS: usize = 5;
+
+// --- JPEG Multi-Picture (MP) Tags & Identifiers (Wave 11) ---
+pub const JPEG_MPF_IDENTIFIER: &[u8] = b"MPF\0";
+pub const JPEG_XMPF_IDENTIFIER: &[u8] = b"XMPF";
+pub const TIFF_BIG_ENDIAN: &[u8] = b"MM\0*";
+pub const TIFF_LITTLE_ENDIAN: &[u8] = b"II*\0";
+pub const JPEG_TAG_NUMBER_OF_IMAGES: u16 = 0xB001;
+pub const JPEG_TAG_MP_ENTRY: u16 = 0xB002;
+
+// --- JPEG Gainmap Scanning (Wave 11) ---
+pub const JPEG_GAINMAP_SCAN_WINDOW_MIN: usize = 4096;
+pub const JPEG_GAINMAP_SCAN_WINDOW_MAX: usize = 131_072;
+pub const JPEG_MAX_GAINMAP_SCAN_CANDIDATES: usize = 48;
+
+// --- SSIM & Precision Limits (Wave 11) ---
+pub const SSIM_MIN: f64 = 0.0;
+pub const SSIM_MAX: f64 = 1.0;
+pub const SSIM_DISPLAY_PRECISION_FULL: usize = 6;
+pub const CRF_PRECISION: f32 = 0.25;
+
+// --- UI & Versioning (Wave 11) ---
+pub const UI_BAR_WIDTH: usize = 35;
+pub const CACHE_SCHEMA_VERSION: i32 = 3;
+
+// --- CRF Cache & Precision (Wave 12) ---
+pub const CRF_CACHE_KEY_MULTIPLIER: f64 = 100.0;
+pub const CRF_CACHE_MAX_VALID: f64 = 63.99;
+
+// --- Unified CRF Constants (f64, Wave 12) ---
+pub const HEVC_CRF_MIN_F64: f64 = 0.0;
+pub const HEVC_CRF_MAX_F64: f64 = 51.0;
+pub const HEVC_CRF_DEFAULT_F64: f64 = 23.0;
+pub const HEVC_CRF_VISUALLY_LOSSLESS_F64: f64 = 18.0;
+pub const HEVC_CRF_PRACTICAL_MAX_F64: f64 = 32.0;
+
+pub const AV1_CRF_MIN_F64: f64 = 0.0;
+pub const AV1_CRF_MAX_F64: f64 = 63.0;
+pub const AV1_CRF_DEFAULT_F64: f64 = 30.0;
+pub const AV1_CRF_VISUALLY_LOSSLESS_F64: f64 = 20.0;
+pub const AV1_CRF_PRACTICAL_MAX_F64: f64 = 45.0;
+
+pub const VP9_CRF_MIN_F64: f64 = 0.0;
+pub const VP9_CRF_MAX_F64: f64 = 63.0;
+pub const VP9_CRF_DEFAULT_F64: f64 = 31.0;
+
+pub const X264_CRF_MIN_F64: f64 = 0.0;
+pub const X264_CRF_MAX_F64: f64 = 51.0;
+pub const X264_CRF_DEFAULT_F64: f64 = 23.0;
+
+// --- Global Exploration Iteration Limits (Wave 12) ---
+pub const NORMAL_MAX_ITERATIONS: u32 = 60;
+pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
+
+// --- JXL Specific Thresholds (Wave 12) ---
+pub const JXL_BREAK_EVEN_RATIO_PCT: f64 = 105.0;
+
+// --- Common Video Resolutions (Wave 13) ---
+pub const RES_FHD_W: u32 = 1920;
+pub const RES_FHD_H: u32 = 1080;
+// Note: 1280x720 and 3840x2160 are already defined in Wave 10 as RES_HD_W/H and RES_4K_W/H.
+
+// --- Exploration & Convergence (Wave 13) ---
+pub const EXPLORE_VARIANCE_THRESHOLD: f64 = 1e-6;
+pub const EXPLORE_MIN_ITERATIONS_VARIANCE: u32 = 6;
+pub const EXPLORE_WINDOW_SIZE: usize = 3;
+pub const EXPLORE_MAX_CONTINUED_ITERATIONS: u32 = 20;
+
+// --- GPU Search Phases (Wave 13) ---
+pub const PHASE4_MAX_ATTEMPTS: u32 = 32;
+pub const PHASE4_MAX_BACKTRACK_RETRIES: u32 = 3;
+pub const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = 2;
+pub const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = 10;
+pub const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+/// GPU coarse search: tolerate up to N consecutive compressions before phase transition.
+pub const GPU_COARSE_MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
+/// GPU coarse search: tolerate up to N consecutive encode failures before giving up on this phase.
+pub const GPU_COARSE_MAX_CONSECUTIVE_FAILURES: u32 = 2;
+/// GPU coarse search: bail when size stops improving for this many upward probes.
+pub const GPU_COARSE_UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
+/// GPU coarse search: hard cap on upward-direction switches before aborting the sweep.
+pub const GPU_COARSE_UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
+
+/// Precheck FPS sanity ranges. Videos with FPS above `PRECHECK_FPS_THRESHOLD_INVALID`
+/// are treated as metadata corruption and rejected.
+pub const PRECHECK_FPS_RANGE_NORMAL: (f64, f64) = (1.0, 240.0);
+pub const PRECHECK_FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
+pub const PRECHECK_FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0);
+pub const PRECHECK_FPS_THRESHOLD_INVALID: f64 = 10000.0;
+
+// --- Checkpoint & Lock Safety (Wave 13) ---
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+pub const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+pub const LOCK_MAX_RETRIES: u32 = 15;
+
+// --- Miscellaneous Business Logic (Wave 13) ---
+pub const WARMUP_DURATION_SECS: f32 = 5.0;
+// Note: CHANGE_RATE_THRESHOLD (0.005) already defined in Wave 2.
+pub const LOG_TAG_WIDTH_DEFAULT: usize = 28;
+pub const LOG_PREFIX_MAX_DISPLAY: usize = 25;
+
+// --- IO & Buffering (Wave 14) ---
+pub const DEFAULT_BUFFER_SIZE: usize = 65536;
+pub const ISOBMFF_ANIMATED_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
+
+// --- Percentage & Scaling (Wave 14) ---
+pub const PERCENT_SCALE_100: f64 = 100.0;
+pub const PERMILLE_TO_PERCENT: f64 = 100.0;
+
+// --- Common Non-Standard Resolutions (Wave 14) ---
+pub const RES_SD_W: u32 = 640;
+pub const RES_SD_H: u32 = 480;
+
+// --- Timing & Intervals (Wave 14) ---
+pub const TICK_RATE_STEADY_MS: u64 = 33;
+pub const TICK_RATE_FAST_MS: u64 = 8;
+pub const POLLING_INTERVAL_SHORT_MS: u64 = 5;
+pub const POLLING_INTERVAL_MEDIUM_MS: u64 = 10;
+pub const RETRY_DELAY_LONG_MS: u64 = 100;
+pub const GPU_NEGATIVE_CACHE_TTL_SECS: u64 = 5;
+
+// --- Codec & Format Names (Wave 15) ---
+pub const CODEC_HEVC: &str = "hevc";
+pub const CODEC_AV1: &str = "av1";
+pub const CODEC_H264: &str = "h264";
+pub const CODEC_VP9: &str = "vp9";
+pub const CODEC_PNG: &str = "png";
+pub const CODEC_JXL: &str = "jxl";
+pub const FORMAT_JPEG: &str = "jpeg";
+pub const FORMAT_JPG: &str = "jpg";
+
+// --- Logic Scaling & Thresholds (Wave 15) ---
+pub const PERCENT_SCALE: f64 = 100.0;
+
+// --- Global Epsilon & Comparison Limits (Wave 18) ---
+pub const EPSILON_DEFAULT: f64 = 0.01;
+pub const EPSILON_DEFAULT_F32: f32 = 0.01;
+pub const EPSILON_STRICT: f64 = 0.001;
+pub const EPSILON_STRICT_F32: f32 = 0.001;
+pub const EPSILON_PRECISE: f64 = 0.0001;
+pub const EPSILON_PRECISE_F32: f32 = 0.0001;
+
+// --- Additional Logic Thresholds (Wave 18) ---
+pub const BPP_MIN_VALID: f64 = 0.01;
+pub const FPS_MIN_VALID: f64 = 0.01;
+pub const DURATION_MIN_VALID: f64 = 0.001;
+pub const SIZE_TOLERANCE_RATIO: f64 = 1.01;
+pub const BREAK_EVEN_RATIO_DEFAULT: f64 = 1.05;
+
+// --- Tool Argument Constants (Wave 16) ---
+pub const ARG_VERSION: &str = "--version";
+pub const ARG_V: &str = "-v";
+pub const ARG_VER: &str = "-ver";
+pub const ARG_HELP: &str = "--help";
+
+pub const MAGICK_ARG_FORMAT: &str = "-format";
+pub const MAGICK_ARG_IDENTIFY: &str = "identify";
+
+pub const WEBPMUX_ARG_INFO: &str = "-info";
+pub const WEBPMUX_ARG_GET: &str = "-get";
+pub const WEBPMUX_ARG_FRAME: &str = "frame";
+pub const WEBPMUX_ARG_LOOP: &str = "-loop";
+pub const WEBPMUX_ARG_BGCOLOR: &str = "-bgcolor";
+pub const WEBPMUX_ARG_OUTPUT: &str = "-o";
+
+pub const GIFSKI_ARG_FPS: &str = "--fps";
+pub const GIFSKI_ARG_QUALITY: &str = "--quality";
+pub const GIFSKI_ARG_MOTION_QUALITY: &str = "--motion-quality";
+pub const GIFSKI_ARG_LOSSY_QUALITY: &str = "--lossy-quality";
+pub const GIFSKI_ARG_WIDTH: &str = "--width";
+pub const GIFSKI_ARG_HEIGHT: &str = "--height";
+pub const GIFSKI_ARG_REPEAT: &str = "--repeat";
+
+// --- Loop Intent Hierarchical Decision Tree (Wave 19) ---
+/// Metadata trust level for GIF (NETSCAPE2.0) and authoritative containers (1.0).
+pub const METADATA_TRUST_AUTHORITATIVE: f64 = 1.0;
+/// Metadata trust level for modern animated containers (0.85).
+pub const METADATA_TRUST_MODERN_ANIMATED: f64 = 0.85;
+/// Metadata trust level for standard video containers (0.6).
+pub const METADATA_TRUST_STANDARD_VIDEO: f64 = 0.6;
+/// Metadata trust level for untrusted or legacy video containers (0.2).
+pub const METADATA_TRUST_UNTRUSTED: f64 = 0.2;
+/// Metadata trust penalty for generic FFmpeg wrappers (0.1).
+pub const METADATA_TRUST_PENALTY_LAVF: f64 = 0.1;
+
+/// Standard neutral score for probabilistic arbitration (0.5).
+pub const LOOP_INTENT_NEUTRAL_SCORE: f64 = 0.5;
+/// Standard ambiguous score for probabilistic arbitration (0.5).
+pub const LOOP_INTENT_AMBIGUOUS_SCORE: f64 = 0.5;
+
+/// Interpolation floor for keep probability (0.3).
+pub const KEEP_PROB_INTERPOLATION_FLOOR: f64 = 0.3;
+/// Interpolation range for keep probability (0.4).
+pub const KEEP_PROB_INTERPOLATION_RANGE: f64 = 0.4;
+
+/// Lower clamp for fused probability (0.01).
+pub const FUSED_PROB_CLAMP_LOWER: f64 = 0.01;
+/// Upper clamp for fused probability (0.99).
+pub const FUSED_PROB_CLAMP_UPPER: f64 = 0.99;
+
+// --- Image Quality Sampling Steps (Wave 19) ---
+pub const COLOR_DIVERSITY_STEP_LARGE: usize = 20;
+pub const COLOR_DIVERSITY_STEP_MEDIUM: usize = 10;
+pub const COLOR_DIVERSITY_STEP_NORMAL: usize = 1;
+
+pub const TEXTURE_VARIANCE_STEP_LARGE: usize = 10;
+pub const TEXTURE_VARIANCE_STEP_MEDIUM: usize = 5;
+pub const TEXTURE_VARIANCE_STEP_NORMAL: usize = 2;
+
+pub const NOISE_LEVEL_STEP_LARGE: usize = 10;
+pub const NOISE_LEVEL_STEP_MEDIUM: usize = 5;
+
+// --- Video Explorer & Resource Allocation (Wave 19) ---
+pub const PIXELS_720P: u64 = 1280 * 720;
+pub const PIXELS_1080P: u64 = 1920 * 1080;
+pub const PIXELS_4K: u64 = 3840 * 2160;
+
+pub const THREADS_LOW_RES: usize = 4;
+pub const THREADS_MEDIUM_RES: usize = 8;
+pub const THREADS_HIGH_RES: usize = 12;
+
+/// Saturation detection threshold for iterations (41.0).
+pub const SATURATION_CRF_RANGE_THRESHOLD: f32 = 41.0;
+/// Scaling divisor for CRF range iteration adjustment (20.0).
+pub const CRF_RANGE_SCALING_DIVISOR: f32 = 20.0;
+
+// --- GPU Acceleration Defaults (Wave 19) ---
+pub const GPU_DEFAULT_CONCURRENCY: usize = 4;
+pub const BEIJING_TIME_OFFSET_SECS: i32 = 8 * 3600;
+
+// --- Floating Point Luma Coefficients (Wave 19) ---
+pub const LUMA_COEFF_R_F64: f64 = 0.299;
+pub const LUMA_COEFF_G_F64: f64 = 0.587;
+pub const LUMA_COEFF_B_F64: f64 = 0.114;
+
+/// Maximum number of colors in a standard 8-bit palette (256).
+pub const PALETTE_MAX_COLORS: u32 = 256;
+
+// --- ISOBMFF Brands (Wave 19) ---
+pub const BRAND_HEIC: &[u8] = b"heic";
+pub const BRAND_HEIX: &[u8] = b"heix";
+pub const BRAND_HEIM: &[u8] = b"heim";
+pub const BRAND_HEIS: &[u8] = b"heis";
+pub const BRAND_HEVC: &[u8] = b"hevc";
+pub const BRAND_HEVX: &[u8] = b"hevx";
+pub const BRAND_HEV1: &[u8] = b"hev1";
+pub const BRAND_HEIF: &[u8] = b"heif";
+pub const BRAND_MIF1: &[u8] = b"mif1";
+pub const BRAND_MSF1: &[u8] = b"msf1";
+pub const BRAND_AVIF: &[u8] = b"avif";
+pub const BRAND_AVIS: &[u8] = b"avis";
+pub const BRAND_MA1B: &[u8] = b"MA1B";
+pub const BRAND_MA1A: &[u8] = b"MA1A";
+
+// --- Magic Headers (Wave 19) ---
+pub const JXL_HEADER_SHORT: &[u8] = &[0xFF, 0x0A];
+pub const JXL_HEADER_LONG: &[u8] = &[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20];
+pub const TIFF_LE: &[u8] = &[0x49, 0x49, 0x2A, 0x00];
+pub const TIFF_BE: &[u8] = &[0x4D, 0x4D, 0x00, 0x2A];
+pub const BIGTIFF_LE: &[u8] = &[0x49, 0x49, 0x2B, 0x00];
+pub const BIGTIFF_BE: &[u8] = &[0x4D, 0x4D, 0x00, 0x2B];
+pub const GIFSKI_ARG_FAST: &str = "--fast";
+
+pub const AVIFENC_ARG_LOSSLESS: &str = "--lossless";
+pub const AVIFENC_ARG_SPEED: &str = "--speed";
+pub const AVIFENC_ARG_JOBS: &str = "-j";
+pub const AVIFENC_ARG_MAX: &str = "--max";
+pub const AVIFENC_ARG_MIN: &str = "--min";
+pub const AVIFENC_ARG_DEPTH: &str = "--depth";
+pub const AVIFENC_ARG_YUV: &str = "--yuv";
+
+pub const SIPS_ARG_S: &str = "-s";
+pub const SIPS_ARG_FORMAT: &str = "format";
+pub const SIPS_ARG_FORMAT_OPTIONS: &str = "formatOptions";
+pub const SIPS_ARG_OUT: &str = "--out";
+
+pub const EXIFTOOL_ARG_OVERWRITE_ORIGINAL: &str = "-overwrite_original";
+pub const EXIFTOOL_ARG_TAGS_FROM_FILE: &str = "-tagsfromfile";
+pub const EXIFTOOL_ARG_ICC_PROFILE: &str = "-icc_profile";
+pub const EXIFTOOL_ARG_B: &str = "-b";
+pub const EXIFTOOL_ARG_ALL: &str = "-all=";
+pub const EXIFTOOL_ARG_M: &str = "-m";
+pub const EXIFTOOL_ARG_Q: &str = "-q";
+pub const EXIFTOOL_ARG_P: &str = "-P";
+pub const EXIFTOOL_ARG_UNSAFE: &str = "-unsafe";
+
+pub const FFMPEG_ARG_F: &str = "-f";
+pub const FFMPEG_ARG_PROFILE_V: &str = "-profile:v";
+
+pub const FFPROBE_ARG_SHOW_STREAMS: &str = "-show_streams";
+pub const FFPROBE_ARG_SHOW_FORMAT: &str = "-show_format";
+pub const FFPROBE_ARG_SHOW_FRAMES: &str = "-show_frames";
+pub const FFPROBE_ARG_SHOW_ENTRIES: &str = "-show_entries";
+pub const FFPROBE_ARG_SELECT_STREAMS: &str = "-select_streams";
+pub const FFPROBE_ARG_PRINT_FORMAT: &str = "-print_format";
+pub const FFPROBE_ARG_READ_INTERVALS: &str = "-read_intervals";
+pub const FFPROBE_ARG_COUNT_FRAMES: &str = "-count_frames";
+pub const FFPROBE_ARG_PATTERN_TYPE: &str = "-pattern_type";
+
+// --- Tool Names (Wave 17) ---
+pub const TOOL_DOVI_TOOL: &str = "dovi_tool";
+pub const TOOL_HDR10PLUS_TOOL: &str = "hdr10plus_tool";
+// --- Tool Names (Wave 19) ---
+pub const TOOL_PS: &str = "ps";
+pub const TOOL_KILL: &str = "kill";
+pub const TOOL_HOSTNAME: &str = "hostname";
+pub const TOOL_TASKKILL: &str = "taskkill";
+pub const TOOL_RSYNC: &str = "rsync";
+pub const TOOL_POWERSHELL: &str = "powershell";
+pub const TOOL_GETFACL: &str = "getfacl";
+pub const TOOL_SETFACL: &str = "setfacl";
+pub const TOOL_SYSCTL: &str = "sysctl";
+pub const TOOL_VM_STAT: &str = "vm_stat";
+pub const TOOL_ATTRIB: &str = "attrib";
+
+// --- Supported Media Extensions (Wave 20) ---
+pub const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
+    "bmp", "ico", "svg", "jp2", "j2k", "jxl",
+];
+pub const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts", "m2ts",
+    "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic", "heif", "apng", "png",
+    "jxl",
+];
+
+// --- Codec Signature Strings (Wave 20) ---
+pub const SIG_VVC: &[&str] = &["vvc", "h266", "h.266"];
+pub const SIG_AV2: &[&str] = &["av2", "avm"];
+pub const SIG_AV1: &[&str] = &["av1", "svt", "aom", "libaom"];
+pub const SIG_HEVC: &[&str] = &["h265", "hevc", "x265", "h.265"];
+pub const SIG_VP9: &[&str] = &["vp9"];
+pub const SIG_VP8: &[&str] = &["vp8", "libvpx"];
+pub const SIG_H264: &[&str] = &["h264", "avc", "x264", "h.264"];
+pub const SIG_MPEG4: &[&str] = &["mpeg4", "xvid", "divx", "mp4v"];
+pub const SIG_MPEG2: &[&str] = &["mpeg2", "mpeg2video"];
+pub const SIG_MPEG1: &[&str] = &["mpeg1", "mpeg1video"];
+pub const SIG_WMV: &[&str] = &["wmv", "vc1", "vc-1"];
+pub const SIG_THEORA: &[&str] = &["theora"];
+pub const SIG_REALVIDEO: &[&str] = &["rv10", "rv20", "rv30", "rv40", "realvideo"];
+pub const SIG_FLASH: &[&str] = &["flv", "vp6", "flashsv"];
+
+// --- Heuristic Coefficients & Tuning (Wave 20) ---
+pub const KINETIC_WEIGHT_BASE: f64 = 1.0;
+pub const KINETIC_WEIGHT_ADJ: f64 = 0.5;
+pub const LOOP_INTENT_SIGNAL_THRESHOLD: u8 = 3;
+pub const LOOP_INTENT_SIGNAL_OFFSET: usize = 2;
+pub const INTERLACED_PENALTY_MULTIPLIER: f64 = 2.0;
+pub const HEURISTIC_SAFETY_FLOOR: f64 = 0.5;
+pub const IQR_SAFETY_FLOOR: f64 = 0.06;
+
+// --- Confidence Defaults (Wave 20) ---
+pub const CONFIDENCE_DEFAULT_HIGH: f64 = 0.75;
+pub const CONFIDENCE_DEFAULT_MED: f64 = 0.7;
+pub const CONFIDENCE_DEFAULT_LOW: f64 = 0.65;
+pub const CONFIDENCE_DEFAULT_MIN: f64 = 0.6;
+
+// --- Search & Exploration Parameters (Wave 20) ---
+pub const SEARCH_ROUNDING_MULTIPLIER: f32 = 2.0;
+pub const SEARCH_OFFSET_FINE: f32 = 0.25;
+pub const SEARCH_OFFSET_NORMAL: f32 = 0.5;
+pub const SEARCH_PLATEAU_MULTIPLIER: f64 = 2.0;
+
+// --- Quality & Bitrate Thresholds (Wave 20) ---
+pub const BPP_UPPER_CAP: f64 = 2.0;
+pub const QUALITY_LOWER_FLOOR: f64 = 50.0;
+pub const KERNEL_SIZE_3X3: f64 = 9.0;
+pub const CONTRAST_NORMALIZATION_FACTOR: f64 = 128.0;
+
+// --- Image Forensics & Perceptual Heuristics (Wave 20) ---
+pub const DITHER_FLOYD_STEINBERG_MULTIPLIER: f64 = 5.0;
+pub const DITHER_CROSS_DIFF_THRESHOLD: f64 = 40.0;
+pub const DITHER_DIAG_RATIO: f64 = 0.5;
+pub const DITHER_DENSE_MULTIPLIER: f64 = 4.0;
+pub const DITHER_DIFF_MIN: f64 = 30.0;
+pub const DITHER_DIFF_MAX: f64 = 100.0;
+pub const DITHER_ALTERNATION_THRESHOLD: i32 = 3;
+pub const ENTROPY_ANOMALY_UPPER_CLAMP: f64 = 0.75;
+
+// --- Color Science Weights (Wave 20) ---
+pub const COLOR_DIFF_WEIGHT_R_BASE: f64 = 2.0;
+pub const COLOR_DIFF_WEIGHT_G: f64 = 4.0;
+pub const COLOR_DIFF_WEIGHT_B_BASE: f64 = 2.0;
+pub const COLOR_DIFF_DIVISOR: f64 = 256.0;
+
+// --- Conversion & Scaling Factors (Wave 20) ---
+pub const SCALE_100: f64 = 100.0;
+pub const SCALE_1000: f64 = 1000.0;
+pub const KB_F64: f64 = 1024.0;
+pub const MB_F64: f64 = 1048576.0;
+pub const PERCENTAGE_FACTOR_U32: u32 = 100;
+
+// --- Graphics & Imaging Fundamentals (Wave 22) ---
+pub const ALPHA_OPAQUE: u8 = 255;
+pub const CHANNELS_RGBA: usize = 4;
+pub const RGBA_ALPHA_OFFSET: usize = 3;
+
+// --- Iteration & Search Limits (Wave 20) ---
+pub const SEARCH_ITERATIONS_MAX_COMPRESS: u32 = 8;
+pub const SEARCH_ITERATIONS_MAX_QUALITY: u32 = 10;
+pub const QUALITY_EST_MIN: f64 = 10.0;
+pub const QUALITY_EST_MAX: f64 = 100.0;
+pub const QUALITY_EST_BPP_LOG_SCALE: f64 = 12.0;
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        JXL_DEFAULT_EFFORT, JXL_ULTIMATE_DISTANCE, JXL_ULTIMATE_EFFORT, is_supported_jxl_effort,
-        jxl_distance_for_mode, jxl_effort_for_mode,
-    };
+    use super::*;
+
     #[test]
     fn test_jxl_effort_policy_is_mode_locked() {
         assert_eq!(jxl_effort_for_mode(false), JXL_DEFAULT_EFFORT);

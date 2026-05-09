@@ -136,11 +136,11 @@ pub fn format_duration_compact(duration: Duration) -> String {
 
 /// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
 /// 28 chars fits filenames up to ~24 chars + brackets + space separator.
-const LOG_TAG_WIDTH: usize = 28;
+const LOG_TAG_WIDTH: usize = crate::constants::LOG_TAG_WIDTH_DEFAULT;
 
 /// Max visible chars for the filename displayed inside \[brackets\].
 /// With `LOG_TAG_WIDTH=28`, tag=\[prefix\] uses prefix+2 bytes, max prefix = 25.
-const LOG_PREFIX_MAX_DISPLAY: usize = 25;
+const LOG_PREFIX_MAX_DISPLAY: usize = crate::constants::LOG_PREFIX_MAX_DISPLAY;
 
 /// Prefix for periodic statistics lines — emoji instead of \[Info\] to avoid
 /// confusion with log severity levels. Followed by a fixed-width space pad so

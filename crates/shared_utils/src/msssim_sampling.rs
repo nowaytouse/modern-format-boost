@@ -150,27 +150,31 @@ mod tests {
     #[test]
     fn test_sampling_strategy_boundaries() {
         assert_eq!(
-            SamplingStrategy::from_duration(60.0),
+            SamplingStrategy::from_duration(crate::constants::MSSSIM_DURATION_THRESHOLD_FULL),
             SamplingStrategy::Full
         );
         assert_eq!(
-            SamplingStrategy::from_duration(60.1),
+            SamplingStrategy::from_duration(crate::constants::MSSSIM_DURATION_THRESHOLD_FULL + 0.1),
             SamplingStrategy::OneThird
         );
         assert_eq!(
-            SamplingStrategy::from_duration(300.0),
+            SamplingStrategy::from_duration(crate::constants::MSSSIM_DURATION_THRESHOLD_THIRD),
             SamplingStrategy::OneThird
         );
         assert_eq!(
-            SamplingStrategy::from_duration(300.1),
+            SamplingStrategy::from_duration(
+                crate::constants::MSSSIM_DURATION_THRESHOLD_THIRD + 0.1
+            ),
             SamplingStrategy::OneTenth
         );
         assert_eq!(
-            SamplingStrategy::from_duration(1800.0),
+            SamplingStrategy::from_duration(crate::constants::MSSSIM_DURATION_THRESHOLD_TENTH),
             SamplingStrategy::OneTenth
         );
         assert_eq!(
-            SamplingStrategy::from_duration(1800.1),
+            SamplingStrategy::from_duration(
+                crate::constants::MSSSIM_DURATION_THRESHOLD_TENTH + 0.1
+            ),
             SamplingStrategy::Skip
         );
     }
@@ -190,11 +194,17 @@ mod tests {
         assert_eq!(SamplingStrategy::Full.ffmpeg_filter(), None);
         assert_eq!(
             SamplingStrategy::OneThird.ffmpeg_filter(),
-            Some("select='not(mod(n\\,3))'".to_string())
+            Some(format!(
+                "select='not(mod(n\\,{}))'",
+                crate::constants::MSSSIM_RATE_THIRD
+            ))
         );
         assert_eq!(
             SamplingStrategy::OneTenth.ffmpeg_filter(),
-            Some("select='not(mod(n\\,10))'".to_string())
+            Some(format!(
+                "select='not(mod(n\\,{}))'",
+                crate::constants::MSSSIM_RATE_TENTH
+            ))
         );
         assert_eq!(SamplingStrategy::Skip.ffmpeg_filter(), None);
     }

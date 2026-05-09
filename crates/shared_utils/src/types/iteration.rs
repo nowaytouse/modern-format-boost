@@ -7,9 +7,10 @@ use std::fmt;
 use crate::constants::{LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS};
 pub use crate::crf_constants::{EMERGENCY_MAX_ITERATIONS, NORMAL_MAX_ITERATIONS};
 
-pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = crate::constants::LONG_VIDEO_FALLBACK_ITERATIONS;
 
-pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 =
+    crate::constants::VERY_LONG_VIDEO_FALLBACK_ITERATIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IterationError {

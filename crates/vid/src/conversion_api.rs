@@ -202,11 +202,13 @@ impl ExploreQualityFailureDecision {
             message: self.fail_message,
             final_crf: explore_result.optimal_crf,
             exploration_attempts: u8::try_from(explore_result.iterations).map_err(|_| {
-                VidQualityError::ConversionError(format!(
-                    "Exploration iteration limit exceeded ({} > 255) for {}",
-                    explore_result.iterations,
-                    input.display()
-                ))
+                shared_utils::unified_error::UnifiedError::IterationLimitExceeded(
+                    shared_utils::IterationError {
+                        current: explore_result.iterations,
+                        max: shared_utils::constants::EXPLORATION_ITERATION_LIMIT,
+                        context: format!("Exploration attempts overflow for {}", input.display()),
+                    },
+                )
             })?,
             blake3: None,
         })
@@ -249,7 +251,10 @@ impl FinalQualityGateFailureDecision {
             skip_message: if ultimate_mode {
                 format!("Skipped: 3D quality gate failed ({quality_summary})")
             } else {
-                format!("Skipped: MS-SSIM {quality_summary} below target 0.90")
+                format!(
+                    "Skipped: MS-SSIM {quality_summary} below target {:.2}",
+                    shared_utils::constants::VIDEO_QUALITY_GATE_THRESHOLD
+                )
             },
             quality_summary,
         }
@@ -279,11 +284,13 @@ impl FinalQualityGateFailureDecision {
             message: self.skip_message,
             final_crf: result.optimal_crf,
             exploration_attempts: u8::try_from(result.iterations).map_err(|_| {
-                VidQualityError::ConversionError(format!(
-                    "Exploration iteration limit exceeded ({} > 255) for {}",
-                    result.iterations,
-                    input.display()
-                ))
+                shared_utils::unified_error::UnifiedError::IterationLimitExceeded(
+                    shared_utils::IterationError {
+                        current: result.iterations,
+                        max: shared_utils::constants::EXPLORATION_ITERATION_LIMIT,
+                        context: format!("Exploration attempts overflow for {}", input.display()),
+                    },
+                )
             })?,
             blake3: None,
         })
@@ -677,27 +684,31 @@ pub fn determine_strategy_with_apple_compat(
             SelectedCodec::Av2 => (TargetVideoFormat::Av2Mp4, "AV2"),
             SelectedCodec::Vvc => (TargetVideoFormat::VvcMp4, "VVC"),
         };
-        if result.archival_candidate || result.quality_score >= 90 {
+        if result.archival_candidate
+            || result.quality_score >= shared_utils::constants::QUALITY_SCORE_HIGH_THRESHOLD
+        {
             (
                 target,
                 format!(
-                    "Source is high quality ({}) - compressing with {} CRF 18 (visually lossless)",
+                    "Source is high quality ({}) - compressing with {} CRF {} (visually lossless)",
                     result.codec.as_str(),
-                    reason_prefix
+                    reason_prefix,
+                    shared_utils::constants::CRF_TARGET_VISUALLY_LOSSLESS
                 ),
-                18.0_f32,
+                shared_utils::constants::CRF_TARGET_VISUALLY_LOSSLESS,
                 false,
             )
         } else {
             (
                 target,
                 format!(
-                    "Source is {} ({}) - compressing with {} CRF 20",
+                    "Source is {} ({}) - compressing with {} CRF {}",
                     result.codec.as_str(),
                     result.compression.as_str(),
-                    reason_prefix
+                    reason_prefix,
+                    shared_utils::constants::CRF_TARGET_STANDARD
                 ),
-                20.0_f32,
+                shared_utils::constants::CRF_TARGET_STANDARD,
                 false,
             )
         }
@@ -1122,8 +1133,15 @@ pub fn auto_convert_with_cache(
         | TargetVideoFormat::Av1Mp4
         | TargetVideoFormat::Av2Mp4
         | TargetVideoFormat::VvcMp4 => {
-            let vf_args =
-                shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+            let vf_args = shared_utils::get_ffmpeg_dimension_args(
+                detection.width.ok_or_else(|| {
+                    anyhow::anyhow!("ffprobe returned no width for {}", detection.file_path)
+                })?,
+                detection.height.ok_or_else(|| {
+                    anyhow::anyhow!("ffprobe returned no height for {}", detection.file_path)
+                })?,
+                false,
+            );
             let input_path = Path::new(&detection.file_path);
 
             // Log media info to log file only (for SSIM/quality context); not shown on terminal.
@@ -1151,8 +1169,9 @@ pub fn auto_convert_with_cache(
                     SelectedCodec::Vvc => "libvvenc",
                 };
                 info!(
-                    "   🖥️  CPU Mode: Using {} for higher SSIM (≥0.95)",
-                    encoder_name
+                    "   🖥️  CPU Mode: Using {} for higher SSIM (≥{:.2})",
+                    encoder_name,
+                    shared_utils::constants::UI_QUALITY_GOOD_THRESHOLD
                 );
             }
 
@@ -1399,7 +1418,7 @@ pub fn auto_convert_with_cache(
                 )
                 .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-                return Ok(decision.into_skip_output(input, &detection, &explore_result)?);
+                return decision.into_skip_output(input, &detection, &explore_result);
             }
 
             (
@@ -1570,7 +1589,7 @@ pub fn auto_convert_with_cache(
         )
         .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-        return Ok(decision.into_skip_output(input, &detection, result)?);
+        return decision.into_skip_output(input, &detection, result);
     }
 
     let pre_metadata_size = output_size;
@@ -1591,7 +1610,10 @@ pub fn auto_convert_with_cache(
         config.allow_size_tolerance(),
     );
 
-    if metadata_delta > 0 || output_stream_info.container_overhead > 10000 {
+    if metadata_delta > 0
+        || output_stream_info.container_overhead
+            > shared_utils::constants::CONTAINER_OVERHEAD_REPORT_THRESHOLD
+    {
         info!("   📋 Metadata: +{} bytes", metadata_delta);
         info!(
             "   📦 Container overhead: {} bytes ({:.1}%)",
@@ -1811,6 +1833,9 @@ fn best_effort_status_for_cache(
 ///
 /// # Errors
 /// Returns an error if calculation fails.
+///
+/// # Panics
+/// Panics if the ffprobe-backed detection is missing `width` or `height`.
 pub fn calculate_matched_crf(
     detection: &VideoDetectionResult,
     codec: &SelectedCodec,
@@ -1818,8 +1843,18 @@ pub fn calculate_matched_crf(
     let mut builder = shared_utils::VideoAnalysisBuilder::new()
         .basic(
             detection.codec.as_str(),
-            detection.width,
-            detection.height,
+            detection.width.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "calculate_matched_crf: ffprobe returned no width for {}",
+                    detection.file_path
+                )
+            })?,
+            detection.height.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "calculate_matched_crf: ffprobe returned no height for {}",
+                    detection.file_path
+                )
+            })?,
             detection.fps,
             detection.duration_secs,
         )
@@ -1925,7 +1960,7 @@ fn execute_lossless(
             file = %detection.file_path,
             codec = %detection.codec.as_str(),
             file_size_gb = shared_utils::numeric_cast::u64_to_f64(detection.file_size)
-                / (1024.0_f64 * 1024.0_f64 * 1024.0_f64),
+                / shared_utils::numeric_cast::u64_to_f64(shared_utils::constants::BYTES_PER_GB),
             "Applying low-memory x265 profile for large/high-fidelity source"
         );
     }
@@ -1974,7 +2009,15 @@ fn execute_lossless(
     );
 
     let pix_fmt = hdr_pix_fmt(detection);
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+    let vf_args = shared_utils::get_ffmpeg_dimension_args(
+        detection.width.ok_or_else(|| {
+            anyhow::anyhow!("ffprobe returned no width for {}", detection.file_path)
+        })?,
+        detection.height.ok_or_else(|| {
+            anyhow::anyhow!("ffprobe returned no height for {}", detection.file_path)
+        })?,
+        false,
+    );
 
     let encoder = match codec {
         SelectedCodec::Hevc => "libx265",
@@ -2128,8 +2171,8 @@ mod tests {
             codec: crate::detection_api::DetectedCodec::VP9,
             codec_long: "Google VP9".to_string(),
             compression: crate::detection_api::CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2145,7 +2188,7 @@ mod tests {
             video_bitrate: Some(6_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.1,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2181,8 +2224,8 @@ mod tests {
             codec: crate::detection_api::DetectedCodec::VP9,
             codec_long: "Google VP9".to_string(),
             compression: crate::detection_api::CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2198,7 +2241,7 @@ mod tests {
             video_bitrate: Some(6_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.1,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2245,8 +2288,8 @@ mod tests {
             codec: crate::detection_api::DetectedCodec::H265,
             codec_long: "HEVC".to_string(),
             compression: crate::detection_api::CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2262,7 +2305,7 @@ mod tests {
             video_bitrate: Some(6_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.1,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2311,8 +2354,8 @@ mod tests {
             codec: crate::detection_api::DetectedCodec::H264,
             codec_long: "H.264/AVC".to_string(),
             compression: crate::detection_api::CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2328,7 +2371,7 @@ mod tests {
             video_bitrate: Some(6_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.1,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2380,8 +2423,8 @@ mod tests {
                 codec,
                 codec_long: "Test".to_string(),
                 compression: CompressionType::Standard,
-                width: 1920,
-                height: 1080,
+                width: Some(1920),
+                height: Some(1080),
                 frame_count: Some(1800),
                 fps: Some(30.0),
                 duration_secs: Some(60.0),
@@ -2397,7 +2440,7 @@ mod tests {
                 video_bitrate: Some(6_000_000),
                 has_b_frames: true,
                 profile: None,
-                bits_per_pixel: 0.1,
+                bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
                 color_primaries: None,
                 color_transfer: None,
                 mastering_display: None,
@@ -2461,8 +2504,8 @@ mod tests {
             codec: DetectedCodec::AV1,
             codec_long: "AV1".into(),
             compression: CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2478,7 +2521,7 @@ mod tests {
             video_bitrate: Some(6_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.1,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2517,8 +2560,8 @@ mod tests {
             codec: DetectedCodec::VVC,
             codec_long: "VVC".into(),
             compression: CompressionType::Standard,
-            width: 3840,
-            height: 2160,
+            width: Some(3840),
+            height: Some(2160),
             frame_count: Some(3600),
             fps: Some(60.0),
             duration_secs: Some(60.0),
@@ -2534,7 +2577,7 @@ mod tests {
             video_bitrate: Some(12_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.04,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_LOW,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2576,8 +2619,8 @@ mod tests {
             codec: DetectedCodec::VP9,
             codec_long: "VP9".into(),
             compression: CompressionType::Standard,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2633,8 +2676,8 @@ mod tests {
             codec: DetectedCodec::AV1,
             codec_long: "AV1".into(),
             compression: CompressionType::VisuallyLossless,
-            width: 3840,
-            height: 2160,
+            width: Some(3840),
+            height: Some(2160),
             frame_count: Some(3600),
             fps: Some(60.0),
             duration_secs: Some(60.0),
@@ -2650,7 +2693,7 @@ mod tests {
             video_bitrate: Some(60_000_000),
             has_b_frames: true,
             profile: None,
-            bits_per_pixel: 0.15,
+            bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_HIGH,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
@@ -2686,8 +2729,8 @@ mod tests {
             codec: DetectedCodec::FFV1,
             codec_long: "FFV1".into(),
             compression: CompressionType::Lossless,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(900),
             fps: Some(30.0),
             duration_secs: Some(30.0),
@@ -2746,8 +2789,8 @@ mod tests {
             codec: DetectedCodec::ProRes,
             codec_long: "ProRes".into(),
             compression: CompressionType::VisuallyLossless,
-            width: 1920,
-            height: 1080,
+            width: Some(1920),
+            height: Some(1080),
             frame_count: Some(1800),
             fps: Some(30.0),
             duration_secs: Some(60.0),
@@ -2806,8 +2849,8 @@ mod tests {
             codec: DetectedCodec::Unknown("vp9".into()),
             codec_long: "VP9".into(),
             compression: CompressionType::Standard,
-            width: 1280,
-            height: 720,
+            width: Some(1280),
+            height: Some(720),
             frame_count: Some(900),
             fps: Some(30.0),
             duration_secs: Some(30.0),
@@ -2917,8 +2960,8 @@ mod tests {
             file_path: "sticker.mp4".into(),
             codec: DetectedCodec::H264,
             compression: CompressionType::Standard,
-            width: 512,
-            height: 512,
+            width: Some(512),
+            height: Some(512),
             duration_secs: Some(2.0),
             has_audio: false,
             frame_count: Some(50),
@@ -2959,8 +3002,8 @@ mod tests {
             format: "gif".into(),
             codec: DetectedCodec::Unknown("gif".into()),
             compression: CompressionType::Lossless,
-            width: 1,
-            height: 1,
+            width: Some(1),
+            height: Some(1),
             duration_secs: Some(0.2),
             has_audio: false,
             frame_count: Some(2),
@@ -3002,8 +3045,8 @@ mod tests {
             format: "gif".into(),
             codec: DetectedCodec::Unknown("gif".into()),
             compression: CompressionType::Lossless,
-            width: 1,
-            height: 1,
+            width: Some(1),
+            height: Some(1),
             duration_secs: Some(0.2),
             has_audio: false,
             frame_count: Some(2),
@@ -3037,8 +3080,8 @@ mod tests {
             format: "webp".into(),
             codec: DetectedCodec::Unknown("webp".into()),
             compression: CompressionType::Standard,
-            width: 512,
-            height: 512,
+            width: Some(512),
+            height: Some(512),
             duration_secs: Some(0.0),
             has_audio: false,
             frame_count: Some(12),
@@ -3075,8 +3118,8 @@ mod tests {
             format: "webp".into(),
             codec: DetectedCodec::Unknown("webp".into()),
             compression: CompressionType::Standard,
-            width: 720,
-            height: 720,
+            width: Some(720),
+            height: Some(720),
             duration_secs: Some(shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0),
             has_audio: false,
             frame_count: Some(600),

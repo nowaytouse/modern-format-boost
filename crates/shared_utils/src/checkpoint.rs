@@ -34,6 +34,7 @@
 //! }
 //! ```
 
+use crate::{HostnameBuilder, ToolBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -56,13 +57,13 @@ fn get_central_progress_dir() -> PathBuf {
 ///
 /// After this duration, a lock file is considered abandoned and can be
 /// safely overridden. Default is 24 hours.
-const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+const LOCK_STALE_TIMEOUT_SECS: u64 = crate::constants::LOCK_STALE_TIMEOUT_SECS;
 
 /// Current version of the checkpoint file format.
 ///
 /// Increment this when the checkpoint structure changes to invalidate
 /// old checkpoint files and force regeneration.
-const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+const CHECKPOINT_FORMAT_VERSION: u32 = crate::constants::CHECKPOINT_FORMAT_VERSION;
 
 /// Gets the current Unix timestamp in seconds.
 ///
@@ -369,10 +370,7 @@ fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
 fn get_hostname() -> String {
     #[cfg(unix)]
     {
-        match crate::tool_builders::HostnameBuilder::new()
-            .build()
-            .output()
-        {
+        match HostnameBuilder::new().build().output() {
             Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(
                 |err| {
                     eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");
@@ -581,7 +579,7 @@ impl CheckpointManager {
     ///
     /// Returns an error if the lock cannot be acquired or if the lock file exists and is not stale.
     pub fn acquire_lock(&self) -> io::Result<()> {
-        const MAX_LOCK_RETRIES: u32 = 15;
+        const MAX_LOCK_RETRIES: u32 = crate::constants::LOCK_MAX_RETRIES;
         let lock_info = LockInfo::new();
         let json = serde_json::to_string_pretty(&lock_info)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -1102,8 +1100,8 @@ mod tests {
         unsafe { std::env::remove_var("MFB_PROGRESS_DIR") };
     }
 
-    fn create_test_file(path: &Path) {
-        fs::write(path, b"checkpoint-test").unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn create_test_file(path: &Path) -> io::Result<()> {
+        fs::write(path, b"checkpoint-test")
     }
 
     #[test]
@@ -1125,8 +1123,8 @@ mod tests {
 
         let file1 = target.join("test1.mp4");
         let file2 = target.join("test2.mp4");
-        create_test_file(&file1);
-        create_test_file(&file2);
+        create_test_file(&file1)?;
+        create_test_file(&file2)?;
 
         assert!(!checkpoint.is_completed(&file1));
         assert!(!checkpoint.is_completed(&file2));
@@ -1153,8 +1151,8 @@ mod tests {
 
         {
             let checkpoint = CheckpointManager::new(target)?;
-            create_test_file(&target.join("file1.mp4"));
-            create_test_file(&target.join("file2.mp4"));
+            let _ = create_test_file(&target.join("file1.mp4"));
+            let _ = create_test_file(&target.join("file2.mp4"));
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
             checkpoint.mark_completed(&target.join("file2.mp4"))?;
         }
@@ -1178,8 +1176,8 @@ mod tests {
         let target = temp.path();
 
         let checkpoint = CheckpointManager::new(target)?;
-        create_test_file(&target.join("file1.mp4"));
-        create_test_file(&target.join("file2.mp4"));
+        create_test_file(&target.join("file1.mp4"))?;
+        create_test_file(&target.join("file2.mp4"))?;
         checkpoint.mark_completed(&target.join("file1.mp4"))?;
         checkpoint.mark_completed(&target.join("file2.mp4"))?;
 
@@ -1199,7 +1197,7 @@ mod tests {
 
         let checkpoint = CheckpointManager::new(target)?;
         assert!(!checkpoint.is_resume_mode());
-        create_test_file(&target.join("file1.mp4"));
+        create_test_file(&target.join("file1.mp4"))?;
 
         checkpoint.mark_completed(&target.join("file1.mp4"))?;
 
@@ -1216,8 +1214,8 @@ mod tests {
 
         {
             let checkpoint = CheckpointManager::new(target)?;
-            create_test_file(&target.join("file1.mp4"));
-            create_test_file(&target.join("file2.mp4"));
+            let _ = create_test_file(&target.join("file1.mp4"));
+            let _ = create_test_file(&target.join("file2.mp4"));
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
             checkpoint.mark_completed(&target.join("file2.mp4"))?;
         }
@@ -1243,7 +1241,7 @@ mod tests {
         let output_a = target.join("optimized_a");
         let output_b = target.join("optimized_b");
         let input = target.join("file1.mp4");
-        create_test_file(&input);
+        create_test_file(&input)?;
 
         {
             let checkpoint = CheckpointManager::new_with_context(target, Some(&output_a))?;
@@ -1291,7 +1289,7 @@ mod tests {
         {
             let checkpoint = CheckpointManager::new(target)?;
             checkpoint.acquire_lock()?;
-            create_test_file(&target.join("file1.mp4"));
+            create_test_file(&target.join("file1.mp4"))?;
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
 
             checkpoint.cleanup()?;
@@ -1303,160 +1301,147 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_lock_acquire_release() {
-        let (temp, _progress, guard) = setup_test_env().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_checkpoint_lock_acquire_release() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let checkpoint = CheckpointManager::new(target)?;
 
-        assert!(
-            checkpoint
-                .check_lock()
-                .unwrap_or_else(|e| panic!("error: {e:?}"))
-                .is_none()
-        );
+        assert!(checkpoint.check_lock()?.is_none());
 
-        checkpoint
-            .acquire_lock()
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        checkpoint.acquire_lock()?;
         assert!(checkpoint.lock_file.exists());
 
-        checkpoint
-            .release_lock()
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        checkpoint.release_lock()?;
         assert!(!checkpoint.lock_file.exists());
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_verify_output_integrity_valid_file() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_verify_output_integrity_valid_file() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let output = temp.path().join("output.mp4");
 
-        fs::write(&output, b"This is test content for integrity check")
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&output, b"This is test content for integrity check")?;
 
         assert!(verify_output_integrity(&output, 10).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_verify_output_integrity_empty_file() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_verify_output_integrity_empty_file() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let output = temp.path().join("empty.mp4");
 
-        fs::write(&output, b"").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&output, b"")?;
 
         let result = verify_output_integrity(&output, 10);
         assert!(result.is_err());
         assert!(result.err().unwrap_or_default().contains("empty"));
+        Ok(())
     }
 
     #[test]
-    fn test_verify_output_integrity_too_small() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_verify_output_integrity_too_small() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let output = temp.path().join("small.mp4");
 
-        fs::write(&output, b"tiny").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&output, b"tiny")?;
 
         let result = verify_output_integrity(&output, 100);
         assert!(result.is_err());
         assert!(result.err().unwrap_or_default().contains("too small"));
+        Ok(())
     }
 
     #[test]
-    fn test_verify_output_integrity_nonexistent() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_verify_output_integrity_nonexistent() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let output = temp.path().join("nonexistent.mp4");
 
         let result = verify_output_integrity(&output, 10);
         assert!(result.is_err());
         assert!(result.err().unwrap_or_default().contains("does not exist"));
+        Ok(())
     }
 
     #[test]
-    fn test_safe_delete_original_success() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_safe_delete_original_success() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let input = temp.path().join("input.mp4");
         let output = temp.path().join("output.mp4");
 
-        fs::write(&input, b"original content").unwrap_or_else(|e| panic!("error: {e:?}"));
-        fs::write(&output, b"converted content that is valid")
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&input, b"original content")?;
+        fs::write(&output, b"converted content that is valid")?;
 
         assert!(safe_delete_original(&input, &output, 10).is_ok());
 
         assert!(!input.exists());
         assert!(output.exists());
+        Ok(())
     }
 
     #[test]
-    fn test_safe_delete_original_protects_on_invalid_output() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_safe_delete_original_protects_on_invalid_output() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let input = temp.path().join("input.mp4");
         let output = temp.path().join("output.mp4");
 
-        fs::write(&input, b"original content").unwrap_or_else(|e| panic!("error: {e:?}"));
-        fs::write(&output, b"").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&input, b"original content")?;
+        fs::write(&output, b"")?;
 
         assert!(safe_delete_original(&input, &output, 10).is_err());
 
         assert!(input.exists());
+        Ok(())
     }
 
     #[test]
-    fn test_safe_delete_original_protects_on_missing_output() {
-        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_safe_delete_original_protects_on_missing_output() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
         let input = temp.path().join("input.mp4");
         let output = temp.path().join("nonexistent.mp4");
 
-        fs::write(&input, b"original content").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&input, b"original content")?;
 
         assert!(safe_delete_original(&input, &output, 10).is_err());
 
         assert!(input.exists());
+        Ok(())
     }
 
     #[test]
-    fn test_full_workflow_with_interruption() {
-        let (temp, _progress, guard) = setup_test_env().unwrap_or_else(|e| panic!("error: {e:?}"));
+    fn test_full_workflow_with_interruption() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
         let files: Vec<PathBuf> = (1_i32..=5_i32)
             .map(|i| {
                 let path = target.join(format!("video{i}.mp4"));
-                fs::write(&path, format!("content {i}")).unwrap_or_else(|e| panic!("error: {e:?}"));
-                path
+                fs::write(&path, format!("content {i}"))?;
+                Ok(path)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         {
-            let checkpoint =
-                CheckpointManager::new(target).unwrap_or_else(|e| panic!("error: {e:?}"));
-            checkpoint
-                .acquire_lock()
-                .unwrap_or_else(|e| panic!("error: {e:?}"));
+            let checkpoint = CheckpointManager::new(target)?;
+            checkpoint.acquire_lock()?;
 
             for file in files.iter().take(2) {
-                checkpoint
-                    .mark_completed(file)
-                    .unwrap_or_else(|e| panic!("error: {e:?}"));
+                checkpoint.mark_completed(file)?;
             }
 
-            checkpoint
-                .release_lock()
-                .unwrap_or_else(|e| panic!("error: {e:?}"));
+            checkpoint.release_lock()?;
         }
 
         {
-            let checkpoint =
-                CheckpointManager::new(target).unwrap_or_else(|e| panic!("error: {e:?}"));
+            let checkpoint = CheckpointManager::new(target)?;
 
             assert!(checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 2);
 
-            checkpoint
-                .acquire_lock()
-                .unwrap_or_else(|e| panic!("error: {e:?}"));
+            checkpoint.acquire_lock()?;
 
             let mut processed = 0_i32;
             let mut skipped = 0_i32;
@@ -1466,9 +1451,7 @@ mod tests {
                     skipped += 1_i32;
                     continue;
                 }
-                checkpoint
-                    .mark_completed(file)
-                    .unwrap_or_else(|e| panic!("error: {e:?}"));
+                checkpoint.mark_completed(file)?;
                 processed += 1_i32;
             }
 
@@ -1476,18 +1459,16 @@ mod tests {
             assert_eq!(processed, 3_i32);
             assert_eq!(checkpoint.completed_count(), 5);
 
-            checkpoint
-                .cleanup()
-                .unwrap_or_else(|e| panic!("error: {e:?}"));
+            checkpoint.cleanup()?;
         }
 
         {
-            let checkpoint =
-                CheckpointManager::new(target).unwrap_or_else(|e| panic!("error: {e:?}"));
+            let checkpoint = CheckpointManager::new(target)?;
             assert!(!checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 0);
         }
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[cfg(unix)]

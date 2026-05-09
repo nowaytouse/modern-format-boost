@@ -1,5 +1,6 @@
 //! Type-safe builder for constructing `ffmpeg` and `ffprobe` commands.
 
+use crate::builder_base::ToolBuilder;
 use crate::constants;
 use crate::ffmpeg_process::FfmpegProcess;
 pub use crate::types::EncoderPreset;
@@ -219,7 +220,6 @@ impl FfmpegBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.inputs.push(path.as_ref().to_path_buf());
         self
@@ -407,17 +407,68 @@ impl FfmpegBuilder {
         );
     }
 
+    /// Spawn the command and return an `FfmpegProcess` for monitoring.
+    ///
+    /// # Errors
+    /// Returns an error if the process fails to start.
+    pub fn spawn(&self) -> anyhow::Result<FfmpegProcess> {
+        let mut cmd = self.build();
+        FfmpegProcess::spawn(&mut cmd)
+    }
+
+    /// List available `FFmpeg` encoders.
+    ///
+    /// # Errors
+    /// Returns an error if the command fails.
+    pub fn list_encoders() -> anyhow::Result<String> {
+        let output = Command::new(constants::TOOL_FFMPEG)
+            .arg(constants::FFMPEG_ARG_HIDE_BANNER)
+            .arg("-encoders")
+            .output()?;
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let summary = stderr
+                .lines()
+                .chain(stdout.lines())
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" | ");
+
+            anyhow::bail!(
+                "ffmpeg -encoders failed{}",
+                if summary.is_empty() {
+                    format!(" with status {}", output.status)
+                } else {
+                    format!(": {summary}")
+                }
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+}
+
+impl ToolBuilder for FfmpegBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_FFMPEG
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        &[constants::FFMPEG_ARG_HIDE_BANNER, constants::ARG_VERSION]
+    }
+
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(
         clippy::too_many_lines,
         reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
     )]
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
+    fn build(&self) -> Command {
         self.assert_output_target();
 
-        let mut cmd = Command::new(constants::TOOL_FFMPEG);
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.overwrite {
             cmd.arg(constants::FFMPEG_ARG_OVERWRITE);
@@ -441,7 +492,7 @@ impl FfmpegBuilder {
         }
 
         if let Some(fmt) = &self.input_format {
-            cmd.arg("-f").arg(fmt);
+            cmd.arg(constants::FFMPEG_ARG_F).arg(fmt);
         }
 
         for input in &self.inputs {
@@ -482,7 +533,7 @@ impl FfmpegBuilder {
         }
 
         if let Some(profile) = self.profile {
-            cmd.arg("-profile:v");
+            cmd.arg(constants::FFMPEG_ARG_PROFILE_V);
             cmd.arg(profile.ffmpeg_name());
         }
 
@@ -492,15 +543,16 @@ impl FfmpegBuilder {
         }
 
         if let Some(fmt) = &self.format {
-            cmd.arg("-f").arg(fmt);
+            cmd.arg(constants::FFMPEG_ARG_F).arg(fmt);
         }
 
         if let Some(frames) = self.frames_v {
-            cmd.arg("-frames:v").arg(frames.to_string());
+            cmd.arg(constants::FFMPEG_ARG_FRAMES_VIDEO)
+                .arg(frames.to_string());
         }
 
         for m in &self.map {
-            cmd.arg("-map").arg(m);
+            cmd.arg(constants::FFMPEG_ARG_MAP).arg(m);
         }
 
         if let Some(p) = &self.params.x265 {
@@ -526,16 +578,6 @@ impl FfmpegBuilder {
         }
 
         cmd
-    }
-
-    /// Spawn the command and return an `FfmpegProcess` for monitoring.
-    /// Spawn the `FFmpeg` process.
-    ///
-    /// # Errors
-    /// Returns an error if the process fails to start.
-    pub fn spawn(&self) -> anyhow::Result<FfmpegProcess> {
-        let mut cmd = self.build();
-        FfmpegProcess::spawn(&mut cmd)
     }
 }
 
@@ -565,6 +607,11 @@ impl FfprobeBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
@@ -636,42 +683,48 @@ impl FfprobeBuilder {
         self.extra_args.push(arg.as_ref().to_string());
         self
     }
+}
+
+impl ToolBuilder for FfprobeBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_FFPROBE
+    }
 
     /// Construct the `std::process::Command`.
-    #[must_use]
-    pub fn build(&self) -> Command {
-        let mut cmd = Command::new(constants::TOOL_FFPROBE);
+    fn build(&self) -> Command {
+        let mut cmd = Command::new(self.get_command_name());
 
         if self.show_streams {
-            cmd.arg("-show_streams");
+            cmd.arg(constants::FFPROBE_ARG_SHOW_STREAMS);
         }
 
         if self.show_format {
-            cmd.arg("-show_format");
+            cmd.arg(constants::FFPROBE_ARG_SHOW_FORMAT);
         }
 
         if self.show_frames {
-            cmd.arg("-show_frames");
+            cmd.arg(constants::FFPROBE_ARG_SHOW_FRAMES);
         }
 
         if self.count_frames {
-            cmd.arg("-count_frames");
+            cmd.arg(constants::FFPROBE_ARG_COUNT_FRAMES);
         }
 
         if let Some(entries) = &self.show_entries {
-            cmd.arg("-show_entries").arg(entries);
+            cmd.arg(constants::FFPROBE_ARG_SHOW_ENTRIES).arg(entries);
         }
 
         if let Some(select) = &self.select_streams {
-            cmd.arg("-select_streams").arg(select);
+            cmd.arg(constants::FFPROBE_ARG_SELECT_STREAMS).arg(select);
         }
 
         if let Some(fmt) = &self.print_format {
-            cmd.arg("-print_format").arg(fmt);
+            cmd.arg(constants::FFPROBE_ARG_PRINT_FORMAT).arg(fmt);
         }
 
         if let Some(intervals) = &self.read_intervals {
-            cmd.arg("-read_intervals").arg(intervals);
+            cmd.arg(constants::FFPROBE_ARG_READ_INTERVALS)
+                .arg(intervals);
         }
 
         if let Some(level) = &self.loglevel {
@@ -679,13 +732,13 @@ impl FfprobeBuilder {
         }
 
         if let Some(pt) = &self.pattern_type {
-            cmd.arg("-pattern_type").arg(pt);
+            cmd.arg(constants::FFPROBE_ARG_PATTERN_TYPE).arg(pt);
         } else if let Some(input) = &self.input {
             // Auto-fallback: if filename contains [ or ], we MUST use -pattern_type none
             // to avoid demuxer sequence errors.
             let s = input.to_string_lossy();
             if s.contains('[') || s.contains(']') {
-                cmd.arg("-pattern_type").arg("none");
+                cmd.arg(constants::FFPROBE_ARG_PATTERN_TYPE).arg("none");
             }
         }
 
@@ -699,54 +752,12 @@ impl FfprobeBuilder {
 
         cmd
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Command::new(constants::TOOL_FFPROBE)
-            .arg("-version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
-}
-
-impl FfmpegBuilder {
-    /// List available `FFmpeg` encoders.
-    ///
-    /// # Errors
-    /// Returns an error if the command fails.
-    pub fn list_encoders() -> anyhow::Result<String> {
-        let output = Command::new(constants::TOOL_FFMPEG)
-            .arg("-hide_banner")
-            .arg("-encoders")
-            .output()?;
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let summary = stderr
-                .lines()
-                .chain(stdout.lines())
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" | ");
-
-            anyhow::bail!(
-                "ffmpeg -encoders failed{}",
-                if summary.is_empty() {
-                    format!(" with status {}", output.status)
-                } else {
-                    format!(": {summary}")
-                }
-            );
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::FfmpegBuilder;
+    use crate::builder_base::ToolBuilder;
     use std::path::Path;
 
     #[test]

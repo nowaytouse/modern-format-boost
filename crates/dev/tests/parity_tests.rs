@@ -1,3 +1,4 @@
+use shared_utils::ToolBuilder;
 use shared_utils::ffmpeg_builder::{EncoderPreset, FfmpegBuilder, VideoCodec};
 use shared_utils::image_builders::{
     AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, IdentifyBuilder, MagickBuilder,
@@ -554,7 +555,7 @@ fn test_hostname_flag_order_parity() {
 }
 
 fn test_taskkill_flag_order_parity() {
-    let cmd = TaskkillBuilder::new().pid(1234).force().build();
+    let cmd = TaskkillBuilder::new().pid(1234).force(true).build();
     let args: Vec<String> = cmd
         .get_args()
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())

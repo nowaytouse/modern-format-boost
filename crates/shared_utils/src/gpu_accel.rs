@@ -23,6 +23,8 @@
 //! }
 //! ```
 
+use crate::builder_base::ToolBuilder;
+use crate::{FfmpegBuilder, FfprobeBuilder};
 use chrono::{DateTime, FixedOffset, Utc};
 use std::any::Any;
 use std::collections::VecDeque;
@@ -40,9 +42,11 @@ use crate::explore_strategy::CrfCache;
 /// Formatted Beijing time string
 fn beijing_time_now() -> String {
     // UTC+8 (28800 seconds) is always a valid fixed offset
-    let beijing = FixedOffset::east_opt(8 * 3600).unwrap_or_else(|| {
-        FixedOffset::east_opt(0).unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() })
-    });
+    let beijing =
+        FixedOffset::east_opt(crate::constants::BEIJING_TIME_OFFSET_SECS).unwrap_or_else(|| {
+            FixedOffset::east_opt(0)
+                .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() })
+        });
     let now: DateTime<Utc> = Utc::now();
     now.with_timezone(&beijing)
         .format("%Y-%m-%d %H:%M:%S (UTC+8)")
@@ -127,14 +131,14 @@ impl StderrCapture {
 }
 
 // --- Sampling Positions ---
-pub const GPU_SAMPLE_POS_START: f64 = 0.0;
-pub const GPU_SAMPLE_POS_QUARTER: f64 = 0.25;
-pub const GPU_SAMPLE_POS_HALF: f64 = 0.50;
-pub const GPU_SAMPLE_POS_THREE_QUARTERS: f64 = 0.75;
-pub const GPU_SAMPLE_POS_TAIL: f64 = 0.90;
+pub const GPU_SAMPLE_POS_START: f64 = crate::constants::GPU_SAMPLE_POS_START;
+pub const GPU_SAMPLE_POS_QUARTER: f64 = crate::constants::GPU_SAMPLE_POS_QUARTER;
+pub const GPU_SAMPLE_POS_HALF: f64 = crate::constants::GPU_SAMPLE_POS_HALF;
+pub const GPU_SAMPLE_POS_THREE_QUARTERS: f64 = crate::constants::GPU_SAMPLE_POS_THREE_QUARTERS;
+pub const GPU_SAMPLE_POS_TAIL: f64 = crate::constants::GPU_SAMPLE_POS_TAIL;
 
 /// Number of segments to sample in multi-segment GPU probing.
-pub const GPU_SAMPLE_SEGMENTS: usize = 5;
+pub const GPU_SAMPLE_SEGMENTS: usize = crate::constants::GPU_SAMPLE_SEGMENTS;
 
 /// Collects video filter arguments from `FFmpeg` command line arguments.
 ///
@@ -235,7 +239,8 @@ fn build_sampling_vf_args(vf_args: &[String], duration: f64, ultimate_mode: bool
     }
 }
 
-const GPU_NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+const GPU_NEGATIVE_CACHE_TTL: std::time::Duration =
+    std::time::Duration::from_secs(crate::constants::GPU_NEGATIVE_CACHE_TTL_SECS);
 
 #[derive(Debug, Clone)]
 struct CachedGpuAccel {
@@ -268,7 +273,7 @@ fn gpu_concurrency_max() -> usize {
         std::env::var("MODERN_FORMAT_BOOST_GPU_CONCURRENCY")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(4)
+            .unwrap_or(crate::constants::GPU_DEFAULT_CONCURRENCY)
     })
 }
 
@@ -1069,7 +1074,7 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
 
     let mut last_err = String::new();
     for allow_sw in &attempts {
-        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        let mut builder = FfmpegBuilder::new();
         builder
             .hide_banner()
             .input_format("lavfi")
@@ -1189,7 +1194,7 @@ pub fn calculate_smart_sample(
         )
     };
 
-    let test_output = crate::tool_builders::FfmpegBuilder::new()
+    let test_output = FfmpegBuilder::new()
         .hide_banner()
         .arg("-t")
         .arg("10")
@@ -1600,7 +1605,7 @@ impl Default for GpuCoarseConfig {
 /// # Returns
 /// PSNR value, or error string if calculation fails
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
-    let psnr_output = crate::tool_builders::FfmpegBuilder::new()
+    let psnr_output = FfmpegBuilder::new()
         .input(std::path::Path::new(input))
         .input(std::path::Path::new(output))
         .filter_complex("[0:v][1:v]psnr=stats_file=-")
@@ -1925,12 +1930,12 @@ fn gpu_coarse_search_with_log_impl(
 ) -> GpuCoarseResult {
     use anyhow::{Context, bail};
 
-    const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
-    const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
-    const LONG_DURATION_THRESHOLD: f32 = 600.0;
-    const VERY_LONG_DURATION_THRESHOLD: f32 = 3600.0;
-    const WARMUP_DURATION: f32 = 5.0;
-    const CHANGE_RATE_THRESHOLD: f64 = 0.02;
+    const LARGE_FILE_THRESHOLD: u64 = crate::constants::GPU_LARGE_FILE_THRESHOLD_BYTES;
+    const VERY_LARGE_FILE_THRESHOLD: u64 = crate::constants::GPU_VERY_LARGE_FILE_THRESHOLD_BYTES;
+    const LONG_DURATION_THRESHOLD: f32 = crate::constants::VIDEO_DURATION_LONG_SECS;
+    const VERY_LONG_DURATION_THRESHOLD: f32 = crate::constants::VIDEO_DURATION_VERY_LONG_SECS;
+    const WARMUP_DURATION: f32 = crate::constants::WARMUP_DURATION_SECS;
+    const CHANGE_RATE_THRESHOLD: f64 = crate::constants::CHANGE_RATE_THRESHOLD;
 
     let mut log = Vec::new();
 
@@ -2015,7 +2020,7 @@ fn gpu_coarse_search_with_log_impl(
     let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
 
     let quick_duration: f32 = {
-        let duration_output = crate::tool_builders::FfprobeBuilder::new()
+        let duration_output = FfprobeBuilder::new()
             .loglevel("error")
             .show_entries("format=duration")
             .print_format("default=noprint_wrappers=1:nokey=1")
@@ -2144,7 +2149,7 @@ fn gpu_coarse_search_with_log_impl(
         let extra_args = gpu_encoder.extra_args();
         let warmup_output = output.with_extension(temp_extension_for(output, "warmup"));
 
-        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        let mut builder = FfmpegBuilder::new();
         builder
             .overwrite()
             .arg("-t")
@@ -2244,7 +2249,7 @@ fn gpu_coarse_search_with_log_impl(
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.extra_args();
 
-        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        let mut builder = FfmpegBuilder::new();
         builder.overwrite();
 
         let use_multi_segment = duration >= 60.0;
@@ -2430,7 +2435,7 @@ fn gpu_coarse_search_with_log_impl(
                     // Concurrency slot released on drop (see `GpuSlotGuard`).
                     let _gpu_slot_guard = GpuSlotGuard;
                     acquire_gpu_slot();
-                    let mut builder = crate::tool_builders::FfmpegBuilder::new();
+                    let mut builder = FfmpegBuilder::new();
                     builder
                         .overwrite()
                         .arg("-t")
@@ -3124,7 +3129,7 @@ fn gpu_coarse_search_with_log_impl(
         );
         match encode_gpu(last_tested_crf) {
             Ok(_) => {
-                let ssim_output = crate::tool_builders::FfmpegBuilder::new()
+                let ssim_output = FfmpegBuilder::new()
                     .input(input)
                     .input(output)
                     .filter_complex("ssim")

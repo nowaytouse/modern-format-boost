@@ -7,6 +7,7 @@ use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, Ima
 use crate::{ImgQualityError, Result};
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
+use shared_utils::ToolBuilder;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,7 +175,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                     input_path,
                     output_path.display()
                 ),
-                expected_reduction: 15.0,
+                expected_reduction: shared_utils::constants::EXPECTED_REDUCTION_JXL_LOSSLESS_JPEG,
             })
         }
 
@@ -190,7 +191,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                     output_path.display(),
                     shared_utils::constants::JXL_DEFAULT_EFFORT
                 ),
-                expected_reduction: 45.0,
+                expected_reduction: shared_utils::constants::EXPECTED_REDUCTION_JXL_LOSSLESS_STATIC,
             })
         }
 
@@ -205,8 +206,14 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("AVIF");
 
+            #[allow(clippy::option_if_let_else)]
             let (quality_arg, reason) = if let Some(q) = detection.estimated_quality {
-                (format!(" -q {q}"), format!("Static lossy image (non-JPEG), recommend AVIF (quality matched to {q})"))
+                (
+                    format!(" -q {q}"),
+                    format!(
+                        "Static lossy image (non-JPEG), recommend AVIF (quality matched to {q})"
+                    ),
+                )
             } else {
                 (String::new(), "Static lossy image (non-JPEG), quality estimation failed; recommend AVIF (using encoder defaults)".to_string())
             };
@@ -220,7 +227,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                     output_path.display(),
                     quality_arg
                 ),
-                expected_reduction: 25.0,
+                expected_reduction: shared_utils::constants::EXPECTED_REDUCTION_AVIF_LOSSY_STATIC,
             })
         }
     }

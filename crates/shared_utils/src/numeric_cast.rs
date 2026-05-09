@@ -765,6 +765,25 @@ pub const fn f64_to_i32_sat(v: f64) -> i32 {
     raw::f64_to_i32(v)
 }
 
+/// Saturating cast: `f64` → `f32`.
+///
+/// - `NaN` → `0.0`
+/// - overflow → `f32::MAX` or `f32::MIN`
+#[inline]
+#[must_use]
+pub fn f64_to_f32_sat(v: f64) -> f32 {
+    if v.is_nan() {
+        return 0.0;
+    }
+    if v > f64::from(f32::MAX) {
+        f32::MAX
+    } else if v < f64::from(f32::MIN) {
+        f32::MIN
+    } else {
+        raw::f64_to_f32(v)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // f32 → unsigned integer (saturating)
 // ---------------------------------------------------------------------------

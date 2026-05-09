@@ -160,7 +160,7 @@ impl ParallelMsssimCalculator {
             y_score,
             u_score,
             v_score,
-            combined_score: (y_score + u_score + v_score) / 3.0,
+            combined_score: (y_score + u_score + v_score) / crate::constants::CHANNELS_COUNT_F64,
             sampling_strategy: self.sampling_config.strategy,
             sampled_frames: self.sampling_config.sampled_frames,
             total_frames: self.sampling_config.total_frames,
@@ -270,7 +270,7 @@ mod tests {
             v_score: 0.96,
             combined_score: 0.97,
             sampling_strategy: SamplingStrategy::OneThird,
-            sampled_frames: 1000,
+            sampled_frames: crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64,
             total_frames: 3000,
         };
 
@@ -309,10 +309,10 @@ mod tests {
                     y_score: y,
                     u_score: u,
                     v_score: v,
-                    combined_score: (y + u + v) / 3.0,
+                    combined_score: (y + u + v) / crate::constants::CHANNELS_COUNT_F64,
                     sampling_strategy: SamplingStrategy::Full,
-                    sampled_frames: 1000,
-                    total_frames: 1000,
+                    sampled_frames: crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64,
+                    total_frames: crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64,
                 };
 
                 let expected = (y + u + v) / 3.0_f64;
@@ -327,8 +327,8 @@ mod tests {
                     v_score: 0.96,
                     combined_score: 0.97,
                     sampling_strategy: SamplingStrategy::Full,
-                    sampled_frames: 1000,
-                    total_frames: 1000,
+                    sampled_frames: crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64,
+                    total_frames: crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64,
                 };
 
                 result.print_stats(elapsed);

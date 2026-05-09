@@ -12,6 +12,7 @@
 //!
 //! ⚠️ `FileModifyDate` is EXCLUDED as it's unreliable (download/copy time)
 
+use crate::{ExiftoolBuilder, ToolBuilder};
 use chrono::{Datelike, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,7 +141,7 @@ pub fn analyze_directory(
         return Err(format!("Not a directory: {}", dir.display()));
     }
 
-    let mut builder = crate::ExiftoolBuilder::new();
+    let mut builder = ExiftoolBuilder::new();
     builder
         .arg("-m") // Suppress warnings for non-critical errors (e.g., corrupted EXIF in JPEG, PNG without metadata)
         .arg("-r")

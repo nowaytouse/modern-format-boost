@@ -10,6 +10,7 @@
 //! - When converting image formats like GIF/PNG to video, source files lack `QuickTime` metadata.
 //! - `QuickTime` dates need to be set from XMP:DateCreated or file modification time.
 
+use crate::builder_base::ToolBuilder;
 use std::io;
 use std::path::Path;
 use std::sync::OnceLock;

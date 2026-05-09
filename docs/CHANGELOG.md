@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## 💎 Production-Ready Final Hardening & Audit (v0.11.4-Hardened) (2026-05-08)
+## 💎 Production-Ready Final Hardening & Audit (v0.11.3-Final) (2026-05-08)
 
 - **Strict Documentation & Rationale Compliance**:
   - **100% Justified Lint Overrides**: Audited 116 instances of `#[allow(...)]` attributes across the workspace. Added mandatory `reason = "..."` justifications for every override, ensuring 100% accountability for technical debt.
@@ -27,7 +27,7 @@ All notable changes to this project will be documented in this file.
   - **Panic Path Audit**: Audited 156 remaining `unwrap()`/`expect()` calls; added diagnostic rationales and refactored high-risk sites into safe error propagation patterns.
   - **Registry Finalization**: Completed the migration of all remaining magic numbers into the centralized `constants.rs` registry.
 
-## 💎 Technical Integrity & Zero-Forgery Mandate (v0.11.4) (2026-05-08)
+## 💎 Technical Integrity & Zero-Forgery Mandate (v0.11.3-Audit) (2026-05-08)
 
 - **Total Elimination of Numeric Forgery**:
   - **Zero-Unwrap Audit**: Audited the entire workspace to eliminate "silent forgery" patterns where missing metadata (duration, bitrate, frame count) was defaulted to `0.0`, `1.0`, or `0`.
@@ -47,6 +47,13 @@ All notable changes to this project will be documented in this file.
   - **Exhaustive Clippy Pass**: Resolved all cross-crate warnings under strict `-D warnings` and `pedantic` flags.
 
 ## 🛡️ Nightly Pipeline Hardening & Strict Clippy Compliance (v0.11.3) (2026-05-07)
+
+- **Systemic Determinism & Absolute Zero Hardcoding (Audit Wave 20-22)**:
+  - **Total Registry Centralization**: Expanded `crates/shared_utils/src/constants.rs` as the single source of truth, replacing 200+ magic numbers with semantically named constants for search, quality, forensics, and imaging fundamentals.
+  - **Wave 20-22 Foundations**: Centralized BPP caps, forensic dither thresholds, SSIM semantic levels (`SSIM_LEVEL_NEAR_LOSSLESS`), and graphics offsets (`ALPHA_OPAQUE`, `CHANNELS_RGBA`).
+  - **Module Hardening**: Integrated registry constants into `image_quality_detector`, `video_explorer`, and `quality_matcher`, fixing a reporting regression in the process.
+  - **Measurement Standardization**: Unified scaling factors (`SCALE_100`, `KB_F64`) across the workspace for deterministic progress and size calculations.
+  - **Nightly Audit Pass**: Achieved 100% Clippy compliance (`-D warnings`) after resolving numeric truncation and duplicate symbol errors during registry migration.
 
 - **Post-Hardening Fixes & Compilation Stability**:
   - **Constant Refinement**: Resolved compilation errors by supplementing missing `JPEG_QUALITY_MAPPING_V1_SSIM_BASE` and `DURATION_THRESHOLD_SUSPICIOUS` constants.

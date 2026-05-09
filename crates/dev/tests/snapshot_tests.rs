@@ -6,6 +6,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use insta::assert_debug_snapshot;
+    use shared_utils::ToolBuilder;
     use shared_utils::ffmpeg_builder::{EncoderPreset, FfmpegBuilder, VideoCodec};
     use shared_utils::jxl_builder::CjxlBuilder;
     use std::path::Path;

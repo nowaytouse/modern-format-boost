@@ -1,13 +1,14 @@
 //! VMAF Standalone Integration
 //! Uses standalone vmaf command-line tool, bypassing ffmpeg libvmaf dependency
 
+use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
 
 #[must_use]
 pub fn is_vmaf_available() -> bool {
-    crate::tool_builders::VmafBuilder::check_available()
+    crate::tool_builders::VmafBuilder::new().check_available()
 }
 
 /// Calculate MS-SSIM using the standalone `vmaf` tool.

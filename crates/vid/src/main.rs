@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(guard) => Some(guard),
                 Err(e) => {
                     shared_utils::log_eprintln!("❌ {e}");
-                    std::process::exit(3);
+                    std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                 }
             }
         } else {
@@ -166,7 +166,7 @@ fn main() -> anyhow::Result<()> {
             // Fail-fast if critical sub-tools are missing
             if let Err(e) = shared_utils::tools::require_tools(&["ffmpeg", "ffprobe", "exiftool"]) {
                 shared_utils::log_eprintln!("{e}");
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             let apple_compat = apple_compat && !no_apple_compat;
@@ -182,7 +182,7 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::log_eprintln!(
                     "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
                 );
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             if let Err(e) =
@@ -194,7 +194,7 @@ fn main() -> anyhow::Result<()> {
                 })
             {
                 shared_utils::log_eprintln!("{e}");
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             let base_dir =
@@ -255,7 +255,7 @@ fn main() -> anyhow::Result<()> {
                     } else {
                         ConfigFlags::empty()
                     },
-                min_ssim: 0.95,
+                min_ssim: shared_utils::constants::MIN_SSIM_DEFAULT,
                 child_threads: shared_utils::thread_manager::get_balanced_thread_config(
                     shared_utils::thread_manager::WorkloadType::Video,
                 )
@@ -384,7 +384,7 @@ fn main() -> anyhow::Result<()> {
         Commands::IngestSamples { input, label } => {
             if !input.is_dir() {
                 shared_utils::log_eprintln!("❌ Input path must be a directory");
-                std::process::exit(1);
+                std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
             if let Some(lbl) = &label {
                 println!(
@@ -401,7 +401,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");
-                    std::process::exit(1);
+                    std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                 }
             }
         }

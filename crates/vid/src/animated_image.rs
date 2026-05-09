@@ -1,6 +1,7 @@
 //! - `vid`: all video encoding (including animated image → video)
 
 use crate::{Rational, Result, VidQualityError};
+use shared_utils::ToolBuilder;
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
 use std::fs;
 use std::path::Path;
@@ -169,7 +170,10 @@ impl AnimatedFinalGateFailureDecision {
             skip_message: if ultimate_mode {
                 format!("Skipped: 3D quality gate failed ({quality_summary})")
             } else {
-                format!("Skipped: MS-SSIM {quality_summary} below target 0.90")
+                format!(
+                    "Skipped: MS-SSIM {quality_summary} below target {:.2}",
+                    shared_utils::constants::VIDEO_QUALITY_GATE_THRESHOLD
+                )
             },
             skip_code: "quality_gate_failed",
         }
@@ -411,7 +415,9 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             frame_count,
             frame_durations_ms.len()
         );
-        let pad = *frame_durations_ms.last().unwrap_or(&100);
+        let pad = *frame_durations_ms
+            .last()
+            .unwrap_or(&crate::constants::DEFAULT_ANIMATION_DELAY_MS);
         frame_durations_ms.resize(
             shared_utils::numeric_cast::u64_to_usize_strict(
                 u64::from(frame_count),
@@ -426,7 +432,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // sane 100ms default so ffmpeg's concat demuxer doesn't produce a 0-length clip.
     for d in &mut frame_durations_ms {
         if *d == 0 {
-            *d = 100;
+            *d = crate::constants::DEFAULT_ANIMATION_DELAY_MS;
         }
     }
 
@@ -487,7 +493,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .get((i - 1) as usize)
             .copied()
             .expect("frame_durations_ms was sized to frame_count above; index must exist");
-        let duration_sec = f64::from(duration_ms) / 1_000.0_f64;
+        let duration_sec = f64::from(duration_ms) / crate::constants::MS_PER_SEC_F64;
         let _ = writeln!(
             concat_content,
             "file '{}'",
@@ -1079,6 +1085,9 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 ///
 /// # Errors
 /// Returns an error if matching or encoding fails.
+///
+/// # Panics
+/// Panics if the tolerance ratio cannot be converted to a finite rational number.
 #[allow(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
@@ -1358,7 +1367,10 @@ pub fn convert_to_mp4_matched(
 
     let use_gpu = options.use_gpu();
     if !use_gpu && options.verbose() {
-        eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
+        eprintln!(
+            "   🖥️  CPU Mode: Using libx265 for higher SSIM (≥{:.2})",
+            shared_utils::constants::HIGH_QUALITY_MIN_SSIM
+        );
     }
 
     let is_gif = shared_utils::is_gif_magic(&final_input);
@@ -1523,14 +1535,14 @@ pub fn convert_to_mp4_matched(
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
-        1.01_f64
+        1.0 + shared_utils::constants::DEFAULT_SIZE_TOLERANCE_RATIO
     } else {
         1.0_f64
     };
-    // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
     let max_allowed_size = {
         let input_rat = Rational::from(input_size);
-        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1_i32));
+        let tol_rat = Rational::from_f64(tolerance_ratio)
+            .expect("tolerance_ratio is 1.0 or 1.0 + DEFAULT_SIZE_TOLERANCE_RATIO; always finite");
         let res: Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
@@ -1553,7 +1565,8 @@ pub fn convert_to_mp4_matched(
         }
         if options.allow_size_tolerance() {
             eprintln!(
-                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
+                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (tolerance: {:.1}%)",
+                shared_utils::constants::DEFAULT_SIZE_TOLERANCE_RATIO * 100.0
             );
         } else {
             eprintln!(
@@ -1580,7 +1593,9 @@ pub fn convert_to_mp4_matched(
     let quality_or_compat_ok = explore_result.quality_passed.is_passed()
         || (options.apple_compat()
             && !flag_mode.is_ultimate()
-            && explore_result.ssim.is_some_and(|s| s >= 0.90_f64));
+            && explore_result
+                .ssim
+                .is_some_and(|s| s >= shared_utils::constants::ACCEPTABLE_MIN_SSIM));
 
     if !quality_or_compat_ok {
         let decision = AnimatedQualityFailureDecision::inspect_and_log(
@@ -1806,6 +1821,9 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
 ///
 /// # Errors
 /// Returns an error if encoding fails.
+///
+/// # Panics
+/// Panics if the tolerance ratio cannot be converted to a finite rational number.
 #[allow(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
@@ -2145,13 +2163,14 @@ pub fn convert_to_gif_apple_compat(
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
-        1.01_f64
+        1.0 + shared_utils::constants::DEFAULT_SIZE_TOLERANCE_RATIO
     } else {
         1.0_f64
     };
     let max_allowed_size = {
         let input_rat = Rational::from(input_size);
-        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1_i32));
+        let tol_rat = Rational::from_f64(tolerance_ratio)
+            .expect("tolerance_ratio is 1.0 or 1.0 + DEFAULT_SIZE_TOLERANCE_RATIO; always finite");
         let res: Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };

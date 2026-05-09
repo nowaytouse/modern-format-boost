@@ -28,8 +28,8 @@
 //!
 //! All comparators follow this priority chain (highest priority first):
 //!
-//! 1. **Gating/Pass Status**: Size gate, quality checks (quality_passed, ms_ssim_passed)
-//! 2. **Quality Metrics**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
+//! 1. **Gating/Pass Status**: Size gate, quality checks (`quality_passed`, `ms_ssim_passed`)
+//! 2. **Quality Metrics**: VMAF > CAMBI > `PSNR_UV` > MS-SSIM > SSIM > PSNR
 //! 3. **Size/Efficiency**: Output file size (prefer smaller)
 //! 4. **Parameter**: CRF (prefer aggressive/lower) or Distance (prefer higher compression)
 //! 5. **Preset/Strategy**: Encoder preset rank (prefer slower/better quality)

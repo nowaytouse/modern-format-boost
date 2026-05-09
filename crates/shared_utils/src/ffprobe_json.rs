@@ -1,6 +1,7 @@
 //! 🔥 v6.5: `FFprobe` JSON Parsing Module
 //! Uses `serde_json` instead of manual string parsing
 
+use crate::builder_base::ToolBuilder;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::warn;
@@ -98,12 +99,14 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
                     return None;
                 }
                 Some(crate::numeric_cast::f64_to_u64_sat(
-                    ((n / d) * 50000.0).round(),
+                    ((n / d) * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
                 ))
             } else {
                 let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_gx_val")?;
                 if f <= 1.0 {
-                    Some(crate::numeric_cast::f64_to_u64_sat((f * 50000.0).round()))
+                    Some(crate::numeric_cast::f64_to_u64_sat(
+                        (f * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
+                    ))
                 } else {
                     Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
                 }
@@ -112,7 +115,9 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
             if f <= 1.0 {
-                Some(crate::numeric_cast::f64_to_u64_sat((f * 50000.0).round()))
+                Some(crate::numeric_cast::f64_to_u64_sat(
+                    (f * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
+                ))
             } else {
                 Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
             }
@@ -131,12 +136,14 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
                     return None;
                 }
                 Some(crate::numeric_cast::f64_to_u64_sat(
-                    ((n / d) * 10000.0).round(),
+                    ((n / d) * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
                 ))
             } else {
                 let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_lmax_val")?;
-                if f <= 10000.0 {
-                    Some(crate::numeric_cast::f64_to_u64_sat((f * 10000.0).round()))
+                if f <= crate::constants::HDR_LUMA_SCALING_FACTOR {
+                    Some(crate::numeric_cast::f64_to_u64_sat(
+                        (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
+                    ))
                 } else {
                     Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
                 }
@@ -144,8 +151,10 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= 10000.0 {
-                Some(crate::numeric_cast::f64_to_u64_sat((f * 10000.0).round()))
+            if f <= crate::constants::HDR_LUMA_SCALING_FACTOR {
+                Some(crate::numeric_cast::f64_to_u64_sat(
+                    (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
+                ))
             } else {
                 Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
             }
