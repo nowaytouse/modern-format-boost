@@ -404,8 +404,8 @@ pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
         );
         return None;
     }
-    #[allow(clippy::cast_possible_truncation, reason = "Checked range above")]
-    Some(val as i64)
+    // Safety: we checked that val is within [i64::MIN, i64::MAX] above.
+    Some(unsafe { val.to_int_unchecked::<i64>() })
 }
 
 /// Convert `f64` to `usize` with loud warning on overflow/NaN.

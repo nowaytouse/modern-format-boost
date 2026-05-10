@@ -162,7 +162,7 @@ pub fn smart_copy_with_structure(
 
     let dest = fix_extension_if_mismatch(&dest)?;
 
-    crate::copy_metadata(source, &dest);
+    crate::copy(source, &dest);
 
     Ok(dest)
 }

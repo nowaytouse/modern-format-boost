@@ -102,8 +102,7 @@ fn main() -> anyhow::Result<()> {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
     }
 
-    if let Err(e) =
-        shared_utils::logging::init_logging("vid", &shared_utils::logging::LogConfig::default())
+    if let Err(e) = shared_utils::logging::init("vid", &shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
@@ -164,7 +163,7 @@ fn main() -> anyhow::Result<()> {
             codec,
         } => {
             // Fail-fast if critical sub-tools are missing
-            if let Err(e) = shared_utils::tools::require_tools(&["ffmpeg", "ffprobe", "exiftool"]) {
+            if let Err(e) = shared_utils::tools::require(&["ffmpeg", "ffprobe", "exiftool"]) {
                 shared_utils::log_eprintln!("{e}");
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
@@ -187,10 +186,12 @@ fn main() -> anyhow::Result<()> {
 
             if let Err(e) =
                 shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
-                    explore,
-                    match_quality,
-                    compress,
-                    ultimate,
+                    base: shared_utils::FlagBase {
+                        explore,
+                        match_quality,
+                        compress,
+                    },
+                    tier: shared_utils::FlagTier { ultimate },
                 })
             {
                 shared_utils::log_eprintln!("{e}");
@@ -328,7 +329,7 @@ fn main() -> anyhow::Result<()> {
             info!("");
 
             shared_utils::cli_runner::run_auto_command(
-                &shared_utils::cli_runner::CliRunnerConfig {
+                &shared_utils::cli_runner::Config {
                     input: input.clone(),
                     output: output.clone(),
                     recursive,

@@ -67,7 +67,7 @@ pub struct FileDateInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DateAnalysisResult {
+pub struct AnalysisResult {
     pub total_files: usize,
     pub files_with_dates: usize,
     pub files_without_dates: usize,
@@ -80,13 +80,13 @@ pub struct DateAnalysisResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct DateAnalysisConfig {
+pub struct AnalysisConfig {
     pub min_valid_year: i32,
     pub max_valid_year: i32,
     pub extensions: Vec<String>,
 }
 
-impl Default for DateAnalysisConfig {
+impl Default for AnalysisConfig {
     fn default() -> Self {
         let current_year = chrono::Local::now().year();
         Self {
@@ -133,10 +133,7 @@ struct ExiftoolOutput {
 ///
 /// # Errors
 /// Returns an error message if analysis fails.
-pub fn analyze_directory(
-    dir: &Path,
-    config: &DateAnalysisConfig,
-) -> Result<DateAnalysisResult, String> {
+pub fn analyze_directory(dir: &Path, config: &AnalysisConfig) -> Result<AnalysisResult, String> {
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", dir.display()));
     }
@@ -178,7 +175,7 @@ pub fn analyze_directory(
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     if json_str.trim().is_empty() || json_str.trim() == "[]" {
-        return Ok(DateAnalysisResult {
+        return Ok(AnalysisResult {
             total_files: 0,
             files_with_dates: 0,
             files_without_dates: 0,
@@ -232,7 +229,7 @@ pub fn analyze_directory(
     let files_with_dates_count = files_with_dates.len();
     let total = files.len();
 
-    Ok(DateAnalysisResult {
+    Ok(AnalysisResult {
         total_files: total,
         files_with_dates: files_with_dates_count,
         files_without_dates: total - files_with_dates_count,
@@ -256,7 +253,7 @@ pub fn analyze_directory(
 ///
 /// # Returns
 /// File date information with the best available date and metadata
-fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> FileDateInfo {
+fn extract_best_date(item: &ExiftoolOutput, config: &AnalysisConfig) -> FileDateInfo {
     let filename = item.file_name.clone().unwrap_or_else(|| {
         tracing::warn!("☢️ [ANOMALY] Missing 'FileName' in exiftool output; defaulting to empty string (may cause matching failures)");
         String::new()
@@ -339,7 +336,7 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
 ///
 /// # Returns
 /// Parsed datetime, or None if parsing fails
-fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTime> {
+fn parse_date(date_str: &str, config: &AnalysisConfig) -> Option<NaiveDateTime> {
     if date_str.is_empty() || date_str == "-" || date_str.starts_with("0000") {
         return None;
     }
@@ -368,7 +365,7 @@ fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTi
     None
 }
 
-pub fn print_analysis(result: &DateAnalysisResult) {
+pub fn print_analysis(result: &AnalysisResult) {
     println!("\n📊 Deep Analysis Results");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
@@ -434,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_parse_date() {
-        let config = DateAnalysisConfig::default();
+        let config = AnalysisConfig::default();
 
         assert!(parse_date("2023:05:15 10:30:00", &config).is_some());
         assert!(parse_date("2023-05-15 10:30:00", &config).is_some());

@@ -7,7 +7,7 @@ pub struct ProcessHistory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct VisualPerception {
+pub struct Visual {
     pub average_luma: f64,
     pub peak_luma: f64,
     pub gray_center_of_mass: (f64, f64), // (x, y) normalized 0.0-1.0

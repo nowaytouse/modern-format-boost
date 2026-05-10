@@ -268,10 +268,9 @@ impl MediaIndex {
 
 /// Helper to get current unix time.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if the current system time is out of range for a 64-bit signed integer.
 pub fn now_unix() -> i64 {
     i64::try_from(
         SystemTime::now()

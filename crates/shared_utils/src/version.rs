@@ -12,10 +12,10 @@
 //! ## Usage
 //!
 //! ```rust
-//! use shared_utils::version::{PROGRAM_VERSION, cache_algorithm_version, CACHE_SCHEMA_VERSION};
+//! use shared_utils::version::{PROGRAM_VERSION, cache_algorithm, CACHE_SCHEMA_VERSION};
 //!
 //! println!("Program: {}", PROGRAM_VERSION);
-//! println!("Cache Algorithm: {}", cache_algorithm_version());
+//! println!("Cache Algorithm: {}", cache_algorithm());
 //! println!("Cache Schema: {}", CACHE_SCHEMA_VERSION);
 //! ```
 //!
@@ -91,7 +91,7 @@ pub const CACHE_SCHEMA_VERSION: i32 = crate::constants::CACHE_SCHEMA_VERSION;
 /// Returns the auto-calculated cache algorithm version based on program version.
 /// This function is lazy-initialized and will panic if version parsing fails.
 #[must_use]
-pub fn cache_algorithm_version() -> i32 {
+pub fn cache_algorithm() -> i32 {
     *CACHE_ALGORITHM_VERSION
 }
 
@@ -140,7 +140,7 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 
 /// 📋 Version Information - For display and debugging
 #[derive(Debug, Clone)]
-pub struct VersionInfo {
+pub struct Info {
     /// Program version string (e.g., "0.10.102")
     pub program_version: String,
 
@@ -151,13 +151,13 @@ pub struct VersionInfo {
     pub cache_schema_version: i32,
 }
 
-impl VersionInfo {
+impl Info {
     /// Get current version information
     #[must_use]
     pub fn current() -> Self {
         Self {
             program_version: PROGRAM_VERSION.to_string(),
-            cache_algorithm_version: cache_algorithm_version(),
+            cache_algorithm_version: cache_algorithm(),
             cache_schema_version: CACHE_SCHEMA_VERSION,
         }
     }
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_version_info() {
-        let info = VersionInfo::current();
+        let info = Info::current();
         assert!(!info.program_version.is_empty());
         assert!(info.cache_algorithm_version > 0_i32);
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);

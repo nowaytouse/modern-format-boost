@@ -67,7 +67,6 @@ mp4parse    = "0.14.0"
 tempfile = "3.27.0"
 proptest = "1.11.0"
 insta    = "1.47.2"
-criterion = "0.8.2"
 flate2   = "1.1.9"
 
 # Signal handling
@@ -159,7 +158,6 @@ rug = { git = "https://gitlab.com/tspiteri/rug.git" }
 rusqlite = { git = "https://github.com/rusqlite/rusqlite.git" }
 quick-xml = { git = "https://github.com/tafia/quick-xml.git" }
 infer = { git = "https://github.com/bojand/infer.git" }
-criterion = { git = "https://github.com/criterion-rs/criterion.rs.git" }
 bitflags = { git = "https://github.com/bitflags/bitflags.git" }
 rand = { git = "https://github.com/rust-random/rand.git" }
 blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3.git" }

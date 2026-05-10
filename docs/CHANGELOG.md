@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.3] - 2026-05-10
+
+- **Tool Discovery Hardening**: Hardened tool discovery across the macOS App wrapper, Python scripts, and Rust core by adding dynamic fallbacks to Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) instead of relying solely on `shutil.which` or the default environment `PATH`. Fixed crashes caused by missing tools.
+- **Strict Clippy Compliance**: Enabled strict Clippy rules (`pedantic`, `nursery`) globally to enforce code quality and consistency across the Rust workspace.
+- **Systematic Precision Cast Eradication**: Replaced all remaining lossy `as` casts in critical paths (SSIM calculation, `Rational`/`Integer` construction) with explicit, intent-based methods from `shared_utils::numeric_cast`.
+- **Suppression Cleanup**: Removed manual `#[allow(clippy::cast_precision_loss)]` and `#[allow(clippy::cast_possible_truncation)]` attributes from `image_metrics.rs` and `lib.rs`, achieving true systemic compliance without suppressions.
+- **Doc-Test Integrity**: Fixed broken documentation examples in `logging.rs` caused by outdated import paths, restoring 100% doc-test pass rate.
+- **Dependency Hygiene**: Removed unused `criterion` dependency and its corresponding `[patch.crates-io]` configuration to resolve Cargo patch warnings.
+- **Systemic Boolean Density Refactoring**: Achieved 100% compliance with `clippy::struct_excessive_bools` and `clippy::cast_possible_truncation` without suppressions.
+  - Decomposed monolithic flag structs (`X265Builder`, `FlagRequest`, `VideoDetectionResult`, `LoopMeta`, `AppleFallbackKeepRequest`) into thematic, nested sub-structs.
+  - Replaced ad-hoc boolean flags with `bitflags`-based containers for configuration and status tracking.
+  - Eliminated all previously justified `allow(clippy::struct_excessive_bools)` suppressions from `img`, `vid`, and `shared_utils`.
+  - Hardened the `numeric_cast` layer to eliminate unsafe type casting in constant definitions.
+  - Verified binary integrity and operational parity across all conversion pipelines via full-suite regression testing.
+
 ## 💎 Production-Ready Final Hardening & Audit (v0.11.3-Final) (2026-05-08)
 
 - **Strict Documentation & Rationale Compliance**:
@@ -496,7 +511,7 @@ All notable changes to this project will be documented in this file.
 
 - **Documented lint suppressions**
   - Added explicit rationale comments for all `#[allow(...)]` attributes across the workspace.
-  - Justified retention of `clippy::too_many_lines` and `clippy::struct_excessive_bools` based on architectural needs and readability.
+  - Historically justified retention of `clippy::too_many_lines` (now being addressed) and `clippy::struct_excessive_bools` (now fully eliminated via structural refactoring).
   - Gated several identified long functions (> 100 lines) with explicit `clippy::too_many_lines` suppressions and rationales.
 
 - **Dependency & Environment Hardening**

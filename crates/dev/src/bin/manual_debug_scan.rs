@@ -68,7 +68,7 @@ fn manual_debug_scan_debug_dir_only() {
 
         match shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
             Some(meta) => {
-                let verdict = shared_utils::loop_intent::identify_loop_intent(&meta);
+                let verdict = shared_utils::identify_loop_intent(&meta);
                 let verd_str = format!("{verdict:?}");
 
                 eprintln!(
@@ -76,20 +76,14 @@ fn manual_debug_scan_debug_dir_only() {
                     meta.file_size_bytes,
                     meta.palette_size,
                     meta.loop_count,
-                    meta.has_transparency,
+                    meta.flags.streams.has_transparency,
                     meta.frame_payload_variation,
                     verd_str
                 );
 
-                if matches!(
-                    verdict,
-                    shared_utils::loop_intent::LoopIntentVerdict::LoopStrong(_)
-                ) {
+                if matches!(verdict, shared_utils::LoopIntentVerdict::LoopStrong(_)) {
                     // Definitive: keep as GIF
-                } else if matches!(
-                    verdict,
-                    shared_utils::loop_intent::LoopIntentVerdict::LoopWeak(_)
-                ) {
+                } else if matches!(verdict, shared_utils::LoopIntentVerdict::LoopWeak(_)) {
                     // Definitive: convert to video
                 } else {
                     undecided.push(p.to_path_buf());
@@ -144,8 +138,7 @@ fn manual_debug_scan_debug_dir_only() {
                 .unwrap_or_else(|| panic!("missing index {idx}"));
             eprintln!("--- Deep sample: {}", p.display());
             if let Some(meta) = shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
-                let verdict =
-                    shared_utils::loop_intent::assess_loop_intent_from_meta(&meta, Some(p));
+                let verdict = shared_utils::assess_loop_intent_from_meta(&meta, Some(p));
                 eprintln!(
                     "Deep verdict: {:?} (duration={:.2}s,size={})",
                     verdict,

@@ -931,11 +931,8 @@ impl VideoEncoder {
     ) -> Vec<String> {
         match self {
             Self::Hevc => {
-                let x265_params = crate::x265_params::format_x265_params(
-                    max_threads,
-                    hdr_x265_params,
-                    x265_memory_profile,
-                );
+                let x265_params =
+                    crate::x265_params::format(max_threads, hdr_x265_params, x265_memory_profile);
                 let mut args = vec![
                     crate::constants::FFMPEG_ARG_PRESET.to_string(),
                     preset.hevc_name().to_string(),
@@ -4094,8 +4091,8 @@ pub mod dynamic_mapping;
 /// GPU-accelerated coarse search implementations.
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
-    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation, explore_av1_with_gpu,
-    explore_hevc_with_gpu, explore_with_gpu_coarse_search,
+    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation,
+    explore as explore_gpu_coarse, explore_av1_with_gpu, explore_hevc_with_gpu,
 };
 
 #[cfg(test)]

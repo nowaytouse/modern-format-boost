@@ -72,6 +72,14 @@ pub struct FFprobeHdrInfo {
 
 impl FFprobeHdrInfo {
     #[must_use]
+    pub const fn is_hdr(&self) -> bool {
+        self.mastering_display.is_some()
+            || self.max_cll.is_some()
+            || self.hdr10_plus
+            || self.is_dolby_vision()
+    }
+
+    #[must_use]
     pub const fn is_dolby_vision(&self) -> bool {
         self.dolby_vision.is_some()
     }

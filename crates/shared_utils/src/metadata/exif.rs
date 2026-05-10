@@ -73,8 +73,8 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
 ///
 /// # Errors
 /// Returns an `io::Result` if preservation fails.
-pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
-    match preserve_internal_metadata_core(src, dst) {
+pub fn preserve_internal(src: &Path, dst: &Path) -> io::Result<()> {
+    match preserve_internal_core(src, dst) {
         Ok(()) => Ok(()),
         Err(e) => {
             let err_str = e.to_string();
@@ -87,7 +87,7 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
                     eprintln!("💡 ExifTool suggests content is: {h}");
                 }
 
-                match preserve_internal_metadata_fallback(src, dst, hint.as_deref()) {
+                match preserve_internal_fallback(src, dst, hint.as_deref()) {
                     Ok(()) => {
                         eprintln!("✅ Metadata fallback successful for {}", dst.display());
                         return Ok(());
@@ -102,11 +102,7 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-fn preserve_internal_metadata_fallback(
-    src: &Path,
-    dst: &Path,
-    hint_ext: Option<&str>,
-) -> io::Result<()> {
+fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) -> io::Result<()> {
     let detected_ext = if let Some(hint) = hint_ext {
         hint.to_string()
     } else {
@@ -138,7 +134,7 @@ fn preserve_internal_metadata_fallback(
 
     std::fs::rename(dst, &temp_path)?;
 
-    let result = preserve_internal_metadata_core(src, &temp_path);
+    let result = preserve_internal_core(src, &temp_path);
 
     if let Err(e) = std::fs::rename(&temp_path, dst) {
         eprintln!(
@@ -203,7 +199,7 @@ fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
+fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
@@ -495,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_preserve_metadata_mismatch() {
+    fn test_preserve_mismatch() {
         if !is_exiftool_available() {
             eprintln!("ExifTool not available, skipping test");
             return;
@@ -517,7 +513,7 @@ mod tests {
         let dst_path = complex_dir.join("dst_image.jpeg");
         fs::write(&dst_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let result = preserve_internal_metadata(&src_path, &dst_path);
+        let result = preserve_internal(&src_path, &dst_path);
 
         if let Err(e) = &result {
             println!("Test failed with error: {e}");
@@ -529,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn test_preserve_metadata_with_percent_in_path() {
+    fn test_preserve_with_percent_in_path() {
         if !is_exiftool_available() {
             return;
         }
@@ -548,7 +544,7 @@ mod tests {
         let dst_path = temp.path().join("output.png");
         fs::write(&dst_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let result = preserve_internal_metadata(&src_path, &dst_path);
+        let result = preserve_internal(&src_path, &dst_path);
 
         assert!(
             result.is_ok(),
@@ -585,7 +581,7 @@ mod tests {
         fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00])
             .unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let result = preserve_internal_metadata(&src_path, &dst_path);
+        let result = preserve_internal(&src_path, &dst_path);
 
         assert!(
             result.is_ok(),

@@ -366,29 +366,40 @@ impl ToolBuilder for Hdr10PlusBuilder {
 }
 
 /// Builder for constructing `x265` commands.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct X265IoFlags {
+    pub y4m: bool,
+    pub repeat_headers: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct X265EncodingFlags {
+    pub lossless: bool,
+    pub hdr10_opt: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct X265Flags {
+    pub io: X265IoFlags,
+    pub encoding: X265EncodingFlags,
+}
+
+/// Builder for constructing `x265` commands.
 #[derive(Debug, Default)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct X265Builder {
     input: Option<PathBuf>,
     output: Option<PathBuf>,
-    y4m: bool,
     crf: Option<f32>,
-    lossless: bool,
     preset: Option<String>,
     pools: Option<String>,
     log_level: Option<String>,
-    hdr10_opt: bool,
-    repeat_headers: bool,
     colorprim: Option<String>,
     transfer: Option<String>,
     colormatrix: Option<String>,
     master_display: Option<String>,
     max_cll: Option<String>,
     extra_args: Vec<String>,
+    flags: X265Flags,
 }
 
 fn x265_io_arg(path: &Path) -> std::borrow::Cow<'_, str> {
@@ -423,7 +434,7 @@ impl X265Builder {
     }
 
     pub const fn y4m(&mut self, enabled: bool) -> &mut Self {
-        self.y4m = enabled;
+        self.flags.io.y4m = enabled;
         self
     }
 
@@ -433,7 +444,7 @@ impl X265Builder {
     }
 
     pub const fn lossless(&mut self, enabled: bool) -> &mut Self {
-        self.lossless = enabled;
+        self.flags.encoding.lossless = enabled;
         self
     }
 
@@ -454,12 +465,12 @@ impl X265Builder {
     }
 
     pub const fn hdr10_opt(&mut self, enabled: bool) -> &mut Self {
-        self.hdr10_opt = enabled;
+        self.flags.encoding.hdr10_opt = enabled;
         self
     }
 
     pub const fn repeat_headers(&mut self, enabled: bool) -> &mut Self {
-        self.repeat_headers = enabled;
+        self.flags.io.repeat_headers = enabled;
         self
     }
 
@@ -502,7 +513,7 @@ impl ToolBuilder for X265Builder {
     fn build(&self) -> Command {
         let mut cmd = Command::new(self.get_command_name());
 
-        if self.y4m {
+        if self.flags.io.y4m {
             cmd.arg("--y4m");
         }
 
@@ -510,7 +521,7 @@ impl ToolBuilder for X265Builder {
             cmd.arg("--crf").arg(format!("{crf:.1}"));
         }
 
-        if self.lossless {
+        if self.flags.encoding.lossless {
             cmd.arg("--lossless");
         }
 
@@ -526,11 +537,11 @@ impl ToolBuilder for X265Builder {
             cmd.arg("--log-level").arg(level);
         }
 
-        if self.hdr10_opt {
+        if self.flags.encoding.hdr10_opt {
             cmd.arg("--hdr10-opt");
         }
 
-        if self.repeat_headers {
+        if self.flags.io.repeat_headers {
             cmd.arg("--repeat-headers");
         }
 

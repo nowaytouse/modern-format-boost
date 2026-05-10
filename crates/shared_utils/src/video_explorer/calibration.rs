@@ -1,7 +1,7 @@
 //! GPU calibration data structures
 
 #[derive(Debug, Clone)]
-pub struct CalibrationPoint {
+pub struct Point {
     pub gpu_crf: f32,
     pub gpu_size: u64,
     pub gpu_ssim: Option<f64>,
@@ -10,7 +10,7 @@ pub struct CalibrationPoint {
     pub reason: &'static str,
 }
 
-impl CalibrationPoint {
+impl Point {
     #[must_use]
     pub fn from_gpu_result(
         gpu_crf: f32,

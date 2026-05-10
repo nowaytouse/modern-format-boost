@@ -43,7 +43,7 @@ impl ExtractionMethod {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamSizeInfo {
+pub struct Info {
     pub video_stream_size: u64,
     pub audio_stream_size: u64,
     pub total_file_size: u64,
@@ -54,7 +54,7 @@ pub struct StreamSizeInfo {
     pub audio_bitrate: Option<u64>,
 }
 
-impl StreamSizeInfo {
+impl Info {
     #[must_use]
     pub const fn pure_media_size(&self) -> u64 {
         self.video_stream_size + self.audio_stream_size
@@ -119,7 +119,7 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
     }
 }
 
-pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
+pub fn extract_stream_sizes(path: &Path) -> Info {
     let total_file_size = match crate::io_utils::metadata_with_retry(path) {
         Ok(metadata) => metadata.len(),
         Err(err) => {
@@ -139,7 +139,7 @@ pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
     estimate_stream_sizes(path, total_file_size)
 }
 
-fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSizeInfo> {
+fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let mut builder = crate::ffmpeg_builder::FfprobeBuilder::new();
     builder
         .show_streams()
@@ -237,7 +237,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let pure_media = video_stream_size + audio_stream_size;
     let container_overhead = total_file_size.saturating_sub(pure_media);
 
-    Some(StreamSizeInfo {
+    Some(Info {
         video_stream_size,
         audio_stream_size,
         total_file_size,
@@ -302,11 +302,11 @@ pub fn can_compress_pure_video(
 }
 
 #[must_use]
-pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
+pub fn get_output_video(output_path: &Path) -> u64 {
     extract_stream_sizes(output_path).video_stream_size
 }
 
-fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
+fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> Info {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
         let overhead_r =
@@ -317,7 +317,7 @@ fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);
 
-    StreamSizeInfo {
+    Info {
         video_stream_size: estimated_video_size,
         audio_stream_size: 0,
         total_file_size,
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_stream_size_info_methods() {
-        let info = StreamSizeInfo {
+        let info = Info {
             video_stream_size: 1000,
             audio_stream_size: 100,
             total_file_size: 1200,
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_excessive_overhead() {
-        let info = StreamSizeInfo {
+        let info = Info {
             video_stream_size: 800,
             audio_stream_size: 0,
             total_file_size: 1000,
@@ -409,7 +409,7 @@ mod prop_tests {
             overhead in 0u64..100_000_000u64,
         ) {
             let total = video_size + audio_size + overhead;
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: video_size,
                 audio_stream_size: audio_size,
                 total_file_size: total,
@@ -437,7 +437,7 @@ mod prop_tests {
             let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(pure_media) * overhead_percent);
             let total = pure_media + overhead;
 
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: video_size,
                 audio_stream_size: audio_size,
                 total_file_size: total,
@@ -462,7 +462,7 @@ mod prop_tests {
             video_size in 0u64..1_000_000_000u64,
             audio_size in 0u64..100_000_000u64,
         ) {
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: video_size,
                 audio_stream_size: audio_size,
                 total_file_size: video_size + audio_size + 1000,
@@ -487,7 +487,7 @@ mod prop_tests {
             let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
             let video_size = total_size.saturating_sub(overhead);
 
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: video_size,
                 audio_stream_size: 0,
                 total_file_size: total_size,
@@ -515,7 +515,7 @@ mod prop_tests {
             let estimated_overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
             let estimated_video_size = total_size.saturating_sub(estimated_overhead);
 
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: estimated_video_size,
                 audio_stream_size: 0,
                 total_file_size: total_size,
@@ -545,7 +545,7 @@ mod prop_tests {
             let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
             let video_size = total_size.saturating_sub(overhead);
 
-            let info = StreamSizeInfo {
+            let info = Info {
                 video_stream_size: video_size,
                 audio_stream_size: 0,
                 total_file_size: total_size,

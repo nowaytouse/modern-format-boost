@@ -210,29 +210,29 @@ pub struct ConversionOutput {
 
 impl ConversionOutput {
     #[must_use]
-    pub fn outcome(&self) -> crate::conversion::ConversionOutcome {
+    pub fn outcome(&self) -> crate::conversion::Outcome {
         if !self.success {
-            return crate::conversion::ConversionOutcome::Failed;
+            return crate::conversion::Outcome::Failed;
         }
 
         if self.strategy.target == TargetVideoFormat::Skip
             || self.output_path.is_empty()
             || self.output_size == 0
         {
-            return crate::conversion::ConversionOutcome::Skipped;
+            return crate::conversion::Outcome::Skipped;
         }
 
-        crate::conversion::ConversionOutcome::Converted
+        crate::conversion::Outcome::Converted
     }
 }
 
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
-        self.outcome() == crate::conversion::ConversionOutcome::Skipped
+        self.outcome() == crate::conversion::Outcome::Skipped
     }
 
     fn is_success(&self) -> bool {
-        self.outcome() == crate::conversion::ConversionOutcome::Converted
+        self.outcome() == crate::conversion::Outcome::Converted
     }
 
     fn skip_reason(&self) -> Option<&str> {

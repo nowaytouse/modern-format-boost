@@ -13,7 +13,7 @@ use std::path::Path;
 /// This function checks if the given file has a companion file with the same
 /// stem but different extension (.mov/.MOV for images, .heic/.HEIC for videos)
 #[must_use]
-pub fn is_live_photo(path: &Path) -> bool {
+pub fn is_live(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
@@ -79,18 +79,18 @@ mod tests {
         File::create(&mov_path).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         // Both files should be detected as Live Photo
-        assert!(is_live_photo(&heic_path));
-        assert!(is_live_photo(&mov_path));
+        assert!(is_live(&heic_path));
+        assert!(is_live(&mov_path));
 
         // Single HEIC without MOV should not be Live Photo
         let single_heic = base_path.join("IMG_5678.HEIC");
         File::create(&single_heic).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert!(!is_live_photo(&single_heic));
+        assert!(!is_live(&single_heic));
 
         // Single MOV without HEIC should not be Live Photo
         let single_mov = base_path.join("VID_9999.MOV");
         File::create(&single_mov).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert!(!is_live_photo(&single_mov));
+        assert!(!is_live(&single_mov));
     }
 
     #[test]
@@ -105,7 +105,7 @@ mod tests {
         File::create(&heic_lower).unwrap_or_else(|e| panic!("error: {e:?}"));
         File::create(&mov_upper).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        assert!(is_live_photo(&heic_lower));
-        assert!(is_live_photo(&mov_upper));
+        assert!(is_live(&heic_lower));
+        assert!(is_live(&mov_upper));
     }
 }

@@ -46,38 +46,45 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
-pub struct FlagRequest {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlagBase {
     pub explore: bool,
     pub match_quality: bool,
     pub compress: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlagTier {
     pub ultimate: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlagRequest {
+    pub base: FlagBase,
+    pub tier: FlagTier,
 }
 
 #[must_use]
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
     validate_flags_with_ultimate(FlagRequest {
-        explore,
-        match_quality,
-        compress,
-        ultimate: false,
+        base: FlagBase {
+            explore,
+            match_quality,
+            compress,
+        },
+        tier: FlagTier { ultimate: false },
     })
 }
 
 #[must_use]
 pub fn validate_flags_with_ultimate(request: FlagRequest) -> FlagValidation {
-    if !request.explore || !request.match_quality || !request.compress {
+    if !request.base.explore || !request.base.match_quality || !request.base.compress {
         return FlagValidation::Invalid(
             "❌ Only the recommended flag combination is supported: explore + match-quality + compress (all on by default).\n\
              💡 Omit flags to use defaults, or do not turn off explore/match-quality/compress.".to_string(),
         );
     }
-    if request.ultimate {
+    if request.tier.ultimate {
         return FlagValidation::Valid(FlagMode::UltimateExplore);
     }
     FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
@@ -165,10 +172,12 @@ mod tests {
     #[test]
     fn test_ultimate_valid_only_with_full_combination() {
         let r = validate_flags_result_with_ultimate(FlagRequest {
-            explore: true,
-            match_quality: true,
-            compress: true,
-            ultimate: true,
+            base: FlagBase {
+                explore: true,
+                match_quality: true,
+                compress: true,
+            },
+            tier: FlagTier { ultimate: true },
         });
         assert!(r.is_ok());
         assert_eq!(
@@ -181,19 +190,23 @@ mod tests {
     fn test_ultimate_invalid_with_incomplete() {
         assert!(
             validate_flags_result_with_ultimate(FlagRequest {
-                explore: false,
-                match_quality: false,
-                compress: false,
-                ultimate: true,
+                base: FlagBase {
+                    explore: false,
+                    match_quality: false,
+                    compress: false,
+                },
+                tier: FlagTier { ultimate: true },
             })
             .is_err()
         );
         assert!(
             validate_flags_result_with_ultimate(FlagRequest {
-                explore: true,
-                match_quality: true,
-                compress: false,
-                ultimate: true,
+                base: FlagBase {
+                    explore: true,
+                    match_quality: true,
+                    compress: false,
+                },
+                tier: FlagTier { ultimate: true },
             })
             .is_err()
         );

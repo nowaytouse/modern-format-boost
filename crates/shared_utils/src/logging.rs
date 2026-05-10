@@ -9,7 +9,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! use shared_utils::logging::{LogConfig, init_logging};
+//! use shared_utils::{LogConfig, init_logging};
 //! use tracing::{info, error};
 //!
 //! // Initialize logging system
@@ -272,10 +272,9 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 /// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
 /// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if the string slicing logic encounters an invalid UTF-8 boundary during escape sequence extraction.
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -537,7 +536,7 @@ impl LogConfig {
 ///
 /// # Errors
 /// Returns an error if initialization fails.
-pub fn init_logging(program_name: &str, config: &LogConfig) -> Result<()> {
+pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     if std::env::var("FORCE_COLOR").is_ok() {
         console::set_colors_enabled(true);
         console::set_colors_enabled_stderr(true);

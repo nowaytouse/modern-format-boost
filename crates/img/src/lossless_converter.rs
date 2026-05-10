@@ -1,7 +1,7 @@
 //! Lossless Converter Module
 //!
 //! Provides conversion API for verified lossless/lossy images.
-//! Uses `shared_utils` for common functionality (anti-duplicate, `ConversionResult`, etc.)
+//! Uses `shared_utils` for common functionality (anti-duplicate, `TaskResult`, etc.)
 //!
 //! **Unified Compress Check**: All image conversions call `check_size_tolerance` after
 //! successful encoding and obtaining `output_size`, before finalization. When `options.compress`
@@ -17,8 +17,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use shared_utils::conversion::{
-    ConversionResult, ConvertFlags, ConvertOptions, check_size_tolerance, clear_processed_list,
-    determine_output_path_with_base, finalize_conversion, format_size_change, is_already_processed,
+    ConvertFlags, ConvertOptions, TaskResult, check_size_tolerance, clear_processed_list,
+    determine_output_path_with_base, finalize_task, format_size_change, is_already_processed,
     load_processed_list, mark_as_processed, save_processed_list,
 };
 
@@ -38,7 +38,7 @@ fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
 
 /// Finalize conversion with size check and metadata preservation.
 /// Common pattern: commit temp → check size → finalize.
-/// Returns `ConversionResult` on success or error.
+/// Returns `TaskResult` on success or error.
 /// # Errors
 ///
 /// Returns an error if the temp file cannot be committed or metadata cannot be preserved.
@@ -51,7 +51,7 @@ fn finalize_with_size_check(
     options: &ConvertOptions,
     format_label: &str,
     extra_info: Option<&str>,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     let ratio = if input_size > 0 {
         let rat = Rational::from((output_size, input_size));
         rat.to_f64()
@@ -77,7 +77,7 @@ fn finalize_with_size_check(
         options.force(),
         Some(input),
     )? {
-        return Ok(ConversionResult::skipped_exists(input, output));
+        return Ok(TaskResult::skipped_exists(input, output));
     }
 
     // Check size tolerance (compress mode, oversized check)
@@ -93,7 +93,7 @@ fn finalize_with_size_check(
     }
 
     // Finalize with metadata preservation
-    finalize_conversion(input, output, input_size, format_label, extra_info, options)
+    finalize_task(input, output, input_size, format_label, extra_info, options)
         .map_err(ImgQualityError::IoError)
 }
 
@@ -106,7 +106,7 @@ fn finalize_fallback_jxl(
     input_size: u64,
     options: &ConvertOptions,
     label: &str,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     let output_size = fs::metadata(temp_output)?.len();
     if let Err(e) = verify_jxl_health(temp_output) {
         cleanup_temp_output(temp_output, input);
@@ -132,23 +132,20 @@ fn finalize_fallback_jxl(
 /// - The input file is invalid or a duplicate.
 /// - The `HDR` synthesis process fails.
 /// - The output file cannot be written or finalized.
-pub fn convert_heic_gainmap_to_jxl(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
+pub fn convert_heic_gainmap_to_jxl(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -206,23 +203,20 @@ pub fn convert_heic_gainmap_to_jxl(
 /// # Errors
 ///
 /// Returns an error if extraction, synthesis, or finalization fails.
-pub fn convert_ultrahdr_jpeg_to_jxl(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
+pub fn convert_ultrahdr_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -281,7 +275,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 /// * `hdr_info` - Optional HDR metadata for preserving color information
 ///
 /// # Returns
-/// * `Ok(ConversionResult)` - Conversion result with file sizes and status
+/// * `Ok(TaskResult)` - Conversion result with file sizes and status
 /// * `Err(ImgQualityError)` - Conversion failed
 ///
 /// # Behavior
@@ -320,7 +314,7 @@ pub fn convert_to_jxl(
     options: &ConvertOptions,
     distance: f32,
     hdr_info: Option<&shared_utils::ColorInfo>,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     use std::process::Stdio;
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
@@ -328,7 +322,7 @@ pub fn convert_to_jxl(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -342,7 +336,7 @@ pub fn convert_to_jxl(
         }
         copy_original_on_skip(input, options)?;
         mark_as_processed(input);
-        return Ok(ConversionResult::skipped_custom(
+        return Ok(TaskResult::skipped_custom(
             input,
             input_size,
             "Skipped: Small PNG (< 500KB)",
@@ -356,7 +350,7 @@ pub fn convert_to_jxl(
     }
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -510,9 +504,9 @@ pub fn convert_to_jxl(
                             options.force(),
                             Some(input),
                         )? {
-                            return Ok(ConversionResult::skipped_exists(input, &output));
+                            return Ok(TaskResult::skipped_exists(input, &output));
                         }
-                        return finalize_conversion(
+                        return finalize_task(
                             input,
                             &output,
                             input_size,
@@ -969,7 +963,7 @@ fn commit_jpeg_to_jxl_success(
     input_size: u64,
     options: &ConvertOptions,
     label: &str,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     if let Err(e) = verify_jxl_health(temp_output) {
         cleanup_temp_output(temp_output, input);
         return Err(e);
@@ -1003,7 +997,7 @@ fn commit_jpeg_to_jxl_success(
 /// * `options` - Conversion options
 ///
 /// # Returns
-/// * `Ok(ConversionResult)` - Conversion result
+/// * `Ok(TaskResult)` - Conversion result
 /// * `Err(ImgQualityError)` - Conversion failed
 ///
 /// # Behavior
@@ -1031,14 +1025,14 @@ pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
     hdr_info: Option<&shared_utils::ColorInfo>,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     // Check for corruption early
@@ -1058,7 +1052,7 @@ pub fn convert_jpeg_to_jxl(
         let input_size = fs::metadata(input)?.len();
         copy_original_on_skip(input, options)?;
         mark_as_processed(input);
-        return Ok(ConversionResult::skipped_custom(
+        return Ok(TaskResult::skipped_custom(
             input,
             input_size,
             "UltraHDR JPEG",
@@ -1076,7 +1070,7 @@ pub fn convert_jpeg_to_jxl(
     let output = get_output_path(input, "jxl", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1246,7 +1240,7 @@ pub fn convert_jpeg_to_jxl(
 /// * `options` - Conversion options
 ///
 /// # Returns
-/// * `Ok(ConversionResult)` - Conversion result
+/// * `Ok(TaskResult)` - Conversion result
 /// * `Err(ImgQualityError)` - Conversion failed
 ///
 /// # Behavior
@@ -1262,21 +1256,21 @@ pub fn convert_to_avif(
     input: &Path,
     quality: Option<u8>,
     options: &ConvertOptions,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1339,10 +1333,7 @@ pub fn convert_to_avif(
 ///
 /// # Errors
 /// Returns an error if encoding fails.
-pub fn convert_to_avif_lossless(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
+pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
@@ -1353,14 +1344,14 @@ pub fn convert_to_avif_lossless(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1461,14 +1452,14 @@ pub fn convert_to_jxl_matched(
     input: &Path,
     options: &ConvertOptions,
     analysis: &crate::ImageAnalysis,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -1479,7 +1470,7 @@ pub fn convert_to_jxl_matched(
     }
 
     if output.exists() && !options.force() {
-        return Ok(ConversionResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output));
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -2096,20 +2087,13 @@ fn prepare_input_for_cjxl(
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     // Ensure we have color info for bit depth detection if not provided
-    let local_hdr_info;
-    // Rationale: Using if-let and match-else here is more readable than overly nested or functional alternatives for this specific logic.
-    #[allow(
-        clippy::option_if_let_else,
-        clippy::single_match_else,
-        reason = "Preserving if-let structure to maintain clear linear control flow during complex state transitions."
-    )]
-    let hdr_info = match hdr_info {
-        Some(info) => info,
-        None => {
-            local_hdr_info = shared_utils::ffprobe_json::extract_color_info(input);
-            &local_hdr_info
-        }
-    };
+    let mut local_hdr_info = None;
+    let hdr_info = hdr_info.unwrap_or_else(|| {
+        local_hdr_info = Some(shared_utils::ffprobe_json::extract_color_info(input));
+        local_hdr_info
+            .as_ref()
+            .expect("Always Some after assignment")
+    });
 
     // Determine target bit depth (match source if > 8-bit, else 8-bit)
     let mut is_float = hdr_info.is_float;
@@ -2168,7 +2152,7 @@ fn prepare_input_for_cjxl(
     }
 
     // Check if we need HDR decoding (explicitly requested or high bit depth)
-    if shared_utils::needs_hdr_decode(Some(hdr_info)) {
+    if shared_utils::needs_decode(Some(hdr_info)) {
         use console::style;
         eprintln!(
             "   {} {}",

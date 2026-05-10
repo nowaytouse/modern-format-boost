@@ -44,11 +44,11 @@ impl MappingPoint {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PsnrSsimMapping {
+pub struct PsnrSsim {
     points: Vec<MappingPoint>,
 }
 
-impl PsnrSsimMapping {
+impl PsnrSsim {
     #[must_use]
     pub const fn new() -> Self {
         Self { points: Vec::new() }
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_predict() {
-        let mut mapping = PsnrSsimMapping::new();
+        let mut mapping = PsnrSsim::new();
         mapping.insert(30.0, 0.90);
         mapping.insert(40.0, 0.95);
         mapping.insert(50.0, 0.99);
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_not_enough_points() {
-        let mut mapping = PsnrSsimMapping::new();
+        let mut mapping = PsnrSsim::new();
         mapping.insert(30.0, 0.90);
         mapping.insert(40.0, 0.95);
 
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_update() {
-        let mut mapping = PsnrSsimMapping::new();
+        let mut mapping = PsnrSsim::new();
         mapping.insert(30.0, 0.90);
         mapping.update(30.2, 0.91);
 
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_insert_replaces_exact_duplicate_psnr() {
-        let mut mapping = PsnrSsimMapping::new();
+        let mut mapping = PsnrSsim::new();
         mapping.insert(30.0, 0.90);
         mapping.insert(30.0, 0.92);
 
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_predict_ssim_with_duplicate_psnr_points_stays_finite() {
-        let mapping = PsnrSsimMapping {
+        let mapping = PsnrSsim {
             points: vec![
                 MappingPoint {
                     psnr: 30.0,
@@ -295,7 +295,7 @@ mod prop_tests {
             p3_ssim in 0.97_f64..0.995_f64,
             query_ratio in 0.0_f64..1.0_f64,
         ) {
-            let mut mapping = PsnrSsimMapping::new();
+            let mut mapping = PsnrSsim::new();
             mapping.insert(p1_psnr, p1_ssim);
             mapping.insert(p2_psnr, p2_ssim);
             mapping.insert(p3_psnr, p3_ssim);
@@ -318,7 +318,7 @@ mod prop_tests {
             initial_ssim in 0.90_f64..0.95_f64,
             actual_ssim in 0.95_f64..0.99_f64,
         ) {
-            let mut mapping = PsnrSsimMapping::new();
+            let mut mapping = PsnrSsim::new();
             mapping.insert(psnr, initial_ssim);
 
             mapping.update(psnr + 0.1, actual_ssim);

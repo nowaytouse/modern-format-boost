@@ -8,7 +8,7 @@
 
 use crate::image_analyzer::ImageAnalysis;
 use crate::image_quality_detector::ImageQualityAnalysis;
-use crate::video_detection::VideoDetectionResult;
+use crate::video_detection::Detection;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use postgres::Client;
@@ -18,7 +18,7 @@ use std::time::UNIX_EPOCH;
 use tracing::{debug, info, warn};
 
 // Import unified version management
-use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm_version};
+use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
@@ -173,7 +173,7 @@ impl AnalysisCache {
     fn invalidate_old_algorithm_entries(client: &mut Client) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated: i64 = 0;
-        let current_version = cache_algorithm_version();
+        let current_version = cache_algorithm();
 
         for table in &tables {
             let count: i64 = client
@@ -217,10 +217,9 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    ///
+    /// Panics if the database schema is corrupted or columns are missing from the `analysis_records` table.
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -236,7 +235,7 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let algorithm_version: i32 = row.get(1);
-            if algorithm_version >= cache_algorithm_version() {
+            if algorithm_version >= cache_algorithm() {
                 let row_ctime_epoch: i64 = row.get(3);
                 let row_birthtime_epoch: i64 = row.get(4);
 
@@ -273,7 +272,7 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let algorithm_version: i32 = row.get(1);
-            if algorithm_version >= cache_algorithm_version() {
+            if algorithm_version >= cache_algorithm() {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(2)
                     && calculate_checksum(&data)
@@ -310,10 +309,9 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    ///
+    /// Panics if the database schema is corrupted or columns are missing from the `quality_records` table.
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -415,7 +413,7 @@ impl AnalysisCache {
             "INSERT INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm_version(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
         )?;
         tx.execute(
             "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
@@ -452,7 +450,7 @@ impl AnalysisCache {
             "INSERT INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm_version(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
         )?;
         tx.execute(
             "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
@@ -470,11 +468,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
-    pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
+    /// # Panics
+    ///
+    /// Panics if the database schema is corrupted or columns are missing from the `video_records` table.
+    pub fn get_video_analysis(&self, path: &Path) -> Result<Option<Detection>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -506,7 +503,7 @@ impl AnalysisCache {
                     return Ok(None);
                 }
 
-                let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+                let mut analysis: Detection = rmp_serde::from_slice(&data)
                     .context("Failed to unpack cached video data (path hit)")?;
                 analysis.file_path = path.display().to_string();
                 return Ok(Some(analysis));
@@ -534,7 +531,7 @@ impl AnalysisCache {
                 return Ok(None);
             }
 
-            let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+            let mut analysis: Detection = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached video data (hash hit)")?;
 
             // Backfill path index
@@ -556,7 +553,7 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database insertion fails.
-    pub fn store_video_analysis(&self, path: &Path, analysis: &VideoDetectionResult) -> Result<()> {
+    pub fn store_video_analysis(&self, path: &Path, analysis: &Detection) -> Result<()> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -571,7 +568,7 @@ impl AnalysisCache {
             "INSERT INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm_version(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
         )?;
         tx.execute(
             "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
@@ -589,10 +586,9 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database deletion fails.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    ///
+    /// Panics if the database schema is corrupted or columns are missing.
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
         let mut client = open_pg_client()?;
         let now = crate::numeric_cast::unix_secs_i64_result()?;
@@ -620,10 +616,9 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    ///
+    /// Panics if the database schema is corrupted or mandatory metadata entries are missing.
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
 
@@ -671,7 +666,7 @@ impl AnalysisCache {
             path_index_entries: crate::numeric_cast::i64_to_usize_sat(path_index_count),
             schema_version,
             algorithm_version_distribution: version_dist,
-            current_algorithm_version: cache_algorithm_version(),
+            current_algorithm_version: cache_algorithm(),
         })
     }
 

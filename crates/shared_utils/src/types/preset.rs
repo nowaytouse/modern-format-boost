@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum EncoderPreset {
+pub enum Preset {
     Ultrafast,
     Fast,
     #[default]
@@ -15,7 +15,7 @@ pub enum EncoderPreset {
     Veryslow,
 }
 
-impl EncoderPreset {
+impl Preset {
     #[must_use]
     pub const fn x26x_name(self) -> &'static str {
         match self {
@@ -72,22 +72,16 @@ pub fn sanitize_hevc_preset_name(preset: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{EncoderPreset, sanitize_hevc_preset_name};
+    use super::{Preset, sanitize_hevc_preset_name};
 
     #[test]
     fn test_hevc_preset_sanitizer_clamps_to_allowed_window() {
-        assert_eq!(
-            EncoderPreset::Ultrafast.sanitize_hevc(),
-            EncoderPreset::Medium
-        );
-        assert_eq!(EncoderPreset::Fast.sanitize_hevc(), EncoderPreset::Medium);
-        assert_eq!(EncoderPreset::Medium.sanitize_hevc(), EncoderPreset::Medium);
-        assert_eq!(EncoderPreset::Slow.sanitize_hevc(), EncoderPreset::Slow);
-        assert_eq!(EncoderPreset::Slower.sanitize_hevc(), EncoderPreset::Slower);
-        assert_eq!(
-            EncoderPreset::Veryslow.sanitize_hevc(),
-            EncoderPreset::Slower
-        );
+        assert_eq!(Preset::Ultrafast.sanitize_hevc(), Preset::Medium);
+        assert_eq!(Preset::Fast.sanitize_hevc(), Preset::Medium);
+        assert_eq!(Preset::Medium.sanitize_hevc(), Preset::Medium);
+        assert_eq!(Preset::Slow.sanitize_hevc(), Preset::Slow);
+        assert_eq!(Preset::Slower.sanitize_hevc(), Preset::Slower);
+        assert_eq!(Preset::Veryslow.sanitize_hevc(), Preset::Slower);
     }
 
     #[test]

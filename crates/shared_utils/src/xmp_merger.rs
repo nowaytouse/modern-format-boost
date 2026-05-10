@@ -69,7 +69,7 @@ pub struct MergeResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct XmpMergerConfig {
+pub struct Config {
     pub delete_xmp_after_merge: bool,
     pub overwrite_mode: OverwriteMode,
     pub preserve_timestamps: bool,
@@ -88,7 +88,7 @@ pub enum LogLevel {
     Verbose, // Corresponds to verbose: true
 }
 
-impl Default for XmpMergerConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
             delete_xmp_after_merge: false,
@@ -100,12 +100,12 @@ impl Default for XmpMergerConfig {
 }
 
 pub struct XmpMerger {
-    config: XmpMergerConfig,
+    config: Config,
 }
 
 impl XmpMerger {
     #[must_use]
-    pub const fn new(config: XmpMergerConfig) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 
@@ -1079,7 +1079,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
                 eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
             }
 
-            let config = XmpMergerConfig {
+            let config = Config {
                 delete_xmp_after_merge: false,
                 overwrite_mode: OverwriteMode::Original,
                 preserve_timestamps: true,
@@ -1136,7 +1136,7 @@ mod tests {
         fs::write(&xmp2, "").unwrap_or_else(|_| panic!("error"));
         fs::write(&jpg, "").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let xmp_files = merger
             .find_xmp_files(temp_dir.path())
             .unwrap_or_else(|_| panic!("error"));
@@ -1153,7 +1153,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let _merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(Config::default());
         let result = XmpMerger::find_direct_match(&xmp);
 
         assert!(result.is_some());
@@ -1169,7 +1169,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
@@ -1185,7 +1185,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let result = merger.find_case_insensitive(&xmp);
 
         assert!(result.is_some());
@@ -1200,7 +1200,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let result = merger.find_fuzzy_match(&xmp);
 
         assert!(result.is_some());
@@ -1226,7 +1226,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
@@ -1242,7 +1242,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
@@ -1258,7 +1258,7 @@ mod tests {
         fs::write(&raw, "fake raw").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let merger = XmpMerger::new(Config::default());
         let (result, strategy) = merger
             .find_media_file(&xmp)
             .unwrap_or_else(|_| panic!("error"));
@@ -1303,7 +1303,7 @@ mod tests {
 <?xpacket end='w'?>";
         fs::write(&xmp_path, xmp_content).unwrap_or_else(|_| panic!("error"));
 
-        let config = XmpMergerConfig {
+        let config = Config {
             log_level: LogLevel::Verbose,
             ..Default::default()
         };
@@ -1336,7 +1336,7 @@ mod tests {
             source: None,
         };
 
-        let _merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(Config::default());
         assert_eq!(XmpMerger::find_by_xmp_metadata(&xmp_path, &xmp_info), None);
     }
 
@@ -1365,7 +1365,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let empty_xmp = temp_dir.path().join("empty.xmp");
         std::fs::write(&empty_xmp, "").unwrap_or_else(|_| panic!("test setup error"));
-        let _merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(Config::default());
 
         let err = XmpMerger::extract_xmp_metadata(&empty_xmp, LogLevel::Verbose)
             .err()

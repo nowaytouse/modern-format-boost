@@ -4,6 +4,7 @@ use crate::builder_base::ToolBuilder;
 use crate::constants;
 use crate::ffmpeg_process::FfmpegProcess;
 pub use crate::types::EncoderPreset;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
@@ -184,13 +185,28 @@ impl StreamType {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfmpegCoreFlags {
+    pub overwrite: bool,
+    pub hide_banner: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfmpegHardwareFlags {
+    pub is_gpu: bool,
+    pub odd_dim_correction: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfmpegFlags {
+    #[serde(flatten)]
+    pub core: FfmpegCoreFlags,
+    #[serde(flatten)]
+    pub hw: FfmpegHardwareFlags,
+}
+
 /// Builder for constructing `ffmpeg` commands.
 #[derive(Debug, Default, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct FfmpegBuilder {
     inputs: Vec<PathBuf>,
     output_target: Option<OutputTarget>,
@@ -203,16 +219,13 @@ pub struct FfmpegBuilder {
     profile: Option<VideoProfile>,
     pix_fmt: Option<PixFmt>,
     threads: Option<usize>,
-    overwrite: bool,
-    hide_banner: bool,
     loglevel: Option<String>,
     map: Vec<String>,
     filter_complex: Option<String>,
     input_args: Vec<String>,
     extra_args: Vec<String>,
-    is_gpu: bool,
     params: FfmpegParams,
-    odd_dim_correction: bool,
+    flags: FfmpegFlags,
 }
 
 impl FfmpegBuilder {
@@ -312,12 +325,12 @@ impl FfmpegBuilder {
     }
 
     pub const fn overwrite(&mut self) -> &mut Self {
-        self.overwrite = true;
+        self.flags.core.overwrite = true;
         self
     }
 
     pub const fn overwrite_bool(&mut self, overwrite: bool) -> &mut Self {
-        self.overwrite = overwrite;
+        self.flags.core.overwrite = overwrite;
         self
     }
 
@@ -338,7 +351,7 @@ impl FfmpegBuilder {
     }
 
     pub const fn use_gpu(&mut self, use_gpu: bool) -> &mut Self {
-        self.is_gpu = use_gpu;
+        self.flags.hw.is_gpu = use_gpu;
         self
     }
 
@@ -353,7 +366,7 @@ impl FfmpegBuilder {
     }
 
     pub const fn hide_banner(&mut self) -> &mut Self {
-        self.hide_banner = true;
+        self.flags.core.hide_banner = true;
         self
     }
 
@@ -385,7 +398,7 @@ impl FfmpegBuilder {
     /// Automatically corrects odd dimensions by scaling to floor(w/2)*2.
     /// Prevents filtergraph crashes with SSIM/VMAF on odd-sized inputs.
     pub const fn with_odd_dim_correction(&mut self) -> &mut Self {
-        self.odd_dim_correction = true;
+        self.flags.hw.odd_dim_correction = true;
         self
     }
 
@@ -470,11 +483,11 @@ impl ToolBuilder for FfmpegBuilder {
 
         let mut cmd = Command::new(self.get_command_name());
 
-        if self.overwrite {
+        if self.flags.core.overwrite {
             cmd.arg(constants::FFMPEG_ARG_OVERWRITE);
         }
 
-        if self.hide_banner {
+        if self.flags.core.hide_banner {
             cmd.arg(constants::FFMPEG_ARG_HIDE_BANNER);
         }
 
@@ -501,19 +514,19 @@ impl ToolBuilder for FfmpegBuilder {
         }
 
         if let Some(mut filter) = self.filter_complex.clone() {
-            if self.odd_dim_correction {
+            if self.flags.hw.odd_dim_correction {
                 // Prepend scaling to align dimensions - standard fix for filter compatibility
                 filter = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,{filter}");
             }
             cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg(filter);
-        } else if self.odd_dim_correction {
+        } else if self.flags.hw.odd_dim_correction {
             cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX)
                 .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2");
         }
 
         if let Some(vcodec) = self.vcodec {
             cmd.arg(constants::FFMPEG_ARG_CODEC_VIDEO);
-            cmd.arg(vcodec.ffmpeg_name(self.is_gpu));
+            cmd.arg(vcodec.ffmpeg_name(self.flags.hw.is_gpu));
         }
 
         if let Some(crf) = self.crf {
@@ -581,23 +594,35 @@ impl ToolBuilder for FfmpegBuilder {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfprobeOutputFlags {
+    pub show_streams: bool,
+    pub show_format: bool,
+    pub show_frames: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfprobeAnalysisFlags {
+    pub count_frames: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FfprobeFlags {
+    #[serde(flatten)]
+    pub output: FfprobeOutputFlags,
+    #[serde(flatten)]
+    pub analysis: FfprobeAnalysisFlags,
+}
+
 /// Builder for constructing `ffprobe` commands.
 #[derive(Debug, Default)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct FfprobeBuilder {
     input: Option<PathBuf>,
-    show_streams: bool,
-    show_format: bool,
-    show_frames: bool,
+    flags: FfprobeFlags,
     show_entries: Option<String>,
     select_streams: Option<String>,
     print_format: Option<String>,
     read_intervals: Option<String>,
-    count_frames: bool,
     loglevel: Option<String>,
     pattern_type: Option<String>,
     extra_args: Vec<String>,
@@ -620,12 +645,12 @@ impl FfprobeBuilder {
     }
 
     pub const fn show_streams(&mut self) -> &mut Self {
-        self.show_streams = true;
+        self.flags.output.show_streams = true;
         self
     }
 
     pub const fn show_format(&mut self) -> &mut Self {
-        self.show_format = true;
+        self.flags.output.show_format = true;
         self
     }
 
@@ -660,12 +685,12 @@ impl FfprobeBuilder {
     }
 
     pub const fn show_frames(&mut self) -> &mut Self {
-        self.show_frames = true;
+        self.flags.output.show_frames = true;
         self
     }
 
     pub const fn count_frames(&mut self) -> &mut Self {
-        self.count_frames = true;
+        self.flags.analysis.count_frames = true;
         self
     }
 
@@ -694,19 +719,19 @@ impl ToolBuilder for FfprobeBuilder {
     fn build(&self) -> Command {
         let mut cmd = Command::new(self.get_command_name());
 
-        if self.show_streams {
+        if self.flags.output.show_streams {
             cmd.arg(constants::FFPROBE_ARG_SHOW_STREAMS);
         }
 
-        if self.show_format {
+        if self.flags.output.show_format {
             cmd.arg(constants::FFPROBE_ARG_SHOW_FORMAT);
         }
 
-        if self.show_frames {
+        if self.flags.output.show_frames {
             cmd.arg(constants::FFPROBE_ARG_SHOW_FRAMES);
         }
 
-        if self.count_frames {
+        if self.flags.analysis.count_frames {
             cmd.arg(constants::FFPROBE_ARG_COUNT_FRAMES);
         }
 

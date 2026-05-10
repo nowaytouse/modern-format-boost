@@ -7,7 +7,7 @@
 //!
 //! # Usage
 //! ```no_run
-//! use shared_utils::checkpoint::{CheckpointManager, safe_delete_original};
+//! use shared_utils::checkpoint::{Manager, safe_delete_original};
 //! use shared_utils::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 //! use std::path::Path;
 //!
@@ -18,7 +18,7 @@
 //!     let output = Path::new("/tmp/test/output.jxl");
 //!
 //!     // Initialize checkpoint for a directory
-//!     let mut checkpoint = CheckpointManager::new(target_dir)?;
+//!     let mut checkpoint = Manager::new(target_dir)?;
 //!
 //!     // Check if file was already processed
 //!     if !checkpoint.is_completed(&file_path) {
@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm_version};
+use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
 
 /// The central location for all MFB progress tracking to avoid polluting user directories.
 fn get_central_progress_dir() -> PathBuf {
@@ -131,7 +131,7 @@ impl CheckpointEntry {
         });
 
         Ok(Self {
-            path: CheckpointManager::normalize_path(path),
+            path: Manager::normalize_path(path),
             size,
             mtime,
             ctime,
@@ -158,9 +158,9 @@ impl CheckpointHeader {
     fn new(target_dir: &Path, output_root: Option<&Path>) -> Self {
         Self {
             format_version: CHECKPOINT_FORMAT_VERSION,
-            target_dir: CheckpointManager::normalize_path(target_dir),
-            output_root: output_root.map(CheckpointManager::normalize_path),
-            cache_algorithm_version: cache_algorithm_version(),
+            target_dir: Manager::normalize_path(target_dir),
+            output_root: output_root.map(Manager::normalize_path),
+            cache_algorithm_version: cache_algorithm(),
             cache_schema_version: CACHE_SCHEMA_VERSION,
             created_at: current_unix_secs(),
         }
@@ -400,7 +400,7 @@ fn get_hostname() -> String {
 
 use std::sync::Mutex;
 
-pub struct CheckpointManager {
+pub struct Manager {
     progress_dir: PathBuf,
     lock_file: PathBuf,
     progress_file: PathBuf,
@@ -409,7 +409,7 @@ pub struct CheckpointManager {
     resume_mode: AtomicBool,
 }
 
-impl CheckpointManager {
+impl Manager {
     /// # Errors
     ///
     /// Returns an error if the progress directory cannot be created or if initialization fails.
@@ -1003,7 +1003,7 @@ impl CheckpointManager {
     }
 }
 
-impl Drop for CheckpointManager {
+impl Drop for Manager {
     fn drop(&mut self) {
         if let Err(err) = self.release_lock() {
             eprintln!(
@@ -1107,7 +1107,7 @@ mod tests {
     #[test]
     fn test_checkpoint_new_creates_progress_dir() -> anyhow::Result<()> {
         let (target, progress, guard) = setup_test_env()?;
-        let checkpoint = CheckpointManager::new(target.path())?;
+        let checkpoint = Manager::new(target.path())?;
         assert!(checkpoint.progress_dir().exists());
         assert!(progress.path().exists());
         teardown_test_env(guard);
@@ -1119,7 +1119,7 @@ mod tests {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target)?;
+        let checkpoint = Manager::new(target)?;
 
         let file1 = target.join("test1.mp4");
         let file2 = target.join("test2.mp4");
@@ -1150,7 +1150,7 @@ mod tests {
         let target = temp.path();
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
             let _ = create_test_file(&target.join("file1.mp4"));
             let _ = create_test_file(&target.join("file2.mp4"));
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
@@ -1158,7 +1158,7 @@ mod tests {
         }
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
 
             assert!(checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 2);
@@ -1175,7 +1175,7 @@ mod tests {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target)?;
+        let checkpoint = Manager::new(target)?;
         create_test_file(&target.join("file1.mp4"))?;
         create_test_file(&target.join("file2.mp4"))?;
         checkpoint.mark_completed(&target.join("file1.mp4"))?;
@@ -1195,7 +1195,7 @@ mod tests {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target)?;
+        let checkpoint = Manager::new(target)?;
         assert!(!checkpoint.is_resume_mode());
         create_test_file(&target.join("file1.mp4"))?;
 
@@ -1213,14 +1213,14 @@ mod tests {
         let missing_output = target.join("deleted_optimized");
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
             let _ = create_test_file(&target.join("file1.mp4"));
             let _ = create_test_file(&target.join("file2.mp4"));
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
             checkpoint.mark_completed(&target.join("file2.mp4"))?;
         }
 
-        let checkpoint = CheckpointManager::new(target)?;
+        let checkpoint = Manager::new(target)?;
         assert!(checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 2);
 
@@ -1244,11 +1244,11 @@ mod tests {
         create_test_file(&input)?;
 
         {
-            let checkpoint = CheckpointManager::new_with_context(target, Some(&output_a))?;
+            let checkpoint = Manager::new_with_context(target, Some(&output_a))?;
             checkpoint.mark_completed(&input)?;
         }
 
-        let checkpoint = CheckpointManager::new_with_context(target, Some(&output_b))?;
+        let checkpoint = Manager::new_with_context(target, Some(&output_b))?;
         assert!(!checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 0);
         teardown_test_env(guard);
@@ -1264,14 +1264,14 @@ mod tests {
         fs::write(&input, b"aaaaaaaaaaaaaaa")?;
 
         {
-            let checkpoint = CheckpointManager::new_with_context(target, Some(&output))?;
+            let checkpoint = Manager::new_with_context(target, Some(&output))?;
             checkpoint.mark_completed(&input)?;
         }
 
         std::thread::sleep(Duration::from_millis(2));
         fs::write(&input, b"bbbbbbbbbbbbbbb")?;
 
-        let checkpoint = CheckpointManager::new_with_context(target, Some(&output))?;
+        let checkpoint = Manager::new_with_context(target, Some(&output))?;
         assert!(!checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 0);
         assert!(!checkpoint.is_completed(&input));
@@ -1287,7 +1287,7 @@ mod tests {
         let (progress_temp, _, guard) = setup_test_env()?;
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
             checkpoint.acquire_lock()?;
             create_test_file(&target.join("file1.mp4"))?;
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
@@ -1305,7 +1305,7 @@ mod tests {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target)?;
+        let checkpoint = Manager::new(target)?;
 
         assert!(checkpoint.check_lock()?.is_none());
 
@@ -1425,7 +1425,7 @@ mod tests {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
             checkpoint.acquire_lock()?;
 
             for file in files.iter().take(2) {
@@ -1436,7 +1436,7 @@ mod tests {
         }
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
 
             assert!(checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 2);
@@ -1463,7 +1463,7 @@ mod tests {
         }
 
         {
-            let checkpoint = CheckpointManager::new(target)?;
+            let checkpoint = Manager::new(target)?;
             assert!(!checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 0);
         }

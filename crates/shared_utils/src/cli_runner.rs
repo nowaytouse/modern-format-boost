@@ -1,9 +1,9 @@
-use crate::batch::{BatchPauseController, BatchResult, disk_full_pause_reason};
+use crate::batch::{PauseController, Summary, disk_full_pause_reason};
 use crate::common_utils::has_extension;
 use crate::file_copier::{
     SUPPORTED_VIDEO_EXTENSIONS, copy_unsupported_files, verify_output_completeness,
 };
-use crate::report::print_summary_report;
+use crate::report::print_summary;
 use crate::smart_file_copier::fix_extension_if_mismatch;
 use anyhow::Result;
 use log::{error, info, warn};
@@ -25,16 +25,15 @@ pub trait CliProcessingResult {
     fn blake3(&self) -> Option<&str>;
 }
 
-impl CliProcessingResult for crate::conversion::ConversionResult {
+impl CliProcessingResult for crate::conversion::TaskResult {
     fn is_skipped(&self) -> bool {
         matches!(
             self.outcome(),
-            crate::conversion::ConversionOutcome::Skipped
-                | crate::conversion::ConversionOutcome::FallbackPreserved
+            crate::conversion::Outcome::Skipped | crate::conversion::Outcome::FallbackPreserved
         )
     }
     fn is_success(&self) -> bool {
-        self.outcome() == crate::conversion::ConversionOutcome::Converted
+        self.outcome() == crate::conversion::Outcome::Converted
     }
     fn skip_reason(&self) -> Option<&str> {
         self.skip_reason.as_deref()
@@ -59,7 +58,7 @@ impl CliProcessingResult for crate::conversion::ConversionResult {
     }
 }
 
-pub struct CliRunnerConfig {
+pub struct Config {
     pub input: PathBuf,
     pub output: Option<PathBuf>,
     pub recursive: bool,
@@ -90,7 +89,7 @@ pub fn resolve_video_run_base_dir(
 ///
 /// # Errors
 /// Returns an error if command execution or file processing fails.
-pub fn run_auto_command<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
+pub fn run_auto_command<F, R>(config: &Config, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
@@ -107,7 +106,7 @@ where
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-fn process_directory<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
+fn process_directory<F, R>(config: &Config, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
@@ -167,10 +166,7 @@ where
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
     // Initialize checkpoint manager if resume is enabled
     let checkpoint = if config.resume {
-        match crate::checkpoint::CheckpointManager::new_with_context(
-            input,
-            config.output.as_deref(),
-        ) {
+        match crate::checkpoint::Manager::new_with_context(input, config.output.as_deref()) {
             Ok(cp) => {
                 // Detect when user deleted the output directory to start fresh:
                 // clear old checkpoint state so all files get reprocessed.
@@ -243,7 +239,7 @@ where
 
     let start_time = Instant::now();
     let total_files = files.len();
-    let pause_controller = Arc::new(BatchPauseController::new());
+    let pause_controller = Arc::new(PauseController::new());
     let fatal_stop = AtomicBool::new(false);
     let progress_bar = Arc::new(crate::CoarseProgressBar::new(
         crate::numeric_cast::usize_to_u64(total_files),
@@ -533,7 +529,7 @@ where
         });
     });
 
-    let mut batch_result = BatchResult::new();
+    let mut batch_result = Summary::new();
     batch_result.succeeded = succeeded.load(Ordering::Relaxed);
     batch_result.failed = failed.load(Ordering::Relaxed);
     batch_result.skipped = skipped.load(Ordering::Relaxed);
@@ -573,7 +569,7 @@ where
         }
     }
 
-    print_summary_report(
+    print_summary(
         &batch_result,
         start_time.elapsed(),
         total_input_bytes.load(Ordering::Relaxed),
@@ -609,7 +605,7 @@ where
 
         if let Some(ref base_dir) = config.base_dir {
             info!("\n📁 Preserving directory metadata...");
-            if let Err(e) = crate::metadata::preserve_directory_metadata(base_dir, output_dir) {
+            if let Err(e) = crate::metadata::preserve_directory(base_dir, output_dir) {
                 error!("Metadata: Failed to sync directory timestamps/permissions: {e}");
             } else {
                 info!("✅ Directory metadata preserved");
@@ -619,7 +615,7 @@ where
 
     Ok(())
 }
-fn process_single_file<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
+fn process_single_file<F, R>(config: &Config, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,

@@ -1,5 +1,5 @@
 use crate::media_index_types::MediaIndexRow;
-use crate::video_detection::{DetectedCodec, VideoDetectionResult};
+use crate::video_detection::{DetectedCodec, Detection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,12 +18,12 @@ pub struct VideoRecommendation {
 pub fn get_video_recommendation_from_row(
     row: &MediaIndexRow,
 ) -> Result<VideoRecommendation, serde_json::Error> {
-    let features: VideoDetectionResult = serde_json::from_str(&row.raw_features_json)?;
+    let features: Detection = serde_json::from_str(&row.raw_features_json)?;
 
     Ok(generate_video_recommendation(&features))
 }
 
-fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecommendation {
+fn generate_video_recommendation(features: &Detection) -> VideoRecommendation {
     let mut recommended_codec = features.codec.as_str().to_string();
     let mut reason = "Current codec is optimal or sufficient".to_string();
     let mut is_archival_upgrade = false;

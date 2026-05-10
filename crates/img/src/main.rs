@@ -15,8 +15,7 @@ use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
-    BatchPauseController, BatchResult, check_dangerous_directory, disk_full_pause_reason,
-    print_summary_report,
+    PauseController, Summary, check_dangerous_directory, disk_full_pause_reason, print_summary,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -83,7 +82,7 @@ enum Commands {
         preserve_timestamps: bool,
 
         #[arg(long, default_value_t = true)]
-        preserve_metadata: bool,
+        preserve: bool,
 
         #[arg(short, long)]
         verbose: bool,
@@ -149,8 +148,7 @@ fn main() -> anyhow::Result<()> {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
     }
 
-    if let Err(e) =
-        shared_utils::logging::init_logging("img", &shared_utils::logging::LogConfig::default())
+    if let Err(e) = shared_utils::logging::init("img", &shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
@@ -229,7 +227,7 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             preserve_timestamps,
-            preserve_metadata,
+            preserve,
             verbose,
 
             base_dir,
@@ -258,10 +256,12 @@ fn main() -> anyhow::Result<()> {
 
             let flag_mode =
                 match shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
-                    explore,
-                    match_quality,
-                    compress,
-                    ultimate,
+                    base: shared_utils::FlagBase {
+                        explore,
+                        match_quality,
+                        compress,
+                    },
+                    tier: shared_utils::FlagTier { ultimate },
                 }) {
                     Ok(mode) => mode,
                     Err(e) => {
@@ -271,9 +271,7 @@ fn main() -> anyhow::Result<()> {
                 };
 
             // Fail-fast if critical sub-tools are missing
-            if let Err(e) =
-                shared_utils::tools::require_tools(&["cjxl", "djxl", "exiftool", "ffmpeg"])
-            {
+            if let Err(e) = shared_utils::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]) {
                 shared_utils::log_eprintln!("{e}");
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
@@ -356,7 +354,7 @@ fn main() -> anyhow::Result<()> {
                         } else {
                             ConfigFlags::empty()
                         }
-                        | if preserve_metadata {
+                        | if preserve {
                             ConfigFlags::PRESERVE_METADATA
                         } else {
                             ConfigFlags::empty()
@@ -700,11 +698,6 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 /// Print image analysis in human-readable format.
 /// Currently unused but kept for potential future CLI output mode.
 #[derive(Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
@@ -763,7 +756,7 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
 
 use img::conversion_api::ConversionOutput;
 
-fn convert_result_to_output(result: shared_utils::ConversionResult) -> ConversionOutput {
+fn convert_result_to_output(result: shared_utils::TaskResult) -> ConversionOutput {
     let input_path = result.input_path.clone();
     ConversionOutput {
         original_path: result.input_path,
@@ -828,7 +821,7 @@ fn auto_convert_single_file(
     // Check for Live Photos first (before any analysis)
     // Only skip in Apple compat mode to preserve the pair association.
     // In normal mode, we treat the HEIC as a regular image to be upgraded.
-    if config.apple_compat() && shared_utils::is_live_photo(input) {
+    if config.apple_compat() && shared_utils::live_photo::is_live(input) {
         let reason =
             "Live Photo detected in Apple compat mode - skipping to preserve pair (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
@@ -1039,7 +1032,7 @@ fn dispatch_static_conversion(
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
     options: &img::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
-) -> anyhow::Result<shared_utils::ConversionResult> {
+) -> anyhow::Result<shared_utils::TaskResult> {
     use img::lossless_converter::{convert_jpeg_to_jxl, convert_to_jxl};
 
     let format = analysis.format.as_str();
@@ -1203,7 +1196,7 @@ fn auto_convert_directory(
         if let Some(output_dir) = config.output_dir.as_ref()
             && let Some(ref base_dir) = config.base_dir
         {
-            shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
+            shared_utils::preserve_directory_with_log(base_dir, output_dir);
         }
 
         return Ok(());
@@ -1218,7 +1211,7 @@ fn auto_convert_directory(
 
     // Initialize checkpoint manager for resume/progress tracking
     let checkpoint = if resume {
-        match shared_utils::checkpoint::CheckpointManager::new_with_context(
+        match shared_utils::checkpoint::Manager::new_with_context(
             input,
             config.output_dir.as_deref(),
         ) {
@@ -1297,7 +1290,7 @@ fn auto_convert_directory(
     let processed = AtomicUsize::new(0);
     let actual_input_bytes = core::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = core::sync::atomic::AtomicU64::new(0);
-    let pause_controller = Arc::new(BatchPauseController::new());
+    let pause_controller = Arc::new(PauseController::new());
 
     shared_utils::progress_mode::enable_quiet_mode();
     let progress_bar = Arc::new(shared_utils::CoarseProgressBar::new(
@@ -1413,12 +1406,10 @@ fn auto_convert_directory(
                                 continue;
                             }
 
-                            #[allow(clippy::option_if_let_else)]
-                            let is_skip = if let Some(ue) = e.downcast_ref::<shared_utils::unified_error::UnifiedError>() {
-                                ue.is_skip()
-                            } else {
-                                err_str.contains("Skipped") || err_str.contains("already optimized")
-                            };
+                            let is_skip = e.downcast_ref::<shared_utils::unified_error::UnifiedError>().map_or_else(
+                                || err_str.contains("Skipped") || err_str.contains("already optimized"),
+                                shared_utils::unified_error::UnifiedError::is_skip
+                            );
 
                             if is_skip {
                                 shared_utils::log_eprintln!(
@@ -1494,7 +1485,7 @@ fn auto_convert_directory(
     let ignored_count = ignored.load(Ordering::Relaxed);
     let processed_count = processed.load(Ordering::Relaxed);
 
-    let mut result = BatchResult::new();
+    let mut result = Summary::new();
     result.succeeded = success_count;
     result.failed = failed_count;
     result.skipped = skipped_count;
@@ -1511,7 +1502,7 @@ fn auto_convert_directory(
     let final_input_bytes = actual_input_bytes.load(Ordering::Relaxed);
     let final_output_bytes = actual_output_bytes.load(Ordering::Relaxed);
 
-    print_summary_report(
+    print_summary(
         &result,
         start_time.elapsed(),
         final_input_bytes,
@@ -1551,7 +1542,7 @@ fn auto_convert_directory(
         && let Some(ref output_dir) = config.output_dir
         && let Some(ref base_dir) = config.base_dir
     {
-        shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
+        shared_utils::preserve_directory_with_log(base_dir, output_dir);
     }
 
     if let Some(ref saved) = saved_dir_timestamps {

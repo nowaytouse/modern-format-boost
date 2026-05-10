@@ -116,7 +116,6 @@ mod test_utils {
         gif
     }
 
-    #[allow(dead_code)]
     pub fn create_animated_webp() -> Vec<u8> {
         let mut webp = Vec::new();
         // RIFF header
@@ -126,7 +125,7 @@ mod test_utils {
         // VP8X chunk (for animation)
         webp.extend_from_slice(b"VP8X");
         webp.extend_from_slice(&[0x0C, 0x00, 0x00, 0x00]); // chunk size
-        webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // flags (animation)
+        webp.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // flags (animation bit 1 set)
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // width
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // height
         // ANIM chunk
@@ -262,6 +261,35 @@ fn test_webp_processing_flow() -> Result<()> {
     );
 
     println!("✅ WebP processing flow test passed");
+    Ok(())
+}
+
+#[test]
+fn test_animated_webp_processing_flow() -> Result<()> {
+    use test_utils::*;
+
+    println!("🎬 Testing animated WebP processing flow...");
+
+    let webp_data = create_animated_webp();
+    let codec = SourceCodec::identify_by_header(&webp_data);
+    assert_eq!(
+        codec,
+        Some(SourceCodec::WebpAnimated),
+        "Should be identified as animated WebP codec"
+    );
+
+    let temp_file = NamedTempFile::new()?;
+    write_test_file(&webp_data, temp_file.path())?;
+
+    // Verify WebP-specific processing
+    let file_data = fs::read(temp_file.path())?;
+    assert!(file_data.starts_with(b"RIFF"), "Should start with RIFF");
+    assert!(
+        file_data[8..12].starts_with(b"WEBP"),
+        "Should contain WEBP identifier"
+    );
+
+    println!("✅ Animated WebP processing flow test passed");
     Ok(())
 }
 

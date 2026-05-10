@@ -33,9 +33,14 @@ fn main() {
         file_size_bytes: 500_000,
         file_name: Some("test_file.gif".to_string()),
         source_extension: Some("gif".to_string()),
-        has_audio: false,
-        has_transparency: true,
-        is_native_gif: true,
+        flags: shared_utils::loop_intent::LoopFlags {
+            streams: shared_utils::loop_intent::LoopStreamFlags {
+                has_audio: false,
+                has_transparency: true,
+                is_native_gif: true,
+            },
+            ..Default::default()
+        },
         ..Default::default()
     };
 

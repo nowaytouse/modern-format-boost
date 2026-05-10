@@ -104,31 +104,31 @@ pub(crate) fn calculate_categorical_features(
 
     (
         cat(
-            sample.is_meme_platform,
+            sample.flags.meme.is_meme_platform,
             crate::constants::KNN_VECTOR_CAT_MEME_WEIGHT,
         ),
         cat(
-            sample.is_human_semantic_name,
+            sample.flags.meme.is_human_semantic_name,
             crate::constants::KNN_VECTOR_CAT_NAME_WEIGHT,
         ),
         cat(
-            sample.is_native_gif,
+            sample.flags.streams.is_native_gif,
             crate::constants::KNN_VECTOR_CAT_NATIVE_WEIGHT,
         ),
         cat(
-            sample.is_high_value_source,
+            sample.flags.source.is_high_value_source,
             crate::constants::KNN_VECTOR_CAT_HIGH_VALUE_WEIGHT,
         ),
         cat(
-            sample.has_transparency,
+            sample.flags.streams.has_transparency,
             crate::constants::KNN_VECTOR_CAT_TRANS_WEIGHT,
         ),
         cat(
-            sample.has_embedded_icc,
+            sample.flags.color.has_embedded_icc,
             crate::constants::KNN_VECTOR_CAT_ICC_WEIGHT / 2.0_f64,
         ),
         cat(
-            sample.has_complex_color_profile,
+            sample.flags.color.has_complex_color_profile,
             crate::constants::KNN_VECTOR_CAT_COMPLEX_WEIGHT / 2.0_f64,
         ),
     )
@@ -152,7 +152,7 @@ pub(crate) fn calculate_extended_features(
             .map(|w| w.max(crate::constants::KNN_VECTOR_MIN_WEIGHT))
     };
 
-    let sample_audio_score = if sample.is_native_gif {
+    let sample_audio_score = if sample.flags.streams.is_native_gif {
         1.0_f64
     } else {
         crate::constants::KNN_VECTOR_DEFAULT_AUDIO_SCORE

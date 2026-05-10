@@ -43,7 +43,7 @@ pub struct ImageQualityAnalysis {
     pub history: crate::types::ProcessHistory,
 
     /// Visual perception data (Auxiliary analysis)
-    pub perception: crate::types::VisualPerception,
+    pub perception: crate::types::Visual,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -243,7 +243,7 @@ pub fn analyze_image_quality(
         confidence,
         precision,
         history: crate::common_utils::get_current_history(),
-        perception: crate::types::VisualPerception::default(),
+        perception: crate::types::Visual::default(),
     })
 }
 

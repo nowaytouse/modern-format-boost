@@ -1,3 +1,4 @@
+#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
@@ -22,7 +23,7 @@ pub mod detection_api;
 pub use analyzer::{ImageAnalysis, analyze_image};
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
-pub use lossless_converter::{ConversionResult, ConvertFlags, ConvertOptions};
+pub use lossless_converter::{ConvertFlags, ConvertOptions, TaskResult};
 pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,

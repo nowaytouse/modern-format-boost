@@ -7,7 +7,7 @@
 //! - Main Criterion: `output_video_stream_size < input_video_stream_size + DEFAULT_SIZE_TOLERANCE_BYTES`
 //! - As long as the pure video stream shrinks or increases slightly (less than the standard tolerance), it's considered a success, regardless of total file size.
 
-use crate::stream_size::StreamSizeInfo;
+use crate::stream_size::Info;
 #[cfg(feature = "high-precision")]
 use rug::Rational;
 
@@ -115,8 +115,8 @@ impl PureMediaVerifyResult {
 
 #[must_use]
 pub fn verify_pure_media_compression(
-    input_info: &StreamSizeInfo,
-    output_info: &StreamSizeInfo,
+    input_info: &Info,
+    output_info: &Info,
     allow_size_tolerance: bool,
 ) -> PureMediaVerifyResult {
     let input_video = input_info.video_stream_size;
@@ -182,8 +182,8 @@ mod tests {
     use super::*;
     use crate::stream_size::ExtractionMethod;
 
-    fn make_stream_info(video: u64, audio: u64, overhead: u64) -> StreamSizeInfo {
-        StreamSizeInfo {
+    fn make_stream_info(video: u64, audio: u64, overhead: u64) -> Info {
+        Info {
             video_stream_size: video,
             audio_stream_size: audio,
             total_file_size: video + audio + overhead,
@@ -309,8 +309,8 @@ mod prop_tests {
     use crate::stream_size::ExtractionMethod;
     use proptest::prelude::*;
 
-    fn make_stream_info(video: u64, audio: u64, overhead: u64) -> StreamSizeInfo {
-        StreamSizeInfo {
+    fn make_stream_info(video: u64, audio: u64, overhead: u64) -> Info {
+        Info {
             video_stream_size: video,
             audio_stream_size: audio,
             total_file_size: video + audio + overhead,

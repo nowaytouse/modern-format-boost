@@ -8,9 +8,22 @@ APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ROOT="$(dirname "$APP_DIR")"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
+
+# Dynamically discover Homebrew prefix to ensure tools are found when launched from Finder
+BREW_PREFIX=""
+if [[ -x "/opt/homebrew/bin/brew" ]]; then
+    BREW_PREFIX="/opt/homebrew"
+elif [[ -x "/usr/local/bin/brew" ]]; then
+    BREW_PREFIX="/usr/local"
+fi
+
+if [[ -n "$BREW_PREFIX" ]]; then
+    export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:$PATH"
+fi
+
 PROCESSOR_SCRIPT="$PROJECT_ROOT/crates/dev/scripts/drag_and_drop_processor.py"
 PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
-APP_PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+APP_PATH="$HOME/.cargo/bin:$PATH:/usr/bin:/bin:/usr/sbin:/sbin"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
     if command -v python3 >/dev/null 2>&1; then

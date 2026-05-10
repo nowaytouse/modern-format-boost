@@ -13,12 +13,12 @@ pub const SSIM_MAX: f64 = crate::constants::SSIM_MAX;
 pub const SSIM_DISPLAY_PRECISION: usize = crate::constants::SSIM_DISPLAY_PRECISION_FULL;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SsimError {
+pub enum Error {
     OutOfRange { value: f64 },
     InvalidFloat,
 }
 
-impl fmt::Display for SsimError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OutOfRange { value } => {
@@ -31,7 +31,7 @@ impl fmt::Display for SsimError {
     }
 }
 
-impl std::error::Error for SsimError {}
+impl std::error::Error for Error {}
 
 #[derive(Clone, Copy)]
 pub struct Ssim(f64);
@@ -45,13 +45,13 @@ impl Ssim {
     ///
     /// # Errors
     /// Returns an error if the value is out of range.
-    pub fn new(value: f64) -> Result<Self, SsimError> {
+    pub fn new(value: f64) -> Result<Self, Error> {
         if value.is_nan() || value.is_infinite() {
-            return Err(SsimError::InvalidFloat);
+            return Err(Error::InvalidFloat);
         }
 
         if !(SSIM_MIN..=SSIM_MAX).contains(&value) {
-            return Err(SsimError::OutOfRange { value });
+            return Err(Error::OutOfRange { value });
         }
 
         Ok(Self(value))

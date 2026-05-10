@@ -101,7 +101,7 @@ pub fn decode_hdr_image_to_png16(
 
 /// Check if an image should use HDR decoding path based on analysis.
 /// Returns true if the image has HDR metadata or high bit depth.
-pub fn needs_hdr_decode(hdr_info: Option<&ColorInfo>) -> bool {
+pub fn needs_decode(hdr_info: Option<&ColorInfo>) -> bool {
     hdr_info.is_some_and(should_use_hdr_decode)
 }
 
@@ -110,20 +110,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_needs_hdr_decode() {
+    fn test_needs_decode() {
         let hdr_info = ColorInfo {
             bit_depth: Some(10),
             color_transfer: Some("smpte2084".to_string()),
             ..Default::default()
         };
-        assert!(needs_hdr_decode(Some(&hdr_info)));
+        assert!(needs_decode(Some(&hdr_info)));
 
         let sdr_info = ColorInfo {
             bit_depth: Some(8),
             ..Default::default()
         };
-        assert!(!needs_hdr_decode(Some(&sdr_info)));
+        assert!(!needs_decode(Some(&sdr_info)));
 
-        assert!(!needs_hdr_decode(None));
+        assert!(!needs_decode(None));
     }
 }

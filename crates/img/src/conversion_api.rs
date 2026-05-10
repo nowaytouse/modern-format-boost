@@ -206,17 +206,20 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("AVIF");
 
-            #[allow(clippy::option_if_let_else)]
-            let (quality_arg, reason) = if let Some(q) = detection.estimated_quality {
-                (
-                    format!(" -q {q}"),
-                    format!(
-                        "Static lossy image (non-JPEG), recommend AVIF (quality matched to {q})"
-                    ),
-                )
-            } else {
-                (String::new(), "Static lossy image (non-JPEG), quality estimation failed; recommend AVIF (using encoder defaults)".to_string())
-            };
+            let (quality_arg, reason) = detection.estimated_quality.map_or_else(
+                || {
+                    (
+                        String::new(),
+                        "Static lossy image (non-JPEG), quality estimation failed; recommend AVIF (using encoder defaults)".to_string(),
+                    )
+                },
+                |q| {
+                    (
+                        format!(" -q {q}"),
+                        format!("Static lossy image (non-JPEG), recommend AVIF (quality matched to {q})"),
+                    )
+                },
+            );
 
             Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
@@ -624,11 +627,11 @@ fn convert_to_avif(
 }
 
 fn preserve_timestamps(source: &Path, dest: &Path) {
-    shared_utils::copy_metadata(source, dest);
+    shared_utils::copy(source, dest);
 }
 
 fn preserve_metadata(source: &Path, dest: &Path) {
-    shared_utils::metadata::copy_metadata(source, dest);
+    shared_utils::metadata::copy(source, dest);
 }
 
 /// Deep-analysis based conversion with intelligent parameter matching.

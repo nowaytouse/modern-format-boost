@@ -847,10 +847,9 @@ pub fn try_imagemagick_fallback(
 ///
 /// # Errors
 /// Returns an I/O error if the file cannot be processed.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if the byte range validation fails unexpectedly despite earlier boundary checks.
 pub fn strip_jpeg_tail_to_temp(
     path: &Path,
 ) -> std::io::Result<Option<(std::path::PathBuf, tempfile::NamedTempFile)>> {

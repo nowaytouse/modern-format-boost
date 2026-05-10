@@ -18,7 +18,7 @@ mod network;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub use exif::preserve_internal_metadata;
+pub use exif::preserve_internal;
 #[cfg(target_os = "macos")]
 pub use macos::append_mfb_branding;
 
@@ -152,7 +152,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             copy_xattrs_manual(src, dst);
         }
         // ExifTool: EXIF/IPTC/XMP internal tags
-        if let Err(e) = exif::preserve_internal_metadata(src, dst) {
+        if let Err(e) = exif::preserve_internal(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {e}");
         }
         // Network xattrs — copy + verify
@@ -174,7 +174,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
         // ExifTool: EXIF/IPTC/XMP internal tags
-        if let Err(e) = exif::preserve_internal_metadata(src, dst) {
+        if let Err(e) = exif::preserve_internal(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
         // Network xattrs — copy + verify
@@ -212,7 +212,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
 ///
 /// # Errors
 /// Returns an `io::Result` if preservation fails.
-pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+pub fn preserve(src: &Path, dst: &Path) -> io::Result<()> {
     preserve_pro(src, dst)
 }
 
@@ -221,8 +221,8 @@ pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) {
     merge_xmp_sidecar(src, dst);
 }
 
-pub fn copy_metadata(src: &Path, dst: &Path) {
-    if let Err(e) = preserve_metadata(src, dst) {
+pub fn copy(src: &Path, dst: &Path) {
+    if let Err(e) = preserve(src, dst) {
         eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
     merge_xmp_sidecar(src, dst);
@@ -233,7 +233,7 @@ pub fn copy_metadata(src: &Path, dst: &Path) {
 ///
 /// # Errors
 /// Returns an `io::Result` if preservation fails.
-pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
     use std::collections::HashMap;
 
     let mut dir_metadata: HashMap<std::path::PathBuf, std::fs::Metadata> = HashMap::new();
@@ -330,9 +330,9 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
     Ok(())
 }
 
-pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) {
+pub fn preserve_directory_with_log(base_dir: &Path, output_dir: &Path) {
     println!("\n📁 Preserving directory metadata...");
-    if let Err(e) = preserve_directory_metadata(base_dir, output_dir) {
+    if let Err(e) = preserve_directory(base_dir, output_dir) {
         eprintln!("⚠️ Failed to preserve directory metadata: {e}");
     } else {
         println!("✅ Directory metadata preserved");
@@ -635,7 +635,7 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
             eprintln!("📋 Found XMP sidecar: {}", xmp.display());
         }
 
-        let config = crate::xmp_merger::XmpMergerConfig {
+        let config = crate::xmp_merger::Config {
             delete_xmp_after_merge: false,
             overwrite_mode: crate::xmp_merger::OverwriteMode::Original,
             preserve_timestamps: true,

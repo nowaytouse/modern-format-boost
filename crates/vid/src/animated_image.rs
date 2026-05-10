@@ -2,7 +2,7 @@
 
 use crate::{Rational, Result, VidQualityError};
 use shared_utils::ToolBuilder;
-use shared_utils::conversion::{ConversionResult, ConvertOptions};
+use shared_utils::conversion::{ConvertOptions, TaskResult};
 use std::fs;
 use std::path::Path;
 
@@ -581,8 +581,8 @@ fn skipped_with_fallback(
     options: &ConvertOptions,
     message: &str,
     reason_id: &str,
-) -> ConversionResult {
-    ConversionResult::skipped_with_fallback(input, options, message, reason_id)
+) -> TaskResult {
+    TaskResult::skipped_with_fallback(input, options, message, reason_id)
 }
 
 fn skipped_with_fallback_owned(
@@ -590,8 +590,8 @@ fn skipped_with_fallback_owned(
     options: &ConvertOptions,
     message: String,
     reason_id: String,
-) -> ConversionResult {
-    ConversionResult::skipped_with_fallback_owned(input, options, message, reason_id)
+) -> TaskResult {
+    TaskResult::skipped_with_fallback_owned(input, options, message, reason_id)
 }
 
 fn failed_with_fallback(
@@ -599,8 +599,8 @@ fn failed_with_fallback(
     options: &ConvertOptions,
     message: &str,
     reason_id: &str,
-) -> ConversionResult {
-    ConversionResult::failed_with_fallback(input, options, message, reason_id)
+) -> TaskResult {
+    TaskResult::failed_with_fallback(input, options, message, reason_id)
 }
 
 fn failed_with_fallback_owned(
@@ -608,8 +608,8 @@ fn failed_with_fallback_owned(
     options: &ConvertOptions,
     message: String,
     reason_id: String,
-) -> ConversionResult {
-    ConversionResult::failed_with_fallback_owned(input, options, message, reason_id)
+) -> TaskResult {
+    TaskResult::failed_with_fallback_owned(input, options, message, reason_id)
 }
 
 /// Get the dimensions of an input video file.
@@ -639,8 +639,8 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
         || total_pixels >= shared_utils::constants::HQ_PIX_COUNT_HD
 }
 
-fn skipped_already_processed(input: &Path, options: &ConvertOptions) -> ConversionResult {
-    shared_utils::ConversionResult::skipped_with_fallback(
+fn skipped_already_processed(input: &Path, options: &ConvertOptions) -> TaskResult {
+    shared_utils::TaskResult::skipped_with_fallback(
         input,
         options,
         "Skipped: Already processed",
@@ -648,8 +648,8 @@ fn skipped_already_processed(input: &Path, options: &ConvertOptions) -> Conversi
     )
 }
 
-fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> ConversionResult {
-    ConversionResult::skipped_exists(input, output)
+fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> TaskResult {
+    TaskResult::skipped_exists(input, output)
 }
 
 /// Return true when the input is either a native GIF or a GIF-like silent loop
@@ -698,8 +698,8 @@ fn is_static_animated_image(path: &Path) -> bool {
     false
 }
 
-fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> ConversionResult {
-    shared_utils::ConversionResult::skipped_with_fallback(
+fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> TaskResult {
+    shared_utils::TaskResult::skipped_with_fallback(
         input,
         options,
         "Skipped: Static image (1 frame), use image conversion path instead",
@@ -721,7 +721,7 @@ fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> Conversion
 /// # Errors
 ///
 /// Returns an error if the conversion fails or input is malformed.
-pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     use shared_utils::conversion_types::SelectedCodec;
     if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
@@ -1028,7 +1028,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
-            shared_utils::copy_metadata(input, &output);
+            shared_utils::copy(input, &output);
             mark_as_processed(input);
 
             if options.should_delete_original()
@@ -1042,7 +1042,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             }
 
             let codec_name = options.codec.as_str().to_uppercase();
-            Ok(ConversionResult::success(
+            Ok(TaskResult::success(
                 input,
                 &output,
                 input_size,
@@ -1097,7 +1097,7 @@ pub fn convert_to_mp4_matched(
     options: &ConvertOptions,
     initial_crf: f32,
     has_alpha: bool,
-) -> Result<ConversionResult> {
+) -> Result<TaskResult> {
     use shared_utils::conversion_types::SelectedCodec;
     if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
@@ -1657,7 +1657,7 @@ pub fn convert_to_mp4_matched(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    shared_utils::copy_metadata(input, &output);
+    shared_utils::copy(input, &output);
     mark_as_processed(input);
 
     if options.should_delete_original()
@@ -1671,7 +1671,7 @@ pub fn convert_to_mp4_matched(
         tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after {} animated conversion", codec_name);
     }
 
-    Ok(ConversionResult::success_video_explored(
+    Ok(TaskResult::success_video_explored(
         input,
         &output,
         &shared_utils::conversion::VideoExplorationMetrics {
@@ -1700,7 +1700,7 @@ pub fn convert_to_mp4_matched(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     eprintln!(
         "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"
     );
@@ -1767,7 +1767,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
-            shared_utils::copy_metadata(input, &output);
+            shared_utils::copy(input, &output);
             mark_as_processed(input);
 
             if options.should_delete_original()
@@ -1780,7 +1780,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
             }
 
-            Ok(ConversionResult::success(
+            Ok(TaskResult::success(
                 input,
                 &output,
                 input_size,
@@ -1828,10 +1828,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-pub fn convert_to_gif_apple_compat(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
+pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
     }
@@ -2219,7 +2216,7 @@ pub fn convert_to_gif_apple_compat(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    shared_utils::copy_metadata(input, &output);
+    shared_utils::copy(input, &output);
     mark_as_processed(input);
 
     if options.should_delete_original()
@@ -2232,7 +2229,7 @@ pub fn convert_to_gif_apple_compat(
         tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
     }
 
-    Ok(ConversionResult::success(
+    Ok(TaskResult::success(
         input,
         &output,
         input_size,

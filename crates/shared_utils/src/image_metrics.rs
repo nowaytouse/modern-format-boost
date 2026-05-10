@@ -216,6 +216,7 @@ fn calculate_window_ssim(
     numerator / denominator
 }
 
+#[cfg_attr(not(feature = "high-precision"), allow(clippy::clone_on_copy))]
 fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
@@ -243,9 +244,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     }
 
     #[cfg(not(feature = "high-precision"))]
-    let n_f64 = n_u64 as f64;
+    let pixel_count_f64 = crate::numeric_cast::u64_to_f64(n_u64);
     #[cfg(not(feature = "high-precision"))]
-    let n1_f64 = (n_u64 - 1) as f64;
+    let n1_f64 = crate::numeric_cast::u64_to_f64(n_u64 - 1);
 
     #[cfg(feature = "high-precision")]
     {
@@ -281,14 +282,20 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 
     #[cfg(not(feature = "high-precision"))]
     {
-        let mean_x = (sum_x as f64) / n_f64;
-        let mean_y = (total_sum_y as f64) / n_f64;
-        let var_x = ((sum_xx as f64) - (n_f64 * mean_x * mean_x)) / n1_f64;
-        let var_y = ((sum_yy as f64) - (n_f64 * mean_y * mean_y)) / n1_f64;
-        let cov_xy = ((products_sum_xy as f64) - (n_f64 * mean_x * mean_y)) / n1_f64;
+        let mean_x = crate::numeric_cast::u64_to_f64(sum_x) / pixel_count_f64;
+        let mean_y = crate::numeric_cast::u64_to_f64(total_sum_y) / pixel_count_f64;
 
-        let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
-        let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
+        let x_sq_total_f64 = crate::numeric_cast::u64_to_f64(sum_xx);
+        let y_sq_total_f64 = crate::numeric_cast::u64_to_f64(sum_yy);
+        let xy_prod_total_f64 = crate::numeric_cast::u64_to_f64(products_sum_xy);
+
+        let var_x = (pixel_count_f64 * mean_x).mul_add(-mean_x, x_sq_total_f64) / n1_f64;
+        let var_y = (pixel_count_f64 * mean_y).mul_add(-mean_y, y_sq_total_f64) / n1_f64;
+        let cov_xy = (pixel_count_f64 * mean_x).mul_add(-mean_y, xy_prod_total_f64) / n1_f64;
+
+        let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
+        let denominator =
+            (mean_x.mul_add(mean_x, mean_y.mul_add(mean_y, C1))) * (var_x + var_y + C2);
 
         if crate::numeric_cast::is_effectively_zero(
             denominator,
@@ -301,10 +308,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 }
 
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if internal image resizing fails or if the SSIM calculation encounters an invalid numeric state.
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [

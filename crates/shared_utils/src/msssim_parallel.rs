@@ -10,7 +10,7 @@
 
 use crate::app_error::AppError;
 
-use crate::msssim_progress::MsssimProgressMonitor;
+use crate::msssim_progress::Monitor;
 use crate::msssim_sampling::{SamplingConfig, SamplingStrategy};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,7 +65,7 @@ pub struct ParallelMsssimCalculator {
     original_path: PathBuf,
     converted_path: PathBuf,
     sampling_config: SamplingConfig,
-    progress_monitor: Arc<MsssimProgressMonitor>,
+    progress_monitor: Arc<Monitor>,
 }
 
 impl ParallelMsssimCalculator {
@@ -75,7 +75,7 @@ impl ParallelMsssimCalculator {
         converted_path: PathBuf,
         sampling_config: SamplingConfig,
     ) -> Self {
-        let progress_monitor = Arc::new(MsssimProgressMonitor::new(
+        let progress_monitor = Arc::new(Monitor::new(
             sampling_config.duration_secs,
             sampling_config.sampled_frames,
         ));
@@ -172,7 +172,7 @@ impl ParallelMsssimCalculator {
         converted_path: &Path,
         config: &SamplingConfig,
         channel: &str,
-        progress_monitor: &Arc<MsssimProgressMonitor>,
+        progress_monitor: &Arc<Monitor>,
     ) -> Result<f64, AppError> {
         let original_path_str = original_path.to_string_lossy();
         let converted_path_str = converted_path.to_string_lossy();

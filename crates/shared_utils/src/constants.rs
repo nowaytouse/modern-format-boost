@@ -2060,11 +2060,7 @@ pub const QUALITY_LEVEL_MEDIUM: u8 = 70;
 pub const QUALITY_LEVEL_LOW: u8 = 60;
 
 // --- Quality Description Thresholds ---
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Checked limit for 32-bit platforms"
-)]
-pub const QUALITY_MATCHER_SCAN_LIMIT: usize = MB as usize;
+pub const QUALITY_MATCHER_SCAN_LIMIT: usize = 1_048_576;
 
 // --- HDR Synthesis & PQ Transfer ---
 pub const HDR_INTENSITY_TARGET_MIN: f32 = 100.0;
@@ -2305,7 +2301,7 @@ pub const METADATA_TRUST_MODERN_ANIMATED: f64 = 0.85;
 pub const METADATA_TRUST_STANDARD_VIDEO: f64 = 0.6;
 /// Metadata trust level for untrusted or legacy video containers (0.2).
 pub const METADATA_TRUST_UNTRUSTED: f64 = 0.2;
-/// Metadata trust penalty for generic FFmpeg wrappers (0.1).
+/// Metadata trust penalty for generic `FFmpeg` wrappers (0.1).
 pub const METADATA_TRUST_PENALTY_LAVF: f64 = 0.1;
 
 /// Standard neutral score for probabilistic arbitration (0.5).
@@ -2512,7 +2508,7 @@ pub const COLOR_DIFF_DIVISOR: f64 = 256.0;
 pub const SCALE_100: f64 = 100.0;
 pub const SCALE_1000: f64 = 1000.0;
 pub const KB_F64: f64 = 1024.0;
-pub const MB_F64: f64 = 1048576.0;
+pub const MB_F64: f64 = 1_048_576.0;
 pub const PERCENTAGE_FACTOR_U32: u32 = 100;
 
 // --- Graphics & Imaging Fundamentals (Wave 22) ---

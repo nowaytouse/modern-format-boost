@@ -300,7 +300,7 @@ pub fn calculate_directory_size_by_extensions(
 /// Contains the path where the pause occurred and a human-readable reason.
 /// This information can be displayed to users to help them understand
 /// why processing was interrupted.
-pub struct BatchPauseInfo {
+pub struct PauseInfo {
     /// The file path where the pause occurred.
     pub path: PathBuf,
     /// Human-readable explanation for the pause.
@@ -313,14 +313,14 @@ pub struct BatchPauseInfo {
 /// optional pause information. This allows batch operations to be
 /// gracefully interrupted and resumed while maintaining context.
 #[derive(Debug, Default)]
-pub struct BatchPauseController {
+pub struct PauseController {
     /// Atomic flag indicating if the batch is currently paused.
     paused: AtomicBool,
     /// Optional information about the current pause state.
-    info: Mutex<Option<BatchPauseInfo>>,
+    info: Mutex<Option<PauseInfo>>,
 }
 
-impl BatchPauseController {
+impl PauseController {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -357,7 +357,7 @@ impl BatchPauseController {
                 .info
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *info = Some(BatchPauseInfo {
+            *info = Some(PauseInfo {
                 path: path.to_path_buf(),
                 reason,
             });
@@ -369,8 +369,8 @@ impl BatchPauseController {
     /// Gets the current pause information if the batch is paused.
     ///
     /// # Returns
-    /// `Some(BatchPauseInfo)` if paused, `None` if not paused
-    pub fn pause_info(&self) -> Option<BatchPauseInfo> {
+    /// `Some(PauseInfo)` if paused, `None` if not paused
+    pub fn pause_info(&self) -> Option<PauseInfo> {
         return self
             .info
             .lock()
@@ -406,18 +406,18 @@ pub fn disk_full_pause_reason(message: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
-pub struct BatchResult {
+pub struct Summary {
     pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
     pub skipped: usize,
     pub errors: Vec<(PathBuf, String)>,
     pub paused: bool,
-    pub pause_info: Option<BatchPauseInfo>,
+    pub pause_info: Option<PauseInfo>,
     pub paused_remaining: usize,
 }
 
-impl BatchResult {
+impl Summary {
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -450,7 +450,7 @@ impl BatchResult {
 
     pub fn pause(&mut self, path: PathBuf, reason: String, remaining: usize) {
         self.paused = true;
-        self.pause_info = Some(BatchPauseInfo { path, reason });
+        self.pause_info = Some(PauseInfo { path, reason });
         self.paused_remaining = remaining;
     }
 
@@ -466,7 +466,7 @@ impl BatchResult {
     }
 }
 
-impl Default for BatchResult {
+impl Default for Summary {
     fn default() -> Self {
         Self::new()
     }
@@ -1238,7 +1238,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_new() {
-        let result = BatchResult::new();
+        let result = Summary::new();
         assert_eq!(result.total, 0);
         assert_eq!(result.succeeded, 0);
         assert_eq!(result.failed, 0);
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_success() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
 
         assert_eq!(result.total, 1);
@@ -1259,7 +1259,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_fail() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.fail(PathBuf::from("test.png"), "Error message".to_string());
 
         assert_eq!(result.total, 1);
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_skip() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.skip();
 
         assert_eq!(result.total, 1);
@@ -1281,7 +1281,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_mixed() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.success();
         result.fail(PathBuf::from("test.png"), "Error".to_string());
@@ -1295,7 +1295,7 @@ mod tests {
 
     #[test]
     fn test_success_rate_empty() {
-        let result = BatchResult::new();
+        let result = Summary::new();
         assert!(
             (result.success_rate() - 100.0).abs() < 0.01_f64,
             "Empty batch should have 100% success rate"
@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_success_rate_all_success() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         for _ in 0_i32..10_i32 {
             result.success();
         }
@@ -1316,7 +1316,7 @@ mod tests {
 
     #[test]
     fn test_success_rate_all_fail() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         for i in 0_i32..10_i32 {
             result.fail(PathBuf::from(format!("file{i}.png")), "Error".to_string());
         }
@@ -1328,7 +1328,7 @@ mod tests {
 
     #[test]
     fn test_success_rate_50_percent() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.fail(PathBuf::from("test.png"), "Error".to_string());
 
@@ -1341,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_success_rate_with_skipped() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.success();
         result.skip();
@@ -1366,7 +1366,7 @@ mod tests {
         ];
 
         for (success, fail, skip, expected) in test_cases {
-            let mut result = BatchResult::new();
+            let mut result = Summary::new();
             for _ in 0_i32..success {
                 result.success();
             }
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[test]
     fn test_strict_large_numbers() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
 
         for _ in 0_i32..500_000_i32 {
             result.success();
@@ -1424,7 +1424,7 @@ mod tests {
 
     #[test]
     fn test_consistency_success_rate() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.success();
         result.fail(PathBuf::from("test.png"), "Error".to_string());
@@ -1439,7 +1439,7 @@ mod tests {
 
     #[test]
     fn test_total_equals_sum() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.success();
         result.success();
@@ -1464,7 +1464,7 @@ mod tests {
 
     #[test]
     fn test_batch_result_pause_tracks_remaining_work() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.pause(
             PathBuf::from("example.mov"),
@@ -1483,7 +1483,7 @@ mod tests {
 
     #[test]
     fn test_pause_controller_keeps_first_pause_reason() {
-        let controller = BatchPauseController::new();
+        let controller = PauseController::new();
 
         assert!(controller.request_pause(Path::new("first.png"), "first"));
         assert!(!controller.request_pause(Path::new("second.png"), "second"));

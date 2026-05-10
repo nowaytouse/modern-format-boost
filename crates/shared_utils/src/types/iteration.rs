@@ -1,4 +1,4 @@
-//! `IterationGuard` - Safeguard for maximum iterations
+//! `Guard` - Safeguard for maximum iterations
 //!
 //! Prevents infinite loops and provides boundary protection for iteration counts.
 
@@ -13,13 +13,13 @@ pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 =
     crate::constants::VERY_LONG_VIDEO_FALLBACK_ITERATIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IterationError {
+pub struct Error {
     pub current: u32,
     pub max: u32,
     pub context: String,
 }
 
-impl fmt::Display for IterationError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -29,16 +29,16 @@ impl fmt::Display for IterationError {
     }
 }
 
-impl std::error::Error for IterationError {}
+impl std::error::Error for Error {}
 
 #[derive(Debug, Clone)]
-pub struct IterationGuard {
+pub struct Guard {
     current: u32,
     max: u32,
     context: String,
 }
 
-impl IterationGuard {
+impl Guard {
     #[must_use]
     pub fn new(max: u32, context: &str) -> Self {
         let safe_max = max.min(EMERGENCY_MAX_ITERATIONS);
@@ -59,10 +59,10 @@ impl IterationGuard {
     ///
     /// # Errors
     /// Returns an error if the count exceeds the maximum allowed iterations.
-    pub fn increment(&mut self) -> Result<u32, IterationError> {
+    pub fn increment(&mut self) -> Result<u32, Error> {
         self.current += 1;
         if self.current > self.max {
-            Err(IterationError {
+            Err(Error {
                 current: self.current,
                 max: self.max,
                 context: self.context.clone(),
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_iteration_guard_basic() {
-        let mut guard = IterationGuard::new(5, "test");
+        let mut guard = Guard::new(5, "test");
 
         for i in 1..=5 {
             assert_eq!(
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_iteration_guard_remaining() {
-        let mut guard = IterationGuard::new(10, "test");
+        let mut guard = Guard::new(10, "test");
 
         assert_eq!(guard.remaining(), 10);
         guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_iteration_guard_reset() {
-        let mut guard = IterationGuard::new(5, "test");
+        let mut guard = Guard::new(5, "test");
 
         for _ in 0_i32..3_i32 {
             guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -170,25 +170,25 @@ mod tests {
 
     #[test]
     fn test_iteration_guard_emergency_limit() {
-        let guard = IterationGuard::new(1000, "test");
+        let guard = Guard::new(1000, "test");
         assert_eq!(guard.max(), EMERGENCY_MAX_ITERATIONS);
     }
 
     #[test]
     fn test_iteration_guard_for_duration() {
-        let guard = IterationGuard::for_duration(60.0, false, "short");
+        let guard = Guard::for_duration(60.0, false, "short");
         assert_eq!(guard.max(), NORMAL_MAX_ITERATIONS);
 
-        let guard = IterationGuard::for_duration(400.0, false, "long");
+        let guard = Guard::for_duration(400.0, false, "long");
         assert_eq!(guard.max(), LONG_VIDEO_FALLBACK_ITERATIONS);
 
-        let guard = IterationGuard::for_duration(700.0, false, "very long");
+        let guard = Guard::for_duration(700.0, false, "very long");
         assert_eq!(guard.max(), VERY_LONG_VIDEO_FALLBACK_ITERATIONS);
     }
 
     #[test]
     fn test_iteration_error_display() {
-        let error = IterationError {
+        let error = Error {
             current: 101,
             max: 100,
             context: "CRF exploration".to_string(),
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_progress_percent() {
-        let mut guard = IterationGuard::new(100, "test");
+        let mut guard = Guard::new(100, "test");
         assert!(crate::float_compare::approx_eq_f64(
             guard.progress_percent(),
             0.0

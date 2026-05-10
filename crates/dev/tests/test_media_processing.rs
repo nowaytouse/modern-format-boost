@@ -251,8 +251,8 @@ fn test_static_gif_processing_normal_flow() {
     let verdict = evaluate_loop_tree(&loop_meta, None).verdict;
     // Single-frame GIFs are usually not considered a loop
     match verdict {
-        shared_utils::loop_intent::LoopIntentVerdict::LoopStrong(_)
-        | shared_utils::loop_intent::LoopIntentVerdict::LoopWeak(_) => {
+        shared_utils::LoopIntentVerdict::LoopStrong(_)
+        | shared_utils::LoopIntentVerdict::LoopWeak(_) => {
             panic!("Single-frame GIF should not be considered a loop");
         }
         _ => {} // Other states are normal
@@ -295,8 +295,8 @@ fn test_animated_gif_processing_normal_flow() {
     let verdict = evaluate_loop_tree(&loop_meta, None).verdict;
     // Since only 1 frame was actually detected, it should not be considered a loop
     match verdict {
-        shared_utils::loop_intent::LoopIntentVerdict::LoopStrong(_)
-        | shared_utils::loop_intent::LoopIntentVerdict::LoopWeak(_) => {
+        shared_utils::LoopIntentVerdict::LoopStrong(_)
+        | shared_utils::LoopIntentVerdict::LoopWeak(_) => {
             println!("Note: Single-frame GIF evaluated as loop (acceptable edge case)");
         }
         _ => {

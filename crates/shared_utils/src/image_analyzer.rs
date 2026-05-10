@@ -7,7 +7,7 @@ use crate::image_jpeg_analysis::{JpegQualityAnalysis, analyze_jpeg_file};
 use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
 use crate::probe_video;
-use crate::types::{ProcessHistory, VisualPerception};
+use crate::types::{ProcessHistory, Visual};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 #[cfg(feature = "high-precision")]
 use rug::Rational;
@@ -151,7 +151,7 @@ pub struct ImageAnalysis {
     pub history: ProcessHistory,
 
     /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
-    pub perception: VisualPerception,
+    pub perception: Visual,
 
     /// ⚠️ Optional: Store error message if deep analysis failed but we fell back to basic info
     pub analysis_error: Option<String>,
@@ -182,7 +182,7 @@ impl Default for ImageAnalysis {
             hdr_info: None,
             precision: PrecisionMetadata::default(),
             history: ProcessHistory::default(),
-            perception: VisualPerception::default(),
+            perception: Visual::default(),
             analysis_error: None,
         }
     }
@@ -486,7 +486,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         hdr_info,
         precision,
         history: crate::common_utils::get_current_history(),
-        perception: VisualPerception::default(),
+        perception: Visual::default(),
         analysis_error: None,
     })
 }
@@ -681,7 +681,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: VisualPerception::default(),
+        perception: Visual::default(),
         analysis_error,
     })
 }
@@ -782,7 +782,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
             ..Default::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: VisualPerception::default(),
+        perception: Visual::default(),
         analysis_error: None,
     }
 }
@@ -1903,7 +1903,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: VisualPerception::default(),
+        perception: Visual::default(),
         analysis_error: animation_error,
     }
 }
@@ -2037,7 +2037,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: VisualPerception::default(),
+        perception: Visual::default(),
         analysis_error: animation_error,
     }
 }

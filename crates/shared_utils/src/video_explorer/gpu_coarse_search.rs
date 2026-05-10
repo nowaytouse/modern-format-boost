@@ -479,7 +479,7 @@ pub(crate) fn format_quality_check_line(
     clippy::too_many_lines,
     reason = "GPU coarse-search public entrypoint: argument unpacking + multi-stage orchestration (encoder, mapping, search, log) is intrinsically linear; splitting forces helper churn without clarity gain."
 )]
-pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
+pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {
         input,
@@ -508,7 +508,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             },
     } = flags;
 
-    let _ = precheck::run_precheck(input)?;
+    let _ = precheck::run(input)?;
     crate::log_eprintln!();
 
     let input_size = fs::metadata(input)
@@ -708,7 +708,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     dynamic_mapper.print_calibration_report();
                     dynamic_mapper.gpu_to_cpu(gpu_crf, mapping.offset, max_crf)
                 } else {
-                    let calibration = calibration::CalibrationPoint::from_gpu_result(
+                    let calibration = calibration::Point::from_gpu_result(
                         gpu_crf,
                         gpu_size,
                         input_size,
@@ -4157,7 +4157,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET
                 );
 
-                let last_output_video = crate::stream_size::get_output_video_stream_size(output);
+                let last_output_video = crate::stream_size::get_output_video(output);
                 crate::verbose_eprintln!(
                     "   Video stream: input {} vs output {} ({:+.1}%)",
                     crate::format_bytes(input_video_stream_size),
@@ -4666,7 +4666,7 @@ fn run_hevc_gpu_search_to_output(
     output_path: &Path,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
-    explore_with_gpu_coarse_search(GpuSearchArgs {
+    explore(GpuSearchArgs {
         input: &req.input,
         output: output_path,
         encoder: VideoEncoder::Hevc,
@@ -4718,7 +4718,7 @@ pub fn explore_av1_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
         .map_or(req.baseline_crf, |hint| (hint - 2.0).max(ABSOLUTE_MIN_CRF))
         .clamp(ABSOLUTE_MIN_CRF, max_crf);
 
-    explore_with_gpu_coarse_search(GpuSearchArgs {
+    explore(GpuSearchArgs {
         input: &req.input,
         output: &req.output,
         encoder: VideoEncoder::Av1,

@@ -15,12 +15,14 @@ pub mod perception;
 pub mod preset;
 pub mod ssim;
 
-pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
+pub use crf::{
+    Av1Encoder, Crf, EncoderBounds, Error as CrfError, HevcEncoder, Vp9Encoder, X264Encoder,
+};
 pub use file_size::FileSize;
-pub use iteration::{IterationError, IterationGuard};
-pub use perception::{ProcessHistory, VisualPerception};
-pub use preset::EncoderPreset;
-pub use ssim::{SSIM_EPSILON, Ssim, SsimError};
+pub use iteration::{Error as IterationError, Guard as IterationGuard};
+pub use perception::{ProcessHistory, Visual};
+pub use preset::Preset as EncoderPreset;
+pub use ssim::{Error as SsimError, SSIM_EPSILON, Ssim};
 
 /// Result of a specific verification check.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

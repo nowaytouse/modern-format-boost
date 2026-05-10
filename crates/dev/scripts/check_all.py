@@ -900,8 +900,6 @@ def main() -> None:
                     "clippy::nursery",
                     # Always-noisy lints — keep as allow to reduce false-positive volume.
                     "-A",
-                    "clippy::module_name_repetitions",
-                    "-A",
                     "clippy::missing_errors_doc",
                     "-A",
                     "clippy::missing_panics_doc",

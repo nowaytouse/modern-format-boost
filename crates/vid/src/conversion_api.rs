@@ -1,6 +1,6 @@
 //! Executes video conversions based on detection results (HEVC and AV1 support).
 
-use crate::detection_api::VideoDetectionResult;
+use crate::detection_api::Detection;
 use crate::{Rational, Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
@@ -181,7 +181,7 @@ impl ExploreQualityFailureDecision {
     fn into_skip_output(
         self,
         input: &Path,
-        detection: &VideoDetectionResult,
+        detection: &Detection,
         explore_result: &shared_utils::ExploreResult,
     ) -> Result<ConversionOutput> {
         Ok(ConversionOutput {
@@ -191,7 +191,7 @@ impl ExploreQualityFailureDecision {
                 target: TargetVideoFormat::Skip,
                 reason: self.fail_reason,
                 command: String::new(),
-                preserve_audio: detection.has_audio,
+                preserve_audio: detection.flags.streams.has_audio,
                 crf: explore_result.optimal_crf,
                 lossless: false,
             },
@@ -263,7 +263,7 @@ impl FinalQualityGateFailureDecision {
     fn into_skip_output(
         self,
         input: &Path,
-        detection: &VideoDetectionResult,
+        detection: &Detection,
         result: &shared_utils::ExploreResult,
     ) -> Result<ConversionOutput> {
         Ok(ConversionOutput {
@@ -273,7 +273,7 @@ impl FinalQualityGateFailureDecision {
                 target: TargetVideoFormat::Skip,
                 reason: self.skip_reason,
                 command: String::new(),
-                preserve_audio: detection.has_audio,
+                preserve_audio: detection.flags.streams.has_audio,
                 crf: result.optimal_crf,
                 lossless: false,
             },
@@ -299,7 +299,7 @@ impl FinalQualityGateFailureDecision {
 
 /// Build `FFmpeg` HDR metadata arguments from detection results.
 /// Preserves primaries, transfer characteristics, matrix, and static HDR10 metadata.
-fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
+fn build_hdr_ffmpeg_args(detection: &Detection) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
     // -color_primaries
@@ -353,7 +353,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
 }
 
 /// Return the correct pixel format (10-bit for HDR, otherwise 8-bit).
-const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
+const fn hdr_pix_fmt(detection: &Detection) -> &'static str {
     if let Some(depth) = detection.bit_depth
         && depth >= 10
     {
@@ -378,8 +378,8 @@ struct DvRpuResult {
 /// - Content is not Dolby Vision
 /// - `dovi_tool` is not installed
 /// - Any extraction step fails (graceful fallback to HDR10)
-fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
-    if !detection.is_dolby_vision {
+fn prepare_dv_rpu(detection: &Detection) -> Option<DvRpuResult> {
+    if !detection.flags.hdr.is_dolby_vision {
         return None;
     }
 
@@ -457,8 +457,8 @@ struct Hdr10PlusResult {
 /// - Content is not HDR10+
 /// - `hdr10plus_tool` is not installed
 /// - Any extraction step fails
-fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10PlusResult> {
-    if !detection.is_hdr10_plus {
+fn prepare_hdr10plus_metadata(detection: &Detection) -> Option<Hdr10PlusResult> {
+    if !detection.flags.hdr.is_hdr10_plus {
         return None;
     }
 
@@ -507,10 +507,7 @@ fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10P
 }
 
 #[must_use]
-pub fn determine_strategy(
-    result: &VideoDetectionResult,
-    codec: SelectedCodec,
-) -> ConversionStrategy {
+pub fn determine_strategy(result: &Detection, codec: SelectedCodec) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, Path::new(&result.file_path), false, false, codec)
 }
 
@@ -528,7 +525,7 @@ const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 pub fn determine_strategy_with_apple_compat(
-    result: &VideoDetectionResult,
+    result: &Detection,
     input: &Path,
     apple_compat: bool,
     force: bool,
@@ -684,7 +681,7 @@ pub fn determine_strategy_with_apple_compat(
             SelectedCodec::Av2 => (TargetVideoFormat::Av2Mp4, "AV2"),
             SelectedCodec::Vvc => (TargetVideoFormat::VvcMp4, "VVC"),
         };
-        if result.archival_candidate
+        if result.flags.content.archival_candidate
             || result.quality_score >= shared_utils::constants::QUALITY_SCORE_HIGH_THRESHOLD
         {
             (
@@ -718,7 +715,7 @@ pub fn determine_strategy_with_apple_compat(
         target,
         reason,
         command: String::new(),
-        preserve_audio: result.has_audio,
+        preserve_audio: result.flags.streams.has_audio,
         crf,
         lossless,
     }
@@ -766,7 +763,7 @@ pub fn auto_convert_with_cache(
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     // Skip Live Photos in Apple compat mode
-    if config.apple_compat() && shared_utils::is_live_photo(input) {
+    if config.apple_compat() && shared_utils::live_photo::is_live(input) {
         let reason = "Live Photo detected in Apple compat mode";
         shared_utils::progress_mode::video_skipped(reason);
 
@@ -900,7 +897,7 @@ pub fn auto_convert_with_cache(
     }
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
-    if detection.is_dolby_vision {
+    if detection.flags.hdr.is_dolby_vision {
         if shared_utils::is_dovi_tool_available() {
             info!("Dolby Vision detected: RPU will be preserved via dovi_tool");
         } else {
@@ -908,7 +905,7 @@ pub fn auto_convert_with_cache(
             warn!("Install dovi_tool to preserve DV metadata: cargo install dovi_tool");
         }
     }
-    if detection.is_hdr10_plus {
+    if detection.flags.hdr.is_hdr10_plus {
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
     }
 
@@ -1153,10 +1150,14 @@ pub fn auto_convert_with_cache(
 
             let flag_mode =
                 shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
-                    explore: config.explore_smaller(),
-                    match_quality: config.match_quality(),
-                    compress: config.require_compression(),
-                    ultimate: config.ultimate_mode(),
+                    base: shared_utils::FlagBase {
+                        explore: config.explore_smaller(),
+                        match_quality: config.match_quality(),
+                        compress: config.require_compression(),
+                    },
+                    tier: shared_utils::FlagTier {
+                        ultimate: config.ultimate_mode(),
+                    },
                 })
                 .map_err(VidQualityError::ConversionError)?;
 
@@ -1231,8 +1232,8 @@ pub fn auto_convert_with_cache(
             }
 
             let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
-                || detection.is_dolby_vision
-                || detection.is_hdr10_plus
+                || detection.flags.hdr.is_dolby_vision
+                || detection.flags.hdr.is_hdr10_plus
                 || detection.mastering_display.is_some()
                 || matches!(
                     detection.color_transfer.as_deref(),
@@ -1351,11 +1352,17 @@ pub fn auto_convert_with_cache(
                 if shared_utils::should_keep_apple_fallback_hevc_output(
                     shared_utils::AppleFallbackKeepRequest {
                         codec_str: detection.codec.as_str(),
-                        total_file_compressed,
                         total_size_ratio,
-                        allow_size_tolerance: config.allow_size_tolerance(),
-                        apple_compat: config.apple_compat(),
-                        source_is_gif,
+                        flags: shared_utils::AppleFallbackFlags {
+                            outcome: shared_utils::AppleOutcomeFlags {
+                                total_file_compressed,
+                                allow_size_tolerance: config.allow_size_tolerance(),
+                            },
+                            context: shared_utils::AppleContextFlags {
+                                apple_compat: config.apple_compat(),
+                                source_is_gif,
+                            },
+                        },
                     },
                 ) {
                     warn!(
@@ -1375,7 +1382,7 @@ pub fn auto_convert_with_cache(
                             target: hevc_delivery_target(config.apple_compat()),
                             reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
                             command: String::new(),
-                            preserve_audio: detection.has_audio,
+                            preserve_audio: detection.flags.streams.has_audio,
                             crf: explore_result.optimal_crf,
                             lossless: false,
                         },
@@ -1546,7 +1553,7 @@ pub fn auto_convert_with_cache(
                     reason: "Apple compat fallback: best-effort HEVC kept (quality below target)"
                         .to_string(),
                     command: String::new(),
-                    preserve_audio: detection.has_audio,
+                    preserve_audio: detection.flags.streams.has_audio,
                     crf: result.optimal_crf,
                     lossless: false,
                 },
@@ -1594,7 +1601,7 @@ pub fn auto_convert_with_cache(
 
     let pre_metadata_size = output_size;
 
-    shared_utils::copy_metadata(input, &output_path);
+    shared_utils::copy(input, &output_path);
 
     let actual_output_size = std::fs::metadata(&output_path).map_or(output_size, |m| m.len());
 
@@ -1661,11 +1668,17 @@ pub fn auto_convert_with_cache(
         if shared_utils::should_keep_apple_fallback_hevc_output(
             shared_utils::AppleFallbackKeepRequest {
                 codec_str: detection.codec.as_str(),
-                total_file_compressed,
                 total_size_ratio,
-                allow_size_tolerance: config.allow_size_tolerance(),
-                apple_compat: config.apple_compat(),
-                source_is_gif,
+                flags: shared_utils::AppleFallbackFlags {
+                    outcome: shared_utils::AppleOutcomeFlags {
+                        total_file_compressed,
+                        allow_size_tolerance: config.allow_size_tolerance(),
+                    },
+                    context: shared_utils::AppleContextFlags {
+                        apple_compat: config.apple_compat(),
+                        source_is_gif,
+                    },
+                },
             },
         ) {
             warn!(
@@ -1684,7 +1697,7 @@ pub fn auto_convert_with_cache(
                         "Apple compat fallback: best-effort HEVC kept (compression check failed)"
                             .to_string(),
                     command: String::new(),
-                    preserve_audio: detection.has_audio,
+                    preserve_audio: detection.flags.streams.has_audio,
                     crf: final_crf,
                     lossless: false,
                 },
@@ -1732,7 +1745,7 @@ pub fn auto_convert_with_cache(
                     verify_result.total_size_change_percent(),
                 ),
                 command: String::new(),
-                preserve_audio: detection.has_audio,
+                preserve_audio: detection.flags.streams.has_audio,
                 crf: final_crf,
                 lossless: false,
             },
@@ -1787,7 +1800,7 @@ pub fn auto_convert_with_cache(
             target: strategy.target,
             reason: strategy.reason,
             command: String::new(),
-            preserve_audio: detection.has_audio,
+            preserve_audio: detection.flags.streams.has_audio,
             crf: final_crf,
             lossless: strategy.lossless,
         },
@@ -1836,10 +1849,7 @@ fn best_effort_status_for_cache(
 ///
 /// # Panics
 /// Panics if the ffprobe-backed detection is missing `width` or `height`.
-pub fn calculate_matched_crf(
-    detection: &VideoDetectionResult,
-    codec: &SelectedCodec,
-) -> Result<f32> {
+pub fn calculate_matched_crf(detection: &Detection, codec: &SelectedCodec) -> Result<f32> {
     let mut builder = shared_utils::VideoAnalysisBuilder::new()
         .basic(
             detection.codec.as_str(),
@@ -1882,7 +1892,7 @@ pub fn calculate_matched_crf(
         builder = builder.color(color_space_str, is_hdr);
     }
 
-    if detection.has_b_frames {
+    if detection.flags.content.has_b_frames {
         builder = builder.gop(Some(60), Some(2));
     }
 
@@ -1925,7 +1935,7 @@ pub fn calculate_matched_crf(
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 fn execute_lossless(
-    detection: &VideoDetectionResult,
+    detection: &Detection,
     output: &Path,
     max_threads: usize,
     codec: SelectedCodec,
@@ -1945,8 +1955,8 @@ fn execute_lossless(
     let hdr10plus = prepare_hdr10plus_metadata(detection);
 
     let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
-        || detection.is_dolby_vision
-        || detection.is_hdr10_plus
+        || detection.flags.hdr.is_dolby_vision
+        || detection.flags.hdr.is_hdr10_plus
         || detection.mastering_display.is_some()
         || matches!(
             detection.color_transfer.as_deref(),
@@ -2076,7 +2086,7 @@ fn execute_lossless(
         args.push(arg.clone());
     }
 
-    if detection.has_audio {
+    if detection.flags.streams.has_audio {
         // MKV supports all codecs — always copy
         args.extend(shared_utils::audio_args_for_container(
             detection.audio_codec.as_deref(),
@@ -2088,7 +2098,7 @@ fn execute_lossless(
 
     // Subtitles: MKV supports all subtitle formats — always copy
     args.extend(shared_utils::subtitle_args_for_container(
-        detection.has_subtitles,
+        detection.flags.streams.has_subtitles,
         detection.subtitle_codec.as_deref(),
         "mkv",
     ));
@@ -2165,7 +2175,7 @@ mod tests {
 
     #[test]
     fn test_strategy_normal_mode_skips_vp9() {
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/test/video.webm".to_string(),
             format: "webm".to_string(),
             codec: crate::detection_api::DetectedCodec::VP9,
@@ -2180,29 +2190,22 @@ mod tests {
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: true,
             audio_codec: Some("opus".to_string()),
             quality_score: 75,
-            archival_candidate: false,
             color_space: crate::detection_api::ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2218,7 +2221,7 @@ mod tests {
 
     #[test]
     fn test_strategy_apple_compat_converts_vp9() {
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/test/video.webm".to_string(),
             format: "webm".to_string(),
             codec: crate::detection_api::DetectedCodec::VP9,
@@ -2233,29 +2236,22 @@ mod tests {
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: true,
             audio_codec: Some("opus".to_string()),
             quality_score: 75,
-            archival_candidate: false,
             color_space: crate::detection_api::ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2282,7 +2278,7 @@ mod tests {
 
     #[test]
     fn test_strategy_hevc_skipped_both_modes() {
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/test/video.mp4".to_string(),
             format: "mp4".to_string(),
             codec: crate::detection_api::DetectedCodec::H265,
@@ -2297,29 +2293,22 @@ mod tests {
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: true,
             audio_codec: Some("aac".to_string()),
             quality_score: 80,
-            archival_candidate: false,
             color_space: crate::detection_api::ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2348,7 +2337,7 @@ mod tests {
 
     #[test]
     fn test_strategy_h264_converted_both_modes() {
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/test/video.mp4".to_string(),
             format: "mp4".to_string(),
             codec: crate::detection_api::DetectedCodec::H264,
@@ -2363,29 +2352,22 @@ mod tests {
             pix_fmt: "yuv420p".to_string(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: true,
             audio_codec: Some("aac".to_string()),
             quality_score: 70,
-            archival_candidate: false,
             color_space: crate::detection_api::ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2416,8 +2398,8 @@ mod tests {
     fn test_strict_apple_compat_routing() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
 
-        let make_detection = |codec: DetectedCodec| -> crate::detection_api::VideoDetectionResult {
-            crate::detection_api::VideoDetectionResult {
+        let make_detection = |codec: DetectedCodec| -> crate::detection_api::Detection {
+            crate::detection_api::Detection {
                 file_path: "/test/video.mp4".to_string(),
                 format: "mp4".to_string(),
                 codec,
@@ -2432,29 +2414,22 @@ mod tests {
                 pix_fmt: "yuv420p".to_string(),
                 file_size: 50_000_000,
                 bitrate: Some(6_666_666),
-                has_audio: false,
                 audio_codec: None,
                 quality_score: 70,
-                archival_candidate: false,
                 color_space: ColorSpace::BT709,
                 video_bitrate: Some(6_000_000),
-                has_b_frames: true,
                 profile: None,
                 bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
                 color_primaries: None,
                 color_transfer: None,
                 mastering_display: None,
                 max_cll: None,
-                is_dolby_vision: false,
                 dv_profile: None,
                 dv_bl_signal_compatibility_id: None,
-                is_hdr10_plus: false,
-                has_subtitles: false,
                 subtitle_codec: None,
                 max_b_frames: Some(0),
                 encoder_params: None,
                 audio_channels: None,
-                is_variable_frame_rate: false,
                 precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
                 tags: std::collections::HashMap::new(),
                 ..Default::default()
@@ -2498,7 +2473,7 @@ mod tests {
     #[test]
     fn test_apple_compat_av1_to_hevc() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.mp4".into(),
             format: "mp4".into(),
             codec: DetectedCodec::AV1,
@@ -2513,29 +2488,22 @@ mod tests {
             pix_fmt: "yuv420p".into(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: true,
             audio_codec: Some("opus".into()),
             quality_score: 85,
-            archival_candidate: false,
             color_space: ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_STANDARD,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2554,7 +2522,7 @@ mod tests {
     #[test]
     fn test_apple_compat_vvc_to_hevc() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.mp4".into(),
             format: "mp4".into(),
             codec: DetectedCodec::VVC,
@@ -2569,29 +2537,22 @@ mod tests {
             pix_fmt: "yuv420p10le".into(),
             file_size: 100_000_000,
             bitrate: Some(13_333_333),
-            has_audio: true,
             audio_codec: Some("aac".into()),
             quality_score: 90,
-            archival_candidate: false,
             color_space: ColorSpace::BT2020,
             video_bitrate: Some(12_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_LOW,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2613,7 +2574,7 @@ mod tests {
     #[test]
     fn test_apple_compat_crf_precision_vp9() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.webm".into(),
             format: "webm".into(),
             codec: DetectedCodec::VP9,
@@ -2628,29 +2589,22 @@ mod tests {
             pix_fmt: "yuv420p".into(),
             file_size: 50_000_000,
             bitrate: Some(6_666_666),
-            has_audio: false,
             audio_codec: None,
             quality_score: 75,
-            archival_candidate: false,
             color_space: ColorSpace::BT709,
             video_bitrate: Some(6_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2670,7 +2624,7 @@ mod tests {
     #[test]
     fn test_apple_compat_crf_precision_av1_high_bitrate() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.mp4".into(),
             format: "mp4".into(),
             codec: DetectedCodec::AV1,
@@ -2685,29 +2639,22 @@ mod tests {
             pix_fmt: "yuv420p10le".into(),
             file_size: 500_000_000,
             bitrate: Some(66_666_666),
-            has_audio: true,
             audio_codec: Some("opus".into()),
             quality_score: 95,
-            archival_candidate: true,
             color_space: ColorSpace::BT2020,
             video_bitrate: Some(60_000_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: shared_utils::constants::VIDEO_BITS_PER_PIXEL_HIGH,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2723,7 +2670,7 @@ mod tests {
     #[test]
     fn test_apple_compat_lossless_source() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.mkv".into(),
             format: "mkv".into(),
             codec: DetectedCodec::FFV1,
@@ -2738,29 +2685,22 @@ mod tests {
             pix_fmt: "yuv444p10le".into(),
             file_size: 2_000_000_000,
             bitrate: Some(533_333_333),
-            has_audio: false,
             audio_codec: None,
             quality_score: 100,
-            archival_candidate: true,
             color_space: ColorSpace::BT709,
             video_bitrate: Some(533_333_333),
-            has_b_frames: false,
             profile: None,
             bits_per_pixel: 8.5,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2783,7 +2723,7 @@ mod tests {
     #[test]
     fn test_apple_compat_visually_lossless() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.mov".into(),
             format: "mov".into(),
             codec: DetectedCodec::ProRes,
@@ -2798,29 +2738,22 @@ mod tests {
             pix_fmt: "yuv422p10le".into(),
             file_size: 1_000_000_000,
             bitrate: Some(133_333_333),
-            has_audio: true,
             audio_codec: Some("pcm_s24le".into()),
             quality_score: 98,
-            archival_candidate: true,
             color_space: ColorSpace::BT709,
             video_bitrate: Some(130_000_000),
-            has_b_frames: false,
             profile: None,
             bits_per_pixel: 2.1,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2843,7 +2776,7 @@ mod tests {
     #[test]
     fn test_apple_compat_unknown_codec_parsing() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "/t.webm".into(),
             format: "webm".into(),
             codec: DetectedCodec::Unknown("vp9".into()),
@@ -2858,29 +2791,22 @@ mod tests {
             pix_fmt: "yuv420p".into(),
             file_size: 10_000_000,
             bitrate: Some(2_666_666),
-            has_audio: false,
             audio_codec: None,
             quality_score: 70,
-            archival_candidate: false,
             color_space: ColorSpace::BT709,
             video_bitrate: Some(2_500_000),
-            has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.09,
             color_primaries: None,
             color_transfer: None,
             mastering_display: None,
             max_cll: None,
-            is_dolby_vision: false,
             dv_profile: None,
             dv_bl_signal_compatibility_id: None,
-            is_hdr10_plus: false,
-            has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: Some(0),
             encoder_params: None,
             audio_channels: None,
-            is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
@@ -2903,15 +2829,13 @@ mod tests {
 
     #[test]
     fn test_hdr10plus_injection_logic() {
-        use crate::detection_api::VideoDetectionResult;
+        use crate::detection_api::Detection;
         use std::path::PathBuf;
 
         // Mock a 10-bit HDR10+ result
-        let detection = VideoDetectionResult {
+        let detection = Detection {
             file_path: "test.mp4".to_string(),
             bit_depth: Some(10),
-            is_hdr10_plus: true, // HDR10+ detected
-            is_dolby_vision: false,
             color_transfer: Some("smpte2084".to_string()),
             ..Default::default()
         };
@@ -2925,8 +2849,8 @@ mod tests {
             .expect("String formatting should not fail");
 
         let is_hdr_content = detection.bit_depth.is_some_and(|d| d >= 10)
-            || detection.is_dolby_vision
-            || detection.is_hdr10_plus
+            || detection.flags.hdr.is_dolby_vision
+            || detection.flags.hdr.is_hdr10_plus
             || detection.mastering_display.is_some()
             || matches!(
                 detection.color_transfer.as_deref(),
@@ -2956,14 +2880,13 @@ mod tests {
     #[test]
     fn test_gif_like_video_recovery() {
         use crate::detection_api::{CompressionType, DetectedCodec};
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "sticker.mp4".into(),
             codec: DetectedCodec::H264,
             compression: CompressionType::Standard,
             width: Some(512),
             height: Some(512),
             duration_secs: Some(2.0),
-            has_audio: false,
             frame_count: Some(50),
             fps: Some(25.0),
             file_size: 500_000,
@@ -2997,7 +2920,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("error: {e:?}"));
         gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
             codec: DetectedCodec::Unknown("gif".into()),
@@ -3005,7 +2928,6 @@ mod tests {
             width: Some(1),
             height: Some(1),
             duration_secs: Some(0.2),
-            has_audio: false,
             frame_count: Some(2),
             fps: Some(10.0),
             file_size: std::fs::metadata(gif.path())
@@ -3040,7 +2962,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("error: {e:?}"));
         gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
-        let detection = crate::detection_api::VideoDetectionResult {
+        let detection = crate::detection_api::Detection {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
             codec: DetectedCodec::Unknown("gif".into()),
@@ -3048,7 +2970,6 @@ mod tests {
             width: Some(1),
             height: Some(1),
             duration_secs: Some(0.2),
-            has_audio: false,
             frame_count: Some(2),
             fps: Some(10.0),
             file_size: std::fs::metadata(gif.path())
@@ -3075,7 +2996,7 @@ mod tests {
         // Simulate an animated WebP with degenerate duration (the historical edge case).
         // Apple compat must still force GIF delivery for modern animated formats *when it is
         // clearly an animated-image (short / sticker-like) asset*.
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "IMG_0116.WEBP".into(),
             format: "webp".into(),
             codec: DetectedCodec::Unknown("webp".into()),
@@ -3083,7 +3004,6 @@ mod tests {
             width: Some(512),
             height: Some(512),
             duration_secs: Some(0.0),
-            has_audio: false,
             frame_count: Some(12),
             fps: Some(0.0),
             file_size: 500_000,
@@ -3113,7 +3033,7 @@ mod tests {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
         // Long animations are video-like and must remain eligible for HEVC delivery in apple compat.
-        let det = crate::detection_api::VideoDetectionResult {
+        let det = crate::detection_api::Detection {
             file_path: "LONG_ANIM.WEBP".into(),
             format: "webp".into(),
             codec: DetectedCodec::Unknown("webp".into()),
@@ -3121,7 +3041,6 @@ mod tests {
             width: Some(720),
             height: Some(720),
             duration_secs: Some(shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0),
-            has_audio: false,
             frame_count: Some(600),
             fps: Some(30.0),
             file_size: 5_000_000,

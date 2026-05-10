@@ -1902,10 +1902,9 @@ pub fn log_quality_analysis(
 }
 
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if the internal numeric calculations for BPP encounter a division-by-zero that was not caught by earlier guards.
 pub fn from_video_detection(
     file_path: &str,
     codec: &str,
@@ -2133,33 +2132,44 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppleOutcomeFlags {
+    pub total_file_compressed: bool,
+    pub allow_size_tolerance: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppleContextFlags {
+    pub apple_compat: bool,
+    pub source_is_gif: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppleFallbackFlags {
+    pub outcome: AppleOutcomeFlags,
+    pub context: AppleContextFlags,
+}
+
 /// Predicate for keeping Apple-compat fallback HEVC output.
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {
     pub codec_str: &'a str,
-    pub total_file_compressed: bool,
     pub total_size_ratio: f64,
-    pub allow_size_tolerance: bool,
-    pub apple_compat: bool,
-    pub source_is_gif: bool,
+    pub flags: AppleFallbackFlags,
 }
 
 #[must_use]
 pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<'_>) -> bool {
     // If the source is already Apple-native (like GIF), we never allow fallback to a larger file.
-    if request.source_is_gif || is_apple_native_format(request.codec_str) {
+    if request.flags.context.source_is_gif || is_apple_native_format(request.codec_str) {
         return false;
     }
-    if !request.apple_compat || !is_apple_incompatible_video_codec(request.codec_str) {
+    if !request.flags.context.apple_compat || !is_apple_incompatible_video_codec(request.codec_str)
+    {
         return false;
     }
-    request.total_file_compressed
-        || (request.allow_size_tolerance
+    request.flags.outcome.total_file_compressed
+        || (request.flags.outcome.allow_size_tolerance
             && request.total_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
 }
 

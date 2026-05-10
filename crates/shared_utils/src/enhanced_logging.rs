@@ -419,7 +419,7 @@ impl UpstreamToolLogger {
 /// # Errors
 ///
 /// Returns an error if an IO error or configuration error occurs during initialization.
-pub fn init_enhanced_logging(
+pub fn init(
     program_name: &str,
     log_level: LogLevel,
     log_file_path: Option<&Path>,

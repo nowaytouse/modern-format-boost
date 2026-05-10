@@ -562,13 +562,43 @@ impl Default for LoopReferenceProfile {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleStreamFlags {
+    pub has_transparency: bool,
+    pub is_native_gif: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleColorFlags {
+    pub has_embedded_icc: bool,
+    pub has_complex_color_profile: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleMemeFlags {
+    pub is_meme_platform: bool,
+    pub is_human_semantic_name: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleSourceFlags {
+    pub is_high_value_source: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SampleFlags {
+    #[serde(flatten)]
+    pub streams: SampleStreamFlags,
+    #[serde(flatten)]
+    pub color: SampleColorFlags,
+    #[serde(flatten)]
+    pub meme: SampleMemeFlags,
+    #[serde(flatten)]
+    pub source: SampleSourceFlags,
+}
+
 /// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub(crate) struct SampleRow {
     pub(crate) _loss_tolerance: Option<String>,
     pub(crate) width: u32,
@@ -579,21 +609,15 @@ pub(crate) struct SampleRow {
     pub(crate) fps: Option<f64>,
     pub(crate) temporal_bpp: f64,
     pub(crate) spatial_bpp: f64,
-    pub(crate) has_transparency: bool,
-    pub(crate) has_embedded_icc: bool,
-    pub(crate) has_complex_color_profile: bool,
+    pub(crate) flags: SampleFlags,
     pub(crate) palette_size: Option<u32>,
     pub(crate) frame_payload_variation: Option<f64>,
     pub(crate) frame_delay_variation: Option<f64>,
     pub(crate) aspect_ratio: Option<f64>,
     pub(crate) _total_pixels: Option<u64>,
     pub(crate) loop_frequency: Option<f64>,
-    pub(crate) is_meme_platform: bool,
-    pub(crate) is_human_semantic_name: bool,
     pub(crate) cadence_score: Option<f64>,
     pub(crate) directory_loop_intent_score: Option<f64>,
-    pub(crate) is_high_value_source: bool,
-    pub(crate) is_native_gif: bool,
     pub(crate) palette_depth: Option<f64>,
     pub(crate) motion_gini: Option<f64>,
     pub(crate) block_skew: Option<f64>,
@@ -617,21 +641,15 @@ impl From<SampleInsert> for SampleRow {
             fps: s.fps,
             temporal_bpp: s.temporal_bpp,
             spatial_bpp: s.spatial_bpp,
-            has_transparency: s.has_transparency,
-            has_embedded_icc: s.has_embedded_icc,
-            has_complex_color_profile: s.has_complex_color_profile,
+            flags: s.flags,
             palette_size: s.palette_size,
             frame_payload_variation: s.frame_payload_variation,
             frame_delay_variation: s.frame_delay_variation,
             aspect_ratio: s.aspect_ratio,
             _total_pixels: Some(s.total_pixels),
             loop_frequency: Some(s.loop_frequency),
-            is_meme_platform: s.is_meme_platform,
-            is_human_semantic_name: s.is_human_semantic_name,
             cadence_score: Some(s.cadence_score),
             directory_loop_intent_score: Some(s.directory_loop_intent_score),
-            is_high_value_source: s.is_high_value_source,
-            is_native_gif: s.is_native_gif,
             palette_depth: s.palette_depth,
             motion_gini: s.motion_gini,
             block_skew: s.block_skew,
@@ -868,6 +886,7 @@ fn check_gif_db_maturity(conn: &mut Client) -> bool {
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
+#[cfg_attr(not(feature = "high-precision"), allow(clippy::clone_on_copy))]
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
     _path: Option<&Path>,
@@ -1512,10 +1531,6 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
     file_hash: String,
@@ -1537,12 +1552,7 @@ pub struct SampleInsert {
     file_size_bytes: u64,
     /// Frames per second.
     fps: Option<f64>,
-    /// Whether the file has an embedded ICC color profile.
-    has_embedded_icc: bool,
-    /// Whether the file uses a complex color profile.
-    has_complex_color_profile: bool,
-    /// Whether the file has transparency.
-    has_transparency: bool,
+    flags: SampleFlags,
     /// Number of unique colors in the palette (if applicable).
     palette_size: Option<u32>,
     /// Variation in frame payload sizes (0-1 range).
@@ -1563,18 +1573,8 @@ pub struct SampleInsert {
     total_pixels: u64,
     /// Score indicating how likely the asset is to loop (0-1 range).
     loop_frequency: f64,
-    /// Whether the asset originates from a meme/sticker platform.
-    is_meme_platform: bool,
-    /// Whether the filename uses human-readable semantic naming.
-    is_human_semantic_name: bool,
-    /// Score measuring the regularity of frame timing patterns.
     cadence_score: f64,
-    /// Score indicating how meme-like the source directory appears.
     directory_loop_intent_score: f64,
-    /// Whether the source is considered high-value art.
-    is_high_value_source: bool,
-    /// Whether the source format is natively GIF.
-    is_native_gif: bool,
     /// Depth of the color palette as a normalized score (0-1).
     palette_depth: Option<f64>,
     /// Motion Gini coefficient -- measures how concentrated motion is across frames.
@@ -1693,7 +1693,7 @@ fn gather_sample_metadata(path: &Path) -> Option<LoopMeta> {
     if let Ok(scan) = scan_gif_headers(path) {
         meta.palette_size = scan.palette_size;
         meta.app_extensions = scan.app_extensions;
-        meta.has_transparency = scan.has_transparency;
+        meta.flags.streams.has_transparency = scan.has_transparency;
         meta.frame_payload_variation = scan.frame_payload_variation;
         meta.frame_delay_variation = scan.frame_delay_variation;
         meta.loop_count = scan.loop_count;
@@ -1713,6 +1713,10 @@ fn gather_sample_metadata(path: &Path) -> Option<LoopMeta> {
     Some(meta)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic for database ingestion where fragmenting state into smaller helpers would decrease readability."
+)]
 pub fn sample_from_path(
     path: &Path,
     labeled_by: &str,
@@ -1735,8 +1739,8 @@ pub fn sample_from_path(
     } else {
         determine_loss_tolerance(
             temporal_bpp,
-            meta.has_embedded_icc,
-            meta.has_complex_color_profile,
+            meta.flags.color.has_embedded_icc,
+            meta.flags.color.has_complex_color_profile,
             meta.app_extensions.as_deref(),
             path,
             meta.file_name.as_deref(),
@@ -1745,7 +1749,7 @@ pub fn sample_from_path(
 
     // If manual label is "video", ensure we treat it as a video-like source
     if loss_tolerance == "video" {
-        meta.is_native_gif = false;
+        meta.flags.streams.is_native_gif = false;
     }
 
     let aspect_ratio = if height > 0 {
@@ -1765,8 +1769,8 @@ pub fn sample_from_path(
             crate::loop_intent::score_sparse_cadence(meta.duration_secs, meta.frame_count),
         )
     };
-    let is_meme_platform = meta.is_meme_platform;
-    let is_native_gif = meta.is_native_gif;
+    let is_meme_platform = meta.flags.meme.is_meme_platform;
+    let is_native_gif = meta.flags.streams.is_native_gif;
     let is_high_value_source = loss_tolerance == "low";
 
     let file_hash = match calculate_blake3_hex(path) {
@@ -1792,9 +1796,23 @@ pub fn sample_from_path(
         frame_count: meta.frame_count,
         file_size_bytes: meta.file_size_bytes,
         fps: meta.fps,
-        has_embedded_icc: meta.has_embedded_icc,
-        has_complex_color_profile: meta.has_complex_color_profile,
-        has_transparency: meta.has_transparency,
+        flags: SampleFlags {
+            streams: SampleStreamFlags {
+                has_transparency: meta.flags.streams.has_transparency,
+                is_native_gif,
+            },
+            color: SampleColorFlags {
+                has_embedded_icc: meta.flags.color.has_embedded_icc,
+                has_complex_color_profile: meta.flags.color.has_complex_color_profile,
+            },
+            meme: SampleMemeFlags {
+                is_meme_platform,
+                is_human_semantic_name,
+            },
+            source: SampleSourceFlags {
+                is_high_value_source,
+            },
+        },
         palette_size: meta.palette_size,
         frame_payload_variation: meta.frame_payload_variation,
         frame_delay_variation: meta.frame_delay_variation,
@@ -1805,12 +1823,8 @@ pub fn sample_from_path(
         aspect_ratio,
         total_pixels,
         loop_frequency,
-        is_meme_platform,
-        is_human_semantic_name,
         cadence_score,
         directory_loop_intent_score,
-        is_high_value_source,
-        is_native_gif,
         palette_depth: meta.palette_depth,
         motion_gini: meta.motion_gini,
         block_skew: meta.block_skew,
@@ -1860,9 +1874,29 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
         fps: meta.fps,
         temporal_bpp,
         spatial_bpp,
-        has_transparency: meta.has_transparency,
-        has_embedded_icc: meta.has_embedded_icc,
-        has_complex_color_profile: meta.has_complex_color_profile,
+        flags: SampleFlags {
+            streams: SampleStreamFlags {
+                has_transparency: meta.flags.streams.has_transparency,
+                is_native_gif: meta.flags.streams.is_native_gif,
+            },
+            color: SampleColorFlags {
+                has_embedded_icc: meta.flags.color.has_embedded_icc,
+                has_complex_color_profile: meta.flags.color.has_complex_color_profile,
+            },
+            meme: SampleMemeFlags {
+                is_meme_platform: meta.flags.meme.is_meme_platform,
+                is_human_semantic_name: crate::loop_intent::analyze_filename(
+                    meta.file_name.as_deref(),
+                    &[],
+                )
+                .kind
+                    == crate::loop_intent::FilenameKind::HumanSemantic,
+            },
+            source: SampleSourceFlags {
+                is_high_value_source: meta.flags.color.has_embedded_icc
+                    || meta.flags.color.has_complex_color_profile,
+            },
+        },
         palette_size: meta.palette_size,
         frame_payload_variation: meta.frame_payload_variation,
         frame_delay_variation: meta.frame_delay_variation,
@@ -1872,13 +1906,6 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
             meta.duration_secs,
             meta.frame_count,
         )),
-        is_meme_platform: meta.is_meme_platform,
-        is_human_semantic_name: crate::loop_intent::analyze_filename(
-            meta.file_name.as_deref(),
-            &[],
-        )
-        .kind
-            == crate::loop_intent::FilenameKind::HumanSemantic,
         cadence_score: Some(crate::loop_intent::score_sparse_cadence(
             meta.duration_secs,
             meta.frame_count,
@@ -1887,9 +1914,6 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
             meta.parent_directories.as_deref(),
             &[],
         )),
-        is_high_value_source: meta.has_embedded_icc || meta.has_complex_color_profile,
-
-        is_native_gif: meta.is_native_gif,
         palette_depth: meta.palette_depth,
         motion_gini: meta.motion_gini,
         block_skew: meta.block_skew,
@@ -2317,9 +2341,9 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
                 &frame_count_i64,
                 &file_size_i64,
                 &sample.fps,
-                &sample.has_embedded_icc,
-                &sample.has_complex_color_profile,
-                &sample.has_transparency,
+                &sample.flags.color.has_embedded_icc,
+                &sample.flags.color.has_complex_color_profile,
+                &sample.flags.streams.has_transparency,
                 &palette_size_i32,
                 &sample.frame_payload_variation,
                 &sample.frame_delay_variation,
@@ -2330,12 +2354,12 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
                 &sample.aspect_ratio,
                 &total_pixels_i64,
                 &sample.loop_frequency,
-                &sample.is_meme_platform,
-                &sample.is_human_semantic_name,
+                &sample.flags.meme.is_meme_platform,
+                &sample.flags.meme.is_human_semantic_name,
                 &sample.cadence_score,
                 &sample.directory_loop_intent_score,
-                &sample.is_high_value_source,
-                &sample.is_native_gif,
+                &sample.flags.source.is_high_value_source,
+                &sample.flags.streams.is_native_gif,
                 &sample.palette_depth,
                 &sample.motion_gini,
                 &sample.block_skew,
@@ -2706,9 +2730,7 @@ fn map_row_to_sample(row: &postgres::Row) -> Option<SampleRow> {
         fps,
         temporal_bpp: row.get(8),
         spatial_bpp: row.get(9),
-        has_transparency: row.get(10),
-        has_embedded_icc: row.get(11),
-        has_complex_color_profile: row.get(12),
+        flags: SampleFlags { streams: SampleStreamFlags { has_transparency: row.get(10), is_native_gif: row.get(25) }, color: SampleColorFlags { has_embedded_icc: row.get(11), has_complex_color_profile: row.get(12) }, meme: SampleMemeFlags { is_meme_platform: row.get(20), is_human_semantic_name: row.get(21) }, source: SampleSourceFlags { is_high_value_source: row.get(24) } },
         palette_size: row.get::<_, Option<i32>>(13).and_then(|s| {
             crate::numeric_cast::i32_to_u32_strict(s, "db_backfill_pal").or_else(|| {
                 crate::progress_mode::emit_stderr(
@@ -2728,12 +2750,8 @@ fn map_row_to_sample(row: &postgres::Row) -> Option<SampleRow> {
             })
         }),
         loop_frequency: row.get(19),
-        is_meme_platform: row.get(20),
-        is_human_semantic_name: row.get(21),
         cadence_score: row.get(22),
         directory_loop_intent_score: row.get::<_, Option<f64>>(23),
-        is_high_value_source: row.get(24),
-        is_native_gif: row.get(25),
         palette_depth: row.get(26),
         motion_gini: row.get(27),
         block_skew: row.get(28),
@@ -2819,12 +2837,12 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
         "fps": opt_f64_safe(meta.fps),
         "frame_count": meta.frame_count,
         "file_size_bytes": meta.file_size_bytes,
-        "has_audio": meta.has_audio,
-        "has_transparency": meta.has_transparency,
-        "is_native_gif": meta.is_native_gif,
-        "has_embedded_icc": meta.has_embedded_icc,
-        "has_complex_color_profile": meta.has_complex_color_profile,
-        "is_meme_platform": meta.is_meme_platform,
+        "has_audio": meta.flags.streams.has_audio,
+        "has_transparency": meta.flags.streams.has_transparency,
+        "is_native_gif": meta.flags.streams.is_native_gif,
+        "has_embedded_icc": meta.flags.color.has_embedded_icc,
+        "has_complex_color_profile": meta.flags.color.has_complex_color_profile,
+        "is_meme_platform": meta.flags.meme.is_meme_platform,
         "loop_count": meta.loop_count,
         "webp_compression_ratio": opt_f64_safe(meta.webp_compression_ratio),
         "palette_depth": opt_f64_safe(meta.palette_depth),
@@ -3241,6 +3259,7 @@ pub fn check_database_health() -> Result<DbHealthReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loop_intent::{LoopColorFlags, LoopFlags, LoopMemeFlags, LoopStreamFlags};
 
     fn base_meta() -> LoopMeta {
         let frames = 24;
@@ -3259,9 +3278,7 @@ mod tests {
             app_extensions: None,
             encoder_software: None,
             is_interlaced: None,
-            has_transparency: true,
             transparency_is_real: None,
-            is_native_gif: true,
             real_frame_count: None,
             frame_payload_variation: Some(0.4),
             frame_delay_variation: Some(0.6),
@@ -3270,10 +3287,7 @@ mod tests {
             parent_directories: None,
             directory_loop_intent_score: 0.5,
             filename_loop_intent_score: 0.5,
-            has_embedded_icc: false,
-            has_complex_color_profile: false,
             loop_count: None,
-            has_audio: false,
             audio_is_silent: Some(true), // GIFs never have audio
             frame_types: vec![
                 'P';
@@ -3300,7 +3314,20 @@ mod tests {
             ],
             mv_magnitudes: Vec::new(),
             cached_frame_png: None,
-            is_meme_platform: false,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: false,
+                    has_transparency: true,
+                    is_native_gif: true,
+                },
+                color: LoopColorFlags {
+                    has_embedded_icc: false,
+                    has_complex_color_profile: false,
+                },
+                meme: LoopMemeFlags {
+                    is_meme_platform: false,
+                },
+            },
             palette_depth: Some(0.8),
             motion_gini: Some(0.7),
             block_skew: Some(0.6),
@@ -3326,21 +3353,21 @@ mod tests {
             fps: Some(12.0),
             temporal_bpp: 0.05,
             spatial_bpp: 1.2,
-            has_transparency: true,
-            has_embedded_icc: false,
-            has_complex_color_profile: false,
+            flags: SampleFlags {
+                streams: SampleStreamFlags {
+                    has_transparency: true,
+                    is_native_gif: true,
+                },
+                ..Default::default()
+            },
             palette_size: Some(64),
             frame_payload_variation: Some(0.35_f64),
             frame_delay_variation: Some(0.55_f64),
             aspect_ratio: Some(1.0_f64),
             _total_pixels: Some(90000),
             loop_frequency: Some(0.8_f64),
-            is_meme_platform: true,
-            is_human_semantic_name: true,
             cadence_score: Some(0.9_f64),
             directory_loop_intent_score: Some(1.0_f64),
-            is_high_value_source: true,
-            is_native_gif: true,
             palette_depth: Some(0.8_f64),
             motion_gini: Some(0.7_f64),
             block_skew: Some(0.6_f64),
@@ -3361,21 +3388,21 @@ mod tests {
             fps: Some(30.0),
             temporal_bpp: 0.4,
             spatial_bpp: 35.0,
-            has_transparency: false,
-            has_embedded_icc: true,
-            has_complex_color_profile: true,
+            flags: SampleFlags {
+                streams: SampleStreamFlags {
+                    has_transparency: false,
+                    is_native_gif: false,
+                },
+                ..Default::default()
+            },
             palette_size: Some(256),
             frame_payload_variation: Some(0.05_f64),
             frame_delay_variation: Some(0.02_f64),
             aspect_ratio: Some(1.78_f64),
             _total_pixels: Some(2_073_600),
             loop_frequency: Some(0.1_f64),
-            is_meme_platform: false,
-            is_human_semantic_name: false,
             cadence_score: Some(0.1_f64),
             directory_loop_intent_score: Some(0.5_f64),
-            is_high_value_source: false,
-            is_native_gif: false,
             palette_depth: Some(0.1_f64),
             motion_gini: Some(0.2_f64),
             block_skew: Some(0.1_f64),

@@ -372,7 +372,7 @@ pub fn active_progress_line() -> Option<String> {
 }
 
 #[must_use]
-pub fn wrap_output_for_active_progress(line: &str) -> String {
+pub fn wrap_output(line: &str) -> String {
     active_progress_line().map_or_else(
         || format!("{line}\n"),
         |progress_line| {
@@ -798,7 +798,7 @@ fn format_eta_simple(seconds: u64) -> String {
     }
 }
 
-pub struct FixedBottomProgress {
+pub struct FixedBottom {
     bar: ProgressBar,
     start_time: Instant,
     total: u64,
@@ -812,7 +812,7 @@ pub struct FixedBottomProgress {
     current_stage: Arc<Mutex<String>>,
 }
 
-impl FixedBottomProgress {
+impl FixedBottom {
     /// Create a new fixed-bottom progress bar for batch processing.
     ///
     /// # Panics
@@ -908,10 +908,10 @@ impl FixedBottomProgress {
         self.bar.inc(1);
     }
 
-    pub fn stats(&self) -> ProgressStats {
+    pub fn stats(&self) -> Stats {
         let input = self.input_bytes.load(Ordering::Relaxed);
         let output = self.output_bytes.load(Ordering::Relaxed);
-        ProgressStats {
+        Stats {
             total: self.total,
             processed: self.processed.load(Ordering::Relaxed),
             succeeded: self.succeeded.load(Ordering::Relaxed),
@@ -947,7 +947,7 @@ impl FixedBottomProgress {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProgressStats {
+pub struct Stats {
     pub total: u64,
     pub processed: u64,
     pub succeeded: u64,
@@ -959,7 +959,7 @@ pub struct ProgressStats {
     pub compression_ratio: f64,
 }
 
-pub struct ExploreProgress {
+pub struct Explore {
     start_time: Instant,
     input_size: u64,
     current_crf: Arc<Mutex<f32>>,
@@ -971,7 +971,7 @@ pub struct ExploreProgress {
     best_ssim: Arc<Mutex<f64>>,
 }
 
-impl ExploreProgress {
+impl Explore {
     #[must_use]
     pub fn new(input_size: u64) -> Self {
         Self {
@@ -1424,11 +1424,11 @@ pub fn create_spinner(message: &str) -> ProgressBar {
 }
 
 #[must_use]
-pub fn create_multi_progress() -> MultiProgress {
+pub fn create_multi() -> MultiProgress {
     MultiProgress::new()
 }
 
-pub struct BatchProgress {
+pub struct Batch {
     pub total: u64,
     pub processed: u64,
     pub succeeded: u64,
@@ -1437,7 +1437,7 @@ pub struct BatchProgress {
     bar: ProgressBar,
 }
 
-impl BatchProgress {
+impl Batch {
     #[must_use]
     pub fn new(total: u64, prefix: &str) -> Self {
         Self {

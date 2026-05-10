@@ -87,19 +87,15 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
         debug!("   hvcc_data.len: {}", hvcc_data.len());
 
         if hvcc_data.len() >= 20 {
-            let profile_idc = if let Some(b) = hvcc_data.get(1) {
-                b & 0x1F
-            } else {
+            let Some(b) = hvcc_data.get(1) else {
                 warn!("☢️ [CORRUPTION] HEIC hvcC box truncated: missing profile_idc");
                 return Err(ImgQualityError::AnalysisError("hvcC truncated".to_string()));
             };
+            let profile_idc = b & 0x1F;
 
-            // Bytes 2-5: general_profile_compatibility_flags (32 bits)
             let mut compat_bytes = [0u8; 4];
             for (i, byte) in compat_bytes.iter_mut().enumerate() {
-                *byte = if let Some(b) = hvcc_data.get(2 + i) {
-                    *b
-                } else {
+                let Some(b) = hvcc_data.get(2 + i) else {
                     warn!(
                         "☢️ [CORRUPTION] HEIC hvcC box truncated at compatibility flags byte {}",
                         i
@@ -108,22 +104,20 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         "hvcC flags truncated".to_string(),
                     ));
                 };
+                *byte = *b;
             }
             let compat_flags = u32::from_be_bytes(compat_bytes);
 
             // HEVCDecoderConfigurationRecord fixed fields
-            let chroma_format_idc = if let Some(b) = hvcc_data.get(16) {
-                b & 0x03
-            } else {
+            let Some(b_16) = hvcc_data.get(16) else {
                 warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at chroma_format_idc");
                 return Err(ImgQualityError::AnalysisError(
                     "hvcC chroma truncated".to_string(),
                 ));
             };
+            let chroma_format_idc = b_16 & 0x03;
 
-            let byte_17 = if let Some(b) = hvcc_data.get(17) {
-                *b
-            } else {
+            let Some(byte_17) = hvcc_data.get(17) else {
                 warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at bit_depth field");
                 return Err(ImgQualityError::AnalysisError(
                     "hvcC bit_depth truncated".to_string(),

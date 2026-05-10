@@ -17,14 +17,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-pub struct MsssimProgressMonitor {
+pub struct Monitor {
     duration_secs: f64,
     current_time_us: AtomicU64,
     channel_scores: Mutex<HashMap<String, f64>>,
     start_time: Instant,
 }
 
-impl MsssimProgressMonitor {
+impl Monitor {
     #[must_use]
     pub fn new(duration_secs: f64, _total_frames: u64) -> Self {
         Self {
@@ -36,26 +36,23 @@ impl MsssimProgressMonitor {
     }
 
     pub fn update_from_line(&self, line: &str) -> Option<u32> {
-        if let Some(val) = line.strip_prefix("out_time_us=")
-            && let Ok(time_us) = val.parse::<u64>()
-        {
-            self.current_time_us.store(time_us, Ordering::Relaxed);
+        let val = line.strip_prefix("out_time_us=")?;
+        let time_us = val.parse::<u64>().ok()?;
 
-            let current_secs = crate::numeric_cast::u64_to_f64(time_us)
-                / crate::constants::MICROSECONDS_PER_SECOND;
-            let progress_pct = if self.duration_secs > 0.0_f64 {
-                crate::numeric_cast::f64_to_u32_sat(
-                    (current_secs / self.duration_secs * crate::constants::PERCENTAGE_FACTOR)
-                        .min(crate::constants::PERCENTAGE_FACTOR),
-                )
-            } else {
-                0
-            };
+        self.current_time_us.store(time_us, Ordering::Relaxed);
 
-            return Some(progress_pct);
-        }
+        let current_secs =
+            crate::numeric_cast::u64_to_f64(time_us) / crate::constants::MICROSECONDS_PER_SECOND;
+        let progress_pct = if self.duration_secs > 0.0_f64 {
+            crate::numeric_cast::f64_to_u32_sat(
+                (current_secs / self.duration_secs * crate::constants::PERCENTAGE_FACTOR)
+                    .min(crate::constants::PERCENTAGE_FACTOR),
+            )
+        } else {
+            0
+        };
 
-        None
+        Some(progress_pct)
     }
 
     pub fn print_progress(&self, channel: &str, progress_pct: u32) {
@@ -172,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_progress_monitor_creation() {
-        let monitor = MsssimProgressMonitor::new(
+        let monitor = Monitor::new(
             crate::constants::PROGRESS_DEFAULT_DURATION,
             crate::constants::PROGRESS_DEFAULT_FRAMES,
         );
@@ -185,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_update_from_line() {
-        let monitor = MsssimProgressMonitor::new(
+        let monitor = Monitor::new(
             crate::constants::PROGRESS_DEFAULT_DURATION,
             crate::constants::PROGRESS_DEFAULT_FRAMES,
         );
@@ -199,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_progress_calculation() {
-        let monitor = MsssimProgressMonitor::new(crate::constants::PERCENTAGE_FACTOR, 2500);
+        let monitor = Monitor::new(crate::constants::PERCENTAGE_FACTOR, 2500);
 
         monitor.update_from_line("out_time_us=0");
         assert_eq!(monitor.current_progress(), 0);
@@ -219,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_channel_score_storage() {
-        let monitor = MsssimProgressMonitor::new(
+        let monitor = Monitor::new(
             crate::constants::PROGRESS_DEFAULT_DURATION,
             crate::constants::PROGRESS_DEFAULT_FRAMES,
         );
@@ -236,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_zero_duration() {
-        let monitor = MsssimProgressMonitor::new(0.0, 0);
+        let monitor = Monitor::new(0.0, 0);
 
         monitor.update_from_line("out_time_us=1000000");
         assert_eq!(monitor.current_progress(), 0);
@@ -244,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_monitor_ffmpeg_process_invalid_command() {
-        let monitor = MsssimProgressMonitor::new(10.0, 250);
+        let monitor = Monitor::new(10.0, 250);
         let result = monitor.monitor_ffmpeg_process(&["invalid_command"], "Y");
         assert!(result.is_err());
     }
@@ -258,7 +255,7 @@ mod tests {
             #[test]
             fn prop_progress_parsing_correctness(time_us in 0u64..1_000_000_000u64) {
                 let duration_secs = crate::constants::PERCENTAGE_FACTOR;
-                let monitor = MsssimProgressMonitor::new(duration_secs, 2500);
+                let monitor = Monitor::new(duration_secs, 2500);
                 let line = format!("out_time_us={time_us}");
                 let progress = monitor.update_from_line(&line);
                 prop_assert!(progress.is_some());
@@ -273,7 +270,7 @@ mod tests {
                 duration_secs in 1.0f64..10000.0f64,
                 time_us in 0u64..10_000_000_000u64
             ) {
-                let monitor = MsssimProgressMonitor::new(duration_secs, crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64);
+                let monitor = Monitor::new(duration_secs, crate::constants::MSSSIM_DEFAULT_SAMPLED_FRAMES as u64);
                 let line = format!("out_time_us={time_us}");
                 if let Some(pct) = monitor.update_from_line(&line) {
                     prop_assert!(pct <= 100);

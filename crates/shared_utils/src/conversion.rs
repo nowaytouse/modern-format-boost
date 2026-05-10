@@ -1,7 +1,7 @@
 //! Conversion Utilities Module
 //!
 //! Provides common conversion functionality shared across all tools:
-//! - `ConversionResult`: Unified result structure
+//! - `TaskResult`: Unified result structure
 //! - `ConvertOptions`: Common conversion options
 //! - Anti-duplicate mechanism: Track processed files
 //! - Result builders: Reduce boilerplate code
@@ -29,7 +29,7 @@ use crate::builder_base::ToolBuilder;
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::conversion_types::SelectedCodec;
 use crate::ffprobe::probe_video;
-use crate::metadata::preserve_metadata;
+use crate::metadata::preserve;
 use crate::modern_ui::{colors, symbols};
 use crate::quality_matcher::is_apple_native_format;
 use crate::smart_file_copier::copy_on_skip_or_fail;
@@ -294,7 +294,7 @@ pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionResult {
+pub struct TaskResult {
     pub success: bool,
     pub input_path: String,
     pub output_path: Option<String>,
@@ -309,7 +309,7 @@ pub struct ConversionResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConversionOutcome {
+pub enum Outcome {
     Converted,
     Skipped,
     FallbackPreserved,
@@ -317,7 +317,7 @@ pub enum ConversionOutcome {
     Failed,
 }
 
-/// Metrics for a video exploration outcome, used to populate `ConversionResult`.
+/// Metrics for a video exploration outcome, used to populate `TaskResult`.
 #[derive(Debug, Clone, Default)]
 pub struct VideoExplorationMetrics<'a> {
     pub input_size: u64,
@@ -380,7 +380,7 @@ impl VideoExplorationMetrics<'_> {
     }
 }
 
-impl ConversionResult {
+impl TaskResult {
     fn copy_original_for_fallback(
         input: &Path,
         options: &ConvertOptions,
@@ -409,19 +409,19 @@ impl ConversionResult {
     }
 
     #[must_use]
-    pub const fn outcome(&self) -> ConversionOutcome {
+    pub const fn outcome(&self) -> Outcome {
         if self.ignored {
-            ConversionOutcome::Ignored
+            Outcome::Ignored
         } else if self.skipped {
             if self.success {
-                ConversionOutcome::Skipped
+                Outcome::Skipped
             } else {
-                ConversionOutcome::FallbackPreserved
+                Outcome::FallbackPreserved
             }
         } else if self.success {
-            ConversionOutcome::Converted
+            Outcome::Converted
         } else {
-            ConversionOutcome::Failed
+            Outcome::Failed
         }
     }
 
@@ -926,10 +926,14 @@ impl ConvertOptions {
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
             crate::flag_validator::FlagRequest {
-                explore: self.explore(),
-                match_quality: self.match_quality(),
-                compress: self.compress(),
-                ultimate: self.ultimate(),
+                base: crate::flag_validator::FlagBase {
+                    explore: self.explore(),
+                    match_quality: self.match_quality(),
+                    compress: self.compress(),
+                },
+                tier: crate::flag_validator::FlagTier {
+                    ultimate: self.ultimate(),
+                },
             },
         )
     }
@@ -1103,13 +1107,13 @@ pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
     options: &ConvertOptions,
-) -> Option<ConversionResult> {
+) -> Option<TaskResult> {
     if !options.force() && is_already_processed(input) {
-        return Some(ConversionResult::skipped_duplicate(input));
+        return Some(TaskResult::skipped_duplicate(input));
     }
 
     if output.exists() && !options.force() {
-        return Some(ConversionResult::skipped_exists(input, output));
+        return Some(TaskResult::skipped_exists(input, output));
     }
 
     None
@@ -1119,14 +1123,14 @@ pub fn pre_conversion_check(
 ///
 /// # Errors
 /// Returns an `io::Result` if finalization fails.
-pub fn finalize_conversion(
+pub fn finalize_task(
     input: &Path,
     output: &Path,
     input_size: u64,
     format_name: &str,
     extra_info: Option<&str>,
     options: &ConvertOptions,
-) -> std::io::Result<ConversionResult> {
+) -> std::io::Result<TaskResult> {
     let output_size = std::fs::metadata(output)?.len();
 
     // Metadata already preserved by commit_temp_to_output_with_metadata
@@ -1142,7 +1146,7 @@ pub fn finalize_conversion(
         safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
     }
 
-    Ok(ConversionResult::success(
+    Ok(TaskResult::success(
         input,
         output,
         input_size,
@@ -1162,7 +1166,7 @@ pub fn post_conversion_actions(
     output: &Path,
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
-    if let Err(e) = preserve_metadata(input, output) {
+    if let Err(e) = preserve(input, output) {
         eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
 
@@ -1283,7 +1287,7 @@ pub fn commit_temp_to_output_with_metadata(
     if let Some(src) = original {
         // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
         // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
-        if let Err(e) = crate::metadata::preserve_metadata(src, output) {
+        if let Err(e) = crate::metadata::preserve(src, output) {
             crate::log_upstream_error!(
                 "Metadata preservation",
                 "Failed to preserve metadata for {}: {}",
@@ -1317,6 +1321,291 @@ pub fn commit_temp_to_output_with_metadata(
     Ok(true)
 }
 
+/// Read image dimensions directly from the file header without external dependencies.
+///
+/// Supports the hot-path image formats (GIF/PNG/JPEG/WebP/BMP). Much faster and more
+/// reliable than subprocess fallbacks — works regardless of ffprobe/ImageMagick availability
+/// and handles filenames with non-ASCII characters uniformly.
+///
+/// Returns `None` if the format is unsupported or the header is malformed.
+#[must_use]
+pub fn dimensions_from_header(input: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+
+    const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    let mut file = std::fs::File::open(input).ok()?;
+    // Large enough to cover all supported header layouts (JPEG SOF can appear a few KB in).
+    let mut head = [0u8; 4096];
+    let n = file.read(&mut head).ok()?;
+    let head = head.get(..n)?;
+
+    // GIF: magic "GIF87a"/"GIF89a", logical screen width/height at bytes 6..10 as little-endian u16.
+    if head.len() >= 10 && (head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a")) {
+        let w = u16::from_le_bytes([head[6], head[7]]);
+        let h = u16::from_le_bytes([head[8], head[9]]);
+        if w > 0 && h > 0 {
+            return Some((u32::from(w), u32::from(h)));
+        }
+    }
+
+    // PNG: magic 89 50 4E 47 0D 0A 1A 0A then IHDR chunk at offset 8 (4 len + "IHDR" + width/height BE u32).
+    if head.len() >= 24 && head.starts_with(&PNG_MAGIC) && &head[12..16] == b"IHDR" {
+        let w = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
+        let h = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
+    }
+
+    // BMP: magic "BM", DIB header width/height at offsets 18..22 and 22..26 (little-endian i32; height can be negative).
+    if head.len() >= 26 && head.starts_with(b"BM") {
+        let w = i32::from_le_bytes([head[18], head[19], head[20], head[21]]);
+        let h = i32::from_le_bytes([head[22], head[23], head[24], head[25]]);
+        if w > 0 && h != 0 {
+            return Some((w.unsigned_abs(), h.unsigned_abs()));
+        }
+    }
+
+    // WebP: "RIFF" <size> "WEBP" then VP8/VP8L/VP8X chunk.
+    if head.len() >= 30 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        let chunk = &head[12..16];
+        if chunk == b"VP8 " && head.len() >= 30 {
+            // Lossy VP8 bitstream: width/height at chunk offset 14 (14-bit values after 3-byte frame tag).
+            let w = u16::from_le_bytes([head[26], head[27]]) & 0x3FFF;
+            let h = u16::from_le_bytes([head[28], head[29]]) & 0x3FFF;
+            if w > 0 && h > 0 {
+                return Some((u32::from(w), u32::from(h)));
+            }
+        } else if chunk == b"VP8L" && head.len() >= 25 {
+            // Lossless VP8L: signature 0x2F then 28 bits = (width-1)<<0 | (height-1)<<14.
+            let sig = head[20];
+            if sig == 0x2F {
+                let b1 = u32::from(head[21]);
+                let b2 = u32::from(head[22]);
+                let b3 = u32::from(head[23]);
+                let b4 = u32::from(head[24]);
+                let w = (b1 | ((b2 & 0x3F) << 8)) + 1;
+                let h = (((b2 & 0xC0) >> 6) | (b3 << 2) | ((b4 & 0x0F) << 10)) + 1;
+                if w > 0 && h > 0 {
+                    return Some((w, h));
+                }
+            }
+        } else if chunk == b"VP8X" && head.len() >= 30 {
+            // Extended: canvas width-1 at offset 24..27, canvas height-1 at 27..30 (24-bit LE).
+            let w =
+                (u32::from(head[24]) | (u32::from(head[25]) << 8) | (u32::from(head[26]) << 16))
+                    + 1;
+            let h =
+                (u32::from(head[27]) | (u32::from(head[28]) << 8) | (u32::from(head[29]) << 16))
+                    + 1;
+            if w > 0 && h > 0 {
+                return Some((w, h));
+            }
+        }
+    }
+
+    // JPEG: FF D8 start of image.
+    if head.starts_with(&[0xFF, 0xD8]) {
+        return scan_jpeg_dimensions(&mut file, head);
+    }
+
+    // ISOBMFF (HEIC/HEIF/AVIF/MP4): ftyp box.
+    if head.len() >= 16 && &head[4..8] == b"ftyp" {
+        return scan_isobmff_dimensions(&mut file, head);
+    }
+
+    // JPEG XL container: magic bytes.
+    if head.len() >= 12 && &head[0..12] == b"\x00\x00\x00\x0CJXL \x0D\x0A\x87\x0A" {
+        return scan_jxl_container_dimensions(&mut file, head);
+    }
+
+    None
+}
+
+fn scan_jpeg_dimensions(file: &mut std::fs::File, head: &[u8]) -> Option<(u32, u32)> {
+    use std::io::{Read, Seek, SeekFrom};
+    // We may need more than the initial 4KB; widen the buffer progressively.
+    let mut buf: Vec<u8> = head.to_vec();
+    // Seek restart for sequential scan.
+    if file.seek(SeekFrom::Start(buf.len() as u64)).is_ok() {
+        let mut more = [0u8; 8192];
+        while let Ok(read_n) = file.read(&mut more) {
+            if read_n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&more[..read_n]);
+            if buf.len() >= 2_097_152 {
+                break; // Hard cap at 2 MiB; avoid OOM on pathological files.
+            }
+        }
+    }
+
+    let mut i = 2_usize;
+    while i + 8 < buf.len() {
+        if buf[i] != 0xFF {
+            return None;
+        }
+        // Skip padding FF bytes.
+        while i + 1 < buf.len() && buf[i + 1] == 0xFF {
+            i += 1;
+        }
+        if i + 1 >= buf.len() {
+            return None;
+        }
+        let marker = buf[i + 1];
+        i += 2;
+        // Standalone markers without payload.
+        if marker == 0xD8 || marker == 0xD9 || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+        if i + 2 > buf.len() {
+            return None;
+        }
+        let seg_len = u16::from_be_bytes([buf[i], buf[i + 1]]) as usize;
+        // SOFn (Start of Frame): 0xC0, 0xC1, 0xC2, 0xC3, 0xC5-0xC7, 0xC9-0xCB, 0xCD-0xCF.
+        let is_sof = (0xC0..=0xCF).contains(&marker)
+            && marker != 0xC4 // DHT
+            && marker != 0xC8 // JPG
+            && marker != 0xCC; // DAC
+        if is_sof && i + 7 <= buf.len() {
+            let h = u16::from_be_bytes([buf[i + 3], buf[i + 4]]);
+            let w = u16::from_be_bytes([buf[i + 5], buf[i + 6]]);
+            if w > 0 && h > 0 {
+                return Some((u32::from(w), u32::from(h)));
+            }
+            return None;
+        }
+        if seg_len < 2 {
+            return None;
+        }
+        i += seg_len;
+    }
+    None
+}
+
+fn scan_isobmff_dimensions(file: &mut std::fs::File, head: &[u8]) -> Option<(u32, u32)> {
+    use std::io::{Read, Seek, SeekFrom};
+    // Fully buffer up to 2 MiB — "meta" box can appear after "mdat" for HEIF.
+    let mut buf: Vec<u8> = head.to_vec();
+    if file.seek(SeekFrom::Start(buf.len() as u64)).is_ok() {
+        let mut more = [0u8; 16_384];
+        while let Ok(read_n) = file.read(&mut more) {
+            if read_n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&more[..read_n]);
+            if buf.len() >= 2_097_152 {
+                break;
+            }
+        }
+    }
+    scan_isobmff_ispe(&buf)
+}
+
+fn scan_jxl_container_dimensions(file: &mut std::fs::File, head: &[u8]) -> Option<(u32, u32)> {
+    use std::io::{Read, Seek, SeekFrom};
+    // ISOBMFF-style JXL container: same scan_isobmff_ispe works since JXL uses image item props too.
+    let mut buf: Vec<u8> = head.to_vec();
+    if file.seek(SeekFrom::Start(buf.len() as u64)).is_ok() {
+        let mut more = [0u8; 16_384];
+        while let Ok(read_n) = file.read(&mut more) {
+            if read_n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&more[..read_n]);
+            if buf.len() >= 1_048_576 {
+                break;
+            }
+        }
+    }
+    scan_isobmff_ispe(&buf)
+}
+
+/// Scan ISOBMFF byte slice for the first `ispe` (Image Spatial Extents) box and return (width, height).
+///
+/// ISOBMFF layout: box = [4-byte BE length][4-byte type]{payload...}
+/// For `ispe` v0: payload = [1-byte version=0][3-byte flags=0][4-byte width BE][4-byte height BE].
+/// We scan recursively through container boxes (`meta`, `iprp`, `ipco`) to find `ispe`.
+fn scan_isobmff_ispe(buf: &[u8]) -> Option<(u32, u32)> {
+    // Container boxes whose children we must recurse into.
+    const CONTAINERS: &[&[u8; 4]] = &[b"meta", b"iprp", b"ipco", b"moov", b"trak", b"mdia"];
+
+    fn recurse(data: &[u8], depth: u32) -> Option<(u32, u32)> {
+        if depth > 8 {
+            return None; // Defend against pathological nesting.
+        }
+        let mut i: usize = 0;
+        while i + 8 <= data.len() {
+            let size =
+                u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+            let box_type = &data[i + 4..i + 8];
+
+            // Header + payload offset. size==1 means 64-bit extended size follows.
+            let (hdr_len, total_len) = if size == 1 {
+                if i + 16 > data.len() {
+                    return None;
+                }
+                let ext = u64::from_be_bytes([
+                    data[i + 8],
+                    data[i + 9],
+                    data[i + 10],
+                    data[i + 11],
+                    data[i + 12],
+                    data[i + 13],
+                    data[i + 14],
+                    data[i + 15],
+                ]);
+                (16_usize, usize::try_from(ext).unwrap_or(usize::MAX))
+            } else if size == 0 {
+                // Extends to end of stream.
+                (8usize, data.len() - i)
+            } else {
+                (8usize, size)
+            };
+
+            if total_len < hdr_len || i + total_len > data.len() {
+                // Box extends past buffer; try partial payload for containers.
+                if CONTAINERS.iter().any(|&t| t == box_type)
+                    && let Some(dims) = recurse(&data[i + hdr_len..], depth + 1)
+                {
+                    return Some(dims);
+                }
+                return None;
+            }
+
+            let payload = &data[i + hdr_len..i + total_len];
+
+            if box_type == b"ispe" && payload.len() >= 12 {
+                // v0 ispe: 4 bytes (version+flags) + 4 bytes width + 4 bytes height.
+                let w = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let h = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                if w > 0 && h > 0 {
+                    return Some((w, h));
+                }
+            }
+
+            // "meta" is a FullBox: skip 4 bytes of version+flags before its children.
+            let recurse_payload = if box_type == b"meta" && payload.len() >= 4 {
+                &payload[4..]
+            } else {
+                payload
+            };
+
+            if CONTAINERS.iter().any(|&t| t == box_type)
+                && let Some(dims) = recurse(recurse_payload, depth + 1)
+            {
+                return Some(dims);
+            }
+
+            i += total_len;
+        }
+        None
+    }
+
+    recurse(buf, 0)
+}
+
 /// Media info fallback chain that does NOT invoke ffprobe.
 ///
 /// Tries the `image` crate first, then `ImageMagick identify` with extended format strings
@@ -1324,7 +1613,25 @@ pub fn commit_temp_to_output_with_metadata(
 /// This fulfills the "Zero-Forgery" mandate by using actual measured data.
 #[must_use]
 pub fn media_info_without_ffprobe(input: &Path) -> Option<(u32, u32, String, u8)> {
-    // Stage 1: ImageMagick identify (covers JXL, HEIC, AVIF and provides bit-depth/channels)
+    // Stage 0: Native header parse — fastest path, no subprocess, no external deps.
+    // Covers GIF/PNG/JPEG/WebP/BMP which are the vast majority of files.
+    // We only have dimensions here; channel/depth extraction still requires a bitstream analyzer.
+    if let Some((w, h)) = dimensions_from_header(input) {
+        return Some((w, h, "unknown".to_string(), 8));
+    }
+
+    // Stage 1: Fast in-process image crate (handles more formats including some TIFF/ICO variants).
+    if let Ok(img) =
+        image::ImageReader::open(input).and_then(image::ImageReader::with_guessed_format)
+        && let Ok(dims) = img.into_dimensions()
+    {
+        let (w, h) = dims;
+        if w > 0 && h > 0 {
+            return Some((w, h, "unknown".to_string(), 8));
+        }
+    }
+
+    // Stage 2: ImageMagick identify (covers JXL, HEIC, AVIF and provides bit-depth/channels).
     // Format: %w (width) %h (height) %[channels] (type string, e.g. 'srgba') %z (depth)
     let output = crate::image_builders::IdentifyBuilder::new()
         .use_magick(true)
@@ -1360,18 +1667,6 @@ pub fn media_info_without_ffprobe(input: &Path) -> Option<(u32, u32, String, u8)
         }
     }
 
-    // Stage 2: Fast in-process image crate (as last resort, only for dimensions)
-    if let Ok(img) =
-        image::ImageReader::open(input).and_then(image::ImageReader::with_guessed_format)
-        && let Ok(dims) = img.into_dimensions()
-    {
-        let (w, h) = dims;
-        if w > 0 && h > 0 {
-            // We only have dimensions here, we return a very conservative "unknown" for channels/depth
-            // but bitstream analysis (Stage 1) is much preferred for technical honesty.
-            return Some((w, h, "unknown".to_string(), 8));
-        }
-    }
     None
 }
 
@@ -1419,7 +1714,7 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// 2. Check compress goal: if compress=true AND increase ≥ tolerance → reject
 /// 3. Otherwise: accept
 ///
-/// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
+/// Returns `Some(TaskResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
 #[derive(Debug, Clone, Copy)]
 struct SizeDeltaSummary {
@@ -1517,14 +1812,14 @@ impl SizeToleranceCheck<'_> {
         None
     }
 
-    fn handle_failure(&self, failure: SizeGuardFailure) -> ConversionResult {
+    fn handle_failure(&self, failure: SizeGuardFailure) -> TaskResult {
         match failure {
             SizeGuardFailure::ToleranceExceeded => self.reject_tolerance_exceeded(),
             SizeGuardFailure::CompressionGoalMissed => self.reject_compression_goal(),
         }
     }
 
-    fn reject_tolerance_exceeded(&self) -> ConversionResult {
+    fn reject_tolerance_exceeded(&self) -> TaskResult {
         let delta = self.delta();
         let mode = if self.options.allow_size_tolerance() {
             "tolerance: absolute (< 1_048_576 bytes increase)"
@@ -1537,10 +1832,10 @@ impl SizeToleranceCheck<'_> {
         self.preserve_original(SizeGuardFailure::ToleranceExceeded);
         mark_as_processed(self.input);
 
-        ConversionResult::skipped_size_increase(self.input, self.input_size, self.output_size)
+        TaskResult::skipped_size_increase(self.input, self.input_size, self.output_size)
     }
 
-    fn reject_compression_goal(&self) -> ConversionResult {
+    fn reject_compression_goal(&self) -> TaskResult {
         let delta = self.delta();
 
         if delta.change_pct.abs() < 0.01_f64 {
@@ -1562,7 +1857,7 @@ impl SizeToleranceCheck<'_> {
         self.preserve_original(SizeGuardFailure::CompressionGoalMissed);
         mark_as_processed(self.input);
 
-        ConversionResult::skipped_size_unchanged(self.input, self.input_size, self.format_label)
+        TaskResult::skipped_size_unchanged(self.input, self.input_size, self.format_label)
     }
 
     fn log_discard(&self, delta: SizeDeltaSummary, mode: Option<&str>) {
@@ -1712,7 +2007,7 @@ pub fn check_size_tolerance(
     output_size: u64,
     options: &ConvertOptions,
     format_label: &str,
-) -> Option<ConversionResult> {
+) -> Option<TaskResult> {
     let check = SizeToleranceCheck {
         input,
         output,
@@ -2219,7 +2514,7 @@ mod tests {
         let input = Path::new("/test/input.png");
         let output = Path::new("/test/output.avif");
 
-        let result = ConversionResult::success(input, output, 1000, 500, "AVIF", None, None);
+        let result = TaskResult::success(input, output, 1000, 500, "AVIF", None, None);
 
         assert!(result.success);
         assert!(!result.skipped);
@@ -2243,55 +2538,55 @@ mod tests {
             "expected '-50.0%' in: {}",
             result.message
         );
-        assert_eq!(result.outcome(), ConversionOutcome::Converted);
+        assert_eq!(result.outcome(), Outcome::Converted);
     }
 
     #[test]
     fn test_conversion_result_size_increase() {
         let input = Path::new("/test/input.png");
 
-        let result = ConversionResult::skipped_size_increase(input, 500, 1000);
+        let result = TaskResult::skipped_size_increase(input, 500, 1000);
 
         assert!(result.success);
         assert!(result.skipped);
         assert_eq!(result.skip_reason, Some("size_increase".to_string()));
         assert!(result.message.contains("larger"));
-        assert_eq!(result.outcome(), ConversionOutcome::Skipped);
+        assert_eq!(result.outcome(), Outcome::Skipped);
     }
 
     #[test]
     fn test_conversion_result_size_unchanged() {
         let input = Path::new("/test/input.png");
 
-        let result = ConversionResult::skipped_size_unchanged(input, 1000, "JXL");
+        let result = TaskResult::skipped_size_unchanged(input, 1000, "JXL");
 
         assert!(result.success);
         assert!(result.skipped);
         assert_eq!(result.skip_reason, Some("size_unchanged".to_string()));
         assert!(result.message.contains("unchanged"));
         assert!(result.message.contains("compression goal not achieved"));
-        assert_eq!(result.outcome(), ConversionOutcome::Skipped);
+        assert_eq!(result.outcome(), Outcome::Skipped);
     }
 
     #[test]
     fn test_conversion_result_outcome_fallback_preserved() {
         let input = Path::new("input.webp");
         let options = ConvertOptions::default();
-        let result = ConversionResult::failed_with_fallback(
+        let result = TaskResult::failed_with_fallback(
             input,
             &options,
             "fallback preserved",
             "encode_failed",
         );
 
-        assert_eq!(result.outcome(), ConversionOutcome::FallbackPreserved);
+        assert_eq!(result.outcome(), Outcome::FallbackPreserved);
     }
 
     #[test]
     fn test_conversion_result_converted_with_message() {
         let input = Path::new("/test/input.mov");
         let output = Path::new("/test/output.mp4");
-        let result = ConversionResult::converted_with_message(
+        let result = TaskResult::converted_with_message(
             input,
             output,
             2_000,
@@ -2303,7 +2598,7 @@ mod tests {
         assert!(!result.skipped);
         assert_eq!(result.output_path.as_deref(), Some("/test/output.mp4"));
         assert_eq!(result.size_reduction, Some(50.0_f64));
-        assert_eq!(result.outcome(), ConversionOutcome::Converted);
+        assert_eq!(result.outcome(), Outcome::Converted);
     }
 
     #[test]
@@ -2476,7 +2771,7 @@ mod tests {
             explored_from_crf: Some(21.0),
             quality_label: Some("Medium"),
         };
-        let result = ConversionResult::success_video_explored(input_path, output_path, &metrics);
+        let result = TaskResult::success_video_explored(input_path, output_path, &metrics);
 
         assert!(result.success);
         assert!(result.message.contains("HEVC"));
@@ -2488,5 +2783,141 @@ mod tests {
         assert!(result.message.contains("Medium"));
         // Colors are present
         assert!(result.message.contains("\x1b[1;32m"));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_gif87a() {
+        // GIF87a, 160x120 (0xA0 0x00, 0x78 0x00)
+        let bytes = [
+            b'G', b'I', b'F', b'8', b'7', b'a', 0xA0, 0x00, 0x78, 0x00, 0x00, 0x00,
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((160, 120)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_gif89a() {
+        let bytes = [
+            b'G', b'I', b'F', b'8', b'9', b'a', 0x01, 0x02, 0x03, 0x04, 0x00, 0x00,
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((0x0201, 0x0403)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_png() {
+        // Minimal PNG: 8-byte magic + 4-byte IHDR length + "IHDR" + 4-byte width BE + 4-byte height BE
+        let bytes = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // magic
+            0x00, 0x00, 0x00, 0x0D, // IHDR length = 13
+            b'I', b'H', b'D', b'R', // IHDR
+            0x00, 0x00, 0x02, 0x80, // width = 640
+            0x00, 0x00, 0x01, 0xE0, // height = 480
+            0x08, 0x02, 0x00, 0x00,
+            0x00, // bit depth, color type, compression, filter, interlace
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((640, 480)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_jpeg_sof0() {
+        // Minimal JPEG: SOI + SOF0 marker + length(17) + precision + height BE + width BE + components
+        let bytes = [
+            0xFF, 0xD8, // SOI
+            0xFF, 0xC0, // SOF0
+            0x00, 0x11, // length
+            0x08, // precision
+            0x01, 0xE0, // height = 480
+            0x02, 0x80, // width = 640
+            0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((640, 480)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_jpeg_with_app_segments() {
+        // JPEG with APP0 (JFIF) + APP1 (EXIF-ish padding) before SOF0 — tests scan across markers.
+        let mut bytes = vec![0xFF, 0xD8]; // SOI
+        // APP0 segment: FF E0, length 0x10, "JFIF\0", version 1.1, density units etc. (16 bytes total with length)
+        bytes.extend_from_slice(&[
+            0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x48,
+            0x00, 0x48, 0x00, 0x00,
+        ]);
+        // APP1 segment: 32-byte dummy payload (length 0x0020 includes the 2 length bytes)
+        bytes.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x20]);
+        bytes.extend(std::iter::repeat_n(0x00, 30));
+        // SOF0 marker: FF C0, length 0x0011, precision 8, height 0x0300=768, width 0x0400=1024, 3 components
+        bytes.extend_from_slice(&[
+            0xFF, 0xC0, 0x00, 0x11, 0x08, 0x03, 0x00, 0x04, 0x00, 0x03, 0x01, 0x22, 0x00, 0x02,
+            0x11, 0x01, 0x03, 0x11, 0x01,
+        ]);
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((1024, 768)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_webp_vp8() {
+        // WebP VP8 (lossy): RIFF + size + WEBP + VP8 + chunk length + 3-byte frame tag + start code + 14-bit w/h
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // size (ignored by our reader)
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8 ");
+        bytes.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // chunk length
+        bytes.extend_from_slice(&[0x00, 0x00, 0x00]); // 3-byte frame tag (key frame)
+        bytes.extend_from_slice(&[0x9D, 0x01, 0x2A]); // start code
+        // width = 640 (low 14 bits), height = 480
+        bytes.extend_from_slice(&[0x80, 0x02, 0xE0, 0x01]);
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((640, 480)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_bmp() {
+        // BMP: "BM" + size(dummy) + reserved(4) + offset(4) + DIB header size(4) + width LE i32 + height LE i32 + ...
+        let bytes = [
+            b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x36, 0x00, 0x00, 0x00, 0xA0, 0x00,
+            0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x00,
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), Some((160, 120)));
+    }
+
+    #[test]
+    fn test_dimensions_from_header_rejects_unknown() {
+        let bytes = b"this is not any recognised image format at all whatsoever";
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), None);
+    }
+
+    #[test]
+    fn test_dimensions_from_header_rejects_truncated_gif() {
+        // GIF magic but truncated before width/height
+        let bytes = b"GIF89a";
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), None);
+    }
+
+    #[test]
+    fn test_dimensions_from_header_rejects_zero_dims() {
+        // PNG with width=0
+        let bytes = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H',
+            b'D', b'R', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xE0, 0x08, 0x02, 0x00, 0x00,
+            0x00,
+        ];
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert_eq!(dimensions_from_header(tmp.path()), None);
     }
 }

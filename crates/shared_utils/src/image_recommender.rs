@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::image_analyzer::{ImageFeatures, JxlIndicator};
     use crate::image_detection::PrecisionMetadata;
-    use crate::types::{ProcessHistory, VisualPerception};
+    use crate::types::{ProcessHistory, Visual};
     use std::collections::HashMap;
 
     #[test]
@@ -149,7 +149,7 @@ mod tests {
             hdr_info: None,
             precision: PrecisionMetadata::default(),
             history: ProcessHistory::default(),
-            perception: VisualPerception::default(),
+            perception: Visual::default(),
             analysis_error: None,
             cache_version: 0,
         };

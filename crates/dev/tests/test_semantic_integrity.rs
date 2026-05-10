@@ -1,5 +1,5 @@
 use shared_utils::anyhow::Result;
-use shared_utils::cli_runner::{CliProcessingResult, CliRunnerConfig, run_auto_command};
+use shared_utils::cli_runner::{CliProcessingResult, Config as CliRunnerConfig, run_auto_command};
 use shared_utils::unified_error::UnifiedError;
 use std::fs;
 use std::path::Path;

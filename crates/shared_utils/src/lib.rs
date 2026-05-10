@@ -1,6 +1,7 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics, portable_simd, try_blocks, specialization)]
 #![allow(incomplete_features)]
+#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::panic))]
@@ -18,7 +19,7 @@
 //! - External tools detection
 //! - Codec information
 //! - Metadata preservation (EXIF/IPTC/xattr/timestamps/ACL)
-//! - Conversion utilities (`ConversionResult`, `ConvertOptions`, anti-duplicate)
+//! - Conversion utilities (`Conversion..Result`, `ConvertOptions`, anti-duplicate)
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 //! - Unified version management (program, cache, schema versions)
@@ -54,22 +55,22 @@ impl Rational {
     }
 
     #[must_use]
-    pub fn is_finite(self) -> bool {
+    pub const fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
     #[must_use]
-    pub fn mul_add(self, a: Self, b: Self) -> Self {
+    pub const fn mul_add(self, a: Self, b: Self) -> Self {
         Self(self.0.mul_add(a.0, b.0))
     }
 
     #[must_use]
-    pub fn abs(self) -> Self {
+    pub const fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
     #[must_use]
-    pub fn max(self, other: Self) -> Self {
+    pub const fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 }
@@ -91,15 +92,22 @@ impl std::ops::Neg for Rational {
 }
 
 #[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_from_int_lossless {
-    ($($ty:ty),+ $(,)?) => {
+macro_rules! impl_rational_from_int {
+    ($($lossless:ty),* ; $($lossy:ty),*) => {
         $(
-            impl From<$ty> for Rational {
-                fn from(value: $ty) -> Self {
-                    Self(value as f64)
+            impl From<$lossless> for Rational {
+                fn from(value: $lossless) -> Self {
+                    Self(f64::from(value))
                 }
             }
-        )+
+        )*
+        $(
+            impl From<$lossy> for Rational {
+                fn from(value: $lossy) -> Self {
+                    Self(crate::numeric_cast::i64_to_f64(value as i64))
+                }
+            }
+        )*
     };
 }
 
@@ -126,50 +134,50 @@ macro_rules! impl_rational_from_pair {
 impl_rational_from_pair!((u64, u64), (u32, u32), (usize, usize), (i32, i32));
 
 #[cfg(not(feature = "high-precision"))]
-impl_rational_from_int_lossless!(i64, u64, i32, u32, usize, u8);
+impl_rational_from_int!(i32, u32, u8; i64, u64, usize);
 
 #[cfg(not(feature = "high-precision"))]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Integer(i64);
 
 #[cfg(not(feature = "high-precision"))]
 impl Integer {
     #[must_use]
-    pub fn from_f64(v: f64) -> Self {
-        Self(v as i64)
+    pub const fn from_f64(v: f64) -> Self {
+        Self(crate::numeric_cast::raw::f64_to_i64(v))
     }
 }
 
 #[cfg(not(feature = "high-precision"))]
 impl From<u64> for Integer {
     fn from(v: u64) -> Self {
-        Self(v as i64)
+        Self(crate::numeric_cast::raw::u64_to_i64(v))
     }
 }
 
 #[cfg(not(feature = "high-precision"))]
 impl From<i32> for Integer {
     fn from(v: i32) -> Self {
-        Self(v as i64)
+        Self(i64::from(v))
     }
 }
 
 #[cfg(not(feature = "high-precision"))]
 impl From<usize> for Integer {
     fn from(v: usize) -> Self {
-        Self(v as i64)
+        Self(crate::numeric_cast::usize_to_i64_sat(v))
     }
 }
 
 #[cfg(not(feature = "high-precision"))]
 impl From<Integer> for Rational {
     fn from(v: Integer) -> Self {
-        Self(v.0 as f64)
+        Self(crate::numeric_cast::i64_to_f64(v.0))
     }
 }
 
 #[cfg(not(feature = "high-precision"))]
-impl std::ops::Mul<Integer> for Integer {
+impl std::ops::Mul<Self> for Integer {
     type Output = Self;
     fn mul(self, other: Self) -> Self {
         Self(self.0 * other.0)
@@ -308,6 +316,7 @@ pub use image_builders::{
 };
 pub use tool_builders::{
     HostnameBuilder, KillBuilder, PsBuilder, RsyncBuilder, VmafBuilder, X265Builder,
+    X265EncodingFlags, X265Flags, X265IoFlags,
 };
 /// Image quality analytics and scoring.
 pub mod image_quality_detector;
@@ -399,7 +408,7 @@ mod ctrlc_guard_tests;
 
 /// Unified progress bar interface.
 pub mod unified_progress;
-pub use unified_progress::UnifiedProgressBar;
+pub use unified_progress::Bar as UnifiedProgressBar;
 
 /// Intelligent file sorting and prioritization.
 pub mod file_sorter;
@@ -447,6 +456,10 @@ pub mod media_passthrough;
 /// Advanced video stream detection and analysis.
 pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
+pub use video_detection::{
+    CompressionType, DetectedCodec, Detection as VideoDetectionResult, VideoFlags, VideoHdrFlags,
+    VideoStreamFlags, detect_video, detect_video_with_cache,
+};
 
 /// Shared database interface for quality matching.
 pub mod database;
@@ -495,8 +508,9 @@ pub use depth_channel::{
 };
 pub use image_quality_db::{QualityScore, lookup_image_quality};
 pub use loop_intent::{
-    LoopIntentVerdict, LoopMeta, apply_apple_compat_modern_animation_policy, assess_loop_intent,
-    assess_loop_intent_from_meta, assess_loop_intent_from_probe, identify_loop_intent,
+    LoopMeta, Verdict as LoopIntentVerdict, apply_apple_compat_modern_animation_policy,
+    assess as assess_loop_intent, assess_from_meta as assess_loop_intent_from_meta,
+    assess_from_probe as assess_loop_intent_from_probe, identify as identify_loop_intent,
     is_lossless_exploration_safe, should_use_gif_fast_path,
 };
 
@@ -510,33 +524,31 @@ pub use codecs::*;
 pub use constants::*;
 pub use conversion::*;
 pub use date_analysis::{
-    DateAnalysisConfig, DateAnalysisResult, DateSource, FileDateInfo, analyze_directory,
-    print_analysis,
+    AnalysisConfig, AnalysisResult, DateSource, FileDateInfo, analyze_directory, print_analysis,
 };
 pub use ffprobe::{
     FFprobeError, FFprobeResult, detect_bit_depth, get_duration, get_frame_count,
     is_ffprobe_available, parse_frame_rate, probe_video,
 };
 pub use metadata::{
-    apply_saved_timestamps_to_dst, copy_metadata, preserve_directory_metadata,
-    preserve_directory_metadata_with_log, preserve_metadata, preserve_pro,
-    restore_directory_timestamps, restore_timestamps_from_source_to_output,
+    apply_saved_timestamps_to_dst, copy, preserve, preserve_directory, preserve_directory_with_log,
+    preserve_pro, restore_directory_timestamps, restore_timestamps_from_source_to_output,
     save_directory_timestamps,
 };
 pub use progress::{
-    BatchProgress, CoarseProgressBar, DetailedCoarseProgressBar, ExploreLogger, ExploreProgress,
-    FixedBottomProgress, GlobalProgressManager, ProgressStats, SmartProgressBar,
-    create_compact_progress_bar, create_detailed_progress_bar, create_multi_progress,
-    create_progress_bar, create_progress_bar_with_eta, create_spinner, format_bytes,
-    format_duration,
+    Batch, CoarseProgressBar, DetailedCoarseProgressBar, Explore, ExploreLogger, FixedBottom,
+    GlobalProgressManager, SmartProgressBar, Stats, create_compact_progress_bar,
+    create_detailed_progress_bar, create_multi, create_progress_bar, create_progress_bar_with_eta,
+    create_spinner, format_bytes, format_duration, wrap_output,
 };
 pub use quality_matcher::{
-    AnalysisDetails, AppleFallbackKeepRequest, ContentType, EncoderType, MatchMode, MatchedQuality,
-    QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
-    calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
-    calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
-    from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
-    is_apple_native_format, is_size_guard_active, log_quality_analysis, parse_source_codec,
+    AnalysisDetails, AppleContextFlags, AppleFallbackFlags, AppleFallbackKeepRequest,
+    AppleOutcomeFlags, ContentType, EncoderType, MatchMode, MatchedQuality, QualityAnalysis,
+    QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder, calculate_av1_crf,
+    calculate_av1_crf_with_options, calculate_hevc_crf, calculate_hevc_crf_with_options,
+    calculate_jxl_distance, calculate_jxl_distance_with_options, from_image_analysis,
+    from_video_detection, is_apple_incompatible_video_codec, is_apple_native_format,
+    is_size_guard_active, log_quality_analysis, parse_source_codec,
     should_keep_apple_fallback_hevc_output, should_skip_image_format, should_skip_video_codec,
     should_skip_video_codec_apple_compat,
 };
@@ -579,19 +591,20 @@ pub use video_explorer::{
     explore_quality_match_gpu, explore_size_only_gpu,
 };
 
-pub use checkpoint::{CheckpointManager, safe_delete_original, verify_output_integrity};
+pub use checkpoint::{Manager, safe_delete_original, verify_output_integrity};
 
 pub use quality_verifier_enhanced::{
     EnhancedVerifyResult, VerifyOptions, verify_after_encode, verify_output_file,
 };
 
 pub use xmp_merger::{
-    MergeResult, MergeSummary, XmpFile, XmpMerger, XmpMergerConfig, merge_xmp_for_copied_file,
+    Config as XmpMergerConfig, MergeResult, MergeSummary, XmpFile, XmpMerger,
+    merge_xmp_for_copied_file,
 };
 
 pub use flag_validator::{
-    FlagMode, FlagRequest, FlagValidation, print_flag_help, validate_flags, validate_flags_result,
-    validate_flags_result_with_ultimate, validate_flags_with_ultimate,
+    FlagBase, FlagMode, FlagRequest, FlagTier, FlagValidation, print_flag_help, validate_flags,
+    validate_flags_result, validate_flags_result_with_ultimate, validate_flags_with_ultimate,
 };
 
 pub use gpu_accel::{
@@ -602,7 +615,7 @@ pub use gpu_accel::{
 
 pub use video_explorer::{
     GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation, explore_av1_with_gpu,
-    explore_hevc_with_gpu, explore_with_gpu_coarse_search, is_gif_magic,
+    explore_gpu_coarse, explore_hevc_with_gpu, is_gif_magic,
 };
 
 pub use modern_ui::{
@@ -623,7 +636,7 @@ pub use unified_error::{
 
 pub use anyhow;
 
-pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
+pub use ssim_mapping::{MappingPoint, PsnrSsim};
 
 pub use explore_strategy::{
     CompressOnlyStrategy, CompressWithQualityStrategy, ExploreContext, ExploreStrategy,
@@ -656,7 +669,7 @@ pub use crf_constants::{
 
 pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};
 
-pub use hdr_decode::{decode_hdr_image_to_png16, needs_hdr_decode};
+pub use hdr_decode::{decode_hdr_image_to_png16, needs_decode};
 
 pub use hdr_utils::{
     color_info_to_cicp, color_info_to_ffmpeg_args, color_info_to_x265_hdr_params,
@@ -665,8 +678,9 @@ pub use hdr_utils::{
 };
 
 pub use stream_size::{
-    DEFAULT_OVERHEAD_PERCENT, ExtractionMethod, MKV_OVERHEAD_PERCENT, MOV_OVERHEAD_PERCENT,
-    MP4_OVERHEAD_PERCENT, StreamSizeInfo, extract_stream_sizes, get_container_overhead_percent,
+    DEFAULT_OVERHEAD_PERCENT, ExtractionMethod, Info as StreamSizeInfo, MKV_OVERHEAD_PERCENT,
+    MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT, extract_stream_sizes,
+    get_container_overhead_percent, get_output_video,
 };
 
 pub use pure_media_verifier::{
@@ -691,7 +705,7 @@ pub use smart_file_copier::{
     smart_copy_with_structure,
 };
 
-pub use live_photo::is_live_photo;
+pub use live_photo::is_live as is_live_photo;
 pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, hash_path_to_hex, init_ghost_mode};
 
 pub use file_sorter::{
@@ -701,18 +715,20 @@ pub use file_sorter::{
 
 pub use msssim_sampling::{SamplingConfig, SamplingStrategy};
 
-pub use msssim_progress::MsssimProgressMonitor;
+pub use msssim_progress::Monitor as MsssimProgressMonitor;
 
 pub use msssim_parallel::{MsssimResult, ParallelMsssimCalculator};
 
 pub use logging::{
-    LogConfig, flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start,
+    LogConfig, flush_logs, init as init_logging, log_external_tool, log_operation_end,
+    log_operation_start,
 };
 
 // Enhanced logging with 24-bit color support
 pub mod enhanced_logging;
 pub use enhanced_logging::{
-    LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger, init_enhanced_logging,
+    LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger,
+    init as init_enhanced_logging,
 };
 
 // Modern terminal logging with color safety
@@ -733,4 +749,4 @@ pub use thread_manager::{
     get_rsync_version, is_multi_instance, memory_cap_hint,
 };
 
-pub use version::{CACHE_SCHEMA_VERSION, PROGRAM_VERSION, VersionInfo, cache_algorithm_version};
+pub use version::{CACHE_SCHEMA_VERSION, Info as VersionInfo, PROGRAM_VERSION, cache_algorithm};

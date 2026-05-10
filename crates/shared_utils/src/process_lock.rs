@@ -12,7 +12,51 @@ pub fn init_ghost_mode() -> Result<()> {
     let tmp = get_mfb_tmp_dir()?;
     // SAFETY: Single-threaded initialization context.
     unsafe { std::env::set_var("TMPDIR", &tmp) };
+    ensure_tool_path();
     Ok(())
+}
+
+/// Augment `PATH` with standard locations for external tools.
+///
+/// When the binary is launched from a `.app` bundle (macOS Finder, Dock) or
+/// any non-interactive context, `PATH` inherits a minimal `/usr/bin:/bin:/usr/sbin:/sbin`
+/// and misses Homebrew's install roots. Commands like `ffprobe`, `magick`, `cjxl`,
+/// `exiftool` installed via Homebrew end up "missing" even when present.
+///
+/// Prepends the well-known Homebrew and `MacPorts` bin directories if they exist
+/// and are not already on `PATH`. Harmless on other platforms (directories just
+/// don't exist and are skipped).
+fn ensure_tool_path() {
+    const KNOWN_DIRS: &[&str] = &[
+        "/opt/homebrew/bin",  // Apple Silicon Homebrew
+        "/opt/homebrew/sbin", // Apple Silicon Homebrew
+        "/usr/local/bin",     // Intel Homebrew
+        "/usr/local/sbin",    // Intel Homebrew
+        "/opt/local/bin",     // MacPorts
+        "/opt/local/sbin",    // MacPorts
+    ];
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    let mut changed = false;
+
+    for dir in KNOWN_DIRS {
+        let p = PathBuf::from(dir);
+        if !p.is_dir() {
+            continue;
+        }
+        if entries.iter().any(|e| e == &p) {
+            continue;
+        }
+        // Prepend so Homebrew-installed tools win over any system stub (e.g. /usr/bin/ffprobe).
+        entries.insert(0, p);
+        changed = true;
+    }
+
+    if changed && let Ok(joined) = std::env::join_paths(&entries) {
+        // SAFETY: init_ghost_mode runs before any worker thread is spawned.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
 }
 
 /// Returns the central home for MFB metadata and transient files (~/.`modern_format_boost`).

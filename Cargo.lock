@@ -3207,8 +3207,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "criterion"
-version = "0.8.2"
-source = "git+https://github.com/criterion-rs/criterion.rs.git#d3f10461c0eb6bfd4e6b236cedea805939878fa9"

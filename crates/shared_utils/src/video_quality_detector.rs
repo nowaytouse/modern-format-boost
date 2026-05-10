@@ -19,18 +19,33 @@ use crate::quality_matcher::{
     ContentType, QualityAnalysis, SourceCodec, VideoAnalysisBuilder, parse_source_codec,
     should_skip_video_codec,
 };
-use crate::video_detection::VideoDetectionResult;
+use crate::video_detection::Detection;
 use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::Level;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecisionFlags {
+    pub is_modern_codec: bool,
+    pub should_skip: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FeatureFlags {
+    pub has_b_frames: bool,
+    pub is_hdr: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QualityFlags {
+    #[serde(flatten)]
+    pub decision: DecisionFlags,
+    #[serde(flatten)]
+    pub features: FeatureFlags,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct VideoQualityAnalysis {
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -41,8 +56,8 @@ pub struct VideoQualityAnalysis {
 
     pub codec: String,
     pub codec_type: VideoCodecType,
-    pub is_modern_codec: bool,
-    pub should_skip: bool,
+    #[serde(flatten)]
+    pub flags: QualityFlags,
     pub skip_reason: Option<String>,
 
     pub total_bitrate: Option<u64>,
@@ -55,10 +70,8 @@ pub struct VideoQualityAnalysis {
     pub gop_size: Option<u32>,
     /// Actual B-frame count (`max_b_frames`) from ffprobe.
     pub b_frame_count: Option<u8>,
-    pub has_b_frames: bool,
 
     pub color_space: Option<String>,
-    pub is_hdr: bool,
 
     pub content_type: VideoContentType,
     pub compression_type: CompressionLevel,
@@ -370,8 +383,16 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         frame_count: input_frame_count,
         codec: codec.to_string(),
         codec_type,
-        is_modern_codec: is_modern,
-        should_skip: skip_decision.should_skip,
+        flags: QualityFlags {
+            decision: DecisionFlags {
+                is_modern_codec: is_modern,
+                should_skip: skip_decision.should_skip,
+            },
+            features: FeatureFlags {
+                has_b_frames,
+                is_hdr,
+            },
+        },
         skip_reason: if skip_decision.should_skip {
             Some(skip_decision.reason)
         } else {
@@ -385,9 +406,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         chroma,
         gop_size,
         b_frame_count,
-        has_b_frames,
         color_space: color_space.map(std::string::ToString::to_string),
-        is_hdr,
         content_type,
         compression_type,
         quality_score,
@@ -396,7 +415,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     })
 }
 
-/// Build [`VideoQualityAnalysis`] from [`VideoDetectionResult`] for logging/display.
+/// Build [`VideoQualityAnalysis`] from [`Detection`] for logging/display.
 ///
 /// Use when you already have detection (e.g. before SSIM exploration) and want media info for log file only.
 /// Analyze video quality based on a previous detection result.
@@ -408,7 +427,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 /// Panics if the `duration_secs` is missing from the detection result,
 /// although this is guarded by a check at the start of the function.
 pub fn analyze_video_quality_from_detection(
-    detection: &VideoDetectionResult,
+    detection: &Detection,
 ) -> Result<VideoQualityAnalysis, String> {
     analyze_video_quality(VideoQualityInput {
         codec: detection.codec.as_str(),
@@ -471,7 +490,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
         Level::DEBUG,
         &format!(
             "  codec={} type={:?} modern={}",
-            analysis.codec, analysis.codec_type, analysis.is_modern_codec
+            analysis.codec, analysis.codec_type, analysis.flags.decision.is_modern_codec
         ),
     );
     write_to_log_at_level(
@@ -511,7 +530,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
         Level::DEBUG,
         &format!(
             "  pix_fmt={} chroma={:?} has_b_frames={}",
-            analysis.pix_fmt, analysis.chroma, analysis.has_b_frames
+            analysis.pix_fmt, analysis.chroma, analysis.flags.features.has_b_frames
         ),
     );
     write_to_log_at_level(
@@ -524,7 +543,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
             analysis.estimated_crf
         ),
     );
-    if analysis.is_hdr {
+    if analysis.flags.features.is_hdr {
         write_to_log_at_level(Level::DEBUG, "  HDR: true");
     }
     write_to_log_at_level(Level::DEBUG, "");
@@ -586,7 +605,7 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         .pix_fmt(&analysis.pix_fmt)
         .color(
             analysis.color_space.as_deref().unwrap_or(color_fallback),
-            analysis.is_hdr,
+            analysis.flags.features.is_hdr,
         )
         .content_type(analysis.content_type.to_content_type())
         .bit_depth(analysis.bit_depth)
@@ -820,8 +839,8 @@ mod tests {
         assert_eq!(result.width, Some(1920));
         assert_eq!(result.height, Some(1080));
         assert_eq!(result.codec_type, VideoCodecType::Legacy);
-        assert!(!result.is_modern_codec);
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.is_modern_codec);
+        assert!(!result.flags.decision.should_skip);
         assert!(result.bpp > 0.0_f64);
     }
 
@@ -847,9 +866,12 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
-        assert!(result.is_modern_codec);
-        assert!(result.should_skip, "HEVC should be skipped");
-        assert!(result.is_hdr, "BT.2020 should be detected as HDR");
+        assert!(result.flags.decision.is_modern_codec);
+        assert!(result.flags.decision.should_skip, "HEVC should be skipped");
+        assert!(
+            result.flags.features.is_hdr,
+            "BT.2020 should be detected as HDR"
+        );
         assert_eq!(result.bit_depth, Some(10));
     }
 
@@ -876,7 +898,7 @@ mod tests {
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
         assert!(
-            result.should_skip,
+            result.flags.decision.should_skip,
             "AV1 skipped in normal mode (use Apple-compat to convert)"
         );
     }
@@ -903,7 +925,10 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
-        assert!(!result.should_skip, "ProRes should not be skipped");
+        assert!(
+            !result.flags.decision.should_skip,
+            "ProRes should not be skipped"
+        );
         assert_eq!(result.chroma, ChromaSubsampling::Yuv422);
         assert!(result.bpp > 1.0_f64, "ProRes should have high BPP");
     }
@@ -931,7 +956,7 @@ mod tests {
 
         assert_eq!(result.codec_type, VideoCodecType::Lossless);
         assert_eq!(result.compression_type, CompressionLevel::Lossless);
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.should_skip);
         assert_eq!(result.chroma, ChromaSubsampling::Yuv444);
     }
 
@@ -957,7 +982,7 @@ mod tests {
             })
             .unwrap_or_else(|e| panic!("{e}"));
             assert!(
-                result.should_skip,
+                result.flags.decision.should_skip,
                 "{codec} skipped in normal mode (modern format)"
             );
         }
@@ -983,7 +1008,10 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!h264.should_skip, "H.264 should NOT be skipped");
+        assert!(
+            !h264.flags.decision.should_skip,
+            "H.264 should NOT be skipped"
+        );
 
         let mjpeg = analyze_video_quality(VideoQualityInput {
             codec: "mjpeg",
@@ -1003,7 +1031,10 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!mjpeg.should_skip, "MJPEG should NOT be skipped");
+        assert!(
+            !mjpeg.flags.decision.should_skip,
+            "MJPEG should NOT be skipped"
+        );
 
         let prores = analyze_video_quality(VideoQualityInput {
             codec: "prores",
@@ -1023,7 +1054,10 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!prores.should_skip, "ProRes should NOT be skipped");
+        assert!(
+            !prores.flags.decision.should_skip,
+            "ProRes should NOT be skipped"
+        );
     }
 
     #[test]
@@ -1345,7 +1379,10 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!(result.is_hdr, "BT.2020 should be detected as HDR");
+        assert!(
+            result.flags.features.is_hdr,
+            "BT.2020 should be detected as HDR"
+        );
     }
 
     #[test]
@@ -1369,7 +1406,10 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!(!result.is_hdr, "BT.709 should NOT be detected as HDR");
+        assert!(
+            !result.flags.features.is_hdr,
+            "BT.709 should NOT be detected as HDR"
+        );
     }
 
     #[test]
@@ -1394,7 +1434,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            !result.is_hdr,
+            !result.flags.features.is_hdr,
             "No color space should NOT be detected as HDR"
         );
     }
@@ -1420,7 +1460,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            result.should_skip,
+            result.flags.decision.should_skip,
             "HEVC should be marked skip by should_skip_video_codec"
         );
     }
@@ -1445,7 +1485,7 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.should_skip);
     }
 
     #[test]
@@ -1468,7 +1508,7 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.should_skip);
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
     }
 
@@ -1492,7 +1532,7 @@ mod tests {
             frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.should_skip);
     }
 
     #[test]
@@ -1796,7 +1836,10 @@ mod tests {
 
         assert_eq!(result.width, Some(3840));
         assert_eq!(result.height, Some(2160));
-        assert!(result.should_skip, "4K HEVC should be skipped");
+        assert!(
+            result.flags.decision.should_skip,
+            "4K HEVC should be skipped"
+        );
     }
 
     #[test]
@@ -1822,7 +1865,10 @@ mod tests {
 
         assert_eq!(result.width, Some(7680));
         assert_eq!(result.height, Some(4320));
-        assert!(result.should_skip, "8K AV1 skipped in normal mode");
+        assert!(
+            result.flags.decision.should_skip,
+            "8K AV1 skipped in normal mode"
+        );
     }
 
     #[test]
@@ -1848,7 +1894,7 @@ mod tests {
 
         assert_eq!(result.width, Some(1080));
         assert_eq!(result.height, Some(1920));
-        assert!(!result.should_skip);
+        assert!(!result.flags.decision.should_skip);
     }
 
     #[test]
@@ -2375,7 +2421,10 @@ mod tests {
             "Same input should produce same BPP"
         );
         assert_eq!(result1.codec_type, result2.codec_type);
-        assert_eq!(result1.should_skip, result2.should_skip);
+        assert_eq!(
+            result1.flags.decision.should_skip,
+            result2.flags.decision.should_skip
+        );
         assert_eq!(result1.estimated_crf, result2.estimated_crf);
     }
 
@@ -2498,12 +2547,12 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
-                result.should_skip, expected_skip,
+                result.flags.decision.should_skip, expected_skip,
                 "STRICT: {} expected skip={}, got {}",
-                codec, expected_skip, result.should_skip
+                codec, expected_skip, result.flags.decision.should_skip
             );
             assert!(
-                result.is_modern_codec,
+                result.flags.decision.is_modern_codec,
                 "STRICT: {codec} must be detected as modern"
             );
         }
@@ -2535,7 +2584,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert!(
-                !result.should_skip,
+                !result.flags.decision.should_skip,
                 "Non-modern codec {codec} (Legacy or Inefficient) must NEVER skip"
             );
         }

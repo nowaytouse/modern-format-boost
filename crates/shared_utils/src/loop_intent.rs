@@ -24,7 +24,7 @@ use crate::media_penetration::{
 };
 use crate::progress_mode::emit_stderr;
 use crate::video_detection::ColorSpace;
-use crate::video_detection::VideoDetectionResult;
+use crate::video_detection::Detection;
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ pub struct FilenameAnalysis {
 // ── Output: Tri-state Output ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LoopIntentVerdict {
+pub enum Verdict {
     /// Strong loop intent: Keep as GIF / convert video → GIF.
     LoopStrong(String),
     /// Weak loop intent: Convert GIF → video / keep as video.
@@ -58,7 +58,7 @@ pub enum LoopIntentVerdict {
     Error(String),
 }
 
-impl LoopIntentVerdict {
+impl Verdict {
     /// Returns true if this media should be preserved as a looping GIF.
     #[must_use]
     pub const fn is_keep_gif(&self) -> bool {
@@ -123,16 +123,40 @@ impl DurationTier {
     }
 }
 
+/// Consolidated boolean flags for `LoopMeta`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LoopStreamFlags {
+    pub has_audio: bool,
+    pub has_transparency: bool,
+    pub is_native_gif: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LoopColorFlags {
+    pub has_embedded_icc: bool,
+    pub has_complex_color_profile: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LoopMemeFlags {
+    pub is_meme_platform: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LoopFlags {
+    #[serde(flatten)]
+    pub streams: LoopStreamFlags,
+    #[serde(flatten)]
+    pub color: LoopColorFlags,
+    #[serde(flatten)]
+    pub meme: LoopMemeFlags,
+}
+
 /// Unified signal bundle consumed by the 7-layer decision tree.
 ///
 /// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: Option<f64>,
@@ -149,16 +173,13 @@ pub struct LoopMeta {
     pub parent_directories: Option<Vec<String>>,
 
     // ── Layer 1 signals (hard constraints) ──
-    pub has_audio: bool,
+    pub flags: LoopFlags,
     /// Whether the audio track is silent (`mean_volume` < -70 dB or `n_samples` == 0).
     /// `None` = not yet detected, `Some(true)` = silent, `Some(false)` = has audible content.
     pub audio_is_silent: Option<bool>,
-    pub has_transparency: bool,
     /// Whether transparency is actually used (not all opaque). Penetrating detection.
     /// `None` = not yet verified, `Some(true)` = real transparency, `Some(false)` = fake/unused alpha.
     pub transparency_is_real: Option<bool>,
-    /// Whether the source is natively a GIF container.
-    pub is_native_gif: bool,
     /// Actual decoded frame count (may differ from metadata claim). Penetrating detection.
     pub real_frame_count: Option<u64>,
 
@@ -201,15 +222,10 @@ pub struct LoopMeta {
     pub directory_loop_intent_score: f64,
     pub filename_loop_intent_score: f64,
 
-    // ── Color Profile signals ──
-    pub has_embedded_icc: bool,
-    pub has_complex_color_profile: bool,
-
     // ── Auxiliary (used in KNN bridge) ──
     pub frame_types: Vec<char>,
     pub mv_magnitudes: Vec<f64>,
     pub cached_frame_png: Option<Vec<u8>>,
-    pub is_meme_platform: bool,
 }
 
 impl LoopMeta {
@@ -218,9 +234,9 @@ impl LoopMeta {
         clippy::too_many_lines,
         reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
     )]
-    /// Build `LoopMeta` from a full `VideoDetectionResult`.
+    /// Build `LoopMeta` from a full `Detection`.
     #[must_use]
-    pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
+    pub fn from_video_detection(detection: &Detection) -> Self {
         let file_path = Path::new(&detection.file_path);
         let file_name = file_path
             .file_name()
@@ -262,12 +278,32 @@ impl LoopMeta {
             file_name,
             source_extension,
             parent_directories: parent_directories.clone(),
-            has_audio: detection.has_audio,
-            audio_is_silent: None, // Will be populated on-demand
-            has_transparency,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: detection.flags.streams.has_audio,
+                    has_transparency,
+                    is_native_gif: detection.format == "gif",
+                },
+                color: LoopColorFlags {
+                    has_embedded_icc: matches!(
+                        detection.color_space,
+                        ColorSpace::BT2020 | ColorSpace::AdobeRGB
+                    ) || detection.flags.hdr.is_dolby_vision
+                        || detection.flags.hdr.is_hdr10_plus,
+                    has_complex_color_profile: detection.is_hdr(),
+                },
+                meme: LoopMemeFlags {
+                    is_meme_platform: detection.tags.values().any(|v| {
+                        let up = v.to_uppercase();
+                        crate::constants::LOOP_PLATFORM_MARKERS
+                            .iter()
+                            .any(|&m| up.contains(m))
+                    }),
+                },
+            },
+            audio_is_silent: None,      // Will be populated on-demand
             transparency_is_real: None, // Will be verified on-demand
-            is_native_gif: detection.format == "gif",
-            real_frame_count: None, // Will be verified on-demand
+            real_frame_count: None,     // Will be verified on-demand
             loop_count: detection.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(detection.format.clone()),
@@ -278,12 +314,6 @@ impl LoopMeta {
                 .or_else(|| detection.tags.get("software").cloned())
                 .or_else(|| detection.tags.get("encoder").cloned()),
             is_interlaced: detection.is_interlaced,
-            has_embedded_icc: false,
-            has_complex_color_profile: matches!(
-                detection.color_space,
-                ColorSpace::BT2020 | ColorSpace::AdobeRGB
-            ) || detection.is_dolby_vision
-                || detection.is_hdr10_plus,
             frame_payload_variation: calculate_cv(&detection.pkt_sizes),
             frame_delay_variation: calculate_cv_f64(&detection.pts_deltas),
             pkt_sizes: detection.pkt_sizes.clone(),
@@ -309,14 +339,6 @@ impl LoopMeta {
             frame_types: detection.frame_types.clone(),
             mv_magnitudes: detection.mv_magnitudes.clone(),
             cached_frame_png: None,
-            is_meme_platform: {
-                detection.tags.values().any(|v| {
-                    let up = v.to_uppercase();
-                    crate::constants::LOOP_PLATFORM_MARKERS
-                        .iter()
-                        .any(|&m| up.contains(m))
-                })
-            },
         };
         meta.directory_loop_intent_score =
             score_directory_context(parent_directories.as_deref(), &[]);
@@ -381,12 +403,29 @@ impl LoopMeta {
             file_name,
             source_extension,
             parent_directories: parent_directories.clone(),
-            has_audio: probe.audio.present,
-            audio_is_silent: None, // Will be populated on-demand
-            has_transparency,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: probe.audio.present,
+                    has_transparency,
+                    is_native_gif: probe.format_name == "gif",
+                },
+                color: LoopColorFlags {
+                    has_embedded_icc: probe.color_primaries.is_some(),
+                    has_complex_color_profile: probe.hdr.is_hdr()
+                        || probe.bit_depth.is_some_and(|d| d > 8),
+                },
+                meme: LoopMemeFlags {
+                    is_meme_platform: probe.tags.values().any(|v| {
+                        let up = v.to_uppercase();
+                        crate::constants::LOOP_PLATFORM_MARKERS
+                            .iter()
+                            .any(|&m| up.contains(m))
+                    }),
+                },
+            },
+            audio_is_silent: None,      // Will be populated on-demand
             transparency_is_real: None, // Will be verified on-demand
-            is_native_gif: probe.format_name == "gif",
-            real_frame_count: None, // Will be verified on-demand
+            real_frame_count: None,     // Will be verified on-demand
             loop_count: probe.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(probe.format_name.clone()),
@@ -420,22 +459,8 @@ impl LoopMeta {
             filename_loop_intent_score: crate::constants::LOOP_INTENT_NEUTRAL_SCORE,
             frame_types: probe.frame_types.clone(),
             mv_magnitudes: probe.mv_magnitudes.clone(),
-            has_embedded_icc: false,
-            has_complex_color_profile: false,
             cached_frame_png: None,
-            is_meme_platform: false,
         };
-        meta.is_meme_platform = meta
-            .app_extensions
-            .as_ref()
-            .is_some_and(|e_list: &Vec<String>| {
-                e_list.iter().any(|e: &String| {
-                    let up = e.to_uppercase();
-                    crate::constants::LOOP_PLATFORM_MARKERS
-                        .iter()
-                        .any(|&m| up.contains(m))
-                })
-            });
         meta.directory_loop_intent_score =
             score_directory_context(parent_directories.as_deref(), &[]);
         meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
@@ -445,10 +470,9 @@ impl LoopMeta {
 
     /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
     #[must_use]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    ///
+    /// Panics if the GIF file is corrupted or contains malformed header data that violates the `GIF89a` specification.
     pub fn from_gif_path(path: &Path) -> Option<Self> {
         let scan = match crate::media_meta_utils::scan_gif_headers(path) {
             Ok(s) => s,
@@ -513,15 +537,33 @@ impl LoopMeta {
             file_name,
             source_extension: Some("gif".to_string()),
             parent_directories: parent_directories.clone(),
-            has_audio: false,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: false,
+                    has_transparency: scan.has_transparency,
+                    is_native_gif: true,
+                },
+                color: LoopColorFlags {
+                    has_embedded_icc: false,
+                    has_complex_color_profile: false,
+                },
+                meme: LoopMemeFlags {
+                    is_meme_platform: scan.app_extensions.as_ref().is_some_and(|e_list| {
+                        e_list.iter().any(|e| {
+                            let up = e.to_uppercase();
+                            crate::constants::LOOP_PLATFORM_MARKERS
+                                .iter()
+                                .any(|&m| up.contains(m))
+                        })
+                    }),
+                },
+            },
             audio_is_silent: Some(true), // GIFs never have audio
-            has_transparency: scan.has_transparency,
             transparency_is_real: if scan.has_transparency {
                 None
             } else {
                 Some(false)
             }, // Verify if claimed
-            is_native_gif: true,
             real_frame_count: Some(u64::from(frame_count)), // GIF frame count is reliable
             loop_count: scan.loop_count,
             app_extensions: scan.app_extensions.clone(),
@@ -529,17 +571,6 @@ impl LoopMeta {
             frame_payload_variation: scan.frame_payload_variation,
             frame_delay_variation: scan.frame_delay_variation,
             palette_size: scan.palette_size,
-            is_meme_platform: scan
-                .app_extensions
-                .as_ref()
-                .is_some_and(|e_list: &Vec<String>| {
-                    e_list.iter().any(|e: &String| {
-                        let up = e.to_uppercase();
-                        crate::constants::LOOP_PLATFORM_MARKERS
-                            .iter()
-                            .any(|&m| up.contains(m))
-                    })
-                }),
             ..Default::default()
         };
 
@@ -620,26 +651,36 @@ impl LogOdds {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
-struct DerivedLoopSignals {
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+struct SignalMotionFlags {
     scene_cut: bool,
     localized_motion: bool,
-    zero_motion_ratio: f64,
-    /// Whether the asset has audible (non-silent) audio.
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+struct SignalContentFlags {
     has_audible_audio: bool,
+    is_portrait: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+struct SignalFlags {
+    #[serde(flatten)]
+    motion: SignalMotionFlags,
+    #[serde(flatten)]
+    content: SignalContentFlags,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct DerivedLoopSignals {
+    flags: SignalFlags,
+    zero_motion_ratio: f64,
     /// Ratio of I-frames to total frames. GIF→MP4 transcodes produce all-I-frame streams
     /// (ratio ≈ 1.0); real video with GOP structure has ratio ≈ 0.03–0.10.
     iframe_ratio: f64,
     /// Average bytes per frame. GIF-class content typically has low `bytes_per_frame`
     /// compared to real video content.
     bytes_per_frame: f64,
-    /// Whether the aspect ratio is near 9:16 (TikTok/Reels/Shorts).
-    is_portrait: bool,
 }
 
 impl DerivedLoopSignals {
@@ -674,18 +715,26 @@ impl DerivedLoopSignals {
             false
         };
         Self {
-            scene_cut: detect_scene_cut(&meta.pkt_sizes),
-            localized_motion: meta.mv_magnitudes.len() >= 10
-                && zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO,
+            flags: SignalFlags {
+                motion: SignalMotionFlags {
+                    scene_cut: detect_scene_cut(&meta.pkt_sizes),
+                    localized_motion: meta.mv_magnitudes.len() >= 10
+                        && zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO,
+                },
+                content: SignalContentFlags {
+                    has_audible_audio: meta.flags.streams.has_audio
+                        && !meta.audio_is_silent.unwrap_or_else(|| {
+                            tracing::debug!(
+                                "Intent: Missing 'audio_is_silent'; defaulting to false"
+                            );
+                            false
+                        }),
+                    is_portrait,
+                },
+            },
             zero_motion_ratio,
-            has_audible_audio: meta.has_audio
-                && !meta.audio_is_silent.unwrap_or_else(|| {
-                    tracing::debug!("Intent: Missing 'audio_is_silent'; defaulting to false");
-                    false
-                }),
             iframe_ratio,
             bytes_per_frame,
-            is_portrait,
         }
     }
 }
@@ -865,7 +914,7 @@ impl LoopThresholds {
 
 #[derive(Debug, Clone)]
 pub struct TreeEvaluation {
-    pub verdict: LoopIntentVerdict,
+    pub verdict: Verdict,
     pub tree_probability: f64,
     pub log_odds_value: f64,
 }
@@ -883,7 +932,7 @@ fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
 }
 
 fn has_explicit_loop_platform_marker(meta: &LoopMeta) -> bool {
-    has_platform_marker(meta.app_extensions.as_deref()) || meta.is_meme_platform
+    has_platform_marker(meta.app_extensions.as_deref()) || meta.flags.meme.is_meme_platform
 }
 
 fn is_silent_webm(meta: &LoopMeta, ext_lower: &str) -> bool {
@@ -892,11 +941,11 @@ fn is_silent_webm(meta: &LoopMeta, ext_lower: &str) -> bool {
         .as_deref()
         .is_some_and(|container| container.eq_ignore_ascii_case("webm"))
         || ext_lower == "webm")
-        && !meta.has_audio
+        && !meta.flags.streams.has_audio
 }
 
 fn is_short_silent_asset(meta: &LoopMeta, _thresholds: &LoopThresholds) -> bool {
-    !meta.has_audio
+    !meta.flags.streams.has_audio
         && meta.tier().is_some_and(|t| {
             matches!(
                 t,
@@ -911,15 +960,15 @@ fn checkpoint_verdict(
     layer_tag: &str,
     strong_label: &str,
     weak_label: &str,
-) -> Option<LoopIntentVerdict> {
+) -> Option<Verdict> {
     if log_odds.value() >= threshold {
-        Some(LoopIntentVerdict::LoopStrong(format!(
+        Some(Verdict::LoopStrong(format!(
             "{layer_tag}: log-odds {:.2} >= {:.2} ({strong_label})",
             log_odds.value(),
             threshold
         )))
     } else if log_odds.value() <= -threshold {
-        Some(LoopIntentVerdict::LoopWeak(format!(
+        Some(Verdict::LoopWeak(format!(
             "{layer_tag}: log-odds {:.2} <= -{:.2} ({weak_label})",
             log_odds.value(),
             threshold
@@ -1013,7 +1062,7 @@ fn evaluate_kinetics_and_physics(
         );
     }
 
-    if derived.scene_cut {
+    if derived.flags.motion.scene_cut {
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
@@ -1025,7 +1074,7 @@ fn evaluate_kinetics_and_physics(
         (-thresholds.pixels_z(total_pixels)).max(0.0)
             * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT,
     );
-    if !meta.has_audio && compactness_signal > 0.0_f64 {
+    if !meta.flags.streams.has_audio && compactness_signal > 0.0_f64 {
         log_odds.add(
             (compactness_signal + crate::constants::COMPACTNESS_SIGNAL_BIAS)
                 .min(crate::constants::COMPACTNESS_SIGNAL_MAX)
@@ -1042,7 +1091,7 @@ fn evaluate_kinetics_and_physics(
                 * crate::constants::LARGE_MEDIA_SIGNAL_PIXELS_WEIGHT,
         );
     if large_media_signal > 0.0_f64 {
-        let audio_multiplier = if meta.has_audio {
+        let audio_multiplier = if meta.flags.streams.has_audio {
             1.0_f64
         } else {
             crate::constants::LARGE_MEDIA_AUDIO_MULTIPLIER
@@ -1113,12 +1162,12 @@ fn apply_structural_signals(
             let strength = ((periodicity - crate::constants::LOOP_INTENT_PERIODICITY_THRESHOLD)
                 / crate::constants::LOOP_INTENT_PERIODICITY_SCALE)
                 .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
-            let envelope_multiplier = if short_silent_asset || is_image || derived.localized_motion
-            {
-                1.0_f64
-            } else {
-                crate::constants::LOOP_INTENT_MOTION_ENVELOPE_REDUCTION
-            };
+            let envelope_multiplier =
+                if short_silent_asset || is_image || derived.flags.motion.localized_motion {
+                    1.0_f64
+                } else {
+                    crate::constants::LOOP_INTENT_MOTION_ENVELOPE_REDUCTION
+                };
             log_odds.add(
                 strength
                     * crate::constants::FEATURE_WEIGHT_MOTION_PERIODICITY
@@ -1219,13 +1268,13 @@ fn apply_structural_signals(
     }
 
     // 9:16 portrait detection (TikTok/Reels/Shorts). Symmetric with existing 16:9 detection.
-    if derived.is_portrait {
+    if derived.flags.content.is_portrait {
         log_odds.add(-crate::constants::PORTRAIT_ASPECT_PENALTY);
     }
 
     if is_video
         && !short_silent_asset
-        && !meta.has_transparency
+        && !meta.flags.streams.has_transparency
         && meta
             .loop_closure_score
             .is_some_and(|c| c < crate::constants::LOOP_INTENT_ANTI_LOOP_THRESHOLD)
@@ -1243,13 +1292,13 @@ fn apply_structural_signals(
     //
     // Count independent anti-loop physical signals:
     let mut anti_loop_count: u8 = 0;
-    if derived.has_audible_audio {
+    if derived.flags.content.has_audible_audio {
         anti_loop_count += 1;
     }
-    if derived.scene_cut {
+    if derived.flags.motion.scene_cut {
         anti_loop_count += 1;
     }
-    if derived.is_portrait {
+    if derived.flags.content.is_portrait {
         anti_loop_count += 1;
     }
     if is_near_16_by_9(meta.width, meta.height) {
@@ -1269,7 +1318,7 @@ fn apply_structural_signals(
 
     // Count independent pro-loop physical signals:
     let mut pro_loop_count: u8 = 0;
-    if !meta.has_audio {
+    if !meta.flags.streams.has_audio {
         pro_loop_count += 1;
     }
     if let (Some(w), Some(h)) = (meta.width, meta.height)
@@ -1357,10 +1406,10 @@ fn apply_weak_heuristics(
     //
     // transparency is already counted in image Layer 1-B. Only add it here for video
     // assets, where it is not applied upstream.
-    if meta.has_transparency && is_video {
+    if meta.flags.streams.has_transparency && is_video {
         log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
     }
-    if is_webm && !meta.has_audio {
+    if is_webm && !meta.flags.streams.has_audio {
         log_odds.add(crate::constants::SHORT_CLIP_MIN_BIAS);
     }
     if is_short_clip {
@@ -1449,7 +1498,9 @@ fn apply_weak_heuristics(
             || {
                 if (z.is_sign_negative() && short_silent_asset)
                     || (z.is_sign_positive()
-                        && !(short_silent_asset || is_image || derived.localized_motion))
+                        && !(short_silent_asset
+                            || is_image
+                            || derived.flags.motion.localized_motion))
                 {
                     // Default relief when no support data is available
                     crate::constants::LOOP_INTENT_SUPPORT_RELIEF_DEFAULT
@@ -1462,7 +1513,9 @@ fn apply_weak_heuristics(
                     crate::constants::LOOP_INTENT_SUPPORT_RELIEF_STRONG
                 } else if (z.is_sign_negative() && short_silent_asset)
                     || (z.is_sign_positive()
-                        && !(short_silent_asset || is_image || derived.localized_motion))
+                        && !(short_silent_asset
+                            || is_image
+                            || derived.flags.motion.localized_motion))
                 {
                     crate::constants::LOOP_INTENT_SUPPORT_RELIEF_WEAK
                 } else {
@@ -1494,7 +1547,7 @@ fn apply_weak_heuristics(
         );
     }
 
-    if derived.localized_motion
+    if derived.flags.motion.localized_motion
         || derived.zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
     {
         log_odds.add(LOCALIZED_MOTION_POSITIVE_LOG_ODDS);
@@ -1523,7 +1576,7 @@ fn apply_weak_heuristics(
             log_odds.add(crate::constants::SQUARE_ASPECT_BONUS);
         } else if is_near_16_by_9(meta.width, meta.height) {
             log_odds.add(-crate::constants::WIDESCREEN_ASPECT_PENALTY);
-        } else if derived.is_portrait {
+        } else if derived.flags.content.is_portrait {
             // 9:16 portrait (TikTok/Reels/Shorts standard) — strong video signal
             log_odds.add(-crate::constants::PORTRAIT_ASPECT_PENALTY);
         }
@@ -1535,7 +1588,7 @@ fn apply_weak_heuristics(
         log_odds.add(crate::constants::FPS_ANOMALY_BONUS);
     }
 
-    if !meta.has_audio
+    if !meta.flags.streams.has_audio
         && meta
             .duration_secs
             .is_some_and(|d| d > thresholds.modern_bias_duration_secs)
@@ -1552,7 +1605,7 @@ fn apply_weak_heuristics(
         } else {
             0.0_f64
         };
-        let transparency_relief = if meta.has_transparency {
+        let transparency_relief = if meta.flags.streams.has_transparency {
             crate::constants::LONG_SILENT_TRANSPARENCY_RELIEF
         } else {
             0.0_f64
@@ -1577,8 +1630,8 @@ fn apply_weak_heuristics(
     let is_modern = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
     let bias_threshold = thresholds.modern_bias_duration_secs;
     if is_modern && bias_enabled && meta.duration_secs.is_some_and(|d| d > bias_threshold) {
-        let master_like = meta.has_embedded_icc
-            || meta.has_complex_color_profile
+        let master_like = meta.flags.color.has_embedded_icc
+            || meta.flags.color.has_complex_color_profile
             || meta
                 .webp_compression_ratio
                 .is_some_and(|ratio| thresholds.webp_ratio_z(ratio) < -0.75_f64);
@@ -1589,7 +1642,7 @@ fn apply_weak_heuristics(
 }
 
 #[must_use]
-pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
+pub fn identify(meta: &LoopMeta) -> Verdict {
     evaluate_loop_tree(meta, None).verdict
 }
 
@@ -1602,16 +1655,16 @@ fn developer_layer1_override_enabled(name: &str) -> bool {
     })
 }
 
-/// Converts a `LoopIntentVerdict` + accumulated `LogOdds` into a `TreeEvaluation`.
+/// Converts a `Verdict` + accumulated `LogOdds` into a `TreeEvaluation`.
 ///
 /// Extracted from the formerly-duplicated inline closure in `evaluate_loop_tree`,
 /// `evaluate_image_tree`, and `evaluate_video_tree`.
-fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
+fn finalize(verdict: Verdict, lo: LogOdds) -> TreeEvaluation {
     TreeEvaluation {
         tree_probability: match &verdict {
-            LoopIntentVerdict::LoopStrong(_) => 1.0,
-            LoopIntentVerdict::LoopWeak(_) | LoopIntentVerdict::Error(_) => 0.0,
-            LoopIntentVerdict::Uncertain(_) => lo.probability(),
+            Verdict::LoopStrong(_) => 1.0,
+            Verdict::LoopWeak(_) | Verdict::Error(_) => 0.0,
+            Verdict::Uncertain(_) => lo.probability(),
         },
         log_odds_value: lo.value(),
         verdict,
@@ -1639,7 +1692,7 @@ pub fn evaluate_loop_tree(
     let mut log_odds = LogOdds::default();
     let Some(tier) = meta.tier() else {
         return finalize(
-            LoopIntentVerdict::Error("Missing duration: cannot resolve duration tier".to_string()),
+            Verdict::Error("Missing duration: cannot resolve duration tier".to_string()),
             log_odds,
         );
     };
@@ -1650,20 +1703,18 @@ pub fn evaluate_loop_tree(
     // Must check BEFORE any fast-path logic to prevent 0-frame inputs from bypassing validation
     if meta.frame_count.is_none_or(|fc| fc <= 1) {
         return finalize(
-            LoopIntentVerdict::Error(
-                "Layer 0: single-frame / zero-frame input, cannot loop".to_string(),
-            ),
+            Verdict::Error("Layer 0: single-frame / zero-frame input, cannot loop".to_string()),
             log_odds,
         );
     }
 
-    if !meta.is_native_gif
+    if !meta.flags.streams.is_native_gif
         && meta
             .duration_secs
             .is_some_and(|d| d < crate::constants::NEGLIGIBLE_DURATION_SECS)
     {
         return finalize(
-            LoopIntentVerdict::Error("Layer 0: degenerate duration".to_string()),
+            Verdict::Error("Layer 0: degenerate duration".to_string()),
             log_odds,
         );
     }
@@ -1678,8 +1729,8 @@ pub fn evaluate_loop_tree(
     //   • ≥ 15.0s: exceeds the practical upper bound for any real-world animated image.
     //     No loop_count, transparency, or platform marker overrides this.
 
-    // Audio signal is now in `derived.has_audible_audio` (computed once, used everywhere).
-    let has_audible_audio_global = derived.has_audible_audio;
+    // Audio signal is now in `derived.flags.content.has_audible_audio` (computed once, used everywhere).
+    let has_audible_audio_global = derived.flags.content.has_audible_audio;
 
     // Hard veto: Extreme short (≤ 6.0s, silent)
     if meta
@@ -1691,7 +1742,7 @@ pub fn evaluate_loop_tree(
             .duration_secs
             .map_or_else(|| "None".to_string(), |d| format!("{d:.2}s"));
         return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
+            Verdict::LoopStrong(format!(
                 "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — \
                  definitively animated image regardless of all other signals",
                 dur_str,
@@ -1710,7 +1761,7 @@ pub fn evaluate_loop_tree(
             .duration_secs
             .map_or_else(|| "None".to_string(), |d| format!("{d:.2}s"));
         return finalize(
-            LoopIntentVerdict::LoopWeak(format!(
+            Verdict::LoopWeak(format!(
                 "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — \
                  definitively video regardless of all other signals",
                 dur_str,
@@ -1812,22 +1863,23 @@ pub fn evaluate_loop_tree(
             .unwrap_or("")
             .to_ascii_lowercase();
         let container = meta.container.as_deref().unwrap_or("").to_ascii_lowercase();
-        let mut base_trust: f64 = if meta.is_native_gif || ext == "gif" || container == "gif" {
-            crate::constants::METADATA_TRUST_AUTHORITATIVE // GIF NETSCAPE2.0 is authoritative
-        } else if ext == "webp"
-            || ext == "apng"
-            || ext == "png"
-            || container == "webp"
-            || container == "apng"
-            || container == "png"
-        {
-            crate::constants::METADATA_TRUST_MODERN_ANIMATED // WebP ANIM chunk / APNG acTL have real loop fields
-        } else if ext == "avif" || container == "avif" {
-            crate::constants::METADATA_TRUST_STANDARD_VIDEO // AVIF loop semantics exist but less standardized
-        } else {
-            // MP4, MKV, AVI, etc. — no authoritative loop metadata
-            crate::constants::METADATA_TRUST_UNTRUSTED
-        };
+        let mut base_trust: f64 =
+            if meta.flags.streams.is_native_gif || ext == "gif" || container == "gif" {
+                crate::constants::METADATA_TRUST_AUTHORITATIVE // GIF NETSCAPE2.0 is authoritative
+            } else if ext == "webp"
+                || ext == "apng"
+                || ext == "png"
+                || container == "webp"
+                || container == "apng"
+                || container == "png"
+            {
+                crate::constants::METADATA_TRUST_MODERN_ANIMATED // WebP ANIM chunk / APNG acTL have real loop fields
+            } else if ext == "avif" || container == "avif" {
+                crate::constants::METADATA_TRUST_STANDARD_VIDEO // AVIF loop semantics exist but less standardized
+            } else {
+                // MP4, MKV, AVI, etc. — no authoritative loop metadata
+                crate::constants::METADATA_TRUST_UNTRUSTED
+            };
 
         // ── Deep Penetration: Creator Software Validation ──
         // If we know the software that generated this file, we can override trust.
@@ -1865,7 +1917,7 @@ pub fn evaluate_loop_tree(
         base_trust
     };
 
-    if is_image || meta.is_native_gif {
+    if is_image || meta.flags.streams.is_native_gif {
         evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier, metadata_trust)
     } else {
         evaluate_video_tree(meta, &derived, &thresholds, log_odds, tier, metadata_trust)
@@ -1891,7 +1943,7 @@ fn evaluate_image_tree(
     // Layer 1-B: Transparency is a strong signal, but NOT decisive on its own.
     // Attenuated by metadata_trust: in the Long zone, transparency cannot carry
     // enough weight to flip the verdict without genuine physical loop evidence.
-    if !meta.has_audio && meta.has_transparency {
+    if !meta.flags.streams.has_audio && meta.flags.streams.has_transparency {
         log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS * 2.0 * metadata_trust);
     }
 
@@ -1912,7 +1964,7 @@ fn evaluate_image_tree(
     // Sticker-class native GIF: weighted bonus, not immediate exit.
     // Dimensions and extension are metadata — they cannot one-shot the verdict.
     if ext_lower == "gif"
-        && !meta.has_audio
+        && !meta.flags.streams.has_audio
         && matches!(
             tier,
             DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
@@ -1959,7 +2011,7 @@ fn evaluate_image_tree(
     // Final arbitration for Images
     if log_odds.value() >= thresholds.decision_threshold {
         finalize(
-            LoopIntentVerdict::LoopStrong(format!(
+            Verdict::LoopStrong(format!(
                 "Layer 5 (Image): log-odds {:.2} >= {:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -1968,7 +2020,7 @@ fn evaluate_image_tree(
         )
     } else if log_odds.value() <= -thresholds.decision_threshold {
         finalize(
-            LoopIntentVerdict::LoopWeak(format!(
+            Verdict::LoopWeak(format!(
                 "Layer 5 (Image): log-odds {:.2} <= -{:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -1977,7 +2029,7 @@ fn evaluate_image_tree(
         )
     } else {
         finalize(
-            LoopIntentVerdict::Uncertain(format!(
+            Verdict::Uncertain(format!(
                 "Layer 5 (Image): log-odds {:.2} within ±{:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -2001,7 +2053,7 @@ fn evaluate_video_tree(
     // An ultra-short video with a single click sound is still plausibly a loop.
     // Duration-tier interaction modulates the penalty.
     // Use the centralized audio signal from DerivedLoopSignals (no duplicate computation).
-    if derived.has_audible_audio {
+    if derived.flags.content.has_audible_audio {
         let audio_penalty = match tier {
             DurationTier::UltraShort => crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS * 0.6_f64,
             DurationTier::Short => crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS,
@@ -2102,7 +2154,7 @@ fn evaluate_video_tree(
     // Final arbitration for Video
     if log_odds.value() >= thresholds.decision_threshold {
         finalize(
-            LoopIntentVerdict::LoopStrong(format!(
+            Verdict::LoopStrong(format!(
                 "Layer 5 (Video): log-odds {:.2} >= {:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -2111,7 +2163,7 @@ fn evaluate_video_tree(
         )
     } else if log_odds.value() <= -thresholds.decision_threshold {
         finalize(
-            LoopIntentVerdict::LoopWeak(format!(
+            Verdict::LoopWeak(format!(
                 "Layer 5 (Video): log-odds {:.2} <= -{:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -2120,7 +2172,7 @@ fn evaluate_video_tree(
         )
     } else {
         finalize(
-            LoopIntentVerdict::Uncertain(format!(
+            Verdict::Uncertain(format!(
                 "Layer 5 (Video): log-odds {:.2} within ±{:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
@@ -2151,7 +2203,7 @@ fn should_accept_layer6_loopstrong(
     let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str());
     let is_gif_family =
         ext == "gif" || crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext.as_str());
-    let short_clip_like = !meta.has_audio
+    let short_clip_like = !meta.flags.streams.has_audio
         && meta.duration_secs.is_some_and(|d| d > 0.0_f64)
         && meta
             .duration_secs
@@ -2272,7 +2324,7 @@ fn layer6_directional_arbitration(
     fusion_score: Option<f64>,
     neighbor_count: Option<usize>,
     upstream_reason: &str,
-) -> Option<LoopIntentVerdict> {
+) -> Option<Verdict> {
     let ext = meta
         .source_extension
         .as_deref()
@@ -2356,7 +2408,7 @@ fn layer6_directional_arbitration(
             "platform/app marker",
         );
     }
-    if meta.has_transparency {
+    if meta.flags.streams.has_transparency {
         arbitration.add_keep(
             crate::constants::LOOP_INTENT_ARBITRATION_TRANSPARENCY_BONUS,
             "transparency",
@@ -2478,7 +2530,7 @@ fn layer6_directional_arbitration(
     if detect_scene_cut(&meta.pkt_sizes) {
         arbitration.add_convert(crate::constants::LOOP_INTENT_SCENE_CUT_DELTA, "scene cut");
     }
-    if !meta.has_audio
+    if !meta.flags.streams.has_audio
         && meta
             .duration_secs
             .is_some_and(|d| d > thresholds.modern_bias_duration_secs)
@@ -2501,7 +2553,7 @@ fn layer6_directional_arbitration(
     // Convert-side signals missing from original implementation — added for symmetry:
     // Audible audio is the single strongest real-world video indicator and was completely
     // absent from Layer 6. High frame counts (>500) are extremely rare in animated images.
-    let has_audible_audio = meta.has_audio
+    let has_audible_audio = meta.flags.streams.has_audio
         && !meta.audio_is_silent.unwrap_or_else(|| {
             tracing::debug!("Intent: Missing 'audio_is_silent'; defaulting to false");
             false
@@ -2551,12 +2603,12 @@ fn layer6_directional_arbitration(
     let neighbor_suffix = neighbor_count.map_or_else(String::new, |count| format!(", n={count}"));
 
     if keep_wins {
-        Some(LoopIntentVerdict::LoopStrong(format!(
+        Some(Verdict::LoopStrong(format!(
             "Layer 6-B: arbitration resolved KEEP (from {upstream_layer}; keep={:.2}, convert={:.2}{neighbor_suffix}; {trace})",
             arbitration.keep_score, arbitration.convert_score
         )))
     } else {
-        Some(LoopIntentVerdict::LoopWeak(format!(
+        Some(Verdict::LoopWeak(format!(
             "Layer 6-B: arbitration resolved CONVERT (from {upstream_layer}; keep={:.2}, convert={:.2}{neighbor_suffix}; {trace})",
             arbitration.keep_score, arbitration.convert_score
         )))
@@ -2569,9 +2621,9 @@ fn layer6_directional_arbitration(
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error.
 #[must_use]
-pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict {
+pub fn assess(detection: &Detection) -> Verdict {
     let meta = LoopMeta::from_video_detection(detection);
-    assess_loop_intent_from_meta(&meta, Some(Path::new(&detection.file_path)))
+    assess_from_meta(&meta, Some(Path::new(&detection.file_path)))
 }
 
 /// Apply Apple compatibility delivery policy to a loop-intent verdict.
@@ -2585,11 +2637,11 @@ pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict
 /// - Uncertain verdicts are forced to GIF in Apple mode to maximize compatibility.
 #[must_use]
 pub fn apply_apple_compat_modern_animation_policy(
-    verdict: LoopIntentVerdict,
+    verdict: Verdict,
     meta: &LoopMeta,
     apple_compat: bool,
     force: bool,
-) -> LoopIntentVerdict {
+) -> Verdict {
     if !apple_compat || force {
         return verdict;
     }
@@ -2605,7 +2657,7 @@ pub fn apply_apple_compat_modern_animation_policy(
     }
 
     // Only apply to silent animations; audio-bearing assets should remain video-delivered.
-    if meta.has_audio {
+    if meta.flags.streams.has_audio {
         return verdict;
     }
 
@@ -2627,11 +2679,11 @@ pub fn apply_apple_compat_modern_animation_policy(
         && dur > 0.0_f64
         && dur <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
     {
-        return LoopIntentVerdict::LoopStrong(format!(
+        return Verdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) \u{2192} force GIF (duration={:.2}s, frames={}, audio={})",
             dur,
             meta.frame_count.map_or(0, |fc| fc),
-            meta.has_audio
+            meta.flags.streams.has_audio
         ));
     }
 
@@ -2640,16 +2692,16 @@ pub fn apply_apple_compat_modern_animation_policy(
     if meta.duration_secs.is_some_and(|d| d <= 0.0_f64)
         && meta.frame_count.is_none_or(|fc| fc <= 300)
     {
-        return LoopIntentVerdict::LoopStrong(format!(
+        return Verdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
             meta.frame_count.map_or(0, |fc| fc),
-            meta.has_audio
+            meta.flags.streams.has_audio
         ));
     }
 
     // Compatibility fallback: modern animated formats with uncertain intent are delivered as GIF.
-    if matches!(verdict, LoopIntentVerdict::Uncertain(_)) {
-        return LoopIntentVerdict::LoopStrong(format!(
+    if matches!(verdict, Verdict::Uncertain(_)) {
+        return Verdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) with uncertain intent → force GIF",
         ));
     }
@@ -2663,12 +2715,9 @@ pub fn apply_apple_compat_modern_animation_policy(
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error.
 #[must_use]
-pub fn assess_loop_intent_from_probe(
-    probe: &crate::ffprobe::FFprobeResult,
-    path: &Path,
-) -> LoopIntentVerdict {
+pub fn assess_from_probe(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Verdict {
     let meta = LoopMeta::from_ffprobe_result(probe, path);
-    assess_loop_intent_from_meta(&meta, Some(path))
+    assess_from_meta(&meta, Some(path))
 }
 
 /// Every invocation logs an inference record to the database (if connected) to
@@ -2683,7 +2732,7 @@ pub fn assess_loop_intent_from_probe(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
+pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
     use crate::database::{
         LoopInferenceRecord, fetch_loop_reference_profile, log_inference_record,
         lookup_similar_samples, open_pg_client,
@@ -2713,7 +2762,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     // Verify actual content instead of trusting potentially fake metadata
     if let Some(p) = path {
         // 1. Audio silence detection (including empty tracks)
-        if mutable_meta.has_audio && mutable_meta.audio_is_silent.is_none() {
+        if mutable_meta.flags.streams.has_audio && mutable_meta.audio_is_silent.is_none() {
             match detect_audio_silence(p) {
                 crate::media_penetration::PenetrationResult::Verified(is_silent) => {
                     mutable_meta.audio_is_silent = Some(is_silent);
@@ -2734,7 +2783,9 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         }
 
         // 2. Transparency verification (detect fake alpha channels)
-        if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
+        if mutable_meta.flags.streams.has_transparency
+            && mutable_meta.transparency_is_real.is_none()
+        {
             match detect_real_transparency(p, mutable_meta.duration_secs) {
                 crate::media_penetration::PenetrationResult::Verified(is_real) => {
                     mutable_meta.transparency_is_real = Some(is_real);
@@ -2744,7 +2795,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                         emit_stderr(
                             "⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata",
                         );
-                        mutable_meta.has_transparency = false;
+                        mutable_meta.flags.streams.has_transparency = false;
                     }
                 }
                 crate::media_penetration::PenetrationResult::Failed => {
@@ -2790,13 +2841,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         );
         let tree_only = evaluate_loop_tree(&mutable_meta, None);
         match &tree_only.verdict {
-            LoopIntentVerdict::LoopStrong(reason)
-            | LoopIntentVerdict::LoopWeak(reason)
-            | LoopIntentVerdict::Error(reason) => {
+            Verdict::LoopStrong(reason) | Verdict::LoopWeak(reason) | Verdict::Error(reason) => {
                 emit_stderr(&format!("💡 Tree-only Result: {reason}"));
                 return tree_only.verdict;
             }
-            LoopIntentVerdict::Uncertain(reason) => {
+            Verdict::Uncertain(reason) => {
                 emit_stderr(&format!(
                     "⚠️  Tree-only result remained uncertain ({reason}) — attempting Layer 6-B arbitration"
                 ));
@@ -2838,7 +2887,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     let mut knn_neighbor_count: Option<usize> = None;
 
     let verdict = match &tree.verdict {
-        LoopIntentVerdict::LoopStrong(reason) | LoopIntentVerdict::LoopWeak(reason) => {
+        Verdict::LoopStrong(reason) | Verdict::LoopWeak(reason) => {
             if tree.verdict.is_keep_gif() {
                 emit_stderr(&format!("✅ Tree Decisive: {reason}"));
             } else {
@@ -2846,11 +2895,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             }
             tree.verdict.clone()
         }
-        LoopIntentVerdict::Error(reason) => {
+        Verdict::Error(reason) => {
             emit_stderr(&format!("❌ Tree Error: {reason}"));
             tree.verdict.clone()
         }
-        LoopIntentVerdict::Uncertain(reason) => {
+        Verdict::Uncertain(reason) => {
             emit_stderr(&format!(
                 "🔭 Tree uncertain ({reason}) [prob={tree_probability:.2}] — falling back to Layer 6 KNN..."
             ));
@@ -2969,7 +3018,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     final_score,
                     confidence,
                 ) {
-                    let v = LoopIntentVerdict::LoopStrong(format!(
+                    let v = Verdict::LoopStrong(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={:.2}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
                         final_score,
                         keep_prob,
@@ -2985,7 +3034,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 } else if confidence >= crate::constants::LAYER6_CONFIDENCE_HIGH
                     && final_score <= crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
                 {
-                    let v = LoopIntentVerdict::LoopWeak(format!(
+                    let v = Verdict::LoopWeak(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={:.2}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
                         final_score,
                         keep_prob,
@@ -3055,16 +3104,16 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     // Fire-and-forget: log the record if we have a DB connection, never block.
     if let Some(ref mut client) = conn {
         let (final_verdict_str, layer_exit) = match &verdict {
-            LoopIntentVerdict::LoopStrong(r) => ("LoopStrong".to_string(), extract_layer_tag(r)),
-            LoopIntentVerdict::LoopWeak(r) => ("LoopWeak".to_string(), extract_layer_tag(r)),
-            LoopIntentVerdict::Uncertain(r) => ("Uncertain".to_string(), extract_layer_tag(r)),
-            LoopIntentVerdict::Error(r) => ("Error".to_string(), extract_layer_tag(r)),
+            Verdict::LoopStrong(r) => ("LoopStrong".to_string(), extract_layer_tag(r)),
+            Verdict::LoopWeak(r) => ("LoopWeak".to_string(), extract_layer_tag(r)),
+            Verdict::Uncertain(r) => ("Uncertain".to_string(), extract_layer_tag(r)),
+            Verdict::Error(r) => ("Error".to_string(), extract_layer_tag(r)),
         };
 
         let final_probability = match &verdict {
-            LoopIntentVerdict::LoopStrong(_) => 1.0_f64,
-            LoopIntentVerdict::LoopWeak(_) | LoopIntentVerdict::Error(_) => 0.0_f64,
-            LoopIntentVerdict::Uncertain(_) => tree_probability,
+            Verdict::LoopStrong(_) => 1.0_f64,
+            Verdict::LoopWeak(_) | Verdict::Error(_) => 0.0_f64,
+            Verdict::Uncertain(_) => tree_probability,
         };
 
         let record = LoopInferenceRecord {
@@ -3092,7 +3141,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 ///
 /// BUG FIX: Removed sticker safe zone logic. "Uncertain" means we don't know,
 /// so we preserve the original format routing without making additional guesses.
-fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict {
+fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> Verdict {
     let ext = meta
         .source_extension
         .as_deref()
@@ -3109,13 +3158,13 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
     // - Video formats (MP4/MOV/etc) → keep as video
     // - Unknown → default to video (safer for quality preservation)
     if is_modern_animated {
-        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve modern animated format"))
+        Verdict::LoopStrong(format!("{reason} → preserve modern animated format"))
     } else if is_gif {
-        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is"))
+        Verdict::LoopStrong(format!("{reason} → preserve GIF as-is"))
     } else if is_video {
-        LoopIntentVerdict::LoopWeak(format!("{reason} → preserve video format"))
+        Verdict::LoopWeak(format!("{reason} → preserve video format"))
     } else {
-        LoopIntentVerdict::LoopWeak(format!("{reason} → unknown format, default to video"))
+        Verdict::LoopWeak(format!("{reason} → unknown format, default to video"))
     }
 }
 
@@ -3188,7 +3237,7 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
             / crate::constants::KEEP_PROB_INTERPOLATION_RANGE;
         let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
         let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
-        crate::numeric_cast::f64_to_f32_lossy(limit_high + (t * (limit_meme - limit_high)))
+        crate::numeric_cast::f64_to_f32_lossy(limit_high.mul_add(1.0 - t, t * limit_meme))
     }
 }
 
@@ -3734,10 +3783,9 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
 ///
 /// # Errors
 /// Returns an error if the `FFmpeg` command fails or the output cannot be parsed.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+///
+/// Panics if the `FFmpeg` output contains malformed UTF-8 or if internal signal statistics parsing fails unexpectedly.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -4063,7 +4111,7 @@ mod tests {
         assert_eq!(meta.frame_count, Some(1));
     }
 
-    fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {
+    fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> Verdict {
         // Ensure developer intercepts are disabled for profile-based tests.
         // SAFETY: test-only; these tests must not run in parallel with other env-var tests.
         unsafe { std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0") };
@@ -4084,7 +4132,7 @@ mod tests {
         // Duration bias (UltraShort) should dominate despite extreme resolution/size.
         // File size is NOT decisive — only duration matters for the final verdict direction.
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            matches!(verdict, Verdict::LoopStrong(_)),
             "short duration should dominate over large file size, got: {verdict:?}"
         );
     }
@@ -4095,7 +4143,7 @@ mod tests {
         let mut meta = base_meta();
         // Use 12.0s Long tier where audio penalty is -LOG_ODDS_BIAS_DEFINITIVELY_LONG (-3.0).
         meta.duration_secs = Some(12.0_f64);
-        meta.has_audio = true;
+        meta.flags.streams.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288); // 24fps × 12s
         // Make this look like a real video: widescreen, large file, scene cuts
@@ -4111,7 +4159,7 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+            matches!(verdict, Verdict::LoopWeak(_)),
             "audible audio in Long-tier video should resolve to LoopWeak, got: {verdict:?}"
         );
     }
@@ -4140,8 +4188,8 @@ mod tests {
         let mut meta = base_meta();
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
-        meta.is_native_gif = true;
-        meta.has_audio = false;
+        meta.flags.streams.is_native_gif = true;
+        meta.flags.streams.has_audio = false;
         meta.duration_secs = Some(4.0_f64);
         meta.width = Some(150);
         meta.height = Some(108);
@@ -4152,7 +4200,7 @@ mod tests {
         // Short duration bias + sticker-class bonus should push this to LoopStrong
         // through the full pipeline, not an immediate exit.
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            matches!(verdict, Verdict::LoopStrong(_)),
             "small native GIF should still resolve to LoopStrong, got {verdict:?}"
         );
     }
@@ -4163,8 +4211,8 @@ mod tests {
         let mut meta = base_meta();
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
-        meta.is_native_gif = true;
-        meta.has_audio = false;
+        meta.flags.streams.is_native_gif = true;
+        meta.flags.streams.has_audio = false;
         meta.duration_secs = Some(4.0_f64);
         meta.width = Some(500);
         meta.height = Some(500);
@@ -4185,7 +4233,7 @@ mod tests {
         let mut meta = base_meta();
         // Use 12.0s Long tier where audio penalty is maximal.
         meta.duration_secs = Some(12.0_f64);
-        meta.has_audio = true;
+        meta.flags.streams.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288);
         // Make this look like a real video: widescreen, large file
@@ -4201,7 +4249,7 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+            matches!(verdict, Verdict::LoopWeak(_)),
             "audible audio should resolve to LoopWeak, got: {verdict:?}"
         );
     }
@@ -4230,7 +4278,7 @@ mod tests {
         let mut meta = base_meta();
         meta.app_extensions = Some(vec!["TENOR".to_string()]);
         meta.duration_secs = Some(14.0_f64); // Long duration - will go to specialized tree
-        meta.has_audio = false; // Ensure it's silent
+        meta.flags.streams.has_audio = false; // Ensure it's silent
         meta.frame_count = Some(168); // Ensure valid frame count
         meta.source_extension = Some("mp4".to_string()); // Video container
 
@@ -4260,7 +4308,7 @@ mod tests {
         // Short duration bias should dominate and push to LoopStrong,
         // even though the verdict now comes from the full pipeline.
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            matches!(verdict, Verdict::LoopStrong(_)),
             "expected loop-strong for short silent asset, got {verdict:?}"
         );
     }
@@ -4284,7 +4332,7 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+            matches!(verdict, Verdict::LoopWeak(_)),
             "expected loop-weak, got {verdict:?}"
         );
         // With ≥15s hard veto, the verdict should come from Layer 0-EX.
@@ -4308,11 +4356,11 @@ mod tests {
         meta.frame_count = Some(88);
         meta.file_size_bytes = 3_800_000;
         meta.webp_compression_ratio = Some(3.5_f64);
-        meta.has_complex_color_profile = true;
+        meta.flags.color.has_complex_color_profile = true;
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+            matches!(verdict, Verdict::LoopWeak(_)),
             "expected loop-weak, got {verdict:?}"
         );
     }
@@ -4327,7 +4375,7 @@ mod tests {
         meta.fps = Some(10.0_f64);
         meta.frame_count = Some(70);
         meta.file_size_bytes = 500_000;
-        meta.has_transparency = true;
+        meta.flags.streams.has_transparency = true;
         meta.app_extensions = Some(vec!["GIPHY".to_string()]);
         meta.loop_count = Some(0);
         meta.motion_gini = Some(0.82_f64);
@@ -4338,7 +4386,7 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            matches!(verdict, Verdict::LoopStrong(_)),
             "expected loop-strong, got {verdict:?}"
         );
     }
@@ -4360,7 +4408,7 @@ mod tests {
         meta.source_extension = Some("webp".to_string());
         meta.container = Some("webp".to_string());
         // Add transparency to give a moderate positive signal
-        meta.has_transparency = true;
+        meta.flags.streams.has_transparency = true;
 
         let verdict = verdict_with_profile(&meta, &profile);
 
@@ -4368,10 +4416,7 @@ mod tests {
         // in the uncertain zone. We accept Uncertain OR LoopStrong (if the positive
         // signals are strong enough to cross the higher threshold).
         assert!(
-            matches!(
-                verdict,
-                LoopIntentVerdict::Uncertain(_) | LoopIntentVerdict::LoopStrong(_)
-            ),
+            matches!(verdict, Verdict::Uncertain(_) | Verdict::LoopStrong(_)),
             "expected uncertain or strong, got {verdict:?}"
         );
     }
@@ -4385,15 +4430,21 @@ mod tests {
             fps: Some(24.0),
             frame_count: Some(84),
             file_size_bytes: 2_000_000,
-            has_audio: false,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             source_extension: Some("mp4".to_string()),
             container: Some("mp4".to_string()),
             loop_closure_score: Some(0.95_f64),
             ..Default::default()
         };
 
-        let verdict = assess_loop_intent_from_meta(&meta, None);
-        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
+        let verdict = assess_from_meta(&meta, None);
+        assert!(matches!(verdict, Verdict::LoopStrong(_)));
         assert!(
             !verdict.reason().contains("Layer 7"),
             "legacy meme profile should resolve explicitly: {}",
@@ -4410,15 +4461,21 @@ mod tests {
             fps: Some(30.0),
             frame_count: Some(255),
             file_size_bytes: 8_000_000,
-            has_audio: false,
+            flags: LoopFlags {
+                streams: LoopStreamFlags {
+                    has_audio: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             source_extension: Some("mp4".to_string()),
             container: Some("mp4".to_string()),
             motion_gini: Some(0.85_f64),
             ..Default::default()
         };
 
-        let verdict = assess_loop_intent_from_meta(&meta, None);
-        assert!(matches!(verdict, LoopIntentVerdict::LoopWeak(_)));
+        let verdict = assess_from_meta(&meta, None);
+        assert!(matches!(verdict, Verdict::LoopWeak(_)));
     }
 
     #[test]
@@ -4486,7 +4543,7 @@ mod tests {
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
         meta.duration_secs = Some(5.0_f64);
-        meta.has_audio = false;
+        meta.flags.streams.has_audio = false;
 
         assert!(should_accept_layer6_loopstrong(
             &meta,
@@ -4505,7 +4562,7 @@ mod tests {
         meta.source_extension = Some("mp4".to_string());
         meta.container = Some("mp4".to_string());
         meta.duration_secs = Some(9.5_f64);
-        meta.has_audio = false;
+        meta.flags.streams.has_audio = false;
 
         assert!(should_accept_layer6_loopstrong(
             &meta,
@@ -4549,7 +4606,7 @@ mod tests {
         // The developer override injects -LOG_ODDS_BIAS_DEFINITIVELY_LONG, which should
         // push the verdict away from LoopStrong. We verify it doesn't end up LoopStrong.
         assert!(
-            !matches!(dev_long_verdict, LoopIntentVerdict::LoopStrong(_)),
+            !matches!(dev_long_verdict, Verdict::LoopStrong(_)),
             "developer override should suppress LoopStrong: {dev_long_verdict:?}"
         );
     }
@@ -4603,7 +4660,7 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = Some(2.28_f64);
         meta.frame_count = Some(57);
-        meta.has_audio = true; // Audio track exists
+        meta.flags.streams.has_audio = true; // Audio track exists
         meta.audio_is_silent = Some(true); // But it's silent (-91 dB)
         meta.source_extension = Some("mov".to_string());
         meta.container = Some("mov".to_string());
@@ -4613,7 +4670,7 @@ mod tests {
         // Silent audio = no audible content → duration bias drives the verdict.
         // Short duration (UltraShort tier) should push to LoopStrong.
         assert!(
-            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            matches!(verdict, Verdict::LoopStrong(_)),
             "Expected LoopStrong for silent audio track, got: {verdict:?}"
         );
     }

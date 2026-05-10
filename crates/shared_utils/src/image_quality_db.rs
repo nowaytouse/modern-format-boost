@@ -315,6 +315,7 @@ pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
 /// # Panics
 ///
 /// Panics if the internal epsilon constants are non-finite during similarity calculation.
+#[cfg_attr(not(feature = "high-precision"), allow(clippy::clone_on_copy))]
 pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Animated assets are handled by the GIF/Video pipeline, not this DB.
     if analysis.is_animated {
@@ -532,11 +533,11 @@ pub fn log_quality_inference_record(
         .and_then(|n| crate::numeric_cast::usize_to_i32_strict(n, "knn_neighbor_count"));
 
     let f64_safe = |v: f64| if v.is_finite() { Some(v) } else { None };
-    let entropy = f64_safe(analysis.features.entropy);
-    let compression = f64_safe(analysis.features.compression_ratio);
-    let bpp = f64_safe(spatial_bpp);
-    let lp = f64_safe(log_pixels);
-    let ar = f64_safe(aspect_ratio);
+    let safe_entropy = f64_safe(analysis.features.entropy);
+    let safe_compression = f64_safe(analysis.features.compression_ratio);
+    let safe_bpp = f64_safe(spatial_bpp);
+    let safe_lp = f64_safe(log_pixels);
+    let safe_ar = f64_safe(aspect_ratio);
     let is_lossless = analysis.is_lossless;
     let knn_score = record.knn_score.and_then(f64_safe);
     let knn_conf = record.knn_confidence.and_then(f64_safe);
@@ -553,11 +554,11 @@ pub fn log_quality_inference_record(
         &[
             &file_hash,
             &source_path,
-            &entropy,
-            &compression,
-            &bpp,
-            &lp,
-            &ar,
+            &safe_entropy,
+            &safe_compression,
+            &safe_bpp,
+            &safe_lp,
+            &safe_ar,
             &is_lossless,
             &knn_score,
             &knn_conf,

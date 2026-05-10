@@ -201,7 +201,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
             Ok(_) => {
                 result.copied += 1;
 
-                crate::copy_metadata(path, &dest);
+                crate::copy(path, &dest);
 
                 let ext = path
                     .extension()
@@ -291,7 +291,7 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
 
             match std::fs::copy(xmp_path, &xmp_dest) {
                 Ok(_) => {
-                    crate::copy_metadata(xmp_path, Path::new(&xmp_dest));
+                    crate::copy(xmp_path, Path::new(&xmp_dest));
                     println!("   📋 Copied XMP sidecar: {}", xmp_path.display());
 
                     debug!(

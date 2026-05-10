@@ -7,7 +7,7 @@
 //! some throughput for a lower peak RAM footprint only when truly necessary.
 
 use crate::constants;
-use crate::video_detection::{DetectedCodec, VideoDetectionResult};
+use crate::video_detection::{DetectedCodec, Detection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum X265MemoryProfile {
@@ -33,7 +33,7 @@ impl X265MemoryProfile {
 /// Uses the source codec and file size as signals, then queries actual
 /// available system RAM to pick the least restrictive profile that is safe.
 #[must_use]
-pub fn memory_profile_for_detection(detection: &VideoDetectionResult) -> X265MemoryProfile {
+pub fn memory_profile_for_detection(detection: &Detection) -> X265MemoryProfile {
     let needs_care = detection.codec.can_be_lossless()
         || detection.file_size >= constants::X265_LOW_MEMORY_SOURCE_SIZE_BYTES;
 
@@ -88,7 +88,7 @@ pub fn current_memory_profile() -> X265MemoryProfile {
 }
 
 #[must_use]
-pub fn format_x265_params(
+pub fn format(
     max_threads: usize,
     extra_params: Option<&str>,
     profile: X265MemoryProfile,
@@ -218,8 +218,8 @@ mod tests {
             > constants::X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES
     );
 
-    fn sample_detection(codec: DetectedCodec, file_size: u64) -> VideoDetectionResult {
-        VideoDetectionResult {
+    fn sample_detection(codec: DetectedCodec, file_size: u64) -> Detection {
+        Detection {
             codec,
             compression: CompressionType::VisuallyLossless,
             file_size,
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn low_memory_profile_injects_buffer_controls() {
-        let params = format_x265_params(4, Some("hdr-opt=1"), X265MemoryProfile::LowMemory);
+        let params = format(4, Some("hdr-opt=1"), X265MemoryProfile::LowMemory);
         assert!(params.contains("pools=2"));
         assert!(params.contains("frame-threads=1"));
         assert!(params.contains("lookahead-threads=1"));
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn moderate_profile_injects_moderate_controls() {
-        let params = format_x265_params(12, None, X265MemoryProfile::Moderate);
+        let params = format(12, None, X265MemoryProfile::Moderate);
         assert!(params.contains("pools=6"));
         assert!(params.contains("frame-threads=3"));
         assert!(params.contains("lookahead-threads=3"));
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn moderate_profile_scales_down_when_threads_are_already_low() {
-        let params = format_x265_params(2, None, X265MemoryProfile::Moderate);
+        let params = format(2, None, X265MemoryProfile::Moderate);
         assert!(params.contains("pools=2"));
         assert!(params.contains("frame-threads=2"));
         assert!(params.contains("lookahead-threads=2"));
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn default_profile_injects_no_buffer_controls() {
-        let params = format_x265_params(4, None, X265MemoryProfile::Default);
+        let params = format(4, None, X265MemoryProfile::Default);
         assert!(params.contains("pools=4"));
         assert!(!params.contains("frame-threads"));
         assert!(!params.contains("lookahead-threads"));

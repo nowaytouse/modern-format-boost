@@ -67,7 +67,7 @@ impl EncoderBounds for X264Encoder {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CrfError {
+pub enum Error {
     OutOfRange {
         value: f32,
         min: f32,
@@ -83,7 +83,7 @@ pub enum CrfError {
     },
 }
 
-impl fmt::Display for CrfError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OutOfRange {
@@ -107,7 +107,7 @@ impl fmt::Display for CrfError {
     }
 }
 
-impl std::error::Error for CrfError {}
+impl std::error::Error for Error {}
 
 #[derive(Clone, Copy)]
 pub struct Crf<E: EncoderBounds> {
@@ -120,13 +120,13 @@ impl<E: EncoderBounds> Crf<E> {
     ///
     /// # Errors
     /// Returns an error if the value is out of range.
-    pub fn new(value: f32) -> Result<Self, CrfError> {
+    pub fn new(value: f32) -> Result<Self, Error> {
         if value.is_nan() || value.is_infinite() {
-            return Err(CrfError::InvalidFloat { encoder: E::NAME });
+            return Err(Error::InvalidFloat { encoder: E::NAME });
         }
 
         if value < E::MIN || value > E::MAX {
-            return Err(CrfError::OutOfRange {
+            return Err(Error::OutOfRange {
                 value,
                 min: E::MIN,
                 max: E::MAX,
@@ -174,10 +174,10 @@ impl<E: EncoderBounds> Crf<E> {
     ///
     /// # Errors
     /// Returns an error if the key is invalid.
-    pub fn from_cache_key(key: u32) -> Result<Self, CrfError> {
+    pub fn from_cache_key(key: u32) -> Result<Self, Error> {
         let value_f64 = crate::numeric_cast::u32_to_f64(key) / CRF_CACHE_KEY_MULTIPLIER;
         let value = crate::numeric_cast::f64_to_f32_lossy(value_f64);
-        Self::new(value).map_err(|_| CrfError::InvalidCacheKey {
+        Self::new(value).map_err(|_| Error::InvalidCacheKey {
             key,
             encoder: E::NAME,
         })

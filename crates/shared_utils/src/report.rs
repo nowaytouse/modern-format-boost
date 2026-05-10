@@ -3,12 +3,12 @@
 //! Provides summary reporting functionality for batch operations
 //! Reference: media/CONTRIBUTING.md - Detailed Reporting requirement
 
-use crate::batch::BatchResult;
+use crate::batch::Summary;
 use crate::progress::{format_bytes, format_duration};
 use std::time::Duration;
 
-pub fn print_summary_report(
-    result: &BatchResult,
+pub fn print_summary(
+    result: &Summary,
     duration: Duration,
     input_bytes: u64,
     output_bytes: u64,
@@ -53,7 +53,7 @@ fn print_report_header(operation_name: &str) {
     );
 }
 
-fn print_file_stats(result: &BatchResult) {
+fn print_file_stats(result: &Summary) {
     use crate::modern_ui::colors::{
         BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, MFB_BLUE, RESET,
     };
@@ -138,7 +138,7 @@ fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
     );
 }
 
-fn print_time_info(result: &BatchResult, duration: Duration) {
+fn print_time_info(result: &Summary, duration: Duration) {
     use crate::modern_ui::colors::{BRIGHT_CYAN, DIM, MFB_BLUE, RESET};
     println!(
         "{}│{}  ⏱️  Total Time:         {}{:>10}{}                                         {}│{}",
@@ -165,7 +165,7 @@ fn print_time_info(result: &BatchResult, duration: Duration) {
     );
 }
 
-fn print_error_summary(result: &BatchResult) {
+fn print_error_summary(result: &Summary) {
     use crate::modern_ui::colors::{BRIGHT_RED, DIM, RESET};
     if !result.errors.is_empty() {
         println!();
@@ -179,7 +179,7 @@ fn print_error_summary(result: &BatchResult) {
     }
 }
 
-fn print_pause_info(result: &BatchResult) {
+fn print_pause_info(result: &Summary) {
     use crate::modern_ui::colors::{BRIGHT_YELLOW, DIM, RESET};
     if let Some(pause) = &result.pause_info {
         println!();
@@ -193,14 +193,14 @@ fn print_pause_info(result: &BatchResult) {
     }
 }
 
-pub fn print_simple_summary(result: &BatchResult) {
+pub fn print_simple_summary(result: &Summary) {
     println!(
         "\n✅ Complete: {} succeeded, {} failed, {} skipped (total: {})",
         result.succeeded, result.failed, result.skipped, result.total
     );
 }
 
-pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
+pub fn print_health(passed: usize, failed: usize, warnings: usize) {
     let total = passed + failed + warnings;
     let health_rate = if total > 0 {
         (crate::numeric_cast::usize_to_f64(passed) / crate::numeric_cast::usize_to_f64(total))
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_print_simple_summary_no_panic() {
-        let mut result = BatchResult::new();
+        let mut result = Summary::new();
         result.success();
         result.success();
         result.fail(std::path::PathBuf::from("test.png"), "Error".to_string());
@@ -236,38 +236,35 @@ mod tests {
 
     #[test]
     fn test_print_simple_summary_empty() {
-        let result = BatchResult::new();
+        let result = Summary::new();
         print_simple_summary(&result);
     }
 
     #[test]
-    fn test_print_summary_report_no_panic() {
-        let mut result = BatchResult::new();
-        result.success();
-        result.fail(std::path::PathBuf::from("test.png"), "Error".to_string());
-
-        let duration = Duration::from_secs(10);
-
-        print_summary_report(&result, duration, 1000, 500, "Test");
-    }
-
-    #[test]
-    fn test_print_summary_report_zero_input() {
-        let result = BatchResult::new();
+    fn test_print_summary_no_panic() {
+        let result = Summary::new();
         let duration = Duration::from_secs(1);
 
-        print_summary_report(&result, duration, 0, 0, "Test");
+        print_summary(&result, duration, 1000, 500, "Test");
     }
 
     #[test]
-    fn test_print_health_report_no_panic() {
-        print_health_report(10, 2, 3);
+    fn test_print_summary_zero_input() {
+        let result = Summary::new();
+        let duration = Duration::from_secs(1);
 
-        print_health_report(0, 0, 0);
+        print_summary(&result, duration, 0, 0, "Test");
+    }
 
-        print_health_report(100, 0, 0);
+    #[test]
+    fn test_print_health_no_panic() {
+        print_health(10, 2, 3);
 
-        print_health_report(0, 100, 0);
+        print_health(0, 0, 0);
+
+        print_health(100, 0, 0);
+
+        print_health(0, 100, 0);
     }
 
     #[test]

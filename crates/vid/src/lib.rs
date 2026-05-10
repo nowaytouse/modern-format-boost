@@ -1,4 +1,5 @@
 //! vid - Video Quality Analysis and HEVC/H.265/AV1 Conversion API
+#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
@@ -23,9 +24,7 @@ pub use shared_utils::constants;
 pub use conversion_api::{
     auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat,
 };
-pub use detection_api::{
-    ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult, detect_video,
-};
+pub use detection_api::{ColorSpace, CompressionType, DetectedCodec, Detection, detect_video};
 pub use ffprobe::{FFprobeResult, probe_video};
 pub use shared_utils::conversion_types::{
     ConfigFlags, ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,

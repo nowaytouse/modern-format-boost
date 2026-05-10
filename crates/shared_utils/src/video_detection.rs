@@ -178,14 +178,38 @@ impl ColorSpace {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct VideoStreamFlags {
+    pub has_audio: bool,
+    pub has_subtitles: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VideoContentFlags {
+    pub archival_candidate: bool,
+    pub has_b_frames: bool,
+    pub is_variable_frame_rate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VideoHdrFlags {
+    pub is_dolby_vision: bool,
+    pub is_hdr10_plus: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VideoFlags {
+    #[serde(flatten)]
+    pub streams: VideoStreamFlags,
+    #[serde(flatten)]
+    pub content: VideoContentFlags,
+    #[serde(flatten)]
+    pub hdr: VideoHdrFlags,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
-pub struct VideoDetectionResult {
+pub struct Detection {
     pub file_path: String,
     pub format: String,
     pub codec: DetectedCodec,
@@ -200,14 +224,13 @@ pub struct VideoDetectionResult {
     pub pix_fmt: String,
     pub color_space: ColorSpace,
     pub bitrate: Option<u64>,
-    pub has_audio: bool,
+    #[serde(flatten)]
+    pub flags: VideoFlags,
     pub audio_codec: Option<String>,
     pub file_size: u64,
     pub quality_score: u8,
-    pub archival_candidate: bool,
     pub profile: Option<String>,
     pub max_b_frames: Option<u8>,
-    pub has_b_frames: bool,
     pub encoder_params: Option<String>,
     pub video_bitrate: Option<u64>,
     pub bits_per_pixel: f64,
@@ -219,22 +242,13 @@ pub struct VideoDetectionResult {
     pub mastering_display: Option<String>,
     /// HDR10 content light level: "MaxCLL,MaxFALL"
     pub max_cll: Option<String>,
-    /// Dolby Vision detected in stream side data
-    pub is_dolby_vision: bool,
-    /// Dolby Vision profile number (5, 7, 8, etc.) — None if not DV
     pub dv_profile: Option<u8>,
     /// Dolby Vision BL signal compatibility ID (used to determine cross-compat)
     pub dv_bl_signal_compatibility_id: Option<u8>,
-    /// HDR10+ (SMPTE ST 2094-40) detected in stream side data
-    pub is_hdr10_plus: bool,
-    /// True when at least one subtitle stream is present
-    pub has_subtitles: bool,
     /// Codec name of the first subtitle stream
     pub subtitle_codec: Option<String>,
     /// Number of audio channels (e.g. 2 for stereo, 6 for 5.1, 8 for 7.1/Atmos)
     pub audio_channels: Option<u32>,
-    /// Variable frame rate (VFR) detected - common in iPhone slow-motion videos
-    pub is_variable_frame_rate: bool,
     /// Precise metadata from encoder tags
     pub precision: VideoPrecisionMetadata,
     /// Raw tags from format section
@@ -242,7 +256,7 @@ pub struct VideoDetectionResult {
     /// 🛠️ New Dimension: Processing history for cache invalidation logic
     pub history: crate::types::ProcessHistory,
     /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
-    pub perception: crate::types::VisualPerception,
+    pub perception: crate::types::Visual,
     /// Optional: Loop count from metadata (0 = infinite).
     pub loop_count: Option<u16>,
     /// 🎞️ Frame types (I, P, B) for the initial sample.
@@ -257,12 +271,12 @@ pub struct VideoDetectionResult {
     pub is_interlaced: Option<bool>,
 }
 
-impl VideoDetectionResult {
+impl Detection {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
     #[must_use]
     pub fn is_hdr(&self) -> bool {
-        self.is_dolby_vision
-            || self.is_hdr10_plus
+        self.flags.hdr.is_dolby_vision
+            || self.flags.hdr.is_hdr10_plus
             || self.mastering_display.is_some()
             || self.max_cll.is_some()
             || matches!(
@@ -385,8 +399,8 @@ pub fn calculate_quality_score(
 pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
-) -> Result<VideoDetectionResult, FFprobeError> {
-    let should_refresh_cached_result = |cached: &VideoDetectionResult| -> bool {
+) -> std::result::Result<Detection, FFprobeError> {
+    let should_refresh_cached_result = |cached: &Detection| -> bool {
         if cached.frame_count.is_some_and(|fc| fc > 1) {
             return false;
         }
@@ -459,7 +473,7 @@ pub fn detect_video_with_cache(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
+pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError> {
     let probe = match probe_video(path) {
         Ok(p) => p,
         Err(e) => {
@@ -595,7 +609,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         CompressionType::Lossless | CompressionType::VisuallyLossless
     ) || codec.can_be_lossless();
 
-    let mut result = VideoDetectionResult {
+    let mut result = Detection {
         file_path: path.display().to_string(),
         format: probe.format_name,
         codec,
@@ -618,14 +632,26 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         pix_fmt: probe.pix_fmt,
         color_space,
         bitrate: format_bit_rate,
-        has_audio: probe.audio.present,
+        flags: VideoFlags {
+            streams: VideoStreamFlags {
+                has_audio: probe.audio.present,
+                has_subtitles: probe.subtitles.present,
+            },
+            content: VideoContentFlags {
+                archival_candidate,
+                has_b_frames,
+                is_variable_frame_rate: probe.is_variable_frame_rate,
+            },
+            hdr: VideoHdrFlags {
+                is_dolby_vision: probe.hdr.is_dolby_vision(),
+                is_hdr10_plus: probe.hdr.hdr10_plus,
+            },
+        },
         audio_codec: probe.audio.codec.clone(),
         file_size: probe.size,
         quality_score,
-        archival_candidate,
         profile: probe.profile,
         max_b_frames: probe.max_b_frames,
-        has_b_frames,
         encoder_params: probe.encoder_settings.clone(),
         video_bitrate: probe.video_bit_rate,
         bits_per_pixel,
@@ -633,18 +659,14 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         color_transfer: probe.color_transfer,
         mastering_display: probe.hdr.mastering_display.clone(),
         max_cll: probe.hdr.max_cll.clone(),
-        is_dolby_vision: probe.hdr.is_dolby_vision(),
         dv_profile: probe.hdr.dv_profile(),
         dv_bl_signal_compatibility_id: probe.hdr.dv_bl_signal_compatibility_id(),
-        is_hdr10_plus: probe.hdr.hdr10_plus,
-        has_subtitles: probe.subtitles.present,
         subtitle_codec: probe.subtitles.codec.clone(),
         audio_channels: probe.audio.channels,
-        is_variable_frame_rate: probe.is_variable_frame_rate,
         precision,
         tags: probe.tags,
         history: crate::common_utils::get_current_history(),
-        perception: crate::types::VisualPerception::default(),
+        perception: crate::types::Visual::default(),
         loop_count: probe.loop_count,
         frame_types: probe.frame_types,
         pts_deltas: probe.pts_deltas,
@@ -655,7 +677,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // ── Penetrating Content Verification ──
     // Verify critical metadata claims by decoding actual content
-    if result.has_audio
+    if result.flags.streams.has_audio
         && let crate::media_penetration::PenetrationResult::Verified(is_silent) =
             crate::media_penetration::detect_audio_silence(path)
         && is_silent
@@ -664,7 +686,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
             "🔊 [{}] Audio penetration: SILENT track detected, treating as no audio",
             path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
         ));
-        result.has_audio = false;
+        result.flags.streams.has_audio = false;
     }
 
     let has_transparency = result.pix_fmt.contains('a')

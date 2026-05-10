@@ -522,21 +522,74 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
     false
 }
 
+static TOOL_PATH_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Option<std::path::PathBuf>>>,
+> = std::sync::OnceLock::new();
+
+#[must_use]
+pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
+    let cache_mutex =
+        TOOL_PATH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+    if let Ok(mut cache) = cache_mutex.lock() {
+        if let Some(cached_path) = cache.get(name) {
+            return cached_path.clone();
+        }
+
+        // Try standard which first
+        if let Ok(path) = which::which(name) {
+            cache.insert(name.to_string(), Some(path.clone()));
+            return Some(path);
+        }
+
+        // Fallback paths, especially useful for macOS GUI apps
+        let fallbacks = [
+            format!("/opt/homebrew/bin/{name}"),
+            format!("/usr/local/bin/{name}"),
+            format!("/usr/bin/{name}"),
+            format!("/bin/{name}"),
+            format!(
+                "{}/.cargo/bin/{}",
+                std::env::var("HOME").unwrap_or_default(),
+                name
+            ),
+        ];
+
+        for fallback in &fallbacks {
+            let path = std::path::Path::new(fallback);
+            if path.is_file() {
+                // Ensure it's executable (simplified check by checking exists + is_file)
+                cache.insert(name.to_string(), Some(path.to_path_buf()));
+                return Some(path.to_path_buf());
+            }
+        }
+
+        // Negative cache
+        cache.insert(name.to_string(), None);
+    }
+
+    None
+}
+
 #[must_use]
 pub fn is_command_available(command_name: &str) -> bool {
-    Command::new(command_name)
+    let path =
+        resolve_tool_path(command_name).unwrap_or_else(|| std::path::PathBuf::from(command_name));
+    Command::new(&path)
         .arg("--version")
         .output()
-        .or_else(|_| Command::new(command_name).arg("-version").output())
+        .or_else(|_| Command::new(&path).arg("-version").output())
         .is_ok_and(|o| o.status.success())
 }
 
 #[must_use]
 pub fn get_command_version(command_name: &str) -> Option<String> {
-    let output = Command::new(command_name)
+    let path =
+        resolve_tool_path(command_name).unwrap_or_else(|| std::path::PathBuf::from(command_name));
+    let output = Command::new(&path)
         .arg("--version")
         .output()
-        .or_else(|_| Command::new(command_name).arg("-version").output())
+        .or_else(|_| Command::new(&path).arg("-version").output())
         .map_err(|e| {
             debug!(command = %command_name, error = %e, "Failed to execute command to check version");
             e

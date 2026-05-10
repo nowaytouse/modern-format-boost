@@ -17,6 +17,25 @@ from pathlib import Path
 
 # Signal handlers removed to avoid intrusive GUI popups
 
+def find_tool_robust(name: str) -> str:
+    """Find a tool robustly, falling back to common paths if not in PATH."""
+    import shutil
+    path = shutil.which(name)
+    if path:
+        return path
+    
+    # Common fallback paths for Homebrew and system tools
+    fallbacks = [
+        f"/opt/homebrew/bin/{name}",
+        f"/usr/local/bin/{name}",
+        f"/usr/bin/{name}",
+        f"/bin/{name}",
+        f"{os.path.expanduser('~/.cargo/bin')}/{name}"
+    ]
+    for fallback in fallbacks:
+        if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+            return fallback
+    return name  # Return name and let it fail naturally if entirely missing
 
 class ReturnToHomeException(Exception):
     """Custom exception to trigger a return to the main selection menu."""

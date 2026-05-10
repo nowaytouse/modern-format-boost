@@ -13,14 +13,14 @@ pub mod templates {
     pub const SPINNER_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 }
 
-pub struct UnifiedProgressBar {
+pub struct Bar {
     pub bar: ProgressBar,
     input_size: u64,
     current_iteration: AtomicU64,
     is_finished: AtomicBool,
 }
 
-impl UnifiedProgressBar {
+impl Bar {
     #[must_use]
     /// Create a new batch progress bar.
     ///
@@ -134,7 +134,7 @@ impl UnifiedProgressBar {
     }
 }
 
-impl Drop for UnifiedProgressBar {
+impl Drop for Bar {
     fn drop(&mut self) {
         if !self.is_finished.load(Ordering::Relaxed) {
             self.bar.finish_and_clear();

@@ -710,7 +710,7 @@ pub fn fallback_success() {
     FALLBACK_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call when a JXL conversion completes successfully (e.g. from `finalize_conversion`).
+/// Call when a JXL conversion completes successfully (e.g. from `finalize_task`).
 pub fn jxl_success() {
     JXL_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
@@ -994,7 +994,7 @@ fn format_video_stats_line(
 }
 
 const fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
-    // Deprecated: UI now relies on inline stats via get_current_stats_string() in ConversionResult
+    // Deprecated: UI now relies on inline stats via get_current_stats_string() in TaskResult
 }
 
 fn format_xmp_jxl_images_line(

@@ -944,7 +944,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
 ///
 /// # Errors
 /// Returns an error if precheck fails.
-pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
+pub fn run(input: &Path) -> Result<VideoInfo> {
     let info = get_video_info(input)?;
     print_precheck_report(&info);
 
