@@ -78,7 +78,7 @@ impl ToolBuilder for VmafBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(reference) = &self.reference {
             cmd.arg("--reference")
@@ -170,7 +170,7 @@ impl ToolBuilder for Exiv2Builder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         for arg in &self.args {
             cmd.arg(arg);
@@ -213,7 +213,7 @@ impl ToolBuilder for JxlinfoBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
@@ -270,7 +270,7 @@ impl ToolBuilder for DoviBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(mode) = &self.mode {
             cmd.arg(mode);
@@ -343,7 +343,7 @@ impl ToolBuilder for Hdr10PlusBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(mode) = &self.mode {
             cmd.arg(mode);
@@ -511,7 +511,7 @@ impl ToolBuilder for X265Builder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.flags.io.y4m {
             cmd.arg("--y4m");
@@ -616,7 +616,7 @@ impl ToolBuilder for OsascriptBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(script) = &self.script {
             cmd.arg("-e").arg(script);
@@ -632,7 +632,7 @@ impl ToolBuilder for OsascriptBuilder {
     fn check_available(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new(self.get_command_name())
+            self.get_resolved_command()
                 .arg("-e")
                 .arg("return")
                 .output()
@@ -680,7 +680,7 @@ impl ToolBuilder for PowershellBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         cmd.arg("-NoProfile").arg("-NonInteractive");
         if let Some(command) = &self.command {
             cmd.arg("-Command").arg(command);
@@ -694,7 +694,7 @@ impl ToolBuilder for PowershellBuilder {
     fn check_available(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
-            Command::new(self.get_command_name())
+            self.get_resolved_command()
                 .arg("-Command")
                 .arg("Get-Date")
                 .output()
@@ -757,7 +757,7 @@ impl ToolBuilder for AclBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         for arg in &self.args {
             cmd.arg(arg);
         }
@@ -768,7 +768,7 @@ impl ToolBuilder for AclBuilder {
     }
 
     fn check_available(&self) -> bool {
-        Command::new(constants::TOOL_GETFACL)
+        self.get_resolved_command()
             .arg(constants::ARG_VERSION)
             .output()
             .is_ok_and(|o| o.status.success())
@@ -804,7 +804,7 @@ impl ToolBuilder for SysctlBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         for arg in &self.args {
             cmd.arg(arg);
         }
@@ -812,7 +812,7 @@ impl ToolBuilder for SysctlBuilder {
     }
 
     fn check_available(&self) -> bool {
-        Command::new(self.get_command_name())
+        self.get_resolved_command()
             .arg("-a")
             .output()
             .is_ok_and(|o| o.status.success())
@@ -841,11 +841,11 @@ impl ToolBuilder for VmstatBuilder {
     }
 
     fn build(&self) -> Command {
-        Command::new(self.get_command_name())
+        self.get_resolved_command()
     }
 
     fn check_available(&self) -> bool {
-        Command::new(self.get_command_name())
+        self.get_resolved_command()
             .output()
             .is_ok_and(|o| o.status.success())
     }
@@ -886,7 +886,7 @@ impl ToolBuilder for AttribBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         for arg in &self.args {
             cmd.arg(arg);
         }
@@ -897,7 +897,7 @@ impl ToolBuilder for AttribBuilder {
     }
 
     fn check_available(&self) -> bool {
-        Command::new(self.get_command_name())
+        self.get_resolved_command()
             .arg("/?")
             .output()
             .is_ok_and(|o| o.status.success())
@@ -951,7 +951,7 @@ impl ToolBuilder for RsyncBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         // Protect args against shell/remote interpretation (requires rsync 3.0.0+)
         cmd.arg("--protect-args");
@@ -1004,7 +1004,7 @@ impl ToolBuilder for PsBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if let Some(pid) = self.pid {
             cmd.args(["-p", &pid.to_string()]);
         }
@@ -1051,7 +1051,7 @@ impl ToolBuilder for KillBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if let Some(sig) = &self.signal {
             cmd.arg(sig);
         }
@@ -1084,7 +1084,7 @@ impl ToolBuilder for HostnameBuilder {
     }
 
     fn build(&self) -> Command {
-        Command::new(self.get_command_name())
+        self.get_resolved_command()
     }
 }
 
@@ -1123,7 +1123,7 @@ impl ToolBuilder for TaskkillBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if let Some(pid) = self.pid {
             cmd.args(["/PID", &pid.to_string()]);
         }

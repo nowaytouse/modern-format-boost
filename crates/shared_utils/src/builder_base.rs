@@ -19,12 +19,27 @@ pub trait ToolBuilder {
     fn get_command_name(&self) -> &str;
     fn build(&self) -> Command;
 
+    /// Returns a `Command` initialized with the resolved path of the tool.
+    /// Uses `resolve_tool_path` to handle macOS GUI app fallbacks.
+    fn get_resolved_command(&self) -> Command {
+        let name = self.get_command_name();
+        let path = crate::common_utils::resolve_tool_path(name)
+            .unwrap_or_else(|| std::path::PathBuf::from(name));
+        Command::new(path)
+    }
+
     /// Returns the arguments used for availability check (default: --version)
     fn get_check_args(&self) -> &[&str] {
         &["--version"]
     }
 
-    /// Checks if the tool is available in the system (with caching).
+    /// Checks if the tool is available in the system.
+    ///
+    /// Positive results are cached. Negative results are NOT cached: under
+    /// heavy parallel workloads a transient failure in `Command::output`
+    /// (fd exhaustion, signal interruption, IO pressure) would otherwise
+    /// latch the cache to `false` and every subsequent file would wrongly
+    /// report the tool missing.
     fn check_available(&self) -> bool {
         let name = self.get_command_name();
 
@@ -32,13 +47,27 @@ pub trait ToolBuilder {
             let cache = TOOL_CACHE
                 .read()
                 .expect("TOOL_CACHE lock poisoned during read");
-            if let Some(&available) = cache.get(name) {
-                return available;
+            if let Some(&available) = cache.get(name)
+                && available
+            {
+                return true;
             }
         }
 
-        let path = crate::common_utils::resolve_tool_path(name)
-            .unwrap_or_else(|| std::path::PathBuf::from(name));
+        // Fast path: if resolve_tool_path finds the binary on disk, it's
+        // available. Skip the --version spawn that can fail transiently.
+        if crate::common_utils::resolve_tool_path(name).is_some() {
+            {
+                let mut cache = TOOL_CACHE
+                    .write()
+                    .expect("TOOL_CACHE lock poisoned during write");
+                cache.insert(name.to_string(), true);
+            }
+            return true;
+        }
+
+        // Slow path: try running the tool. Only cache on success.
+        let path = std::path::PathBuf::from(name);
         let mut cmd = Command::new(&path);
         cmd.args(self.get_check_args());
 
@@ -47,10 +76,12 @@ pub trait ToolBuilder {
             .or_else(|_| Command::new(&path).arg("-version").output())
             .is_ok_and(|o| o.status.success());
 
-        let mut cache = TOOL_CACHE
-            .write()
-            .expect("TOOL_CACHE lock poisoned during write");
-        cache.insert(name.to_string(), available);
+        if available {
+            let mut cache = TOOL_CACHE
+                .write()
+                .expect("TOOL_CACHE lock poisoned during write");
+            cache.insert(name.to_string(), true);
+        }
         available
     }
 

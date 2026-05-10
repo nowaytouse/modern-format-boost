@@ -16,6 +16,13 @@ use std::time::Instant;
 pub trait CliProcessingResult {
     fn is_skipped(&self) -> bool;
     fn is_success(&self) -> bool;
+    /// True when the module is intentionally abdicating this file to the other
+    /// module (e.g. vid ignoring static images handled by img). Unlike
+    /// `is_skipped`, ignored results MUST NOT be copied to the output tree —
+    /// the peer module will produce the file.
+    fn is_ignored(&self) -> bool {
+        false
+    }
     fn skip_reason(&self) -> Option<&str>;
     fn input_path(&self) -> &str;
     fn output_path(&self) -> Option<&str>;
@@ -31,6 +38,9 @@ impl CliProcessingResult for crate::conversion::TaskResult {
             self.outcome(),
             crate::conversion::Outcome::Skipped | crate::conversion::Outcome::FallbackPreserved
         )
+    }
+    fn is_ignored(&self) -> bool {
+        self.outcome() == crate::conversion::Outcome::Ignored
     }
     fn is_success(&self) -> bool {
         self.outcome() == crate::conversion::Outcome::Converted
@@ -372,7 +382,17 @@ where
 
             match converter(fixed.as_path()) {
                 Ok(result) => {
-                    if result.is_skipped() {
+                    if result.is_ignored() {
+                        // Peer module (img/vid) owns this file. Do NOT copy here —
+                        // copying would race the peer and produce an ambiguous
+                        // collision in the output tree.
+                        info!(
+                            "⏭️ {} → IGNORE ({})",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            result.skip_reason().unwrap_or("handled by peer module")
+                        );
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                    } else if result.is_skipped() {
                         info!(
                             "⏭️ {} → SKIP ({})",
                             fixed.file_name().unwrap_or_default().to_string_lossy(),
@@ -611,6 +631,10 @@ where
                 info!("✅ Directory metadata preserved");
             }
         }
+    }
+
+    if fatal_stop.load(Ordering::Relaxed) {
+        anyhow::bail!("Fatal error encountered during batch processing.");
     }
 
     Ok(())

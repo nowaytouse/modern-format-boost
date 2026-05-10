@@ -114,7 +114,7 @@ impl ToolBuilder for CjxlBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.use_stdin {
             cmd.arg("-");
@@ -227,7 +227,7 @@ impl ToolBuilder for DjxlBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());

@@ -211,6 +211,7 @@ impl ExploreQualityFailureDecision {
                 )
             })?,
             blake3: None,
+            ignored: false,
         })
     }
 }
@@ -293,6 +294,7 @@ impl FinalQualityGateFailureDecision {
                 )
             })?,
             blake3: None,
+            ignored: false,
         })
     }
 }
@@ -796,6 +798,7 @@ pub fn auto_convert_with_cache(
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
+            ignored: false,
         });
     }
 
@@ -860,23 +863,11 @@ pub fn auto_convert_with_cache(
         } else {
             "Unknown or zero frame count - vid ignores potentially non-animated media (handled by img)"
         };
-        shared_utils::progress_mode::video_skipped(reason);
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
-
-        // Even though ignored in vid, we must ensure the file is copied to the output
-        // to prevent data loss in cases where img also skips it (e.g. Live Photos).
-        shared_utils::copy_on_skip_or_fail(
-            input,
-            config.output_dir.as_deref(),
-            config.base_dir.as_deref(),
-            false,
-        )
-        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
-
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: input.display().to_string(),
+            output_path: String::new(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: reason.to_string(),
@@ -889,10 +880,11 @@ pub fn auto_convert_with_cache(
             output_size: 0,
             size_ratio: 0.0,
             success: true,
-            message: "Ignored static image in vid module (copied to output)".to_string(),
+            message: format!("IGNORED: {reason}"),
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
+            ignored: true,
         });
     }
 
@@ -958,6 +950,7 @@ pub fn auto_convert_with_cache(
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
+            ignored: false,
         });
     }
 
@@ -1022,6 +1015,7 @@ pub fn auto_convert_with_cache(
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
+            ignored: false,
         });
     }
 
@@ -1071,6 +1065,7 @@ pub fn auto_convert_with_cache(
                     final_crf: 0.0,
                     exploration_attempts: 0,
                     blake3: None,
+                    ignored: false,
                 });
             }
 
@@ -1123,6 +1118,7 @@ pub fn auto_convert_with_cache(
                 final_crf: 0.0,
                 exploration_attempts: 0,
                 blake3: None,
+                ignored: false,
             });
         }
         TargetVideoFormat::HevcMov
@@ -1407,6 +1403,7 @@ pub fn auto_convert_with_cache(
                             ))
                         })?,
                         blake3: None,
+                        ignored: false,
                     });
                 }
 
@@ -1526,6 +1523,7 @@ pub fn auto_convert_with_cache(
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,
+            ignored: false,
         });
     }
 
@@ -1577,6 +1575,7 @@ pub fn auto_convert_with_cache(
                     ))
                 })?,
                 blake3: None,
+                ignored: false,
             });
         }
 
@@ -1711,6 +1710,7 @@ pub fn auto_convert_with_cache(
                 final_crf,
                 exploration_attempts: attempts,
                 blake3: None,
+                ignored: false,
             });
         }
 
@@ -1761,6 +1761,7 @@ pub fn auto_convert_with_cache(
             final_crf,
             exploration_attempts: attempts,
             blake3: None,
+            ignored: false,
         });
     }
 
@@ -1816,6 +1817,7 @@ pub fn auto_convert_with_cache(
         final_crf,
         exploration_attempts: attempts,
         blake3: None,
+        ignored: false,
     })
 }
 

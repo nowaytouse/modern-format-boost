@@ -99,7 +99,7 @@ impl ToolBuilder for MagickBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(input) = &self.input {
             cmd.arg("--")
@@ -215,7 +215,7 @@ impl ToolBuilder for IdentifyBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if self.use_magick {
             cmd.arg(constants::MAGICK_ARG_IDENTIFY);
         }
@@ -240,7 +240,7 @@ impl ToolBuilder for IdentifyBuilder {
     }
 
     fn check_available(&self) -> bool {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if self.use_magick {
             cmd.arg(constants::MAGICK_ARG_IDENTIFY);
         }
@@ -251,7 +251,9 @@ impl ToolBuilder for IdentifyBuilder {
                 if self.use_magick {
                     false
                 } else {
-                    let mut fallback = Command::new(constants::TOOL_MAGICK);
+                    let path = crate::common_utils::resolve_tool_path(constants::TOOL_MAGICK)
+                        .unwrap_or_else(|| std::path::PathBuf::from(constants::TOOL_MAGICK));
+                    let mut fallback = Command::new(path);
                     fallback
                         .arg(constants::MAGICK_ARG_IDENTIFY)
                         .arg(constants::ARG_VERSION);
@@ -343,7 +345,7 @@ impl ToolBuilder for WebpmuxBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.info {
             cmd.arg(constants::WEBPMUX_ARG_INFO);
@@ -473,7 +475,7 @@ impl ToolBuilder for GifskiBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(fps) = self.fps {
             cmd.arg(constants::GIFSKI_ARG_FPS).arg(format!("{fps:.3}"));
@@ -604,7 +606,7 @@ impl ToolBuilder for AvifencBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.lossless {
             cmd.arg(constants::AVIFENC_ARG_LOSSLESS);
@@ -708,7 +710,7 @@ impl ToolBuilder for SipsBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(fmt) = &self.format {
             cmd.arg(constants::SIPS_ARG_S)
@@ -741,7 +743,7 @@ impl ToolBuilder for SipsBuilder {
     fn check_available(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new(self.get_command_name())
+            self.get_resolved_command()
                 .arg(constants::ARG_V)
                 .output()
                 .is_ok_and(|o| o.status.success())
@@ -863,7 +865,7 @@ impl ToolBuilder for ExiftoolBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
         if self.overwrite_original {
             cmd.arg(constants::EXIFTOOL_ARG_OVERWRITE_ORIGINAL);
         }
@@ -925,7 +927,7 @@ impl ToolBuilder for DwebpBuilder {
     }
 
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());

@@ -434,7 +434,8 @@ impl FfmpegBuilder {
     /// # Errors
     /// Returns an error if the command fails.
     pub fn list_encoders() -> anyhow::Result<String> {
-        let output = Command::new(constants::TOOL_FFMPEG)
+        let output = Self::default()
+            .get_resolved_command()
             .arg(constants::FFMPEG_ARG_HIDE_BANNER)
             .arg("-encoders")
             .output()?;
@@ -481,7 +482,7 @@ impl ToolBuilder for FfmpegBuilder {
     fn build(&self) -> Command {
         self.assert_output_target();
 
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.flags.core.overwrite {
             cmd.arg(constants::FFMPEG_ARG_OVERWRITE);
@@ -717,7 +718,7 @@ impl ToolBuilder for FfprobeBuilder {
 
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
-        let mut cmd = Command::new(self.get_command_name());
+        let mut cmd = self.get_resolved_command();
 
         if self.flags.output.show_streams {
             cmd.arg(constants::FFPROBE_ARG_SHOW_STREAMS);

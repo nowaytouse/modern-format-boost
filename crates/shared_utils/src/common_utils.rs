@@ -532,7 +532,9 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
         TOOL_PATH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
     if let Ok(mut cache) = cache_mutex.lock() {
-        if let Some(cached_path) = cache.get(name) {
+        if let Some(cached_path) = cache.get(name)
+            && cached_path.is_some()
+        {
             return cached_path.clone();
         }
 
@@ -558,14 +560,15 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
         for fallback in &fallbacks {
             let path = std::path::Path::new(fallback);
             if path.is_file() {
-                // Ensure it's executable (simplified check by checking exists + is_file)
                 cache.insert(name.to_string(), Some(path.to_path_buf()));
                 return Some(path.to_path_buf());
             }
         }
 
-        // Negative cache
-        cache.insert(name.to_string(), None);
+        // Do NOT cache negative lookups: a transient filesystem hiccup would
+        // otherwise latch the whole process into reporting the tool missing.
+        // The cost of re-checking is tiny (a handful of stat calls) compared
+        // to spuriously failing every file in a batch.
     }
 
     None

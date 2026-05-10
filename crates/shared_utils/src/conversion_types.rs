@@ -206,6 +206,11 @@ pub struct ConversionOutput {
     pub final_crf: f32,
     pub exploration_attempts: u8,
     pub blake3: Option<String>,
+    /// Intentional abdication: this module is yielding the file to the peer
+    /// module (e.g. vid seeing a static image handed to img). Ignored results
+    /// must NOT be copied to the output tree by the orchestrator.
+    #[serde(default)]
+    pub ignored: bool,
 }
 
 impl ConversionOutput {
@@ -213,6 +218,10 @@ impl ConversionOutput {
     pub fn outcome(&self) -> crate::conversion::Outcome {
         if !self.success {
             return crate::conversion::Outcome::Failed;
+        }
+
+        if self.ignored {
+            return crate::conversion::Outcome::Ignored;
         }
 
         if self.strategy.target == TargetVideoFormat::Skip
@@ -229,6 +238,10 @@ impl ConversionOutput {
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
         self.outcome() == crate::conversion::Outcome::Skipped
+    }
+
+    fn is_ignored(&self) -> bool {
+        self.outcome() == crate::conversion::Outcome::Ignored
     }
 
     fn is_success(&self) -> bool {
