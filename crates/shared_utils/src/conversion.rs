@@ -452,7 +452,7 @@ impl TaskResult {
     /// Panics if file metadata cannot be accessed.
     pub fn skipped_duplicate(input: &Path) -> Self {
         let input_size = fs::metadata(input)
-            .unwrap_or_else(|e| panic!("FATAL: Metadata unreachable during duplicate check: {e}"))
+            .expect("FATAL: Metadata unreachable during duplicate check")
             .len();
         Self {
             success: true,
@@ -474,7 +474,7 @@ impl TaskResult {
     /// Panics if file metadata cannot be accessed.
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
         let input_size = fs::metadata(input)
-            .unwrap_or_else(|e| panic!("FATAL: Metadata unreachable during exist check: {e}"))
+            .expect("FATAL: Metadata unreachable during exist check")
             .len();
         Self {
             success: true,
