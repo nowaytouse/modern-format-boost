@@ -120,7 +120,22 @@ pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
     }
 
     reader.limits(limits);
-    reader.decode().map_err(ImgQualityError::from)
+    let img = reader.decode().map_err(ImgQualityError::from)?;
+
+    // PNG Heuristic Detection: Enable 4-layer analysis for PNG files
+    // This supplements simple magic-bytes detection with structural/metadata/statistical analysis
+    if format == Some(image::ImageFormat::Png) {
+        if let Ok(analysis) = analyze_png_quantization(path) {
+            tracing::debug!(
+                is_quantized = analysis.is_quantized,
+                confidence = ?analysis.confidence,
+                detected_tool = ?analysis.detected_tool,
+                "PNG heuristic analysis completed"
+            );
+        }
+    }
+
+    Ok(img)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3712,5 +3727,98 @@ mod tests {
         assert!(py < height);
         assert_eq!(px, width - 1); // Should be clamped to max valid coordinate
         assert_eq!(py, height - 1);
+    }
+
+    #[test]
+    fn test_png_heuristic_detection_enabled() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary PNG file for testing
+        let mut temp_file = NamedTempFile::with_suffix(".png").unwrap();
+        let img = image::DynamicImage::new_rgba8(100, 100);
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        temp_file.write_all(&buf).unwrap();
+
+        // Test analyze_png_quantization with file path
+        let result = analyze_png_quantization(temp_file.path());
+
+        // Should succeed for any valid PNG file
+        assert!(
+            result.is_ok(),
+            "PNG quantization analysis should succeed for valid PNG file"
+        );
+
+        let analysis = result.unwrap();
+        // Verify basic structure is populated
+        assert!(
+            analysis.confidence >= 0.0 && analysis.confidence <= 1.0,
+            "Confidence should be in valid range"
+        );
+    }
+
+    #[test]
+    fn test_open_image_with_png_heuristic() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary PNG file
+        let mut temp_file = NamedTempFile::with_suffix(".png").unwrap();
+
+        // Create simple PNG image using image crate
+        let img = image::DynamicImage::new_rgba8(50, 50);
+        img.write_to(
+            &mut std::io::Cursor::new(Vec::new()),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+
+        // Save to temp file
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        temp_file.write_all(&buf).unwrap();
+
+        // Test open_image_with_limits triggers PNG heuristic analysis
+        let result = open_image_with_limits(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Should successfully open PNG with heuristic analysis"
+        );
+    }
+
+    #[test]
+    fn test_sample_unique_color_count_uniform() {
+        // Test uniform color image returns 1 unique color
+        let img = image::DynamicImage::new_rgba8(100, 100);
+        let count = sample_unique_color_count(&img, 1000).unwrap();
+
+        // Uniform black image should have very few colors after quantization
+        assert!(
+            count <= 10,
+            "Uniform image should have few unique colors, got {}",
+            count
+        );
+    }
+
+    #[test]
+    fn test_sample_unique_color_count_diverse() {
+        // Create diverse color image
+        let mut img = image::RgbaImage::new(100, 100);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = image::Rgba([x as u8, y as u8, 128, 255]);
+        }
+        let dynamic_img = image::DynamicImage::ImageRgba8(img);
+
+        let count = sample_unique_color_count(&dynamic_img, 1000).unwrap();
+
+        // Diverse image should have many colors
+        assert!(
+            count > 50,
+            "Diverse image should have many unique colors, got {}",
+            count
+        );
     }
 }

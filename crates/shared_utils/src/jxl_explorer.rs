@@ -597,10 +597,7 @@ fn build_exploration_plan(
 fn near_best_margin(input_size: u64) -> u64 {
     #[cfg(feature = "high-precision")]
     {
-        #[allow(
-            clippy::expect_used,
-            reason = "Validated constant value"
-        )]
+        #[allow(clippy::expect_used, reason = "Validated constant value")]
         let margin = Rational::from(input_size)
             * crate::numeric_cast::f64_to_rational_strict(
                 JXL_NEAR_BEST_MARGIN_RATIO,

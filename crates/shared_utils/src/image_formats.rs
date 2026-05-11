@@ -821,8 +821,8 @@ pub mod gif {
     }
 
     /// # Errors
-/// Returns an error if the file cannot be read or frame count detection fails.
-pub fn get_frame_count(path: &Path) -> crate::unified_error::Result<usize> {
+    /// Returns an error if the file cannot be read or frame count detection fails.
+    pub fn get_frame_count(path: &Path) -> crate::unified_error::Result<usize> {
         let b = fs::read(path)?;
         let count = count_frames_from_bytes(&b)?;
         crate::numeric_cast::u32_to_usize_strict(count, "gif_frame_count")

@@ -38,11 +38,18 @@ pub fn check_tool_alt(name: &str) -> bool {
 pub fn get_tool_version(name: &str) -> Option<String> {
     let path = crate::common_utils::resolve_tool_path(name)
         .unwrap_or_else(|| std::path::PathBuf::from(name));
-    let output = Command::new(&path)
-        .arg("--version")
-        .output()
-        .or_else(|_| Command::new(&path).arg("-version").output())
-        .ok()?;
+
+    // Tool-specific version flags (some tools don't follow --version convention)
+    let output = match name {
+        "exiftool" => Command::new(&path).arg("-ver").output().ok(),
+        _ => Command::new(&path)
+            .arg("--version")
+            .output()
+            .or_else(|_| Command::new(&path).arg("-version").output())
+            .ok(),
+    };
+
+    let output = output?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -200,10 +207,110 @@ fn is_version_at_least(current_full: &str, required: &str) -> bool {
             return false;
         }
     }
-    current_parts.len() >= required_parts.len()
+    // If all compared parts are equal, current version is sufficient if:
+    // - It has equal or more parts than required, OR
+    // - All remaining required parts are 0 (treat missing parts as 0)
+    let cur_len = current_parts.len();
+    let req_len = required_parts.len();
+    if cur_len >= req_len {
+        return true;
+    }
+    // Current is shorter: check if remaining required parts are all 0
+    required_parts.iter().skip(cur_len).all(|r| *r == 0)
 }
 
 #[must_use]
 pub fn is_available(name: &str) -> bool {
     check_tool(name) || check_tool_alt(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_version_at_least_basic() {
+        assert!(is_version_at_least("0.10.0", "0.9.0"));
+        assert!(is_version_at_least("0.9.1", "0.9.0"));
+        assert!(is_version_at_least("1.0.0", "0.9.0"));
+        assert!(!is_version_at_least("0.8.0", "0.9.0"));
+        assert!(!is_version_at_least("0.9.0", "0.10.0"));
+    }
+
+    #[test]
+    fn test_is_version_at_least_unequal_parts() {
+        // Shorter current version should be treated as having trailing zeros
+        assert!(is_version_at_least("0.9", "0.9.0")); // BUG FIX: was false, should be true
+        assert!(is_version_at_least("0.9", "0.9"));
+        assert!(is_version_at_least("1.0", "1.0.0"));
+
+        // Shorter current version with non-zero remaining required parts should fail
+        assert!(!is_version_at_least("0.9", "0.9.1"));
+        assert!(!is_version_at_least("0.9", "0.10.0"));
+
+        // Longer current version should pass
+        assert!(is_version_at_least("0.9.1", "0.9"));
+        assert!(is_version_at_least("0.10.0", "0.9"));
+    }
+
+    #[test]
+    fn test_is_version_at_least_from_tool_output() {
+        // Real-world cjxl version output formats
+        assert!(is_version_at_least("cjxl 0.10.0 8b1d1d7", "0.9.0"));
+        assert!(is_version_at_least("cjxl 0.9.1 a1b2c3d", "0.9.0"));
+        assert!(!is_version_at_least("cjxl 0.8.3 xxxxxxx", "0.9.0"));
+
+        // ffmpeg version formats
+        assert!(is_version_at_least("ffmpeg version 6.1.1", "6.1"));
+        assert!(is_version_at_least("ffmpeg version 7.0", "6.1"));
+        assert!(!is_version_at_least("ffmpeg version 5.0", "6.1"));
+
+        // exiftool version formats (uses -ver flag, returns plain version like "13.55")
+        assert!(is_version_at_least("13.55", "12.70"));
+        assert!(is_version_at_least("12.70", "12.70"));
+        assert!(!is_version_at_least("11.85", "12.70"));
+    }
+
+    /// Integration test: Actually invoke tools and verify version detection works
+    /// This catches issues like exiftool's non-standard --version behavior
+    #[test]
+    fn test_get_tool_version_integration() {
+        // Test exiftool - this was the original bug (returned "NAME" from --version)
+        let exif_ver = get_tool_version("exiftool");
+        assert!(exif_ver.is_some(), "exiftool version should be detected");
+        let exif_ver = exif_ver.unwrap();
+        assert!(
+            !exif_ver.contains("NAME"),
+            "exiftool version should not contain 'NAME' (wrong flag used?), got: {}",
+            exif_ver
+        );
+        // Should look like a version number (starts with digits.digits)
+        assert!(
+            exif_ver.chars().next().unwrap().is_ascii_digit(),
+            "exiftool version should start with digit, got: {}",
+            exif_ver
+        );
+
+        // Test cjxl
+        let cjxl_ver = get_tool_version("cjxl");
+        if cjxl_ver.is_some() {
+            let ver = cjxl_ver.unwrap();
+            assert!(
+                ver.contains(char::is_numeric),
+                "cjxl version should contain numbers, got: {}",
+                ver
+            );
+        }
+
+        // Test ffmpeg
+        let ffmpeg_ver = get_tool_version("ffmpeg");
+        if ffmpeg_ver.is_some() {
+            let ver = ffmpeg_ver.unwrap();
+            assert!(
+                ver.contains(char::is_numeric),
+                "ffmpeg version should contain numbers, got: {}",
+                ver
+            );
+        }
+    }
 }

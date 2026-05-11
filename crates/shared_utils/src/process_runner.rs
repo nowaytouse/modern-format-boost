@@ -74,6 +74,42 @@ impl ManagedProcess {
         })
     }
 
+    /// Get the process ID (PID) of the managed process.
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Kill the managed process using platform-specific tools.
+    /// Uses `taskkill` on Windows, `kill` on Unix.
+    pub fn kill(&self) -> anyhow::Result<()> {
+        let pid = self.pid();
+
+        #[cfg(target_os = "windows")]
+        {
+            use crate::builder_base::ToolBuilder;
+            crate::tool_builders::TaskkillBuilder::new()
+                .pid(pid)
+                .force(true)
+                .build()
+                .status()
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("Failed to kill process {pid}: {e}"))
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            use crate::builder_base::ToolBuilder;
+            crate::tool_builders::KillBuilder::new()
+                .signal("-9")
+                .pid(pid)
+                .build()
+                .status()
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("Failed to kill process {pid}: {e}"))
+        }
+    }
+
     /// Wait for the process to complete and return its status and outputs.
     ///
     /// # Errors

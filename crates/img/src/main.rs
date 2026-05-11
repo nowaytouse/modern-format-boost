@@ -632,14 +632,14 @@ fn main() -> anyhow::Result<()> {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
             #[allow(
-            unexpected_cfgs,
-            reason = "macos_ui is an optional feature that may not be defined in all builds"
-        )]
-        #[allow(
-            unexpected_cfgs,
-            reason = "macos_ui is an optional feature that may not be defined in all builds"
-        )]
-        #[cfg(all(target_os = "macos", feature = "macos_ui"))]
+                unexpected_cfgs,
+                reason = "macos_ui is an optional feature that may not be defined in all builds"
+            )]
+            #[allow(
+                unexpected_cfgs,
+                reason = "macos_ui is an optional feature that may not be defined in all builds"
+            )]
+            #[cfg(all(target_os = "macos", feature = "macos_ui"))]
             {
                 shared_utils::macos_ui::wait_for_exit_confirmation();
             }
@@ -1646,14 +1646,14 @@ fn auto_convert_directory(
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
             #[allow(
-            unexpected_cfgs,
-            reason = "macos_ui is an optional feature that may not be defined in all builds"
-        )]
-        #[allow(
-            unexpected_cfgs,
-            reason = "macos_ui is an optional feature that may not be defined in all builds"
-        )]
-        #[cfg(all(target_os = "macos", feature = "macos_ui"))]
+                unexpected_cfgs,
+                reason = "macos_ui is an optional feature that may not be defined in all builds"
+            )]
+            #[allow(
+                unexpected_cfgs,
+                reason = "macos_ui is an optional feature that may not be defined in all builds"
+            )]
+            #[cfg(all(target_os = "macos", feature = "macos_ui"))]
             {
                 shared_utils::macos_ui::wait_for_exit_confirmation();
             }

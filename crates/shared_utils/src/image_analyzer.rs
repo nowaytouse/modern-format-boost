@@ -2232,9 +2232,7 @@ fn parse_jxlinfo_output(output: &str) -> crate::unified_error::Result<(u32, u32,
     Ok((width, height, has_alpha, color_depth))
 }
 
-fn extract_metadata(
-    path: &Path,
-) -> std::collections::HashMap<String, String> {
+fn extract_metadata(path: &Path) -> std::collections::HashMap<String, String> {
     let mut metadata = std::collections::HashMap::new();
 
     if let Some(filename) = path.file_name() {
