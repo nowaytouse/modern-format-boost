@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.3] - 2026-05-10
 
+- **Tool Version Validation & Compatibility Fixes**:
+  - Fixed `exiftool` version detection bug that caused incorrect version parsing (was using `--version` instead of `-ver` flag).
+  - Fixed version comparison logic where shorter versions (e.g., `0.9`) were incorrectly rejected when compared to longer required versions (e.g., `0.9.0`).
+  - Added comprehensive integration tests for `get_tool_version` to prevent future regressions.
+
+- **PNG Heuristic Detection Activation**:
+  - Enabled previously dormant PNG 4-layer heuristic analysis system (structural, metadata, statistical, and heuristic analysis).
+  - Integrated `analyze_png_quantization()` into `open_image_with_limits()` for all PNG file processing.
+  - Added unit tests for PNG heuristic detection functionality.
+
+- **Builder System Utilization**:
+  - Integrated `TaskkillBuilder` (Windows) and `KillBuilder` (Unix) into `ManagedProcess::kill()` for cross-platform process termination.
+  - Verified all 15+ ToolBuilder implementations are actively used in production code.
+  - Confirmed `Exiv2Builder`, `AclBuilder`, `SysctlBuilder`, `VmstatBuilder`, `AttribBuilder`, `RsyncBuilder`, `PsBuilder`, `HostnameBuilder` are all utilized.
+
 - **Tool Discovery Hardening**: Hardened tool discovery across the macOS App wrapper, Python scripts, and Rust core by adding dynamic fallbacks to Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) instead of relying solely on `shutil.which` or the default environment `PATH`. Fixed crashes caused by missing tools.
 - **Strict Clippy Compliance**: Enabled strict Clippy rules (`pedantic`, `nursery`) globally to enforce code quality and consistency across the Rust workspace.
 - **Systematic Precision Cast Eradication**: Replaced all remaining lossy `as` casts in critical paths (SSIM calculation, `Rational`/`Integer` construction) with explicit, intent-based methods from `shared_utils::numeric_cast`.
