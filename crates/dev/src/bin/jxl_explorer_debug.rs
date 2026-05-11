@@ -1,10 +1,17 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use img::lossless_converter::{ConvertOptions, convert_to_jxl};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 fn main() {
-    println!("Running test...");
+    log_detail!("Running test...");
     manual_debug_jxl_explorer_uses_copies_only();
 }
 
@@ -39,24 +46,24 @@ fn resolve_debug_root() -> PathBuf {
 
 fn manual_debug_jxl_explorer_uses_copies_only() {
     if std::env::var("MFB_RUN_JXL_DEBUG_EXPLORER").is_err() {
-        eprintln!(
-            "Skipped manual JXL explorer debug test. To run set MFB_RUN_JXL_DEBUG_EXPLORER=1 and optionally MFB_DEBUG_DIR=debug"
+        log_detail!(
+            "Skipped manual JXL explorer debug test. To run set MFB_RUN_JXL_DEBUG_EXPLORER=1 and optionally MFB_DEBUG_DIR=debug",
         );
         return;
     }
 
     let root = resolve_debug_root();
     if !root.exists() {
-        eprintln!(
+        log_detail!(
             "Debug path {} not found; set MFB_DEBUG_DIR to your local debug dir.",
-            root.display()
+            root.display(),
         );
         return;
     }
 
     let samples = debug_sample_paths(&root);
     if samples.is_empty() {
-        eprintln!("No debug JXL samples found under {}.", root.display());
+        log_detail!("No debug JXL samples found under {}.", root.display());
         return;
     }
 
@@ -132,7 +139,7 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
             )
         });
 
-        eprintln!("debug sample {} -> {}", sample.display(), result.message);
+        log_detail!("debug sample {} -> {}", sample.display(), result.message);
 
         assert_eq!(
             fs::metadata(&sample)
@@ -150,5 +157,5 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
         processed > 0,
         "expected at least one copied debug sample to run"
     );
-    println!("✅ Test completed!");
+    log_detail!("✅ Test completed!");
 }

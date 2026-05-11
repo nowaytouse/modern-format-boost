@@ -47,21 +47,21 @@ pub fn fix_extension_if_mismatch(path: &std::path::Path) -> Result<PathBuf> {
                 _ => false,
             };
             if !same_file {
-                eprintln!(
+                crate::progress_mode::emit_stderr(&format!(
                     "⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
                     path.display(),
                     content_format,
                     new_path.display()
-                );
+                ));
                 return Ok(path.to_path_buf());
             }
         }
 
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
             path.display(),
             content_format
-        );
+        ));
 
         fs::rename(path, &new_path).with_context(|| {
             format!(
@@ -71,7 +71,10 @@ pub fn fix_extension_if_mismatch(path: &std::path::Path) -> Result<PathBuf> {
             )
         })?;
 
-        eprintln!("✅  [Extension Fix] Complete: {}", new_path.display());
+        crate::progress_mode::emit_stderr(&format!(
+            "✅  [Extension Fix] Complete: {}",
+            new_path.display()
+        ));
 
         return Ok(new_path);
     }
@@ -100,17 +103,14 @@ pub fn check_extension_mismatch_readonly(path: &std::path::Path) -> Result<PathB
         && !codec.is_extension_compatible(&current_ext)
     {
         let content_format = codec.default_extension();
-        tracing::warn!(
-            path = %path.display(),
-            current_ext,
-            detected_format = content_format,
-            "Extension mismatch detected (source immutable, not renaming)"
-        );
-        eprintln!(
-            "⚠️  [Extension Check] {} has .{} extension but content is .{} (source directory immutable, not renaming)",
-            path.display(),
-            current_ext,
-            content_format
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "{} has .{} extension but content is .{} (source directory immutable, not renaming)",
+                path.display(),
+                current_ext,
+                content_format
+            )
         );
     }
 
@@ -146,17 +146,24 @@ pub fn smart_copy_with_structure(
         })?;
 
         if verbose {
-            eprintln!("   📋 Copied: {} → {}", source.display(), dest.display());
+            crate::progress_mode::emit_stderr(&format!(
+                "   📋 Copied: {} → {}",
+                source.display(),
+                dest.display()
+            ));
         }
     } else if verbose {
         if let Ok(meta) = fs::metadata(&dest) {
-            eprintln!(
+            crate::progress_mode::emit_stderr(&format!(
                 "   ⏭️  Already exists: {} ({} bytes)",
                 dest.display(),
                 meta.len()
-            );
+            ));
         } else {
-            eprintln!("   ⚠️  Already exists but inaccessible: {}", dest.display());
+            crate::progress_mode::emit_stderr(&format!(
+                "   ⚠️  Already exists but inaccessible: {}",
+                dest.display()
+            ));
         }
     }
 
@@ -182,9 +189,13 @@ pub fn copy_on_skip_or_fail(
         |out_dir| match smart_copy_with_structure(source, out_dir, base_dir, verbose) {
             Ok(dest) => Ok(Some(dest)),
             Err(e) => {
-                eprintln!("❌ COPY FAILED: {e}");
-                eprintln!("   Source: {}", source.display());
-                eprintln!("   Output dir: {}", out_dir.display());
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    "COPY FAILED: {} (Source: {}, Output: {})",
+                    e,
+                    source.display(),
+                    out_dir.display()
+                );
                 Err(e)
             }
         },

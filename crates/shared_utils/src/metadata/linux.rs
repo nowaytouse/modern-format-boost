@@ -35,42 +35,54 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
 
                 if let Some(mut stdin) = child.stdin.take() {
                     if let Err(e) = stdin.write_all(rewritten.as_bytes()) {
-                        eprintln!(
-                            "⚠️ [metadata] Failed to write ACL data to setfacl for {}: {}",
-                            dst.display(),
-                            e
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "Failed to write ACL data to setfacl for {path}: {e}",
+                                path = dst.display()
+                            )
                         );
                     }
                 }
 
                 match child.wait() {
                     Ok(status) if !status.success() => {
-                        eprintln!(
-                            "⚠️ [metadata] setfacl --restore returned non-zero status for {}",
-                            dst.display()
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "setfacl --restore returned non-zero status for {path}",
+                                path = dst.display()
+                            )
                         );
                     }
                     Err(e) => {
-                        eprintln!(
-                            "⚠️ [metadata] Failed waiting for setfacl while restoring {}: {}",
-                            dst.display(),
-                            e
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "Failed waiting for setfacl while restoring {path}: {e}",
+                                path = dst.display()
+                            )
                         );
                     }
                     _ => {}
                 }
             } else {
-                eprintln!(
-                    "⚠️ [metadata] getfacl returned non-zero status for {}: {}",
-                    src.display(),
-                    String::from_utf8_lossy(&out.stderr).trim()
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "getfacl returned non-zero status for {path}: {err}",
+                        path = src.display(),
+                        err = String::from_utf8_lossy(&out.stderr).trim()
+                    )
                 );
             }
         } else if let Err(e) = output {
-            eprintln!(
-                "⚠️ [metadata] Failed to launch getfacl for {}: {}",
-                src.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to launch getfacl for {path}: {e}",
+                    path = src.display()
+                )
             );
         }
     }
@@ -80,10 +92,12 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode();
         if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-            eprintln!(
-                "⚠️ [metadata] Failed to preserve Linux permission bits for {}: {}",
-                dst.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to preserve Linux permission bits for {path}: {e}",
+                    path = dst.display()
+                )
             );
         }
     }

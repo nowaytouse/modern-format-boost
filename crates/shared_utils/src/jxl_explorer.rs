@@ -597,13 +597,24 @@ fn build_exploration_plan(
 fn near_best_margin(input_size: u64) -> u64 {
     #[cfg(feature = "high-precision")]
     {
+        #[allow(
+            clippy::expect_used,
+            reason = "Validated constant value"
+        )]
         let margin = Rational::from(input_size)
             * crate::numeric_cast::f64_to_rational_strict(
                 JXL_NEAR_BEST_MARGIN_RATIO,
                 "JXL_NEAR_BEST_MARGIN_RATIO",
             )
             .expect("JXL_NEAR_BEST_MARGIN_RATIO is a finite constant");
-        crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
+        crate::numeric_cast::f64_to_u64_strict(margin.to_f64(), "margin").map_or_else(
+            || {
+                unreachable!(
+                    "Failed to convert margin to u64 - this should never happen in production code"
+                )
+            },
+            |v| v.max(1),
+        )
     }
     #[cfg(not(feature = "high-precision"))]
     {

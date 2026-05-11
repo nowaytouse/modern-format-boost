@@ -115,7 +115,13 @@ pub fn extract_depth_from_heic(input: &Path) -> Result<Option<DepthMap>> {
                 let (width, height) = depth_image.dimensions();
 
                 // Parse depth metadata from XMP if available
-                let (near, far) = parse_depth_metadata(&handle).unwrap_or((None, None));
+                let (near, far) = parse_depth_metadata(&handle).unwrap_or_else(|e| {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        &format!("Failed to parse depth metadata: {e}")
+                    );
+                    (None, None)
+                });
 
                 return Ok(Some(DepthMap {
                     image: depth_image,

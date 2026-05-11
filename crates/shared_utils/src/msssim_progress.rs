@@ -44,10 +44,18 @@ impl Monitor {
         let current_secs =
             crate::numeric_cast::u64_to_f64(time_us) / crate::constants::MICROSECONDS_PER_SECOND;
         let progress_pct = if self.duration_secs > 0.0_f64 {
-            crate::numeric_cast::f64_to_u32_sat(
+            crate::numeric_cast::f64_to_u32_strict(
                 (current_secs / self.duration_secs * crate::constants::PERCENTAGE_FACTOR)
                     .min(crate::constants::PERCENTAGE_FACTOR),
+                "current_pct",
             )
+            .or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_QUALITY,
+                    "MS-SSIM progress calculation failed: NaN/Inf/overflow detected"
+                );
+                None
+            })?
         } else {
             0
         };
@@ -69,9 +77,13 @@ impl Monitor {
             0.0_f64
         };
 
-        eprintln!(
-            "⏳ MS-SSIM Progress [{}]: {}% ({:.1}s/{:.1}s) ETA: {:.0}s",
-            channel, progress_pct, current_secs, self.duration_secs, eta_secs
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_QUALITY,
+            &format!(
+                "MS-SSIM Progress [{channel}]: {progress_pct}% ({current_secs:.1}s/{duration:.1}s) ETA: {eta:.0}s",
+                duration = self.duration_secs,
+                eta = eta_secs
+            )
         );
     }
 
@@ -79,14 +91,18 @@ impl Monitor {
         if let Ok(mut scores) = self.channel_scores.lock() {
             scores.insert(channel.to_string(), score);
         } else {
-            eprintln!("❌ Failed to acquire lock for channel scores (poisoned)");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                "Failed to acquire lock for channel scores (poisoned)"
+            );
         }
     }
 
     pub fn get_channel_score(&self, channel: &str) -> Option<f64> {
         let Ok(scores) = self.channel_scores.lock() else {
-            eprintln!(
-                "☢️ [ANOMALY] Failed to acquire lock for channel scores (poisoned)! Result data may be lost."
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                "Failed to acquire lock for channel scores (poisoned)! Result data may be lost."
             );
             return None;
         };
@@ -261,7 +277,12 @@ mod tests {
                 prop_assert!(progress.is_some());
                 let pct = progress.unwrap_or_else(|| panic!("missing progress"));
                 let expected_secs = crate::numeric_cast::u64_to_f64(time_us) / crate::constants::MICROSECONDS_PER_SECOND;
-                let expected_pct = crate::numeric_cast::f64_to_u32_sat((expected_secs / duration_secs * crate::constants::PERCENTAGE_FACTOR).min(crate::constants::PERCENTAGE_FACTOR));
+                let expected_pct = crate::numeric_cast::f64_to_u32_strict(
+                    (expected_secs / duration_secs * crate::constants::PERCENTAGE_FACTOR)
+                        .min(crate::constants::PERCENTAGE_FACTOR),
+                    "expected_pct",
+                )
+                .expect("expected_pct: invalid value (NaN/Inf/overflow)");
                 prop_assert_eq!(pct, expected_pct);
             }
 

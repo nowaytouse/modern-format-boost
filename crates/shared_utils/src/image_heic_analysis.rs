@@ -3,7 +3,7 @@
 //! Uses libheif-rs to decode and analyze HEIC/HEIF images
 
 use crate::common_utils::find_box_data_recursive;
-use crate::img_errors::{ImgQualityError, Result};
+use crate::unified_error::{ImgQualityError, Result};
 use image::DynamicImage;
 use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
         if hvcc_data.len() >= 20 {
             let Some(b) = hvcc_data.get(1) else {
-                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated: missing profile_idc");
+                crate::log_corruption!(
+                    crate::static_logs::messages::LABEL_HEIC,
+                    "hvcC box truncated: missing profile_idc"
+                );
                 return Err(ImgQualityError::AnalysisError("hvcC truncated".to_string()));
             };
             let profile_idc = b & 0x1F;
@@ -96,9 +99,9 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             let mut compat_bytes = [0u8; 4];
             for (i, byte) in compat_bytes.iter_mut().enumerate() {
                 let Some(b) = hvcc_data.get(2 + i) else {
-                    warn!(
-                        "☢️ [CORRUPTION] HEIC hvcC box truncated at compatibility flags byte {}",
-                        i
+                    crate::log_corruption!(
+                        crate::static_logs::messages::LABEL_HEIC,
+                        &format!("hvcC box truncated at compatibility flags byte {i}")
                     );
                     return Err(ImgQualityError::AnalysisError(
                         "hvcC flags truncated".to_string(),
@@ -110,7 +113,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
             // HEVCDecoderConfigurationRecord fixed fields
             let Some(b_16) = hvcc_data.get(16) else {
-                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at chroma_format_idc");
+                crate::log_corruption!(
+                    crate::static_logs::messages::LABEL_HEIC,
+                    "hvcC box truncated at chroma_format_idc"
+                );
                 return Err(ImgQualityError::AnalysisError(
                     "hvcC chroma truncated".to_string(),
                 ));
@@ -118,7 +124,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             let chroma_format_idc = b_16 & 0x03;
 
             let Some(byte_17) = hvcc_data.get(17) else {
-                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at bit_depth field");
+                crate::log_corruption!(
+                    crate::static_logs::messages::LABEL_HEIC,
+                    "hvcC box truncated at bit_depth field"
+                );
                 return Err(ImgQualityError::AnalysisError(
                     "hvcC bit_depth truncated".to_string(),
                 ));
@@ -177,7 +186,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                                 *pixi_data.first()?,
                                 "heic_pixi_num_ch",
                             ) else {
-                                crate::progress_mode::emit_stderr("☢️ [ANOMALY] HEIC pixi num_ch overflow! Refusing to forge data.");
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_ANOMALY,
+                                    "HEIC pixi num_ch overflow! Refusing to forge data."
+                                );
                                 return None;
                             };
                             if num_ch > 0 && pixi_data.len() > num_ch {
@@ -187,7 +199,9 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                             }
                         }
                     })
-                    .is_some_and(|max_depth| max_depth >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH);
+                    .is_some_and(|max_depth| {
+                        max_depth >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH
+                    });
 
                 if has_high_bitdepth {
                     return Ok(true);
@@ -238,7 +252,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
             // Most are lossy variants; treat as lossy rather than Err (safe default)
             if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                eprintln!("   📊 HEIC: unknown profile {profile_idc} — treating as lossy");
+                crate::log_debug!("   📊 HEIC: unknown profile {profile_idc} — treating as lossy");
             }
             return Ok(false);
         }
@@ -253,14 +267,21 @@ fn detect_heic_lossless_via_mp4parse_data(data: &[u8]) -> Option<bool> {
     parse_sps_for_transquant_bypass_flag(hvcc_data)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex SPS parsing requiring multiple bit-level operations and validation"
+)]
 fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
     if hvcc_data.len() < 25 {
         return None;
     }
     let num_nalu_arrays = if let Some(b) = hvcc_data.get(24) {
-        crate::numeric_cast::u8_to_usize_sat(*b)
+        crate::numeric_cast::u8_to_usize_strict(*b, "num_nalu_arrays")?
     } else {
-        warn!("☢️ [CORRUPTION] hvcC box too short to read num_nalu_arrays");
+        crate::log_corruption!(
+            crate::static_logs::messages::LABEL_HEIC,
+            "hvcC box too short to read num_nalu_arrays"
+        );
         return None;
     };
     let mut pos = 25;
@@ -271,31 +292,40 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
         let nal_unit_type = if let Some(b) = hvcc_data.get(pos) {
             b & 0x3F
         } else {
-            warn!(
-                "☢️ [CORRUPTION] hvcC box truncated at NAL unit type byte at {}",
-                pos
+            crate::log_corruption!(
+                crate::static_logs::messages::LABEL_HEIC,
+                &format!("hvcC box truncated at NAL unit type byte at {pos}")
             );
             return None;
         };
         let b1 = if let Some(b) = hvcc_data.get(pos + 1) {
             *b
         } else {
-            warn!(
-                "☢️ [CORRUPTION] hvcC box truncated at NAL unit length high byte at {}",
-                pos + 1
+            crate::log_corruption!(
+                crate::static_logs::messages::LABEL_HEIC,
+                &format!(
+                    "hvcC box truncated at NAL unit length high byte at {}",
+                    pos + 1
+                )
             );
             return None;
         };
         let b2 = if let Some(b) = hvcc_data.get(pos + 2) {
             *b
         } else {
-            warn!(
-                "☢️ [CORRUPTION] hvcC box truncated at NAL unit length low byte at {}",
-                pos + 2
+            crate::log_corruption!(
+                crate::static_logs::messages::LABEL_HEIC,
+                &format!(
+                    "hvcC box truncated at NAL unit length low byte at {}",
+                    pos + 2
+                )
             );
             return None;
         };
-        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
+        let num_nalus = crate::numeric_cast::u16_to_usize_strict(
+            u16::from_be_bytes([b1, b2]),
+            "heic_nalu_count",
+        )?;
         pos += 3;
         if nal_unit_type == crate::constants::HEIC_NAL_UNIT_TYPE_SPS {
             for _ in 0..num_nalus {
@@ -306,10 +336,11 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 let b2 = *hvcc_data.get(pos + 1)?;
                 let Some(nal_unit_length) = crate::numeric_cast::u16_to_usize_strict(
                     u16::from_be_bytes([b1, b2]),
-                    "heic_nal_len",
+                    "nal_unit_length",
                 ) else {
-                    crate::progress_mode::emit_stderr(
-                        "☢️ [ANOMALY] HEIC NAL unit length overflow! Refusing to forge data.",
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        "HEIC NAL unit length overflow! Refusing to forge data."
                     );
                     return None;
                 };
@@ -331,8 +362,16 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 }
                 let b1 = *hvcc_data.get(pos)?;
                 let b2 = *hvcc_data.get(pos + 1)?;
-                let nal_unit_length =
-                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
+                let Some(nal_unit_length) = crate::numeric_cast::u16_to_usize_strict(
+                    u16::from_be_bytes([b1, b2]),
+                    "nal_unit_length",
+                ) else {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        "HEIC NAL unit length overflow! Refusing to forge data."
+                    );
+                    return None;
+                };
                 pos += 2 + nal_unit_length;
             }
         }
@@ -375,7 +414,10 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 leading_zeros += 1;
             }
             let info = if leading_zeros > 0 {
-                self.read_bits(crate::numeric_cast::u32_to_usize_sat(leading_zeros))?
+                self.read_bits(crate::numeric_cast::u32_to_usize_strict(
+                    leading_zeros,
+                    "leading_zeros",
+                )?)?
             } else {
                 0
             };
@@ -548,12 +590,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     let is_lossless_result = detect_heic_is_lossless(&data, path);
     if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-        eprintln!("   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}");
+        crate::log_debug!("   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}");
     }
-    let is_lossless = is_lossless_result.unwrap_or_else(|_| {
-        tracing::debug!("Missing HEIC lossless info; defaulting to false");
-        false
-    });
+    let is_lossless = is_lossless_result?;
 
     // Detect HDR and Dolby Vision
     let mut is_hdr = false;
@@ -718,8 +757,9 @@ fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
             u32::from_be_bytes(size_bytes),
             "heic_box_size",
         ) else {
-            crate::progress_mode::emit_stderr(
-                "☢️ [ANOMALY] HEIC box size overflow! Refusing to forge data.",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                "HEIC box size overflow! Refusing to forge data."
             );
             return None;
         };

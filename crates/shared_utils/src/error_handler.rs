@@ -49,23 +49,30 @@ pub fn handle_error<E: std::error::Error + Send + Sync + 'static>(
 
     match category {
         ErrorCategory::Recoverable => {
-            tracing::warn!("[{}] {}: {}", category, context, error);
-            eprintln!("⚠️ [{category}] {context}: {error}");
-            eprintln!("   → Suggested action: {suggestion_str}");
-            eprintln!("   → Continuing with fallback behavior...");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_SYSTEM,
+                &format!(
+                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   → Continuing with fallback behavior..."
+                )
+            );
             ErrorAction::Continue
         }
         ErrorCategory::Fatal => {
-            tracing::error!("[{}] {}: {}", category, context, error);
-            eprintln!("❌ [{category}] {context}: {error}");
-            eprintln!("   → Suggested action: {suggestion_str}");
-            eprintln!("   → Operation aborted.");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_SYSTEM,
+                &format!(
+                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   → Operation aborted."
+                )
+            );
             ErrorAction::Abort(anyhow::anyhow!("{context}: {error}"))
         }
         ErrorCategory::Optional => {
-            tracing::info!("[{}] {}: {}", category, context, error);
-            eprintln!("ℹ️ [{category}] {context}: {error}");
-            eprintln!("   → This is non-critical, continuing...");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_SYSTEM,
+                &format!(
+                    "[{category}] {context}: {error}\n   → This is non-critical, continuing..."
+                )
+            );
             ErrorAction::Continue
         }
     }
@@ -132,25 +139,17 @@ macro_rules! handle_fatal {
 }
 
 pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
-    eprintln!("🔥 ERROR: {error}");
-
+    let mut msg = format!("ERROR: {error}");
     let mut source = error.source();
     let mut level = 1usize;
     while let Some(err) = source {
-        eprintln!("   {level}. Caused by: {err}");
+        use std::fmt::Write;
+        let _ = write!(msg, "\n   {level}. Caused by: {err}");
         source = err.source();
         level += 1usize;
     }
 
-    tracing::error!("Error occurred: {}", error);
-
-    let mut source = error.source();
-    let mut level = 1_i32;
-    while let Some(err) = source {
-        tracing::error!("  Caused by (level {}): {}", level, err);
-        source = err.source();
-        level += 1_i32;
-    }
+    crate::log_anomaly!(crate::static_logs::messages::LABEL_SYSTEM, &msg);
 }
 
 /// Add context to a Result.
@@ -183,12 +182,12 @@ pub fn install_panic_handler() {
             |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
         );
 
-        eprintln!("💥 PANIC occurred!");
-        eprintln!("   Message: {message}");
-        eprintln!("   Location: {location}");
-        eprintln!("   This is a bug! Please report it.");
-
-        tracing::error!("PANIC: {} at {}", message, location);
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!(
+                "PANIC occurred!\n   Message: {message}\n   Location: {location}\n   This is a bug! Please report it."
+            )
+        );
 
         default_hook(panic_info);
     }));

@@ -132,7 +132,10 @@ impl XmpMerger {
                 Ok(entry) => entry,
                 Err(err) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!("  ⚠️ Skipping unreadable path while scanning XMP files: {err}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!("Skipping unreadable path while scanning XMP files: {err}")
+                        );
                     }
 
                     continue;
@@ -157,10 +160,12 @@ impl XmpMerger {
             Ok(entries) => entries,
             Err(err) => {
                 if matches!(self.config.log_level, LogLevel::Verbose) {
-                    eprintln!(
-                        "  ⚠️ Failed to read directory {}: {}",
-                        parent.display(),
-                        err
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!(
+                            "Failed to read directory {path}: {err}",
+                            path = parent.display()
+                        )
                     );
                 }
                 return None;
@@ -173,10 +178,12 @@ impl XmpMerger {
                 Ok(entry) => paths.push(entry.path()),
                 Err(err) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ Skipping unreadable directory entry in {}: {}",
-                            parent.display(),
-                            err
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "Skipping unreadable directory entry in {path}: {err}",
+                                path = parent.display()
+                            )
                         );
                     }
                 }
@@ -440,20 +447,25 @@ impl XmpMerger {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ exiftool sidecar scan failed for {}: status {}",
-                            path.display(),
-                            output.status
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "exiftool sidecar scan failed for {path}: status {status}",
+                                path = path.display(),
+                                status = output.status
+                            )
                         );
                     }
                     continue;
                 }
                 Err(err) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ exiftool sidecar scan failed for {}: {}",
-                            path.display(),
-                            err
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "exiftool sidecar scan failed for {path}: {err}",
+                                path = path.display()
+                            )
                         );
                     }
                     continue;
@@ -515,10 +527,12 @@ impl XmpMerger {
                 Ok(entry) => entry,
                 Err(err) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ Skipping unreadable path while scanning subdirectories for {}: {}",
-                            xmp_path.display(),
-                            err
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "Skipping unreadable path while scanning subdirectories for {path}: {err}",
+                                path = xmp_path.display()
+                            )
                         );
                     }
                     continue;
@@ -582,7 +596,10 @@ impl XmpMerger {
         }
 
         if matches!(self.config.log_level, LogLevel::Verbose) {
-            eprintln!("  🔍 Searching by DocumentID: {xmp_doc_id}");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!("Searching by DocumentID: {xmp_doc_id}")
+            );
         }
 
         for path in self.read_parent_paths(parent)? {
@@ -608,20 +625,25 @@ impl XmpMerger {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ exiftool DocumentID scan failed for {}: status {}",
-                            path.display(),
-                            output.status
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "exiftool DocumentID scan failed for {path}: status {status}",
+                                path = path.display(),
+                                status = output.status
+                            )
                         );
                     }
                     continue;
                 }
                 Err(err) => {
                     if matches!(self.config.log_level, LogLevel::Verbose) {
-                        eprintln!(
-                            "  ⚠️ exiftool DocumentID scan failed for {}: {}",
-                            path.display(),
-                            err
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!(
+                                "exiftool DocumentID scan failed for {path}: {err}",
+                                path = path.display()
+                            )
                         );
                     }
                     continue;
@@ -632,7 +654,10 @@ impl XmpMerger {
 
             if !media_doc_id.is_empty() && media_doc_id == *xmp_doc_id {
                 if matches!(self.config.log_level, LogLevel::Verbose) {
-                    eprintln!("  ✅ Found match: {}", path.display());
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!("Found match: {path}", path = path.display())
+                    );
                 }
                 return Some(path);
             }
@@ -647,12 +672,18 @@ impl XmpMerger {
     /// Returns an error if searching fails.
     pub fn find_media_file(&self, xmp_path: &Path) -> Result<(Option<PathBuf>, String)> {
         if matches!(self.config.log_level, LogLevel::Verbose) {
-            eprintln!("🔍 Finding match for: {}", xmp_path.display());
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!("Finding match for: {path}", path = xmp_path.display())
+            );
         }
 
         if let Some(media) = Self::find_direct_match(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 1 (direct): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 1 (direct): {path}", path = media.display())
+                );
             }
 
             return Ok((Some(media), "direct_match".to_string()));
@@ -660,14 +691,23 @@ impl XmpMerger {
 
         if let Some(media) = self.find_same_name_different_ext(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 2 (same_name): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 2 (same_name): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "same_name".to_string()));
         }
 
         if let Some(media) = self.find_case_insensitive(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 2.5 (case_insensitive): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!(
+                        "Strategy 2.5 (case_insensitive): {path}",
+                        path = media.display()
+                    )
+                );
             }
             return Ok((Some(media), "case_insensitive".to_string()));
         }
@@ -676,48 +716,66 @@ impl XmpMerger {
 
         if let Some(media) = Self::find_by_xmp_metadata(xmp_path, &xmp_info) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 3 (xmp_metadata): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 3 (xmp_metadata): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "xmp_metadata".to_string()));
         }
 
         if let Some(media) = self.find_by_document_id(xmp_path, &xmp_info) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 4 (document_id): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 4 (document_id): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "document_id".to_string()));
         }
 
         if let Some(media) = self.find_fuzzy_match(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 5 (fuzzy): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 5 (fuzzy): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "fuzzy_match".to_string()));
         }
 
         if let Some(media) = self.find_by_xmp_reference_scan(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 6 (xmp_ref_scan): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 6 (xmp_ref_scan): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "xmp_ref_scan".to_string()));
         }
 
         if let Some(media) = self.find_partial_match(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 7 (partial_match): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 7 (partial_match): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "partial_match".to_string()));
         }
 
         if let Some(media) = self.find_in_subdirectories(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
-                eprintln!("  ✅ Strategy 8 (subdirectory): {}", media.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Strategy 8 (subdirectory): {path}", path = media.display())
+                );
             }
             return Ok((Some(media), "subdirectory".to_string()));
         }
 
         if matches!(self.config.log_level, LogLevel::Verbose) {
-            eprintln!("  ❌ No match found");
+            crate::log_info!(crate::static_logs::messages::LABEL_XMP, "No match found");
         }
         Ok((None, "no_match".to_string()))
     }
@@ -734,7 +792,10 @@ impl XmpMerger {
                 let hint = crate::extract_suggested_extension(&err_str);
 
                 if let Some(ref h) = hint {
-                    eprintln!("💡 ExifTool suggests content is: {h}");
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!("ExifTool suggests content is: {h}")
+                    );
                 }
 
                 self.merge_xmp_fallback(xmp_path, media_path, hint.as_deref())
@@ -867,16 +928,22 @@ impl XmpMerger {
             return self.merge_xmp_core(xmp_path, media_path);
         }
 
-        eprintln!(
-            "⚠️ Merge failed, attempting fallback: Temporary rename to .{original_ext} for merge..."
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_XMP,
+            &format!(
+                "Merge failed, attempting fallback: Temporary rename to .{original_ext} for merge..."
+            )
         );
 
         let temp_path = media_path.with_extension(&original_ext);
 
         if temp_path.exists() {
-            eprintln!(
-                "⚠️ Fallback aborted: Temporary target {} already exists",
-                temp_path.display()
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!(
+                    "Fallback aborted: Temporary target {path} already exists",
+                    path = temp_path.display()
+                )
             );
             return self.merge_xmp_core(xmp_path, media_path);
         }
@@ -887,22 +954,30 @@ impl XmpMerger {
         let merge_result = self.merge_xmp_core(xmp_path, &temp_path);
 
         if let Err(e) = std::fs::rename(&temp_path, media_path) {
-            eprintln!(
-                "❌ CRITICAL: Failed to restore filename from {} to {}",
-                temp_path.display(),
-                media_path.display()
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!(
+                    "CRITICAL: Failed to restore filename from {src} to {dst}: {e}",
+                    src = temp_path.display(),
+                    dst = media_path.display()
+                )
             );
-            eprintln!("❌ Error: {e}");
             bail!("Critical: Failed to restore filename after fallback merge");
         }
 
         match merge_result {
             Ok(()) => {
-                eprintln!("✅ Fallback merge successful");
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    "Fallback merge successful"
+                );
                 Ok(())
             }
             Err(e) => {
-                eprintln!("❌ Fallback merge failed: {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Fallback merge failed: {e}")
+                );
                 Err(e)
             }
         }
@@ -938,10 +1013,12 @@ impl XmpMerger {
         if let Some((atime, mtime)) = original
             && let Err(e) = filetime::set_file_times(media_path, atime, mtime)
         {
-            eprintln!(
-                "⚠️ Failed to restore timestamp for {}: {}",
-                media_path.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!(
+                    "Failed to restore timestamp for {path}: {e}",
+                    path = media_path.display()
+                )
             );
         }
     }
@@ -977,11 +1054,13 @@ impl XmpMerger {
                     && let Err(err) = std::fs::remove_file(xmp_path)
                     && matches!(self.config.log_level, LogLevel::Verbose)
                 {
-                    crate::progress_mode::emit_stderr(&format!(
-                        "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
-                        xmp_path.display(),
-                        err
-                    ));
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!(
+                            "XMP merge succeeded but sidecar delete failed for {path}: {err}",
+                            path = xmp_path.display()
+                        )
+                    );
                 }
 
                 MergeResult {
@@ -1076,7 +1155,10 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     for xmp_path in &xmp_candidates {
         if xmp_path.is_file() {
             if crate::progress_mode::is_verbose_mode() {
-                eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_XMP,
+                    &format!("Found XMP sidecar: {path}", path = xmp_path.display())
+                );
             }
 
             let config = Config {
@@ -1270,7 +1352,10 @@ mod tests {
     #[test]
     fn test_merge_xmp_mismatch_fallback() {
         if !crate::image_builders::ExiftoolBuilder::check_available() {
-            eprintln!("ExifTool not found, skipping test");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                "ExifTool not found, skipping test"
+            );
             return;
         }
 
@@ -1312,7 +1397,10 @@ mod tests {
         let result = merger.merge_xmp(&xmp_path, &jpg_path);
 
         if let Err(e) = &result {
-            println!("Merge failed with error: {e}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                &format!("Merge failed with error: {e}")
+            );
         }
         assert!(result.is_ok(), "XMP merge failed for mismatched extension");
 
@@ -1358,7 +1446,10 @@ mod tests {
     #[test]
     fn test_extract_xmp_metadata_reports_exiftool_failure() {
         if !crate::image_builders::ExiftoolBuilder::check_available() {
-            eprintln!("ExifTool not found, skipping test");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_XMP,
+                "ExifTool not found, skipping test"
+            );
             return;
         }
 

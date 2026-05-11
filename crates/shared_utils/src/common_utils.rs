@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info};
+use tracing::warn;
 
 #[inline]
 #[must_use]
@@ -148,7 +148,14 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Format Detection: Failed to open file for magic-byte analysis");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Format Detection: Failed to open file for magic-byte analysis at {}: {}",
+                    path.display(),
+                    e
+                )
+            );
             return None;
         }
     };
@@ -156,7 +163,14 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     let bytes_read = match file.read(&mut buffer) {
         Ok(n) => n,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Format Detection: Failed to read file header for magic-byte analysis");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Format Detection: Failed to read file header for magic-byte analysis at {}: {}",
+                    path.display(),
+                    e
+                )
+            );
             return None;
         }
     };
@@ -299,7 +313,12 @@ pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     match s.parse::<f64>() {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(input = s, error = %e, "Numerical Parsing: Failed to parse float from string; using fallback value {}", default);
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_NUMERIC,
+                &format!(
+                    "Numerical Parsing: Failed to parse float from string '{s}': {e}; using fallback value {default}"
+                )
+            );
             default
         }
     }
@@ -312,9 +331,9 @@ pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     let command_str = format!("{cmd:?}");
 
-    info!(
-        command = %command_str,
-        "Executing external command"
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_SYSTEM,
+        &format!("Executing external command: {command_str}")
     );
 
     let output = cmd
@@ -325,23 +344,24 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if output.status.success() {
-        info!(
-            command = %command_str,
-            exit_code = output.status.code(),
-            "Command completed successfully"
-        );
-        debug!(
-            stdout = %stdout,
-            stderr = %stderr,
-            "Command output"
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!(
+                "Command completed successfully: {} (exit_code={:?})",
+                command_str,
+                output.status.code()
+            )
         );
     } else {
-        error!(
-            command = %command_str,
-            exit_code = output.status.code(),
-            stdout = %stdout,
-            stderr = %stderr,
-            "Command failed"
+        crate::log_failure!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!(
+                "Command failed: {} (exit_code={:?})\nSTDOUT: {}\nSTDERR: {}",
+                command_str,
+                output.status.code(),
+                stdout,
+                stderr
+            )
         );
     }
 
@@ -372,12 +392,10 @@ fn find_box_data_recursive_impl(
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
-        ]));
+        let size = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]),
+            "isobmff_box_size",
+        )?;
         let Some(current_type) = data.get(pos + 4..pos + 8) else {
             break;
         };
@@ -391,16 +409,19 @@ fn find_box_data_recursive_impl(
                 pos += 8;
                 continue;
             }
-            let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]));
+            let ext = crate::numeric_cast::u64_to_usize_strict(
+                u64::from_be_bytes([
+                    data[pos + 8],
+                    data[pos + 9],
+                    data[pos + 10],
+                    data[pos + 11],
+                    data[pos + 12],
+                    data[pos + 13],
+                    data[pos + 14],
+                    data[pos + 15],
+                ]),
+                "isobmff_ext_size",
+            )?;
             if ext < 16 || pos + ext > data.len() {
                 pos += 16;
                 continue;
@@ -475,12 +496,13 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
-        ]));
+        let Some(size) = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]),
+            "isobmff_box_size",
+        ) else {
+            pos += 4;
+            continue;
+        };
         let Some(current_type) = data.get(pos + 4..pos + 8) else {
             break;
         };
@@ -494,16 +516,22 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
                 pos += 8;
                 continue;
             }
-            let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]));
+            let Some(ext) = crate::numeric_cast::u64_to_usize_strict(
+                u64::from_be_bytes([
+                    data[pos + 8],
+                    data[pos + 9],
+                    data[pos + 10],
+                    data[pos + 11],
+                    data[pos + 12],
+                    data[pos + 13],
+                    data[pos + 14],
+                    data[pos + 15],
+                ]),
+                "isobmff_ext_size",
+            ) else {
+                pos += 8;
+                continue;
+            };
             (pos + 16, (pos + ext).min(data.len()))
         } else if size < 8 {
             pos += 8;
@@ -545,17 +573,20 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
         }
 
         // Fallback paths, especially useful for macOS GUI apps
-        let fallbacks = [
+        let mut fallbacks = vec![
             format!("/opt/homebrew/bin/{name}"),
             format!("/usr/local/bin/{name}"),
             format!("/usr/bin/{name}"),
             format!("/bin/{name}"),
-            format!(
-                "{}/.cargo/bin/{}",
-                std::env::var("HOME").unwrap_or_default(),
-                name
-            ),
         ];
+
+        match std::env::var("HOME") {
+            Ok(home_dir) => fallbacks.push(format!("{home_dir}/.cargo/bin/{name}")),
+            Err(e) => warn!(
+                "HOME environment variable is not set: {}. Skipping user cargo bin fallback.",
+                e
+            ),
+        }
 
         for fallback in &fallbacks {
             let path = std::path::Path::new(fallback);
@@ -594,7 +625,10 @@ pub fn get_command_version(command_name: &str) -> Option<String> {
         .output()
         .or_else(|_| Command::new(&path).arg("-version").output())
         .map_err(|e| {
-            debug!(command = %command_name, error = %e, "Failed to execute command to check version");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_SYSTEM,
+                &format!("Failed to execute command '{command_name}' to check version: {e}")
+            );
             e
         })
         .ok()?;

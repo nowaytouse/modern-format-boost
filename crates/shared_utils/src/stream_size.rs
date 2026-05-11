@@ -13,7 +13,6 @@ use crate::builder_base::ToolBuilder;
 use rug::Rational;
 use serde::Deserialize;
 use std::path::Path;
-use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractionMethod {
@@ -119,14 +118,18 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
     }
 }
 
+#[must_use]
 pub fn extract_stream_sizes(path: &Path) -> Info {
     let total_file_size = match crate::io_utils::metadata_with_retry(path) {
         Ok(metadata) => metadata.len(),
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "Failed to read file metadata for stream-size extraction"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Failed to read file metadata for stream-size extraction (path={}): {}",
+                    path.display(),
+                    err
+                )
             );
             0
         }
@@ -139,6 +142,7 @@ pub fn extract_stream_sizes(path: &Path) -> Info {
     estimate_stream_sizes(path, total_file_size)
 }
 
+#[allow(clippy::too_many_lines)]
 fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let mut builder = crate::ffmpeg_builder::FfprobeBuilder::new();
     builder
@@ -152,10 +156,13 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let output = match builder.build().output() {
         Ok(output) => output,
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "ffprobe stream-size extraction failed to start"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "ffprobe stream-size extraction failed to start (path={}): {}",
+                    path.display(),
+                    err
+                )
             );
             return None;
         }
@@ -163,10 +170,13 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(
-            path = %path.display(),
-            stderr = %stderr.trim(),
-            "ffprobe stream-size extraction returned non-zero status"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe stream-size extraction returned non-zero status (path={}, stderr={})",
+                path.display(),
+                stderr.trim()
+            )
         );
         return None;
     }
@@ -174,10 +184,13 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let json_str = match String::from_utf8(output.stdout) {
         Ok(json_str) => json_str,
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "ffprobe stream-size extraction returned non-UTF-8 JSON"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "ffprobe stream-size extraction returned non-UTF-8 JSON (path={}): {}",
+                    path.display(),
+                    err
+                )
             );
             return None;
         }
@@ -185,10 +198,13 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let parsed: FfprobeFullOutput = match serde_json::from_str(&json_str) {
         Ok(parsed) => parsed,
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "ffprobe stream-size extraction JSON parse failed"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "ffprobe stream-size extraction JSON parse failed (path={}): {}",
+                    path.display(),
+                    err
+                )
             );
             return None;
         }
@@ -202,18 +218,24 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
         .as_ref()
         .and_then(|d| d.parse::<f64>().ok())
     else {
-        warn!(
-            path = %path.display(),
-            "ffprobe stream-size: format duration missing or unparseable; falling back to estimation"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe stream-size: format duration missing or unparseable; falling back to estimation (path={})",
+                path.display()
+            )
         );
         return None;
     };
 
     if duration_secs <= 0.0_f64 {
-        warn!(
-            path = %path.display(),
-            duration = duration_secs,
-            "ffprobe stream-size extraction reported invalid duration"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe stream-size extraction reported invalid duration (path={}, duration={})",
+                path.display(),
+                duration_secs
+            )
         );
         return None;
     }
@@ -222,14 +244,33 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
     let audio_stream = parsed.streams.iter().find(|s| s.codec_type == "audio");
 
     let (video_stream_size, video_bitrate) =
-        calculate_stream_size_and_bitrate(video_stream, duration_secs);
+        match calculate_stream_size_and_bitrate(video_stream, duration_secs) {
+            Ok((s, b)) => (s, b),
+            Err(e) => {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_DETECTION,
+                    &format!(
+                        "ffprobe stream-size extraction failed: {} (path={})",
+                        e,
+                        path.display()
+                    )
+                );
+                return None;
+            }
+        };
     let (audio_stream_size, audio_bitrate) =
-        calculate_stream_size_and_bitrate(audio_stream, duration_secs);
+        match calculate_stream_size_and_bitrate(audio_stream, duration_secs) {
+            Ok((s, b)) => (s, b),
+            Err(_) => (0, None),
+        };
 
     if video_stream_size == 0 {
-        warn!(
-            path = %path.display(),
-            "ffprobe stream-size extraction produced no usable video bitrate; falling back to estimated sizing"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe stream-size extraction produced no usable video bitrate; falling back to estimated sizing (path={})",
+                path.display()
+            )
         );
         return None;
     }
@@ -252,26 +293,32 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
 fn calculate_stream_size_and_bitrate(
     stream: Option<&FfprobeStreamInfo>,
     duration_secs: f64,
-) -> (u64, Option<u64>) {
+) -> anyhow::Result<(u64, Option<u64>)> {
     let Some(br) = stream
         .and_then(|s| s.bit_rate.as_ref())
         .and_then(|br_str| br_str.parse::<u64>().ok())
     else {
-        return (0, None);
+        return Ok((0, None));
     };
 
     let Some(duration_r) =
         crate::numeric_cast::f64_to_rational_strict(duration_secs, "duration_secs")
     else {
-        crate::progress_mode::emit_stderr("☢️ [ANOMALY] Duration NaN/Inf in stream-size calc!");
-        return (0, None);
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            "Duration NaN/Inf in stream-size calc!"
+        );
+        return Err(anyhow::anyhow!("Duration NaN/Inf in stream-size calc"));
     };
 
     let size_rational = (Rational::from(br) * duration_r) / Rational::from(8_i32);
-    let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-    (size, Some(br))
+    let Some(size) = crate::numeric_cast::f64_to_u64_strict(size_rational.to_f64(), "size") else {
+        return Err(anyhow::anyhow!("Failed to convert size to u64"));
+    };
+    Ok((size, Some(br)))
 }
 
+#[must_use]
 pub fn can_compress_pure_video(
     output_path: &Path,
     input_video_stream_size: u64,
@@ -286,16 +333,19 @@ pub fn can_compress_pure_video(
         output_info.video_stream_size < input_video_stream_size
     };
 
-    tracing::debug!(
-        "can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
-        output_info.video_stream_size,
-        input_video_stream_size,
-        allow_size_tolerance,
-        if result {
-            "✅ CAN COMPRESS"
-        } else {
-            "❌ CANNOT COMPRESS"
-        }
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_DETECTION,
+        &format!(
+            "can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
+            output_info.video_stream_size,
+            input_video_stream_size,
+            allow_size_tolerance,
+            if result {
+                "✅ CAN COMPRESS"
+            } else {
+                "❌ CANNOT COMPRESS"
+            }
+        )
     );
 
     result
@@ -313,7 +363,8 @@ fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> Info {
             crate::numeric_cast::f64_to_rational_strict(overhead_percent, "overhead_percent")
                 .expect("Overhead percent constants are strictly finite");
         let overhead = Rational::from(total_file_size) * overhead_r;
-        crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
+        crate::numeric_cast::f64_to_u64_strict(overhead.to_f64(), "overhead")
+            .expect("Estimated overhead is invalid (NaN/Inf/overflow)")
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);
 

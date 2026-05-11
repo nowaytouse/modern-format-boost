@@ -119,26 +119,53 @@ impl DynamicCrfMapper {
             return;
         }
         if self.anchors.is_empty() {
-            eprintln!("⚠️ Dynamic mapping: No calibration data, using static offset");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                "Dynamic mapping: No calibration data, using static offset"
+            );
             return;
         }
 
-        eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ Dynamic GPU→CPU Mapping Calibration (v5.61)");
-        eprintln!("├─────────────────────────────────────────────────────");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "┌─────────────────────────────────────────────────────"
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "│ Dynamic GPU→CPU Mapping Calibration (v5.61)"
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "├─────────────────────────────────────────────────────"
+        );
 
         for (i, anchor) in self.anchors.iter().enumerate() {
             let offset = Self::calculate_offset_from_ratio(anchor.size_ratio);
-            eprintln!("│ Anchor {}: CRF {:.1}", i + 1, anchor.crf);
-            eprintln!("│   GPU: {} bytes", anchor.gpu_size);
-            eprintln!("│   CPU: {} bytes", anchor.cpu_size);
-            eprintln!(
-                "│   Ratio: {:.3} → Offset: +{:.1}",
-                anchor.size_ratio, offset
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("│ Anchor {}: CRF {:.1}", i + 1, anchor.crf)
+            );
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("│   GPU: {} bytes", anchor.gpu_size)
+            );
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("│   CPU: {} bytes", anchor.cpu_size)
+            );
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!(
+                    "│   Ratio: {:.3} → Offset: +{:.1}",
+                    anchor.size_ratio, offset
+                )
             );
         }
 
-        eprintln!("└─────────────────────────────────────────────────────");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "└─────────────────────────────────────────────────────"
+        );
     }
 }
 
@@ -211,7 +238,14 @@ pub fn quick_calibrate(
     let probe = match crate::ffprobe::probe_video(input) {
         Ok(p) => Some(p),
         Err(e) => {
-            tracing::warn!(path = %input.display(), error = %e, "Failed to probe video during dynamic calibration; using fallback parameters");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!(
+                    "Failed to probe video during dynamic calibration; using fallback parameters (input={}): {}",
+                    input.display(),
+                    e
+                )
+            );
             None
         }
     };
@@ -223,8 +257,9 @@ pub fn quick_calibrate(
         .and_then(|p| p.duration)
         .unwrap_or_else(|| f64::from(sample_duration));
     if is_gif_input {
-        crate::verbose_eprintln!(
-            "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
         );
     }
 
@@ -237,11 +272,14 @@ pub fn quick_calibrate(
         build_calibration_filter_chain(vf_args, Some(input_duration), ultimate_mode, &[]);
 
     for (attempt, anchor_crf) in calibration_crfs.iter().enumerate() {
-        crate::verbose_eprintln!(
-            "Dynamic calibration attempt {}/{}: Testing CRF {:.1}...",
-            attempt + 1,
-            calibration_crfs.len(),
-            anchor_crf
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!(
+                "Dynamic calibration attempt {}/{}: Testing CRF {:.1}...",
+                attempt + 1,
+                calibration_crfs.len(),
+                anchor_crf
+            )
         );
 
         let gpu_test_file = tempfile::Builder::new()
@@ -288,31 +326,53 @@ pub fn quick_calibrate(
             Ok(out) if out.status.success() => match fs::metadata(&gpu_path) {
                 Ok(m) => m.len(),
                 Err(e) => {
-                    tracing::warn!(path = %gpu_path.display(), error = %e, "Failed to read GPU test file metadata");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!(
+                            "Failed to read GPU test file metadata (path={}): {}",
+                            gpu_path.display(),
+                            e
+                        )
+                    );
                     0
                 }
             },
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("   ❌ GPU calibration failed for CRF {anchor_crf:.1}");
+                crate::log_failure!(
+                    crate::static_logs::messages::LABEL_DYNAMIC,
+                    &format!("GPU calibration failed for CRF {anchor_crf:.1}")
+                );
                 if stderr.contains("No such encoder") {
-                    eprintln!(
-                        "      Cause: GPU encoder '{}' not available",
-                        gpu_encoder.ffmpeg_name()
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!(
+                            "Cause: GPU encoder '{}' not available",
+                            gpu_encoder.ffmpeg_name()
+                        )
                     );
                 } else if stderr.contains("Invalid") {
-                    eprintln!("      Cause: Invalid parameters");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        "Cause: Invalid parameters"
+                    );
                 }
                 continue;
             }
             Err(e) => {
-                eprintln!("   ❌ GPU calibration command failed: {e}");
+                crate::log_failure!(
+                    crate::static_logs::messages::LABEL_DYNAMIC,
+                    &format!("GPU calibration command failed: {e}")
+                );
                 continue;
             }
         };
 
         if gpu_size == 0 {
-            eprintln!("   ❌ GPU output file is empty");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                "GPU output file is empty"
+            );
             continue;
         }
 
@@ -351,13 +411,23 @@ pub fn quick_calibrate(
                 Ok(out) if out.status.success() => match fs::metadata(&cpu_path) {
                     Ok(m) => m.len(),
                     Err(e) => {
-                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (GIF/x265)");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_DYNAMIC,
+                            &format!(
+                                "Failed to read CPU test file metadata (GIF/x265) (path={}): {}",
+                                cpu_path.display(),
+                                e
+                            )
+                        );
                         0
                     }
                 },
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!("CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}")
+                    );
                     let error_lines: Vec<&str> = stderr
                         .lines()
                         .filter(|l| {
@@ -371,12 +441,18 @@ pub fn quick_calibrate(
                         .take(2)
                         .collect();
                     if !error_lines.is_empty() {
-                        eprintln!("      Cause: {}", error_lines.join(" | "));
+                        crate::log_failure!(
+                            crate::static_logs::messages::LABEL_DYNAMIC,
+                            &format!("Cause: {}", error_lines.join(" | "))
+                        );
                     }
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   ❌ CPU calibration (GIF) command failed: {e}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!("CPU calibration (GIF) command failed: {e}")
+                    );
                     continue;
                 }
             }
@@ -422,12 +498,22 @@ pub fn quick_calibrate(
                 Ok(_) => match fs::metadata(&cpu_path) {
                     Ok(m) => m.len(),
                     Err(e) => {
-                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (x265)");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_DYNAMIC,
+                            &format!(
+                                "Failed to read CPU test file metadata (x265) (path={}): {}",
+                                cpu_path.display(),
+                                e
+                            )
+                        );
                         0
                     }
                 },
                 Err(e) => {
-                    eprintln!("   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!("CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}")
+                    );
                     continue;
                 }
             }
@@ -475,20 +561,36 @@ pub fn quick_calibrate(
                 Ok(out) if out.status.success() => match fs::metadata(&cpu_path) {
                     Ok(m) => m.len(),
                     Err(e) => {
-                        tracing::warn!(path = %cpu_path.display(), error = %e, "Failed to read CPU test file metadata (generic)");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_DYNAMIC,
+                            &format!(
+                                "Failed to read CPU test file metadata (generic) (path={}): {}",
+                                cpu_path.display(),
+                                e
+                            )
+                        );
                         0
                     }
                 },
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("   ❌ CPU encoding failed for CRF {anchor_crf:.1}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!("CPU encoding failed for CRF {anchor_crf:.1}")
+                    );
                     if stderr.contains("No such encoder") {
-                        eprintln!("      Cause: CPU encoder not available");
+                        crate::log_failure!(
+                            crate::static_logs::messages::LABEL_DYNAMIC,
+                            "Cause: CPU encoder not available"
+                        );
                     }
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   ❌ CPU command failed: {e}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_DYNAMIC,
+                        &format!("CPU command failed: {e}")
+                    );
                     continue;
                 }
             }
@@ -500,12 +602,13 @@ pub fn quick_calibrate(
             let ratio = crate::numeric_cast::u64_to_f64(cpu_size)
                 / crate::numeric_cast::u64_to_f64(gpu_size);
 
-            crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
-            crate::verbose_eprintln!(
-                "      GPU: {} bytes, CPU: {} bytes (ratio: {:.2})",
-                gpu_size,
-                cpu_size,
-                ratio
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("Calibration successful at CRF {anchor_crf:.1}")
+            );
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("GPU: {gpu_size} bytes, CPU: {cpu_size} bytes (ratio: {ratio:.2})")
             );
             calibration_success = true;
             break;
@@ -513,9 +616,18 @@ pub fn quick_calibrate(
     }
 
     if !calibration_success {
-        eprintln!("⚠️ All CPU calibration attempts failed, using static offset");
-        eprintln!("   Tried CRF values: {calibration_crfs:?}");
-        eprintln!("   This may affect GPU→CPU mapping accuracy");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "All CPU calibration attempts failed, using static offset"
+        );
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!("Tried CRF values: {calibration_crfs:?}")
+        );
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "This may affect GPU→CPU mapping accuracy"
+        );
         return Ok(mapper);
     }
 
@@ -526,12 +638,11 @@ pub fn quick_calibrate(
             let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
             let gpu_size = anchor.gpu_size;
             let cpu_size = anchor.cpu_size;
-            crate::verbose_eprintln!(
-                "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
-                gpu_size,
-                cpu_size,
-                ratio,
-                offset
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!(
+                    "Calibration complete: GPU {gpu_size} → CPU {cpu_size} (ratio {ratio:.3}, offset +{offset:.1})"
+                )
             );
         }
     }

@@ -2,6 +2,10 @@
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
 )]
+#![allow(
+    unexpected_cfgs,
+    reason = "macos_ui is an optional feature that may not be defined in all builds"
+)]
 use clap::{Parser, Subcommand};
 use img::Rational;
 
@@ -15,7 +19,8 @@ use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
-    PauseController, Summary, check_dangerous_directory, disk_full_pause_reason, print_summary,
+    PauseController, Summary, check_dangerous_directory, disk_full_pause_reason, log_anomaly,
+    log_detail, log_failure, log_fatal, log_hint, log_skip, print_summary,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -145,12 +150,18 @@ enum Commands {
 )]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
-        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+        log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_GHOST_MODE,
+            &e.to_string()
+        );
     }
 
     if let Err(e) = shared_utils::logging::init("img", &shared_utils::logging::LogConfig::default())
     {
-        eprintln!("⚠️ Failed to initialize logging: {e}");
+        log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_LOGGING,
+            &e.to_string()
+        );
     }
 
     // Initialize Ctrl+C guard for long-running batch operations
@@ -158,16 +169,21 @@ fn main() -> anyhow::Result<()> {
 
     let cache = AnalysisCache::default_local()
         .map(Arc::new)
-        .map_err(|e| {
-            shared_utils::log_eprintln!("⚠️  [Cache] Failed to initialize SQLite cache: {}", e);
-            e
+        .inspect_err(|e| {
+            log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_CACHE,
+                &e.to_string()
+            );
         })
         .ok();
 
     if let Some(ref cache) = cache
         && let Err(e) = cache.cleanup_old_records(shared_utils::constants::CACHE_PRUNE_AGE_SECS)
     {
-        shared_utils::log_eprintln!("⚠️ [Cache] Failed to cleanup old records: {}", e);
+        log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_CACHE,
+            &e.to_string()
+        );
     }
 
     let cli = Cli::parse();
@@ -199,7 +215,10 @@ fn main() -> anyhow::Result<()> {
                 match shared_utils::acquire_dir_lock(&input_abs) {
                     Ok(guard) => Some(guard),
                     Err(e) => {
-                        shared_utils::log_eprintln!("❌ {e}");
+                        log_fatal!(
+                            shared_utils::static_logs::messages::LABEL_LOCK,
+                            &e.to_string()
+                        );
                         std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                     }
                 }
@@ -248,8 +267,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             if selected_codec == SelectedCodec::Av1 && apple_compat {
-                shared_utils::log_eprintln!(
-                    "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
+                log_fatal!(
+                    shared_utils::static_logs::messages::LABEL_CONFIG,
+                    shared_utils::static_logs::messages::APPLE_COMPAT_HEVC,
                 );
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
@@ -265,40 +285,40 @@ fn main() -> anyhow::Result<()> {
                 }) {
                     Ok(mode) => mode,
                     Err(e) => {
-                        shared_utils::log_eprintln!("{}", e);
+                        log_fatal!(shared_utils::static_logs::messages::LABEL_CONFIG, &e);
                         std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                     }
                 };
 
             // Fail-fast if critical sub-tools are missing
             if let Err(e) = shared_utils::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]) {
-                shared_utils::log_eprintln!("{e}");
+                log_fatal!(shared_utils::static_logs::messages::LABEL_TOOLS, &e);
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log first; all subsequent output is captured here
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img") {
-                shared_utils::log_eprintln!(
-                    "⚠️  {}: {}",
-                    "\x1b[33mCould not open run log file\x1b[0m",
-                    e
+                log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_RUN_LOG,
+                    shared_utils::static_logs::messages::RUN_LOG_OPEN_FAIL
                 );
+                log_detail!(&format!("Detailed run log failure: {e}"));
             }
             if verbose {
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} {} ({} for animated→video)",
                     symbols::VIDEO,
                     flag_mode.description_en(),
                     selected_codec.as_str().to_uppercase()
                 ));
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.001)",
                     symbols::IMAGE
                 ));
             }
             if apple_compat {
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} Apple Compatibility: {}ENABLED{} (WebP→HEVC)",
                     symbols::SHIELD,
                     colors::BOLD,
@@ -308,7 +328,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             if in_place {
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} In-place mode: {}ENABLED{} (auto-delete original)",
                     symbols::SAVE,
                     colors::BOLD,
@@ -316,7 +336,7 @@ fn main() -> anyhow::Result<()> {
                 ));
             }
             if ultimate {
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} Ultimate Explore: {}ENABLED{} (max SSIM mode)",
                     symbols::SEARCH,
                     colors::BOLD,
@@ -324,7 +344,7 @@ fn main() -> anyhow::Result<()> {
                 ));
             }
             if !allow_size_tolerance {
-                shared_utils::progress_mode::emit_stderr(&format!(
+                log_detail!(&format!(
                     "{} Size Tolerance: {}DISABLED{} (strict < original)",
                     symbols::CHART,
                     colors::BOLD,
@@ -417,10 +437,10 @@ fn main() -> anyhow::Result<()> {
             } else if input.is_dir() {
                 auto_convert_directory(&input, &config, recursive, resume)?;
             } else {
-                shared_utils::progress_mode::emit_stderr(&format!(
-                    "❌ Error: Input path does not exist: {}",
-                    input.display()
-                ));
+                log_fatal!(
+                    "Input",
+                    &format!("Input path does not exist: {}", input.display()),
+                );
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
@@ -428,11 +448,7 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                shared_utils::log_eprintln!(
-                    "⚠️ {}: {}",
-                    "\x1b[33mrestore-timestamps failed\x1b[0m",
-                    e
-                );
+                log_anomaly!("Timestamp Restore", &e.to_string());
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
@@ -448,27 +464,32 @@ fn main() -> anyhow::Result<()> {
             if let Some(cache) = cache {
                 match cache.get_statistics() {
                     Ok(stats) => {
-                        println!("\n📊 Cache Statistics");
-                        println!("═══════════════════════════════════════");
-                        println!(
-                            "📁 Database Size: {:.2} MB ({:.3} GB)",
+                        shared_utils::log_summary_header!("Cache");
+                        shared_utils::log_stat!(
+                            "Database Size",
+                            "{:.2} MB ({:.3} GB)",
                             stats.db_size_mb(),
                             stats.db_size_gb()
                         );
-                        println!("📦 Total Records: {}", stats.total_records());
-                        println!("   ├─ Analysis: {}", stats.analysis_records);
-                        println!("   ├─ Quality: {}", stats.quality_records);
-                        println!("   └─ Video: {}", stats.video_records);
-                        println!("🔗 Path Index Entries: {}", stats.path_index_entries);
-                        println!("\n🔢 Version Information:");
-                        println!("   ├─ Schema Version: v{}", stats.schema_version);
-                        println!(
-                            "   └─ Current Algorithm: v{}",
-                            stats.current_algorithm_version
+                        shared_utils::log_stat!("Total Records", stats.total_records());
+                        shared_utils::log_stat!("Analysis", stats.analysis_records);
+                        shared_utils::log_stat!("Quality", stats.quality_records);
+                        shared_utils::log_stat!("Video", stats.video_records);
+                        shared_utils::log_stat!("Path Index", stats.path_index_entries);
+
+                        shared_utils::log_detail!("");
+                        shared_utils::log_stat!(
+                            "Schema Version",
+                            format!("v{}", stats.schema_version)
+                        );
+                        shared_utils::log_stat!(
+                            "Current Algorithm",
+                            format!("v{}", stats.current_algorithm_version)
                         );
 
                         if !stats.algorithm_version_distribution.is_empty() {
-                            println!("\n📈 Algorithm Version Distribution:");
+                            shared_utils::log_detail!("");
+                            shared_utils::log_detail!("📈 Algorithm Version Distribution:");
                             let mut versions: Vec<_> =
                                 stats.algorithm_version_distribution.iter().collect();
                             versions.sort_by_key(|(v, _)| *v);
@@ -479,13 +500,18 @@ fn main() -> anyhow::Result<()> {
                                     core::cmp::Ordering::Equal => "✅ (current)",
                                     core::cmp::Ordering::Greater => "❓ (future)",
                                 };
-                                println!("   v{version}: {count} records {marker}");
+                                shared_utils::log_detail!(&format!(
+                                    "   v{version}: {count} records {marker}"
+                                ));
                             }
 
                             let stale = stats.stale_records();
                             if stale > 0 {
-                                println!(
-                                    "\n⚠️  {stale} stale records detected (will be auto-invalidated on next run)"
+                                shared_utils::log_hint!(
+                                    "Stale Data",
+                                    &format!(
+                                        "{stale} stale records detected (will be auto-invalidated on next run)"
+                                    )
                                 );
                             }
                         }
@@ -499,24 +525,27 @@ fn main() -> anyhow::Result<()> {
                             res.to_f64()
                         };
                         let usage_percent = permille / 100.0;
-                        println!(
-                            "\n💾 Storage Usage: {usage_percent:.1}% of {} GB limit",
+                        shared_utils::log_detail!("");
+                        shared_utils::log_stat!(
+                            "Storage Usage",
+                            "{:.1}% of {} GB limit",
+                            usage_percent,
                             shared_utils::constants::CACHE_SIZE_LIMIT_BYTES / 1024 / 1024 / 1024
                         );
 
                         if usage_percent > shared_utils::constants::CACHE_USAGE_WARNING_THRESHOLD {
-                            println!("⚠️  Cache is approaching size limit!");
+                            shared_utils::log_anomaly!("Cache", "Approaching size limit!");
                         }
 
-                        println!("═══════════════════════════════════════\n");
+                        shared_utils::log_detail!("═══════════════════════════════════════");
                     }
                     Err(e) => {
-                        shared_utils::log_eprintln!("❌ Failed to get cache statistics: {}", e);
+                        log_fatal!("Cache Stats", &e.to_string());
                         std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                     }
                 }
             } else {
-                shared_utils::log_eprintln!("❌ Cache is not initialized");
+                log_fatal!("Cache", "Cache is not initialized");
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
         }
@@ -527,10 +556,13 @@ fn main() -> anyhow::Result<()> {
                 // Try to acquire lock. If it fails, report and exit immediately with code 3.
                 match shared_utils::acquire_dir_lock(&input_abs) {
                     Ok(_lock) => {
-                        println!("✅ Directory is available for processing.");
+                        shared_utils::log_success!(
+                            "Directory Lock",
+                            "Directory is available for processing."
+                        );
                     }
                     Err(e) => {
-                        shared_utils::log_eprintln!("❌ {e}");
+                        log_fatal!("Directory Lock", &e.to_string());
                         std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                     }
                 }
@@ -539,7 +571,7 @@ fn main() -> anyhow::Result<()> {
 
         Commands::PathHash { input } => {
             let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
-            println!("{hash}");
+            shared_utils::log_detail!(&hash);
         }
 
         Commands::IngestSamples { input, label } => {
@@ -577,7 +609,10 @@ fn main() -> anyhow::Result<()> {
                                         "fusion_v1",
                                     )
                                 {
-                                    eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
+                                    log_anomaly!(
+                                        "Ingest",
+                                        &format!("Failed to ingest {}: {}", path.display(), e),
+                                    );
                                 } else {
                                     count += 1;
                                 }
@@ -586,14 +621,28 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            println!("✅ Successfully ingested {count} static image samples.");
+            shared_utils::log_success!(
+                "Ingest",
+                &format!("Successfully ingested {count} static image samples.")
+            );
         }
     }
 
     {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
-            shared_utils::macos_ui::wait_for_exit_confirmation();
+            #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[cfg(all(target_os = "macos", feature = "macos_ui"))]
+            {
+                shared_utils::macos_ui::wait_for_exit_confirmation();
+            }
         }
     }
 
@@ -605,55 +654,59 @@ fn verify_conversion(
     converted: &std::path::Path,
     cache: Option<&AnalysisCache>,
 ) -> anyhow::Result<()> {
-    println!("🔍 Verifying conversion quality...");
-    println!("   Original:  {}", original.display());
-    println!("   Converted: {}", converted.display());
+    log_detail!("🔍 Verifying conversion quality...");
+    log_detail!(&format!("Original:  {}", original.display()));
+    log_detail!(&format!("Converted: {}", converted.display()));
 
     let original_analysis =
         shared_utils::image_analyzer::analyze_image_with_cache(original, cache)?;
     let converted_analysis =
         shared_utils::image_analyzer::analyze_image_with_cache(converted, cache)?;
 
-    println!("\n📊 Size Comparison:");
-    println!(
-        "   Original size:  {} bytes ({:.2} KB)",
+    log_detail!("📊 Size Comparison:");
+    log_detail!(&format!(
+        "Original size:  {} bytes ({:.2} KB)",
         original_analysis.file_size,
         shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size)
             / shared_utils::numeric_cast::u64_to_f64(shared_utils::constants::BYTES_PER_KB)
-    );
-    println!(
-        "   Converted size: {} bytes ({:.2} KB)",
+    ));
+    log_detail!(&format!(
+        "Converted size: {} bytes ({:.2} KB)",
         converted_analysis.file_size,
         shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size) / 1024.0
-    );
+    ));
 
     let reduction = 100.0
         * (1.0
             - shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size)
                 / shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size));
-    println!("   Size reduction: {reduction:.2}%");
+    log_detail!(&format!("Size reduction: {reduction:.2}%"));
 
     let orig_img = load_image_safe(original)?;
     let conv_img = load_image_safe(converted)?;
 
-    println!("\n📏 Quality Metrics:");
+    log_detail!("📏 Quality Metrics:");
     if let Some(psnr) = calculate_psnr(&orig_img, &conv_img) {
         if psnr.is_infinite() {
-            println!("   PSNR: ∞ dB (Identical - mathematically lossless)");
+            log_detail!("PSNR: ∞ dB (Identical - mathematically lossless)");
         } else {
-            println!(
-                "   PSNR: {:.2} dB ({})",
+            log_detail!(&format!(
+                "PSNR: {:.2} dB ({})",
                 psnr,
                 psnr_quality_description(psnr)
-            );
+            ));
         }
     }
 
     if let Some(ssim) = calculate_ssim(&orig_img, &conv_img) {
-        println!("   SSIM: {:.6} ({})", ssim, ssim_quality_description(ssim));
+        log_detail!(&format!(
+            "SSIM: {:.6} ({})",
+            ssim,
+            ssim_quality_description(ssim)
+        ));
     }
 
-    println!("\n✅ Verification complete");
+    log_detail!("✅ Verification complete");
 
     Ok(())
 }
@@ -789,14 +842,14 @@ fn auto_convert_single_file(
 
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
-        eprintln!("{e}");
+        log_fatal!("Apple Photos", &e);
         std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
     }
 
     if let Some(ref out_dir) = config.output_dir
         && let Err(e) = shared_utils::check_apple_photos_library(out_dir)
     {
-        eprintln!("{e}");
+        log_fatal!("Apple Photos", &e);
         std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
     }
 
@@ -827,9 +880,12 @@ fn auto_convert_single_file(
         shared_utils::progress_mode::image_skipped(reason);
         let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or_else(
             |e| {
-                tracing::warn!(
-                    "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                    input.display()
+                log_anomaly!(
+                    "Metadata",
+                    &format!(
+                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                        input.display()
+                    ),
                 );
                 0
             },
@@ -1016,12 +1072,10 @@ fn auto_convert_single_file(
 
     if output.skipped {
         if config.verbose() {
-            println!("⏭️ {}", output.message);
+            log_skip!(&label, &output.message);
         }
-    } else if output.is_jpeg_transcode() {
-        shared_utils::verbose_eprintln!("{}", output.message);
     } else {
-        shared_utils::log_eprintln!("{}", output.message);
+        log_detail!(&output.message);
     }
 
     Ok(output)
@@ -1051,15 +1105,15 @@ fn dispatch_static_conversion(
         && config.verbose()
     {
         if let Some(reason) = q.fallback_reason.as_deref() {
-            println!(
-                "   🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
+            log_detail!(&format!(
+                "🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
                 q.score
-            );
+            ));
         } else {
-            println!(
-                "   🔭 Quality Score: {:.2} (KNN, conf={:.2})",
+            log_detail!(&format!(
+                "🔭 Quality Score: {:.2} (KNN, conf={:.2})",
                 q.score, q.confidence
-            );
+            ));
         }
     }
 
@@ -1069,42 +1123,48 @@ fn dispatch_static_conversion(
                 && let Some(h) = &analysis.heic_analysis
                 && h.hdr.has_gainmap
             {
-                println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
+                log_detail!(&format!(
+                    "🌈 HDR Synthesis: {} (Gainmap detected)",
+                    input.display()
+                ));
                 return Ok(img::lossless_converter::convert_heic_gainmap_to_jxl(
                     input, options,
                 )?);
             }
             if config.verbose() {
-                println!("🔄 Modern Lossless→JXL: {}", input.display());
+                log_detail!(&format!("🔄 Modern Lossless→JXL: {}", input.display()));
             }
             convert_to_jxl(input, options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
         ("JPEG", _) => {
             use shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
             if is_ultra_hdr_jpeg_file(input) {
-                println!(
+                log_detail!(&format!(
                     "🌈 UltraHDR Migration: {} (Gainmap detected)",
                     input.display()
-                );
+                ));
                 return Ok(img::lossless_converter::convert_ultrahdr_jpeg_to_jxl(
                     input, options,
                 )?);
             }
 
             if config.verbose() {
-                println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
+                log_detail!(&format!(
+                    "🔄 JPEG→JXL lossless transcode: {}",
+                    input.display()
+                ));
             }
             convert_jpeg_to_jxl(input, options, analysis.hdr_info.as_ref())?
         }
         (_, true) => {
             if config.verbose() {
-                println!("🔄 Legacy Lossless→JXL: {}", input.display());
+                log_detail!(&format!("🔄 Legacy Lossless→JXL: {}", input.display()));
             }
             convert_to_jxl(input, options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
         _ => {
             if config.verbose() {
-                println!(
+                log_detail!(&format!(
                     "🔄 {} Lossy→JXL (Near-Lossless): {}",
                     match format.to_uppercase().as_str() {
                         "PNG" => "Quantized PNG",
@@ -1112,7 +1172,7 @@ fn dispatch_static_conversion(
                         _ => "Legacy",
                     },
                     input.display()
-                );
+                ));
             }
             convert_to_jxl(
                 input,
@@ -1137,21 +1197,21 @@ fn auto_convert_directory(
 ) -> anyhow::Result<()> {
     // Check for Apple Photos library before any processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
-        eprintln!("{e}");
+        log_detail!("{e}");
         std::process::exit(1);
     }
 
     if let Some(ref out_dir) = config.output_dir
         && let Err(e) = shared_utils::check_apple_photos_library(out_dir)
     {
-        eprintln!("{e}");
+        log_detail!("{e}");
         std::process::exit(1);
     }
 
     if (config.delete_original() || config.in_place())
         && let Err(e) = check_dangerous_directory(input)
     {
-        eprintln!("{e}");
+        log_detail!("{e}");
         std::process::exit(1);
     }
 
@@ -1174,10 +1234,13 @@ fn auto_convert_directory(
     let saved_dir_timestamps = match shared_utils::save_directory_timestamps(input) {
         Ok(saved) => Some(saved),
         Err(e) => {
-            shared_utils::log_eprintln!(
-                "⚠️ [Metadata] Failed to snapshot directory timestamps for {}: {}",
-                input.display(),
-                e
+            log_anomaly!(
+                "Metadata",
+                &format!(
+                    "Failed to snapshot directory timestamps for {}: {}",
+                    input.display(),
+                    e
+                ),
             );
             None
         }
@@ -1191,7 +1254,7 @@ fn auto_convert_directory(
 
     let total = files.len();
     if total == 0 {
-        println!("📂 No image files found in {}", input.display());
+        shared_utils::log_detail!(&format!("📂 No image files found in {}", input.display()));
 
         if let Some(output_dir) = config.output_dir.as_ref()
             && let Some(ref base_dir) = config.base_dir
@@ -1203,9 +1266,9 @@ fn auto_convert_directory(
     }
 
     if config.verbose() {
-        println!("📂 Found {total} files to process");
-        shared_utils::log_eprintln!(
-            "⚡ Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution"
+        shared_utils::log_info!("Setup", &format!("Found {total} files to process"));
+        log_detail!(
+            "⚡ Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution",
         );
     }
 
@@ -1218,9 +1281,9 @@ fn auto_convert_directory(
             Ok(cp) => {
                 if cp.is_resume_mode() {
                     if config.verbose() {
-                        println!(
-                            "📂 Resume: skipping {} already completed images",
-                            cp.completed_count()
+                        shared_utils::log_info!(
+                            "Resume",
+                            &format!("skipping {} already completed images", cp.completed_count())
                         );
                     }
                     cp.sync_to_processed_list();
@@ -1231,7 +1294,7 @@ fn auto_convert_directory(
             }
             Err(e) => {
                 if config.verbose() {
-                    println!("⚠️ [checkpoint] Failed to initialize: {e}");
+                    shared_utils::log_anomaly!("Checkpoint", &format!("Failed to initialize: {e}"));
                 }
                 None
             }
@@ -1247,10 +1310,9 @@ fn auto_convert_directory(
             .map(|f| match shared_utils::io_utils::metadata_with_retry(f) {
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
-                    shared_utils::log_eprintln!(
-                        "⚠️ [Disk Precheck] Failed to read file metadata ({}): {}",
-                        f.display(),
-                        err
+                    log_anomaly!(
+                        "Disk Precheck",
+                        &format!("Failed to read file metadata ({}): {}", f.display(), err),
                     );
                     0
                 }
@@ -1265,19 +1327,23 @@ fn auto_convert_directory(
                     shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0);
                 let required_gb =
                     shared_utils::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0);
-                eprintln!(
+                log_detail!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\
                      💾 Required:  {required_gb:.2} GB (input size + 1 GB headroom)\n\
-                     💡 Free up space or choose a different output location."
+                     💡 Free up space or choose a different output location.",
                 );
                 std::process::exit(1);
             }
             if config.verbose() {
-                println!(
-                    "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
-                    shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0),
-                    shared_utils::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0)
+                shared_utils::log_info!(
+                    "Disk Space",
+                    &format!(
+                        "OK: {:.2} GB available, {:.2} GB required",
+                        shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0),
+                        shared_utils::numeric_cast::u64_to_f64(required)
+                            / (1024.0 * 1024.0 * 1024.0)
+                    )
                 );
             }
         }
@@ -1307,13 +1373,11 @@ fn auto_convert_directory(
     {
         Ok(p) => p,
         Err(e) => {
-            shared_utils::log_eprintln!(
-                "⚠️  {}: {}, falling back to 2 threads",
-                format!(
-                    "\x1b[33mFailed to create {} thread pool\x1b[0m",
-                    max_threads
+            log_anomaly!(
+                "Thread Pool",
+                &format!(
+                    "Failed to create {max_threads} thread pool, falling back to 2 threads: {e}"
                 ),
-                e
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
@@ -1323,14 +1387,14 @@ fn auto_convert_directory(
     };
 
     if config.verbose() {
-        shared_utils::log_eprintln!(
+        log_detail!(&format!(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
             child_threads,
             std::thread::available_parallelism().map_or(4, core::num::NonZero::get)
-        );
+        ));
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
-            shared_utils::log_eprintln!("   💡 {}", hint);
+            log_hint!(hint);
         }
     }
 
@@ -1385,11 +1449,7 @@ fn auto_convert_directory(
                                 // Mark as completed in checkpoint manager on success (thread-safe)
                                 if let Some(cp) = checkpoint.as_ref()
                                     && let Err(e) = cp.mark_completed(path) {
-                                        shared_utils::log_eprintln!(
-                                            "⚠️ [img] Failed to mark completed {}: {}",
-                                            path.display(),
-                                            e
-                                        );
+                                        log_anomaly!("Checkpoint", &format!("Failed to mark completed {}: {}", path.display(), e));
                                     }
                             }
                         }
@@ -1397,7 +1457,7 @@ fn auto_convert_directory(
                             let err_str = e.to_string();
                             if let Some(reason) = disk_full_pause_reason(&err_str) {
                                 if pause_controller.request_pause(path, reason.clone()) {
-                                    shared_utils::log_eprintln!(
+                                    shared_utils::log_detail!(
                                         "⏸️ [Batch] Paused at {}: {}",
                                         path.display(),
                                         reason
@@ -1412,10 +1472,9 @@ fn auto_convert_directory(
                             );
 
                             if is_skip {
-                                shared_utils::log_eprintln!(
-                                    "⏭️  {} → SKIP ({})",
-                                    path.file_name().unwrap_or_default().to_string_lossy(),
-                                    err_str
+                                log_skip!(
+                                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                                    &err_str
                                 );
                                 skipped.fetch_add(1, Ordering::Relaxed);
                                 shared_utils::progress_mode::image_processed_success(); // Skip with copy is a partial success
@@ -1428,10 +1487,9 @@ fn auto_convert_directory(
                                         config.base_dir.as_deref(),
                                         config.verbose(),
                                     ) {
-                                        shared_utils::log_eprintln!(
-                                            "🚨 [CRITICAL] Failed to copy original after skip ({}): {}. DATA LOSS RISK!",
-                                            path.display(),
-                                            copy_err
+                                        log_fatal!(
+                                            "Critical Data Link",
+                                            &format!("Failed to copy original after skip ({}): {}. DATA LOSS RISK!", path.display(), copy_err)
                                         );
                                     }
                             } else {
@@ -1513,28 +1571,39 @@ fn auto_convert_directory(
     if !result.paused
         && let Some(ref output_dir) = config.output_dir
     {
-        shared_utils::log_eprintln!("\n📦 Copying unsupported files...");
+        log_detail!("");
+        shared_utils::log_static!(
+            info,
+            shared_utils::static_logs::messages::COPYING_UNSUPPORTED
+        );
         let copy_result = shared_utils::copy_unsupported_files(
             config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
             output_dir,
             recursive,
         );
         if copy_result.copied > 0 {
-            shared_utils::log_eprintln!("📦 Copied {} unsupported files", copy_result.copied);
+            log_detail!(&format!("Copied {} unsupported files", copy_result.copied));
         }
         if copy_result.failed > 0 {
-            shared_utils::log_eprintln!("❌ Failed to copy {} files", copy_result.failed);
+            log_failure!(
+                "Unsupported Files",
+                &format!("Failed to copy {} files", copy_result.failed),
+            );
         }
 
-        shared_utils::log_eprintln!("\n🔍 Verifying output completeness...");
+        log_detail!("");
+        shared_utils::log_static!(info, shared_utils::static_logs::messages::OUTPUT_VERIFY);
         let verify = shared_utils::verify_output_completeness(
             config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
             output_dir,
             recursive,
         );
-        shared_utils::log_eprintln!("{}", verify.message);
+        log_detail!(&verify.message);
         if !verify.passed {
-            shared_utils::log_eprintln!("⚠️  Some files may be missing from output!");
+            log_anomaly!(
+                "Verification",
+                "File count mismatch between input and output directories; some files may have been lost",
+            );
         }
     }
 
@@ -1542,6 +1611,8 @@ fn auto_convert_directory(
         && let Some(ref output_dir) = config.output_dir
         && let Some(ref base_dir) = config.base_dir
     {
+        log_detail!("");
+        shared_utils::log_static!(info, shared_utils::static_logs::messages::METADATA_SYNC);
         shared_utils::preserve_directory_with_log(base_dir, output_dir);
     }
 
@@ -1553,28 +1624,39 @@ fn auto_convert_directory(
             shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
         }
         shared_utils::restore_directory_timestamps(saved);
-        shared_utils::log_eprintln!("✅ Directory timestamps restored");
+        log_detail!("✅ Directory timestamps restored");
     }
 
     // Finalize checkpoint only on 100% success
     if let Some(cp) = checkpoint {
         if result.paused {
             if let Err(e) = cp.release_lock() {
-                shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
+                log_anomaly!("Checkpoint Lock", &format!("Release lock failed: {e}"));
             }
         } else if failed_count == 0 {
             if let Err(e) = cp.cleanup() {
-                shared_utils::log_eprintln!("⚠️ [checkpoint] Cleanup failed: {}", e);
+                log_anomaly!("Checkpoint Cleanup", &format!("Cleanup failed: {e}"));
             }
         } else if let Err(e) = cp.release_lock() {
-            shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
+            log_anomaly!("Checkpoint Lock", &format!("Release lock failed: {e}"));
         }
     }
 
     {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
-            shared_utils::macos_ui::wait_for_exit_confirmation();
+            #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[cfg(all(target_os = "macos", feature = "macos_ui"))]
+            {
+                shared_utils::macos_ui::wait_for_exit_confirmation();
+            }
         }
     }
 

@@ -26,10 +26,9 @@ thread_local! {
 static RUN_LOG_IO_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 fn report_run_log_io_failure(context: &str, detail: &str) {
-    tracing::warn!(
-        context = context,
-        detail = detail,
-        "Run log output degraded"
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_ANOMALY,
+        &format!("Run log output degraded (context={context}, detail={detail})")
     );
 
     if !RUN_LOG_IO_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
@@ -282,7 +281,7 @@ static LOG_FILE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
 fn lock_log_writer() -> std::sync::MutexGuard<'static, Option<BufWriter<File>>> {
     LOG_FILE_WRITER.lock().unwrap_or_else(|err| {
-        eprintln!("⚠️ [Run Log] log writer mutex was poisoned; recovering state");
+        emit_stderr("⚠️ [Run Log] log writer mutex was poisoned; recovering state");
         err.into_inner()
     })
 }
@@ -529,8 +528,11 @@ pub fn emit_stderr(line: &str) {
             output.push('\r');
             output.push_str(&progress_line);
 
-            if let Err(err) = write!(std::io::stderr(), "{output}") {
-                tracing::warn!(error = %err, "Failed to write progress output to stderr");
+            if let Err(_err) = write!(std::io::stderr(), "{output}") {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "Failed to write progress output to stderr"
+                );
             }
         } else {
             let mut output = String::new();
@@ -538,8 +540,11 @@ pub fn emit_stderr(line: &str) {
                 output.push_str(&p_line);
                 output.push('\n');
             }
-            if let Err(err) = write!(std::io::stderr(), "{output}") {
-                tracing::warn!(error = %err, "Failed to write progress output to stderr");
+            if let Err(_err) = write!(std::io::stderr(), "{output}") {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "Failed to write progress output to stderr"
+                );
             }
         }
     } else {
@@ -549,8 +554,11 @@ pub fn emit_stderr(line: &str) {
             output.push_str(&p_line);
             output.push('\n');
         }
-        if let Err(err) = write!(std::io::stderr(), "{output}") {
-            tracing::warn!(error = %err, "Failed to write progress output to stderr");
+        if let Err(_err) = write!(std::io::stderr(), "{output}") {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                "Failed to write progress output to stderr"
+            );
         }
     }
     let _ = std::io::stderr().flush();

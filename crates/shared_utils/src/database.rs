@@ -1161,10 +1161,7 @@ fn lookup_similar_samples_inner(
     } else {
         loop_durations
             .sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = crate::numeric_cast::f64_to_usize_strict(
-            (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
-            "p90_idx",
-        )
+        let idx = crate::numeric_cast::f64_to_usize_strict((crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(), "p90_idx")
         .ok_or_else(|| {
             crate::progress_mode::emit_stderr("☢️ [ANOMALY] p90_idx overflow! Refusing to forge percentile. Information invalidated.");
             anyhow::anyhow!("p90_idx overflow")
@@ -2124,10 +2121,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     init_schema(&mut conn)?;
     seed_positive_dataset_if_needed(&mut conn)?;
 
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "🔍 Scanning for candidate assets in {}...",
         dataset_path.display()
-    );
+    ));
     let mut candidate_paths = Vec::new();
     for entry in WalkDir::new(dataset_path)
         .follow_links(false)
@@ -2147,8 +2144,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     }
 
     if candidate_paths.is_empty() {
-        println!("⚠️ No matching assets found in designated path.");
-        println!("✅ Successfully initialized PostgreSQL with default seeded samples.");
+        crate::progress_mode::emit_stderr("⚠️ No matching assets found in designated path.");
+        crate::progress_mode::emit_stderr(
+            "✅ Successfully initialized PostgreSQL with default seeded samples.",
+        );
         return Ok(0);
     }
 
@@ -2160,7 +2159,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             .progress_chars("#>-"),
     );
 
-    println!("🧠 Learning from {} samples...", candidate_paths.len());
+    crate::progress_mode::emit_stderr(&format!(
+        "🧠 Learning from {} samples...",
+        candidate_paths.len()
+    ));
 
     // Process in parallel to speed up ffprobe and GIF header scanning
     let samples: Vec<_> = candidate_paths
@@ -2181,7 +2183,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 
     pb.finish_with_message("Learning complete.");
 
-    println!("💾 Persisting {} samples to database...", samples.len());
+    crate::progress_mode::emit_stderr(&format!(
+        "💾 Persisting {} samples to database...",
+        samples.len()
+    ));
 
     let initial_feature_map = fetch_feature_map(&mut conn)?;
     let mut tx = conn.transaction()?;
@@ -3247,9 +3252,15 @@ pub fn check_database_health() -> Result<DbHealthReport> {
         report.maturity_status = "Mature (KNN Active)".to_string();
     } else {
         let needed = min_total.saturating_sub(total_samples);
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "i64 to f64 conversion is acceptable for sample count display"
+        )]
+        let needed_f64 = needed as f64;
         report.maturity_status = format!(
             "Immature (Need {} more samples)",
-            crate::numeric_cast::i64_to_usize_sat(needed)
+            crate::numeric_cast::f64_to_usize_strict(needed_f64, "needed")
+                .ok_or_else(|| anyhow::anyhow!("Failed to convert needed value to usize"))?
         );
     }
 

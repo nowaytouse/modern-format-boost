@@ -7,7 +7,6 @@ use crate::unified_error::UnifiedError;
 use anyhow::{Context, Result, bail};
 use rug::Rational;
 use std::path::Path;
-use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compressibility {
@@ -209,10 +208,9 @@ fn parse_duration_from_precheck_json(
         )
     {
         frame_count = nb_read_frames;
-        info!(
-            nb_read_frames = frame_count,
-            "Using nb_read_frames for frame count"
-        );
+        crate::log_detail!(&format!(
+            "Using nb_read_frames ({frame_count}) for frame count"
+        ));
     }
 
     let stream_duration: Option<f64> = crate::numeric_cast::parse_option_strict(
@@ -225,7 +223,10 @@ fn parse_duration_from_precheck_json(
         return Ok((duration, fps, frame_count));
     }
 
-    warn!("DURATION: stream.duration unavailable, trying format.duration");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: stream.duration unavailable, trying format.duration"
+    );
     let format_duration: Option<f64> = json
         .get("format")
         .and_then(|f| f.get("duration"))
@@ -234,31 +235,49 @@ fn parse_duration_from_precheck_json(
         .filter(|&d: &f64| d > 0.0_f64 && !d.is_nan());
 
     if let Some(duration) = format_duration {
-        info!(duration_secs = %duration, "DURATION RECOVERED via format.duration");
+        crate::log_detail!(&format!(
+            "DURATION RECOVERED via format.duration: {duration:.3}s"
+        ));
         return Ok((duration, fps, frame_count));
     }
 
-    warn!("DURATION: format.duration failed, trying frame_count/fps");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: format.duration failed, trying frame_count/fps"
+    );
     if frame_count > 0 && fps > 0.0_f64 && !fps.is_nan() {
         let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
         if duration > 0.0_f64 {
-            info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
+            crate::log_detail!(&format!(
+                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frame_count}, fps={fps:.2})"
+            ));
             return Ok((duration, fps, frame_count));
         }
     }
 
-    warn!("DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)"
+    );
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
         && duration_secs > 0.0_f64
         && frames > 0
     {
         let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
-        info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
+        crate::log_detail!(&format!(
+            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, fps={inferred_fps:.2})"
+        ));
         return Ok((duration_secs, inferred_fps, frames));
     }
 
-    error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
+    crate::log_failure!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        &format!(
+            "DURATION DETECTION FAILED for {}: Cannot determine video duration",
+            input.display()
+        )
+    );
     Err(UnifiedError::ResultAnomaly(
         "Failed to detect video duration - all methods failed".to_string(),
     )
@@ -290,9 +309,12 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     )
     .or_else(|| stream["nb_frames"].as_u64())
     .unwrap_or_else(|| {
-        tracing::warn!(
-            path = %input.display(),
-            "ffprobe bpp_from_precheck_json: nb_frames absent or non-numeric; using 0 (will re-derive from duration)"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_PRECHECK,
+            &format!(
+                "nb_frames absent or non-numeric for {}; using 0 (will re-derive from duration)",
+                input.display()
+            )
         );
         0
     });
@@ -300,20 +322,24 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0_f64 {
-        crate::numeric_cast::f64_to_u64_sat(duration * fps)
+        crate::numeric_cast::f64_to_u64_strict(duration * fps, "frame_count")
+            .context("Invalid frame count calculation")?
     } else {
         frame_count_raw.max(1)
     };
     let video_bytes =
         crate::numeric_cast::parse_option_strict(stream["bit_rate"].as_str(), "bit_rate")
             .filter(|&br| br > 0)
-            .map_or(0, |br| {
-                crate::numeric_cast::f64_to_u64_sat(
+            .and_then(|br| {
+                crate::numeric_cast::f64_to_u64_strict(
                     crate::numeric_cast::u64_to_f64(br) * duration / 8.0,
+                    "video_bytes",
                 )
             });
-    let bytes_for_bpp = if video_bytes > 0 {
-        video_bytes
+    let bytes_for_bpp = if let Some(vb) = video_bytes
+        && vb > 0
+    {
+        vb
     } else {
         file_size
     };
@@ -346,6 +372,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     }
 }
 
+#[allow(clippy::too_many_lines)]
 /// Detect video duration comprehensively using multiple methods.
 ///
 /// # Errors
@@ -390,9 +417,12 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         .and_then(serde_json::Value::as_str)
         .and_then(|s| crate::numeric_cast::parse_strict(s, "nb_frames"))
         .unwrap_or_else(|| {
-            tracing::warn!(
-                path = %input.display(),
-                "detect_duration_comprehensive: nb_frames absent or non-numeric; using 0"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_PRECHECK,
+                &format!(
+                    "nb_frames absent or non-numeric for {}; using 0",
+                    input.display()
+                )
             );
             0
         });
@@ -411,7 +441,10 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         return Ok((duration, fps, frame_count, "stream.duration"));
     }
 
-    warn!("DURATION: stream.duration unavailable, trying format.duration");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: stream.duration unavailable, trying format.duration"
+    );
     let format_duration: Option<f64> = json
         .get("format")
         .and_then(|f| f.get("duration"))
@@ -420,32 +453,50 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         .filter(|&d: &f64| d > 0.0_f64 && !d.is_nan());
 
     if let Some(duration) = format_duration {
-        info!(duration_secs = %duration, "DURATION RECOVERED via format.duration");
+        crate::log_detail!(&format!(
+            "DURATION RECOVERED via format.duration: {duration:.3}s"
+        ));
         let fps = fps_sanitise_for_validation(fps, duration, frame_count);
         return Ok((duration, fps, frame_count, "format.duration"));
     }
 
-    warn!("DURATION: format.duration failed, trying frame_count/fps");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: format.duration failed, trying frame_count/fps"
+    );
     if frame_count > 0 && fps > 0.0_f64 && !fps.is_nan() && fps <= FPS_THRESHOLD_INVALID {
         let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
         if duration > 0.0_f64 {
-            info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
+            crate::log_detail!(&format!(
+                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frame_count}, fps={fps:.2})"
+            ));
             return Ok((duration, fps, frame_count, "frame_count/fps"));
         }
     }
 
-    warn!("DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        "DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)"
+    );
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
         && duration_secs > 0.0_f64
         && frames > 0
     {
         let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
-        info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
+        crate::log_detail!(&format!(
+            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, fps={inferred_fps:.2})"
+        ));
         return Ok((duration_secs, inferred_fps, frames, "imagemagick"));
     }
 
-    error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
+    crate::log_failure!(
+        crate::static_logs::messages::LABEL_PRECHECK,
+        &format!(
+            "DURATION DETECTION FAILED for {}: Cannot determine video duration",
+            input.display()
+        )
+    );
     Err(UnifiedError::ResultAnomaly(
         "Failed to detect video duration - all methods failed".to_string(),
     )
@@ -505,19 +556,23 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         "nb_frames_str",
     )
     .or_else(|| stream["nb_frames"].as_u64())
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                path = %input.display(),
-                "get_video_info: nb_frames absent or non-numeric; using 0 (will re-derive from duration)"
-            );
-            0
-        });
+    .unwrap_or_else(|| {
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_PRECHECK,
+            &format!(
+                "nb_frames absent or non-numeric for {}; using 0 (will re-derive from duration)",
+                input.display()
+            )
+        );
+        0
+    });
 
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0_f64 {
-        crate::numeric_cast::f64_to_u64_sat(duration * fps)
+        crate::numeric_cast::f64_to_u64_strict(duration * fps, "frame_count")
+            .context("Invalid frame count calculation")?
     } else {
         frame_count_raw.max(1)
     };
@@ -539,13 +594,16 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let video_bytes =
         crate::numeric_cast::parse_option_strict(stream["bit_rate"].as_str(), "bit_rate_u64")
             .filter(|&br| br > 0)
-            .map_or(0, |br| {
-                crate::numeric_cast::f64_to_u64_sat(
+            .and_then(|br| {
+                crate::numeric_cast::f64_to_u64_strict(
                     crate::numeric_cast::u64_to_f64(br) * duration / 8.0,
+                    "video_bytes",
                 )
             });
-    let bytes_for_bpp = if video_bytes > 0 {
-        video_bytes
+    let bytes_for_bpp = if let Some(vb) = video_bytes
+        && vb > 0
+    {
+        vb
     } else {
         file_size
     };
@@ -936,7 +994,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
 
     lines.push("└─────────────────────────────────────────────────────".to_string());
     for line in &lines {
-        info!("{}", line);
+        crate::log_info!(crate::static_logs::messages::LABEL_PRECHECK, line);
     }
 }
 
@@ -950,16 +1008,27 @@ pub fn run(input: &Path) -> Result<VideoInfo> {
 
     match &info.recommendation {
         ProcessingRecommendation::CannotProcess { reason } => {
-            warn!(reason = %reason, "PRECHECK: cannot process");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_PRECHECK,
+                &format!("PRECHECK: cannot process: {reason}")
+            );
             bail!("Precheck cannot process this file: {reason}");
         }
 
         ProcessingRecommendation::NotRecommended { codec, reason } => {
-            info!(codec = %codec, reason = %reason, "already modern codec (continuing anyway)");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_PRECHECK,
+                &format!("already modern codec ({codec}): {reason} (continuing anyway)")
+            );
         }
 
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
-            info!(codec = %codec, reason = %reason, "EXCELLENT TARGET: legacy codec, will benefit from modern encoding");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_PRECHECK,
+                &format!(
+                    "EXCELLENT TARGET: legacy codec ({codec}), will benefit from modern encoding: {reason}"
+                )
+            );
         }
 
         ProcessingRecommendation::Recommended { .. }

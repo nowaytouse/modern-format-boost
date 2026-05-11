@@ -56,8 +56,12 @@ fn main() -> Result<()> {
 
     init_quality_schema(&mut client)?;
 
-    println!("🎨 Training Static Image Quality Model...");
-    println!("📂 Input: {} (Label: {:?}", cli.input.display(), cli.label);
+    shared_utils::progress_mode::emit_stderr("🎨 Training Static Image Quality Model...");
+    shared_utils::progress_mode::emit_stderr(&format!(
+        "📂 Input: {} (Label: {:?})",
+        cli.input.display(),
+        cli.label
+    ));
 
     let mut count = 0_i32;
     let supported_extensions = [
@@ -81,13 +85,17 @@ fn main() -> Result<()> {
             if let Err(e) =
                 ingest_quality_sample(&mut client, path, cli.label.as_str(), "manual_training")
             {
-                eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "⚠️ Failed to ingest {}: {}",
+                    path.display(),
+                    e
+                ));
             } else {
                 count += 1_i32;
             }
         }
     }
 
-    println!("✅ Finished! Ingested {count} samples.");
+    shared_utils::progress_mode::emit_stderr(&format!("✅ Finished! Ingested {count} samples."));
     Ok(())
 }

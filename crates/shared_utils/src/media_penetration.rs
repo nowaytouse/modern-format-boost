@@ -7,7 +7,6 @@ use crate::builder_base::ToolBuilder;
 use crate::progress_mode::emit_stderr;
 use std::intrinsics::likely;
 use std::path::Path;
-use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PenetrationResult<T> {
@@ -95,8 +94,12 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     // Phase 1: Stratified Sampling (fast check)
     // Sample up to 3 points in time to catch most cases efficiently.
     let Some(duration_val) = duration else {
-        tracing::warn!(
-            "☢️ [ANOMALY] Transparency penetration impossible: Missing duration! Information invalidated."
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_PENETRATION,
+            &format!(
+                "Transparency penetration impossible: Missing duration! Information invalidated. (path={})",
+                path.display()
+            )
         );
         return PenetrationResult::Failed;
     };
@@ -349,16 +352,23 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
                     .split_whitespace()
                     .next()
                     .unwrap_or_else(|| {
-                        tracing::warn!(
-                            "☢️ [ANOMALY] Failed to parse TFF string from idet output for {}",
-                            path.display()
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_PENETRATION,
+                            &format!(
+                                "Failed to parse TFF string from idet output for {}",
+                                path.display()
+                            )
                         );
                         "0"
                     });
                 tff = s.parse::<u64>().unwrap_or_else(|_| {
-                    warn!(
-                        "☢️ [ANOMALY] Failed to parse TFF value '{}' in interlacing check",
-                        s
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_PENETRATION,
+                        &format!(
+                            "Failed to parse TFF value '{}' in interlacing check (path={})",
+                            s,
+                            path.display()
+                        )
                     );
                     0
                 });
@@ -368,16 +378,23 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
                     .split_whitespace()
                     .next()
                     .unwrap_or_else(|| {
-                        tracing::warn!(
-                            "☢️ [ANOMALY] Failed to parse BFF string from idet output for {}",
-                            path.display()
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_PENETRATION,
+                            &format!(
+                                "Failed to parse BFF string from idet output for {}",
+                                path.display()
+                            )
                         );
                         "0"
                     });
                 bff = s.parse::<u64>().unwrap_or_else(|_| {
-                    warn!(
-                        "☢️ [ANOMALY] Failed to parse BFF value '{}' in interlacing check",
-                        s
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_PENETRATION,
+                        &format!(
+                            "Failed to parse BFF value '{}' in interlacing check (path={})",
+                            s,
+                            path.display()
+                        )
                     );
                     0
                 });

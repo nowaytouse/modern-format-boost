@@ -515,6 +515,37 @@ pub const IMAGE_COMPLEXITY_WEIGHT_EDGE: f64 = 0.25;
 pub const IMAGE_COMPLEXITY_WEIGHT_COLOR: f64 = 0.25;
 pub const IMAGE_ALPHA_SAMPLING_STEP: usize = 16;
 pub const IMAGE_CONTRAST_NORMALIZATION: f64 = 80.0;
+
+// --- Pixel-level Lossless Heuristic (Wave 23) ---
+/// Complexity threshold for heuristic lossless detection.
+pub const HEURISTIC_LOSSLESS_COMPLEXITY_MAX: f64 = 0.55;
+/// Edge density threshold for heuristic lossless detection.
+pub const HEURISTIC_LOSSLESS_EDGE_DENSITY_MAX: f64 = 0.35;
+/// Color diversity threshold for heuristic lossless detection.
+pub const HEURISTIC_LOSSLESS_COLOR_DIVERSITY_MAX: f64 = 0.45;
+/// Noise level threshold for heuristic lossless detection (low noise required).
+pub const HEURISTIC_LOSSLESS_NOISE_LEVEL_MAX: f64 = 0.15;
+/// Minimum confidence required to accept a heuristic lossless verdict.
+pub const HEURISTIC_LOSSLESS_CONFIDENCE_MIN: f64 = 0.75;
+/// Content types that are highly credible for lossless detection (e.g. digital sources).
+pub const HEURISTIC_LOSSLESS_CREDIBLE_TYPES: &[&str] = &[
+    "SCREENSHOT",
+    "MOBILE_SCREENSHOT",
+    "ICON",
+    "DOCUMENT",
+    "WEB_UI",
+    "MAP",
+    "ANIMATION",
+];
+
+// --- Lossless Affinity Weights (Wave 23) ---
+pub const AFFINITY_WEIGHT_COMPLEXITY: f64 = 0.4;
+pub const AFFINITY_WEIGHT_NOISE: f64 = 0.3;
+pub const AFFINITY_WEIGHT_TEXTURE: f64 = 0.2;
+pub const AFFINITY_WEIGHT_COLOR: f64 = 0.1;
+pub const AFFINITY_THRESHOLD_LOSSLESS: f64 = 0.85;
+pub const AFFINITY_BONUS_CREDIBLE_TYPE: f64 = 0.15;
+pub const AFFINITY_BONUS_ALPHA: f64 = 0.05;
 // --- Video Quality & Compression Boundaries ---
 /// Empirical: base confidence for video quality analysis.
 pub const VIDEO_CONFIDENCE_BASE: f64 = 0.7;
@@ -552,7 +583,7 @@ pub const DENSITY_TO_CRF_LUT: &[(f64, u8)] = &[
 /// Target CRF for high-quality (archival-grade) sources.
 pub const CRF_TARGET_VISUALLY_LOSSLESS: f32 = 18.0;
 /// Target CRF for standard quality sources.
-pub const CRF_TARGET_STANDARD: f32 = 20.0;
+pub const CRF_TARGET_STANDARD: f32 = 30.0;
 /// Minimum quality score (0-100) to be considered a high-quality master candidate.
 pub const QUALITY_SCORE_HIGH_THRESHOLD: u8 = 90;
 /// Expected size reduction (%) for JPEG to JXL lossless reconstruction.
@@ -657,8 +688,8 @@ pub const HQ_HD_HEIGHT: u32 = 720;
 /// Total pixels for HD (1280x720 = 921,600).
 pub const HQ_PIX_COUNT_HD: u64 = 921_600;
 // --- Extension Constants ---
-pub const EXT_MOV: &str = "MOV";
-pub const EXT_MP4: &str = "MP4";
+pub const EXT_MOV: &str = "mov";
+pub const EXT_MP4: &str = "mp4";
 pub const EXT_MKV: &str = "mkv";
 pub const EXT_WEBP: &str = "webp";
 pub const EXT_GIF: &str = "gif";
@@ -666,6 +697,15 @@ pub const EXT_JXL: &str = "jxl";
 pub const EXT_AVIF: &str = "avif";
 pub const EXT_APNG: &str = "apng";
 pub const EXT_PNG: &str = "png";
+pub const EXT_JPG: &str = "jpg";
+pub const EXT_JPEG: &str = "jpeg";
+pub const EXT_HEIC: &str = "heic";
+pub const EXT_HEIF: &str = "heif";
+pub const EXT_TIFF: &str = "tiff";
+pub const EXT_TIF: &str = "tif";
+pub const EXT_BMP: &str = "bmp";
+pub const EXT_ICO: &str = "ico";
+pub const EXT_SVG: &str = "svg";
 // --- External Tools & Binary Names ---
 pub const TOOL_FFMPEG: &str = "ffmpeg";
 pub const TOOL_FFPROBE: &str = "ffprobe";
@@ -981,8 +1021,8 @@ pub const SAFE_BPP_MIN: f64 = 1e-6;
 pub const SAFE_BPP_MAX: f64 = 50.0;
 /// Minimum CRF value for AV1 encoding (0.0).
 pub const AV1_CRF_CLAMP_MIN: f32 = 0.0;
-/// Maximum CRF value for AV1 encoding (51.0).
-pub const AV1_CRF_CLAMP_MAX: f32 = 51.0;
+/// Maximum CRF value for AV1 encoding (63.0).
+pub const AV1_CRF_CLAMP_MAX: f32 = 63.0;
 /// Minimum CRF value for HEVC encoding (0.0).
 pub const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
 /// Maximum CRF value for HEVC encoding (51.0).
@@ -1091,10 +1131,6 @@ pub const VIDEO_QUALITY_SCORE_LOW: u8 = 40;
 pub const VIDEO_QUALITY_RESOLUTION_BONUS_UHD: u8 = 3;
 /// Bitrate threshold for high-bitrate H.264 recommendation (50 Mbps).
 pub const VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD: u64 = 50_000_000;
-/// Default recommended CRF for AV1 transcode hints (20).
-pub const VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT: f32 = 20.0;
-/// Default recommended preset for AV1 transcode hints (6).
-pub const VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT: u8 = 6;
 /// Maximum number of finalist candidates promoted for JXL e10 finalization (8).
 pub const JXL_FINALIST_LIMIT: usize = 8;
 /// Perceptual probe anchor at distance 0.03.
@@ -1386,6 +1422,10 @@ pub const QUALITY_TWEAK_MAX_BONUS: u8 = 5;
 // --- Systemic Divisors & Thresholds (Wave 8) ---
 /// Standard KB divisor (1024.0).
 pub const KB_DIVISOR: f64 = 1024.0;
+/// Standard MB divisor (1024^2).
+pub const MB_DIVISOR: f64 = 1024.0 * 1024.0;
+/// Standard GB divisor (1024^3).
+pub const GB_DIVISOR: f64 = 1024.0 * 1024.0 * 1024.0;
 /// SSIM grade threshold for 'Excellent' (0.98 - explorer calibrated).
 pub const SSIM_GRADE_EXCELLENT: f64 = 0.98;
 /// SSIM grade threshold for 'Very Good' (0.97).
@@ -1659,6 +1699,18 @@ pub const CRF_HIGH_QUALITY: f32 = CRF_TARGET_VISUALLY_LOSSLESS;
 pub const CRF_STANDARD_QUALITY: f32 = CRF_TARGET_STANDARD;
 /// Default animation frame delay (100ms).
 pub const DEFAULT_ANIMATION_DELAY_MS: u32 = 100;
+// --- SSIM Constants ---
+pub const SSIM_K1: f64 = 0.01;
+pub const SSIM_K2: f64 = 0.03;
+pub const SSIM_WINDOW_SIZE: usize = 11;
+pub const SSIM_GAUSSIAN_SIGMA: f64 = 1.5;
+
+// --- Video Quality Analysis Thresholds ---
+pub const QUALITY_ANALYSIS_SHORT_DURATION_MIN: f64 = 1.0;
+pub const QUALITY_ANALYSIS_SAMPLE_RATE_SHORT: usize = 1;
+pub const QUALITY_ANALYSIS_SAMPLE_RATE_LONG: usize = 3;
+pub const MS_SSIM_CHROMA_MIN_DIM: u32 = 256;
+pub const ANIMATED_SSIM_TARGET_MIN: f64 = 0.92;
 
 /// Entropy ratio threshold for medium-confidence quantization (0.40).
 pub const PNG_ENTROPY_RATIO_MEDIUM: f64 = 0.40;
@@ -1731,6 +1783,17 @@ pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 60.0;
 pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
 pub const GPU_MIN_DURATION_FOR_SAMPLING: f64 = 60.0;
 pub const GPU_COARSE_STEP: f32 = 1.0;
+pub const GPU_SEARCH_HIGH_COMPLEXITY_BITRATE_THRESHOLD: f64 = 2_500_000.0; // 2.5 Mbps
+pub const GPU_SEARCH_ULTIMATE_STEP: f32 = 0.5;
+pub const GPU_SEARCH_NORMAL_STEP: f32 = 2.0;
+
+pub const CPU_SEARCH_NARROW_RANGE: f32 = 3.0;
+pub const CPU_SEARCH_NORMAL_RANGE: f32 = 15.0;
+pub const CPU_SEARCH_EXTENSION_RANGE: f32 = 8.0;
+
+pub const GPU_SEARCH_CEILING_SSIM_THRESHOLD: f64 = 0.97;
+pub const GPU_SEARCH_GOOD_SSIM_THRESHOLD: f64 = 0.95;
+pub const GPU_SEARCH_LOW_SSIM_CRITICAL_THRESHOLD: f64 = 0.90;
 pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 // --- CRF Estimation Formulas ---
@@ -2109,6 +2172,7 @@ pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 // --- Exploration Confidence Weights (Wave 11) ---
 pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
 pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
+pub const GPU_SEARCH_PREDICTION_ACCURACY_BASE: f64 = 0.95;
 pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
 pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
 
@@ -2241,12 +2305,82 @@ pub const RETRY_DELAY_LONG_MS: u64 = 100;
 pub const GPU_NEGATIVE_CACHE_TTL_SECS: u64 = 5;
 
 // --- Codec & Format Names (Wave 15) ---
+pub const STR_UNKNOWN: &str = "unknown";
+pub const STR_NONE: &str = "none";
+pub const STR_EXACT: &str = "exact";
+
+pub const CS_SRGB_UPPER: &str = "sRGB";
+pub const CS_GRAYSCALE: &str = "Grayscale";
+
+pub const VAL_LOSSLESS: &str = "Lossless";
+pub const VAL_LOSSY: &str = "Lossy";
+pub const VAL_HDR: &str = "HDR";
+pub const VAL_SD: &str = "SD";
+
+pub const FFMPEG_LOGLEVEL_ERROR: &str = "error";
+pub const FFMPEG_PRINT_FORMAT_JSON: &str = "json";
+
+pub const CS_BT709: &str = "bt709";
+pub const CS_BT2020: &str = "bt2020nc";
+pub const CS_SRGB: &str = "srgb";
+pub const CS_ADOBE_RGB: &str = "adobergb";
+pub const CS_GBR: &str = "gbr";
+pub const CS_RGB: &str = "rgb";
+pub const CS_GBRP: &str = "gbrp";
+
+pub const TRC_SMPTE2084: &str = "smpte2084";
+pub const TRC_ARIB_STD_B67: &str = "arib-std-b67";
+
+pub const LIB_X265: &str = "libx265";
+pub const LIB_SVTAV1: &str = "libsvtav1";
+pub const LIB_AV2: &str = "libav2";
+pub const LIB_VVENC: &str = "libvvenc";
+
+pub const AUDIO_CODEC_AAC: &str = "aac";
+pub const AUDIO_CODEC_ALAC: &str = "alac";
+pub const AUDIO_CODEC_OPUS: &str = "opus";
+pub const AUDIO_CODEC_VORBIS: &str = "vorbis";
+pub const AUDIO_CODEC_FLAC: &str = "flac";
+pub const AUDIO_CODEC_PCM: &str = "pcm";
+pub const AUDIO_CODEC_WAV: &str = "wav";
+pub const AUDIO_CODEC_COPY: &str = "copy";
+
+pub const BITRATE_256K: &str = "256k";
+pub const BITRATE_192K: &str = "192k";
+
+pub const FFMPEG_ARG_FPS_MODE: &str = "-fps_mode";
+pub const FFMPEG_VAL_1000: &str = "1000";
+
+pub const PIX_FMT_YUV420P: &str = "yuv420p";
+pub const PIX_FMT_YUV420P10LE: &str = "yuv420p10le";
+pub const PIX_FMT_YUV422P: &str = "yuv422p";
+pub const PIX_FMT_YUV422P10LE: &str = "yuv422p10le";
+pub const PIX_FMT_YUV444P: &str = "yuv444p";
+pub const PIX_FMT_YUV444P10LE: &str = "yuv444p10le";
+pub const PIX_FMT_RGBA: &str = "rgba";
+pub const PIX_FMT_RGB24: &str = "rgb24";
+pub const PIX_FMT_GRAY: &str = "gray";
+pub const PIX_FMT_NV12: &str = "nv12";
+pub const PIX_FMT_P010LE: &str = "p010le";
+
 pub const CODEC_HEVC: &str = "hevc";
 pub const CODEC_AV1: &str = "av1";
 pub const CODEC_H264: &str = "h264";
 pub const CODEC_VP9: &str = "vp9";
 pub const CODEC_PNG: &str = "png";
 pub const CODEC_JXL: &str = "jxl";
+pub const CODEC_AVIF: &str = "avif";
+pub const CODEC_WEBP: &str = "webp";
+
+pub const LABEL_JXL: &str = "JXL";
+pub const LABEL_AVIF: &str = "AVIF";
+pub const LABEL_WEBP: &str = "WebP";
+pub const LABEL_HEVC: &str = "HEVC";
+pub const LABEL_AV1: &str = "AV1";
+pub const LABEL_PNG: &str = "PNG";
+pub const LABEL_JPEG: &str = "JPEG";
+pub const LABEL_GIF: &str = "GIF";
+pub const LABEL_HEIC: &str = "HEIC";
 pub const FORMAT_JPEG: &str = "jpeg";
 pub const FORMAT_JPG: &str = "jpg";
 
@@ -2381,6 +2515,7 @@ pub const TIFF_BE: &[u8] = &[0x4D, 0x4D, 0x00, 0x2A];
 pub const BIGTIFF_LE: &[u8] = &[0x49, 0x49, 0x2B, 0x00];
 pub const BIGTIFF_BE: &[u8] = &[0x4D, 0x4D, 0x00, 0x2B];
 pub const GIFSKI_ARG_FAST: &str = "--fast";
+pub const GIFSKI_ARG_OUTPUT: &str = "--output";
 
 pub const AVIFENC_ARG_LOSSLESS: &str = "--lossless";
 pub const AVIFENC_ARG_SPEED: &str = "--speed";
@@ -2522,6 +2657,10 @@ pub const SEARCH_ITERATIONS_MAX_QUALITY: u32 = 10;
 pub const QUALITY_EST_MIN: f64 = 10.0;
 pub const QUALITY_EST_MAX: f64 = 100.0;
 pub const QUALITY_EST_BPP_LOG_SCALE: f64 = 12.0;
+
+// --- Dolby Vision Constants ---
+/// Default compatibility ID for Dolby Vision Profile 8 (8.1).
+pub const DV_PROFILE8_DEFAULT_COMPAT_ID: u8 = 1;
 
 #[cfg(test)]
 mod tests {

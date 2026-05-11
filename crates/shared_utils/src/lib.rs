@@ -269,6 +269,10 @@ impl std::ops::DivAssign for Rational {
     }
 }
 
+/// Centralized static log messages and themed logging.
+#[macro_use]
+pub mod static_logs;
+
 /// Cache system for analysis results.
 pub mod analysis_cache;
 /// Batch processing engine for handling multiple files.
@@ -359,7 +363,6 @@ pub mod video_explorer;
 // mod video_explorer_tests;
 // #[cfg(test)]
 // mod image_detection_tests;
-pub mod macos_ui;
 /// Video quality analytics and scoring.
 pub mod video_quality_detector;
 /// Metadata-aware `XMP` merging logic.
@@ -379,10 +382,8 @@ pub mod app_error;
 pub mod ffprobe_json;
 /// Robust file copying with retry logic.
 pub mod file_copier;
-/// High-bit-depth `HDR` image decoding.
-pub mod hdr_decode;
-/// `HDR` and Color Space utility functions.
-pub mod hdr_utils;
+/// `HDR` and Color Space unification.
+pub mod hdr;
 /// Safe numeric casting with saturation and range checks.
 pub mod numeric_cast;
 /// Verification of byte-exact media stream identity.
@@ -423,7 +424,6 @@ pub mod msssim_progress;
 pub mod msssim_parallel;
 
 /// Asynchronous and robust error logging system.
-pub mod error_logging;
 /// Shared terminal and file logging initialization.
 pub mod logging;
 
@@ -431,8 +431,6 @@ pub mod logging;
 pub mod common_utils;
 
 /// `AVIF` and `AV1` bitstream health verification.
-pub mod avif_av1_health;
-/// Primitive I/O and filesystem helpers.
 pub mod io_utils;
 /// `JXL` specific bitstream and identification utilities.
 pub mod jxl_utils;
@@ -468,10 +466,8 @@ pub mod database_vector;
 #[cfg(feature = "jpegxl-ffi")]
 pub mod depth_channel;
 /// Gainmap to `HDR` synthesis pipeline.
-pub mod hdr_synthesis;
-/// High-level image analyzer interface.
-pub mod image_analyzer;
 /// Image type and format detection.
+pub mod image_analyzer;
 pub mod image_detection;
 /// Image format definitions and capabilities.
 pub mod image_formats;
@@ -484,9 +480,6 @@ pub mod image_metrics;
 /// Quality database for image matching.
 pub mod image_quality_db;
 /// Quality-preserving image conversion recommender.
-pub mod image_recommender;
-/// Image-specific error types.
-pub mod img_errors;
 /// Apple Live Photo identification and grouping.
 pub mod live_photo;
 /// Loop-intent identification and 7-layer decision system.
@@ -498,9 +491,6 @@ pub mod media_meta_utils;
 /// Content-based penetrating detection (bypasses fake metadata).
 pub mod media_penetration;
 /// Quality-preserving video conversion recommender.
-pub mod video_recommender;
-
-pub use blake3;
 pub use database::{SampleMatch, lookup_similar_samples};
 #[cfg(feature = "jpegxl-ffi")]
 pub use depth_channel::{
@@ -514,9 +504,12 @@ pub use loop_intent::{
     is_lossless_exploration_safe, should_use_gif_fast_path,
 };
 
-pub use hdr_synthesis::{
-    GainMapParams, HdrIntermediateFormat, convert_heic_with_gainmap_to_jxl_hdr,
+pub use hdr::{
+    GainMapParams, HdrIntermediateFormat, color_info_to_cicp, color_info_to_ffmpeg_args,
+    color_info_to_x265_hdr_params, convert_heic_with_gainmap_to_jxl_hdr,
     convert_ultrahdr_jpeg_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_migration,
+    decode_hdr_image_to_png16, dv_x265_profile_string, extract_dv_rpu, extract_hevc_bitstream,
+    get_hdr_pix_fmt, is_dovi_tool_available, should_use_hdr_decode,
 };
 
 pub use batch::*;
@@ -619,10 +612,13 @@ pub use video_explorer::{
 };
 
 pub use modern_ui::{
-    ExploreProgressState, ProgressStyle, colors, format_size, format_size_change, format_size_diff,
-    print_error, print_info, print_result_box, print_stage, print_substage, print_success,
+    ColorGuard, ExploreProgressState, LogLevel, LogRouter, LogTarget, ProgressStyle, TerminalColor,
+    TerminalLogger, UpstreamToolLogger, colors, fmt_compress_status, fmt_crf, fmt_final_result,
+    fmt_iterations, fmt_search_result, fmt_size_pct, fmt_ssim, format_size, format_size_change,
+    format_size_diff, init_enhanced_logging, init_terminal_logger, print_error, print_header,
+    print_info, print_result_box, print_separator, print_stage, print_substage, print_success,
     print_warning, progress_style, render_colored_progress, render_progress_bar, spinner_dots,
-    spinner_frame, symbols,
+    spinner_frame, styles, symbols, terminal_logger,
 };
 
 pub use lru_cache::{CacheEntry, LruCache, SerializableCache};
@@ -664,17 +660,6 @@ pub use crf_constants::{
     CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
     EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS, HEVC_CRF_DEFAULT, HEVC_CRF_MAX,
     HEVC_CRF_MIN, HEVC_CRF_PRACTICAL_MAX, HEVC_CRF_VISUALLY_LOSSLESS, NORMAL_MAX_ITERATIONS,
-    VP9_CRF_DEFAULT, VP9_CRF_MAX, VP9_CRF_MIN, X264_CRF_DEFAULT, X264_CRF_MAX, X264_CRF_MIN,
-};
-
-pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};
-
-pub use hdr_decode::{decode_hdr_image_to_png16, needs_decode};
-
-pub use hdr_utils::{
-    color_info_to_cicp, color_info_to_ffmpeg_args, color_info_to_x265_hdr_params,
-    dv_x265_profile_string, extract_dv_rpu, extract_hevc_bitstream, get_hdr_pix_fmt,
-    is_dovi_tool_available, should_use_hdr_decode,
 };
 
 pub use stream_size::{
@@ -723,17 +708,6 @@ pub use logging::{
     LogConfig, flush_logs, init as init_logging, log_external_tool, log_operation_end,
     log_operation_start,
 };
-
-// Enhanced logging with 24-bit color support
-pub mod enhanced_logging;
-pub use enhanced_logging::{
-    LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger,
-    init as init_enhanced_logging,
-};
-
-// Modern terminal logging with color safety
-pub mod terminal_logging;
-pub use terminal_logging::{ColorGuard, TerminalLogger, init_terminal_logger, terminal_logger};
 
 pub use common_utils::{
     compute_relative_path, copy_file_with_context, ensure_dir_exists, ensure_parent_dir_exists,

@@ -6,12 +6,13 @@ use crate::file_copier::{
 use crate::report::print_summary;
 use crate::smart_file_copier::fix_extension_if_mismatch;
 use anyhow::Result;
-use log::{error, info, warn};
+
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tracing::warn;
 
 pub trait CliProcessingResult {
     fn is_skipped(&self) -> bool;
@@ -152,18 +153,25 @@ where
     );
 
     if files.is_empty() {
-        warn!(
-            "No video files found in directory: {}\n\
-             Supported video formats: {}\n\
-             Use img for images",
-            input.display(),
-            SUPPORTED_VIDEO_EXTENSIONS.join(", ")
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_BATCH,
+            &format!(
+                "No video files found in directory: {}\n\
+                 Supported video formats: {}\n\
+                 Use img for images",
+                input.display(),
+                SUPPORTED_VIDEO_EXTENSIONS.join(", ")
+            )
         );
         return Ok(());
     }
 
-    info!("Found {} video files to process", files.len());
-    info!(
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_BATCH,
+        &format!("Found {} video files to process", files.len())
+    );
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_STRATEGY,
         "Strategy: deeper paths -> lighter workload -> shorter duration -> smaller files -> lower resolution"
     );
 
@@ -180,16 +188,14 @@ where
             Ok(cp) => {
                 // Detect when user deleted the output directory to start fresh:
                 // clear old checkpoint state so all files get reprocessed.
-                if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
-                    warn!(
-                        "Checkpoint: Output directory missing; failed to reset session state: {e}"
-                    );
-                }
 
                 if cp.is_resume_mode() {
-                    info!(
-                        "📂 Resume: skipping {} already completed files",
-                        cp.completed_count()
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        &format!(
+                            "📂 Resume: skipping {} already completed files",
+                            cp.completed_count()
+                        )
                     );
                 } else {
                     crate::clear_processed_list();
@@ -197,7 +203,10 @@ where
                 Some(cp)
             }
             Err(e) => {
-                warn!("Checkpoint: Initialization failed (resume mode disabled): {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    &format!("Initialization failed (resume mode disabled): {e}")
+                );
                 None
             }
         }
@@ -211,10 +220,9 @@ where
             .map(|f| match crate::io_utils::metadata_with_retry(f) {
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
-                    warn!(
-                        "Disk Check: Failed to retrieve metadata for {}; skipping in total size estimation: {}",
-                        f.display(),
-                        err
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_DISK,
+                        &format!("Failed to retrieve metadata for {}; skipping in total size estimation: {}", f.display(), err)
                     );
                     0
                 }
@@ -237,11 +245,15 @@ where
                      💡 Free up space or specify a different output volume via --output."
                 );
             }
-            info!(
-                "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
-                crate::numeric_cast::u64_to_f64(avail) / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64),
-                crate::numeric_cast::u64_to_f64(required)
-                    / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64)
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DISK,
+                &format!(
+                    "Disk space OK: {:.2} GB available, {:.2} GB required",
+                    crate::numeric_cast::u64_to_f64(avail)
+                        / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64),
+                    crate::numeric_cast::u64_to_f64(required)
+                        / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64)
+                )
             );
         }
     }
@@ -273,14 +285,17 @@ where
         let _ = std::fs::create_dir_all(debug_dir);
     }
 
-    info!(
-        "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
-        parallel_tasks,
-        thread_config.child_threads,
-        std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_THREAD,
+        &format!(
+            "Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
+            parallel_tasks,
+            thread_config.child_threads,
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+        )
     );
     if let Some(hint) = crate::thread_manager::memory_cap_hint() {
-        info!("   💡 {hint}");
+        crate::log_info!(crate::static_logs::messages::LABEL_THREAD, hint);
     }
 
     let pool = match rayon::ThreadPoolBuilder::new()
@@ -289,8 +304,11 @@ where
     {
         Ok(pool) => pool,
         Err(err) => {
-            warn!(
-                "Thread Manager: Failed to initialize {parallel_tasks}-thread video pool: {err}. Falling back to sequential execution (1 thread)."
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_THREAD,
+                &format!(
+                    "Failed to initialize {parallel_tasks}-thread video pool: {err}. Falling back to sequential execution (1 thread)."
+                )
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
@@ -307,7 +325,14 @@ where
                 return;
             }
 
-            let display_name = file.file_name().unwrap_or_default().to_string_lossy();
+            let display_name = file.file_name().map_or_else(
+            || {
+                // Log anomaly if file name is unexpectedly missing.
+                warn!("UI Info: File name is missing for a processed file. Defaulting to empty string for display.");
+                std::borrow::Cow::from("") // Return an empty Cow<'_, str> as a display fallback
+            },
+            |name| name.to_string_lossy()
+        );
             progress_bar.set_message(&display_name);
 
             // Fix extension by content first; after fix, only treat as video if extension still
@@ -319,10 +344,16 @@ where
             } {
                 Ok(path) => path,
                 Err(err) => {
-                    error!("❌ Extension fix failed for {}: {}", file.display(), err);
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        &format!("Extension fix failed for {}: {}", file.display(), err)
+                    );
                     if let Some(reason) = disk_full_pause_reason(&err.to_string()) {
                         if pause_controller.request_pause(file, reason.clone()) {
-                            warn!("⏸️ Batch paused at {}: {}", file.display(), reason);
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_BATCH,
+                                &format!("Batch paused at {}: {}", file.display(), reason)
+                            );
                         }
                         return;
                     }
@@ -345,11 +376,14 @@ where
                         config.base_dir.as_deref(),
                         true,
                     ) {
-                        error!("❌ Failed to copy {}: {}", fixed.display(), copy_err);
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_COPY,
+                            &format!("Failed to copy {}: {}", fixed.display(), copy_err)
+                        );
                     } else {
-                        info!(
-                            "📋 Copied (content not video after fix): {}",
-                            fixed.display()
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_COPY,
+                            &format!("Copied (content not video after fix): {}", fixed.display())
                         );
                     }
                 }
@@ -363,9 +397,12 @@ where
                 && cp.is_completed(&fixed)
             {
                 if crate::progress_mode::is_verbose_mode() {
-                    info!(
-                        "   SKIP: {} (Already recorded as completed in checkpoint)",
-                        fixed.file_name().unwrap_or_default().to_string_lossy()
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        &format!(
+                            "SKIP: {} (Already recorded as completed in checkpoint)",
+                            fixed.file_name().unwrap_or_default().to_string_lossy()
+                        )
                     );
                 }
                 skipped.fetch_add(1, Ordering::Relaxed);
@@ -386,17 +423,23 @@ where
                         // Peer module (img/vid) owns this file. Do NOT copy here —
                         // copying would race the peer and produce an ambiguous
                         // collision in the output tree.
-                        info!(
-                            "⏭️ {} → IGNORE ({})",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            result.skip_reason().unwrap_or("handled by peer module")
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_BATCH,
+                            &format!(
+                                "⏭️ {} → IGNORE ({})",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                result.skip_reason().unwrap_or("handled by peer module")
+                            )
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
                     } else if result.is_skipped() {
-                        info!(
-                            "⏭️ {} → SKIP ({})",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            result.skip_reason().unwrap_or("unknown")
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_BATCH,
+                            &format!(
+                                "⏭️ {} → SKIP ({})",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                result.skip_reason().unwrap_or("unknown")
+                            )
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
 
@@ -407,14 +450,24 @@ where
                             config.base_dir.as_deref(),
                             true,
                         ) {
-                            error!("❌ Failed to copy skipped file {}: {}", fixed.display(), copy_err);
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_COPY,
+                                &format!(
+                                    "Failed to copy skipped file {}: {}",
+                                    fixed.display(),
+                                    copy_err
+                                )
+                            );
                         }
                     } else if result.is_success() {
-                        info!(
-                            "{} → {} ({}) ✅",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            result.output_path().unwrap_or("?"),
-                            result.message()
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_BATCH,
+                            &format!(
+                                "{} → {} ({}) ✅",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                result.output_path().unwrap_or("?"),
+                                result.message()
+                            )
                         );
                         succeeded.fetch_add(1, Ordering::Relaxed);
                         crate::progress_mode::video_processed_success();
@@ -434,23 +487,32 @@ where
                         if let Some(cp) = checkpoint.as_ref()
                             && let Err(err) = cp.mark_completed(&fixed)
                         {
-                            warn!(
-                                "Checkpoint: Integrity failure marking file as completed (path={}): {}",
-                                fixed.display(),
-                                err
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_CHECKPOINT,
+                                &format!(
+                                    "Integrity failure marking file as completed (path={}): {}",
+                                    fixed.display(),
+                                    err
+                                )
                             );
                         }
                     } else {
                         if let Some(reason) = disk_full_pause_reason(result.message()) {
                             if pause_controller.request_pause(&fixed, reason.clone()) {
-                                warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_BATCH,
+                                    &format!("Batch paused at {}: {}", fixed.display(), reason)
+                                );
                             }
                             return;
                         }
-                        info!(
-                            "{} → FAILED ({}) ❌",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            result.message()
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_BATCH,
+                            &format!(
+                                "{} → FAILED ({}) ❌",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                result.message()
+                            )
                         );
                         failed.fetch_add(1, Ordering::Relaxed);
                         errors
@@ -466,19 +528,22 @@ where
 
                     // Fallback: search the error chain if direct downcast fails (handles multiple wrapping layers)
                     let ue_from_chain = if maybe_ue.is_none() {
-                        err.chain().find_map(|e| e.downcast_ref::<crate::unified_error::UnifiedError>())
+                        err.chain()
+                            .find_map(|e| e.downcast_ref::<crate::unified_error::UnifiedError>())
                     } else {
                         maybe_ue
                     };
 
-                    let is_skip = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::is_skip)
+                    let is_skip = ue_from_chain
+                        .is_some_and(crate::unified_error::UnifiedError::is_skip)
                         || error_msg.contains("Iteration limit exceeded")
                         || error_msg.contains("Optimization target not met")
                         || error_msg.contains("Quality validation failed")
                         || error_msg.contains("Compression failed")
                         || error_msg.contains("already exists");
 
-                    let should_copy = ue_from_chain.is_some_and(crate::unified_error::UnifiedError::should_copy_original)
+                    let should_copy = ue_from_chain
+                        .is_some_and(crate::unified_error::UnifiedError::should_copy_original)
                         || (is_skip && !error_msg.contains("already exists")); // Don't copy if it already exists in output
 
                     let category = ue_from_chain.map_or_else(
@@ -493,10 +558,13 @@ where
                     );
 
                     if is_skip {
-                        info!(
-                            "⏭️ {} → SKIP ({})",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            error_msg
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_BATCH,
+                            &format!(
+                                "⏭️ {} → SKIP ({})",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                error_msg
+                            )
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
 
@@ -508,19 +576,32 @@ where
                                 config.base_dir.as_deref(),
                                 true,
                             ) {
-                                error!("❌ Failed to copy skipped file {}: {}", fixed.display(), copy_err);
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_COPY,
+                                    &format!(
+                                        "Failed to copy skipped file {}: {}",
+                                        fixed.display(),
+                                        copy_err
+                                    )
+                                );
                             }
                         }
                     } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
                         if pause_controller.request_pause(&fixed, reason.clone()) {
-                            warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_BATCH,
+                                &format!("Batch paused at {}: {}", fixed.display(), reason)
+                            );
                         }
                         return;
                     } else {
-                        error!(
-                            "❌ {} failed: {}",
-                            fixed.file_name().unwrap_or_default().to_string_lossy(),
-                            err
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_ANOMALY,
+                            &format!(
+                                "{} failed: {}",
+                                fixed.file_name().unwrap_or_default().to_string_lossy(),
+                                err
+                            )
                         );
                         failed.fetch_add(1, Ordering::Relaxed);
                         errors
@@ -530,7 +611,10 @@ where
 
                         if category == crate::unified_error::ErrorCategory::Fatal {
                             fatal_stop.store(true, Ordering::SeqCst);
-                            error!("🛑 Fatal error encountered, stopping batch processing.");
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_ANOMALY,
+                                "🛑 Fatal error encountered, stopping batch processing."
+                            );
                         }
 
                         crate::progress_mode::video_processed_failure();
@@ -576,16 +660,25 @@ where
     if let Some(cp) = checkpoint {
         if batch_result.paused {
             if let Err(err) = cp.release_lock() {
-                warn!("Checkpoint: Failed to release file lock during batch pause: {err}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    &format!("Failed to release file lock during batch pause: {err}")
+                );
             }
         } else if batch_result.failed == 0 {
             if let Err(err) = cp.cleanup() {
-                warn!(
-                    "Checkpoint: 100% success reached, but failed to purge completed-list state: {err}"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    &format!(
+                        "100% success reached, but failed to purge completed-list state: {err}"
+                    )
                 );
             }
         } else if let Err(err) = cp.release_lock() {
-            warn!("Checkpoint: Failed to release file lock after batch failure: {err}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                &format!("Failed to release file lock after batch failure: {err}")
+            );
         }
     }
 
@@ -602,33 +695,55 @@ where
     }
 
     if let Some(ref output_dir) = config.output {
-        info!("\n📦 Copying unsupported files...");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_BATCH,
+            "Copying unsupported files..."
+        );
         let copy_result = copy_unsupported_files(input, output_dir, recursive);
         if copy_result.copied > 0 {
-            info!("📦 Copied {} unsupported files", copy_result.copied);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_COPY,
+                &format!("Copied {} unsupported files", copy_result.copied)
+            );
         }
         if copy_result.failed > 0 {
-            error!(
-                "IO Error: Failed to copy {} files to output directory",
-                copy_result.failed
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_COPY,
+                &format!(
+                    "Failed to copy {} files to output directory",
+                    copy_result.failed
+                )
             );
         }
 
-        info!("\n🔍 Verifying output completeness...");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_VERIFY,
+            "Verifying output completeness..."
+        );
         let verify = verify_output_completeness(input, output_dir, recursive);
-        info!("{}", verify.message);
+        crate::log_info!(crate::static_logs::messages::LABEL_VERIFY, &verify.message);
         if !verify.passed {
-            warn!(
-                "Verification: File count mismatch between input and output directories; some files may have been lost"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_VERIFY,
+                "File count mismatch between input and output directories; some files may have been lost"
             );
         }
 
         if let Some(ref base_dir) = config.base_dir {
-            info!("\n📁 Preserving directory metadata...");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "Preserving directory metadata..."
+            );
             if let Err(e) = crate::metadata::preserve_directory(base_dir, output_dir) {
-                error!("Metadata: Failed to sync directory timestamps/permissions: {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to sync directory timestamps/permissions: {e}")
+                );
             } else {
-                info!("✅ Directory metadata preserved");
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    "Directory metadata preserved"
+                );
             }
         }
     }
@@ -677,22 +792,27 @@ where
                 config.base_dir.as_deref(),
                 true,
             ) {
-                error!("IO Error: Failed to copy non-video file to output directory: {copy_err}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    &format!("Failed to copy non-video file to output directory: {copy_err}")
+                );
             } else {
-                info!(
-                    "📋 Copied to output (not a video after content check): {}",
-                    input.display()
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    &format!(
+                        "Copied to output (not a video after content check): {}",
+                        input.display()
+                    )
                 );
             }
         }
+        let supported = SUPPORTED_VIDEO_EXTENSIONS.join(", ");
         anyhow::bail!(
-            "❌ Not a video file: {}\n\
-             💡 Extension (after content fix): .{}\n\
-             💡 Supported video formats: {}\n\
+            "❌ Not a video file: {input_display}\n\
+             💡 Extension (after content fix): .{ext_str}\n\
+             💡 Supported video formats: {supported}\n\
              💡 Use img for images",
-            input.display(),
-            ext_str,
-            SUPPORTED_VIDEO_EXTENSIONS.join(", ")
+            input_display = input.display(),
         );
     }
 
@@ -703,23 +823,34 @@ where
         }
     };
 
-    info!("");
-    info!("📊 Conversion Summary:");
-    info!(
-        "   Input:  {} ({} bytes)",
-        result.input_path(),
-        result.input_size()
+    crate::log_info!(crate::static_logs::messages::LABEL_REPORT, "");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        crate::static_logs::messages::CONVERSION_SUMMARY
+    );
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        &format!(
+            "   Input:  {path} ({size} bytes)",
+            path = result.input_path(),
+            size = result.input_size()
+        )
     );
     if let Some(out_path) = result.output_path() {
-        info!(
-            "   Output: {} ({} bytes)",
-            out_path,
-            result
-                .output_size()
-                .expect("Failed to parse integer or missing required value")
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_REPORT,
+            &format!(
+                "   Output: {out_path} ({size} bytes)",
+                size = result
+                    .output_size()
+                    .expect("Failed to parse integer or missing required value")
+            )
         );
     }
-    info!("   Result: {}", result.message());
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        &format!("   Result: {message}", message = result.message())
+    );
 
     // 📡 Audit: Log live decision to JSONL if debug/ exists
     log_live_audit_to_jsonl(

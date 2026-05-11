@@ -24,16 +24,20 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) {
             Ok(Some(value)) => {
                 if let Err(e) = xattr::set(dst, key, &value) {
                     // Non-fatal: target filesystem may not support xattrs (e.g. FAT32, some network mounts)
-                    eprintln!("⚠️ [metadata] Could not copy xattr '{key}': {e}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!("Could not copy xattr '{key}': {e}")
+                    );
                 }
             }
             Ok(None) => {} // not present on source, nothing to do
             Err(e) => {
-                eprintln!(
-                    "⚠️ [metadata] Could not read source xattr '{}' from {}: {}",
-                    key,
-                    src.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Could not read source xattr '{key}' from {path}: {e}",
+                        path = src.display()
+                    )
                 );
             }
         }
@@ -45,23 +49,28 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) {
             Ok(Some(_)) => match xattr::get(dst, key) {
                 Ok(Some(_)) => {}
                 Ok(None) => {
-                    eprintln!(
-                        "⚠️ [metadata] xattr '{key}' present on source but missing on destination after copy attempt."
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "xattr '{key}' present on source but missing on destination after copy attempt."
+                        )
                     );
                 }
                 Err(e) => {
-                    eprintln!(
-                        "⚠️ [metadata] Could not verify destination xattr '{}' on {}: {}",
-                        key,
-                        dst.display(),
-                        e
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Could not verify destination xattr '{key}' on {path}: {e}",
+                            path = dst.display()
+                        )
                     );
                 }
             },
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "⚠️ [metadata] Could not re-read source xattr '{key}' during verification: {e}"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Could not re-read source xattr '{key}' during verification: {e}")
                 );
             }
         }

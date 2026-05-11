@@ -1,7 +1,14 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use anyhow::{Context, Result};
+use blake3::Hasher;
 use clap::Parser;
 use dev::media_index::{MediaIndex, now_unix};
-use shared_utils::blake3::Hasher;
 use shared_utils::image_detection::{ImageType, detect_image};
 use shared_utils::media_index_types::MediaIndexRow;
 use shared_utils::video_detection::detect_video;
@@ -35,7 +42,7 @@ fn main() -> Result<()> {
 
     let db = MediaIndex::open(&args.db)?;
     let db_display = args.db.display();
-    println!("📂 Initialized Media Index at {db_display}");
+    log_detail!("📂 Initialized Media Index at {db_display}");
 
     let mut count = 0;
     let mut skipped = 0;
@@ -68,23 +75,23 @@ fn main() -> Result<()> {
                 count += 1;
                 if count % 100 == 0 {
                     let total = skipped + count;
-                    println!("🚀 Indexed {count}/{total} files...");
+                    log_detail!("🚀 Indexed {count}/{total} files...");
                 }
             }
             Err(e) => {
                 let path_display = path.display();
-                eprintln!("⚠️ Failed to index {path_display}: {e}");
+                log_detail!("⚠️ Failed to index {path_display}: {e}");
                 errors += 1;
             }
         }
     }
 
-    println!("\n✅ Indexing Complete!");
-    println!("   - New Records:  {count}");
-    println!("   - Skipped Existing: {skipped}");
-    println!("   - Errors:       {errors}");
+    log_detail!("\n✅ Indexing Complete!");
+    log_detail!("   - New Records:  {count}");
+    log_detail!("   - Skipped Existing: {skipped}");
+    log_detail!("   - Errors:       {errors}");
     let total_rows = db.count_records()?;
-    println!("   - Total Rows:   {total_rows}");
+    log_detail!("   - Total Rows:   {total_rows}");
 
     Ok(())
 }

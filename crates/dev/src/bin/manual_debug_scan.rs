@@ -1,10 +1,17 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use std::path::Path;
 use walkdir::WalkDir;
 
 fn main() {
-    println!("Running test...");
+    log_detail!("Running test...");
     manual_debug_scan_debug_dir_only();
-    println!("✅ Test completed!");
+    log_detail!("✅ Test completed!");
 }
 
 // Manual, header-only debug scanner for local `debug/` media.
@@ -21,8 +28,8 @@ fn main() {
 fn manual_debug_scan_debug_dir_only() {
     // Disabled by default to avoid accidental scans of private media.
     if std::env::var("MFB_RUN_DEBUG_SCAN").is_err() {
-        eprintln!(
-            "Skipped manual debug scan. To run set MFB_RUN_DEBUG_SCAN=1 and optionally MFB_DEBUG_DIR=debug/media"
+        log_detail!(
+            "Skipped manual debug scan. To run set MFB_RUN_DEBUG_SCAN=1 and optionally MFB_DEBUG_DIR=debug/media",
         );
         return;
     }
@@ -30,9 +37,9 @@ fn manual_debug_scan_debug_dir_only() {
     let debug_dir = std::env::var("MFB_DEBUG_DIR").unwrap_or_else(|_| "debug/media".into());
     let root = Path::new(&debug_dir);
     if !root.exists() {
-        eprintln!(
+        log_detail!(
             "Debug path {} not found; set MFB_DEBUG_DIR to your local debug dir.",
-            root.display()
+            root.display(),
         );
         return;
     }
@@ -64,21 +71,21 @@ fn manual_debug_scan_debug_dir_only() {
             continue;
         }
         scanned += 1;
-        eprintln!("--- Scanning: {}", p.display());
+        log_detail!("--- Scanning: {}", p.display());
 
         match shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
             Some(meta) => {
                 let verdict = shared_utils::identify_loop_intent(&meta);
                 let verd_str = format!("{verdict:?}");
 
-                eprintln!(
+                log_detail!(
                     "size={} palette={:?} loop={:?} alpha={} payload_var={:?} verdict={}",
                     meta.file_size_bytes,
                     meta.palette_size,
                     meta.loop_count,
                     meta.flags.streams.has_transparency,
                     meta.frame_payload_variation,
-                    verd_str
+                    verd_str,
                 );
 
                 if matches!(verdict, shared_utils::LoopIntentVerdict::LoopStrong(_)) {
@@ -90,12 +97,12 @@ fn manual_debug_scan_debug_dir_only() {
                 }
             }
             None => {
-                eprintln!("LoopMeta::from_gif_path failed for {}", p.display());
+                log_detail!("LoopMeta::from_gif_path failed for {}", p.display());
             }
         }
     }
 
-    eprintln!("Scanned {scanned} GIF(s) (limit {cap}).");
+    log_detail!("Scanned {scanned} GIF(s) (limit {cap}).");
 
     // Optional deeper sampling run: pick a small random subset of UNDECIDED
     // files and run the library's `should_keep_as_gif_with_path` for a
@@ -106,14 +113,14 @@ fn manual_debug_scan_debug_dir_only() {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(5usize)
             .min(undecided.len());
-        eprintln!("Deep-checking {sample_count} random UNDECIDED sample(s)");
+        log_detail!("Deep-checking {sample_count} random UNDECIDED sample(s)");
 
         // Simple linear-congruential generator for deterministic-ish sampling
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or_else(
                 |err| {
-                    eprintln!("System clock before UNIX_EPOCH; using fixed sampling seed: {err}");
+                    log_detail!("System clock before UNIX_EPOCH; using fixed sampling seed: {err}");
                     0xA5A5_5A5A_D3C3_B4B4
                 },
                 |d| (d.as_nanos() & 0xFFFF_FFFF_FFFF_FFFF) as u64,
@@ -136,17 +143,17 @@ fn manual_debug_scan_debug_dir_only() {
             let p = undecided
                 .get(idx)
                 .unwrap_or_else(|| panic!("missing index {idx}"));
-            eprintln!("--- Deep sample: {}", p.display());
+            log_detail!("--- Deep sample: {}", p.display());
             if let Some(meta) = shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
                 let verdict = shared_utils::assess_loop_intent_from_meta(&meta, Some(p));
-                eprintln!(
+                log_detail!(
                     "Deep verdict: {:?} (duration={:.2}s,size={})",
                     verdict,
                     meta.duration_secs.unwrap_or(0.0),
-                    meta.file_size_bytes
+                    meta.file_size_bytes,
                 );
             } else {
-                eprintln!("Deep probe failed for {}", p.display());
+                log_detail!("Deep probe failed for {}", p.display());
             }
         }
     }

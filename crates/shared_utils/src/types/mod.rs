@@ -111,7 +111,7 @@ mod property_tests {
         #[test]
         fn crf_cache_key_round_trip_hevc(value in 0.0f32..51.0f32) {
             let original = Crf::<HevcEncoder>::new(value).unwrap_or_else(|e| panic!("error: {e:?}"));
-            let key = original.to_cache_key();
+            let key = original.to_cache_key().expect("Valid CRF must yield cache key");
             let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let diff = (original.value() - recovered.value()).abs();
@@ -124,7 +124,7 @@ mod property_tests {
         #[test]
         fn crf_cache_key_round_trip_av1(value in 0.0f32..63.0f32) {
             let original = Crf::<Av1Encoder>::new(value).unwrap_or_else(|e| panic!("error: {e:?}"));
-            let key = original.to_cache_key();
+            let key = original.to_cache_key().expect("Valid CRF must yield cache key");
             let recovered = Crf::<Av1Encoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let diff = (original.value() - recovered.value()).abs();

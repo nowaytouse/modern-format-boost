@@ -170,7 +170,9 @@ pub fn should_log(level: Level) -> bool {
 /// Store the "Logging system initialized" line so `progress_mode` can write it to the run log when it opens (run log is set after init).
 fn store_init_message_for_run_log(msg: String) {
     let mut guard = INIT_MESSAGE_FOR_RUN_LOG.lock().unwrap_or_else(|err| {
-        eprintln!("⚠️ [Logging] init-message mutex was poisoned; recovering state");
+        crate::progress_mode::emit_stderr(
+            "⚠️ [Logging] init-message mutex was poisoned; recovering state",
+        );
         err.into_inner()
     });
     *guard = Some(msg);
@@ -179,7 +181,9 @@ fn store_init_message_for_run_log(msg: String) {
 /// Take the stored init message and clear it so it is written to the run log exactly once.
 pub fn take_init_message_for_run_log() -> Option<String> {
     let mut guard = INIT_MESSAGE_FOR_RUN_LOG.lock().unwrap_or_else(|err| {
-        eprintln!("⚠️ [Logging] init-message mutex was poisoned during take; recovering state");
+        crate::progress_mode::emit_stderr(
+            "⚠️ [Logging] init-message mutex was poisoned during take; recovering state",
+        );
         err.into_inner()
     });
     guard.take()
@@ -192,7 +196,9 @@ static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
 /// Called by `progress_mode::set_log_file` so the run log gets complete output (all tracing + progress).
 pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
     let mut guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
-        eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned; recovering state");
+        crate::progress_mode::emit_stderr(
+            "⚠️ [Logging] run-log forwarder mutex was poisoned; recovering state",
+        );
         err.into_inner()
     });
     *guard = Some(f);
@@ -221,9 +227,7 @@ impl Write for RunLogWriter {
             let line_str = String::from_utf8_lossy(&line);
             let stripped = strip_ansi_str(line_str.trim_end_matches('\n'));
             let guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
-                eprintln!(
-                    "⚠️ [Logging] run-log forwarder mutex was poisoned during write; recovering state"
-                );
+                crate::progress_mode::emit_stderr("⚠️ [Logging] run-log forwarder mutex was poisoned during write; recovering state");
                 err.into_inner()
             });
             if let Some(ref f) = *guard {
@@ -242,7 +246,7 @@ impl Write for RunLogWriter {
             let stripped = strip_ansi_str(line.trim_end_matches('\n'));
             if !stripped.is_empty() {
                 let guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
-                    eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned during flush; recovering state");
+                    crate::progress_mode::emit_stderr("⚠️ [Logging] run-log forwarder mutex was poisoned during flush; recovering state");
                     err.into_inner()
                 });
                 if let Some(ref f) = *guard {
@@ -543,7 +547,9 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     }
 
     if CURRENT_LOG_LEVEL.set(config.level).is_err() {
-        eprintln!("⚠️ [Logging] log level was already initialized earlier; keeping previous level");
+        crate::progress_mode::emit_stderr(
+            "⚠️ [Logging] log level was already initialized earlier; keeping previous level",
+        );
     }
     std::fs::create_dir_all(&config.log_dir).with_context(|| {
         format!(

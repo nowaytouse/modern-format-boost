@@ -15,7 +15,6 @@ use postgres::Client;
 use std::io::Read;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
-use tracing::{debug, info, warn};
 
 // Import unified version management
 use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
@@ -187,9 +186,11 @@ impl AnalysisCache {
         }
 
         if total_invalidated > 0 {
-            info!(
-                "🔄 [Cache] Invalidated {} entries due to algorithm version upgrade",
-                total_invalidated
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!(
+                    "Invalidated {total_invalidated} entries due to algorithm version upgrade"
+                )
             );
 
             client.execute(
@@ -243,13 +244,30 @@ impl AnalysisCache {
                     && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
                 {
                     let data: Vec<u8> = row.get(0);
-                    if let Some(stored_checksum) = row.get::<_, Option<i64>>(2)
-                        && calculate_checksum(&data)
-                            != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                    {
-                        warn!(
-                            "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
-                            path.display()
+                    // Honest validation: If checksum is missing or invalid, treat as cache miss (None)
+                    let stored_checksum_opt = row.get::<_, Option<i64>>(2);
+                    let valid_checksum = stored_checksum_opt.and_then(|cs| {
+                        crate::numeric_cast::i64_to_u32_strict(cs, "cache_checksum")
+                    });
+
+                    let Some(checksum) = valid_checksum else {
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_CACHE,
+                            &format!(
+                                "Missing or invalid checksum for {}. Invalidating cached entry.",
+                                path.display()
+                            )
+                        );
+                        return Ok(None);
+                    };
+
+                    if calculate_checksum(&data) != checksum {
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_CACHE,
+                            &format!(
+                                "Checksum mismatch for {}. Invalidating cached entry.",
+                                path.display()
+                            )
                         );
                         return Ok(None);
                     }
@@ -257,7 +275,10 @@ impl AnalysisCache {
                     let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
                         .context("Failed to unpack cached analysis data (path hit)")?;
                     analysis.file_path = path.display().to_string();
-                    debug!("🚀 [Cache] HIT (Path) - {}", path.display());
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!("HIT (Path) - {}", path.display())
+                    );
                     return Ok(Some(analysis));
                 }
             }
@@ -274,13 +295,25 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1);
             if algorithm_version >= cache_algorithm() {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(2)
-                    && calculate_checksum(&data)
-                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                {
-                    warn!(
-                        "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
-                        path.display()
+                let stored_checksum_opt = row.get::<_, Option<i64>>(2);
+                let valid_checksum = stored_checksum_opt
+                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "cache_checksum"));
+
+                let Some(checksum) = valid_checksum else {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!(
+                            "Missing or invalid checksum for {}. Invalidating.",
+                            path.display()
+                        )
+                    );
+                    return Ok(None);
+                };
+
+                if calculate_checksum(&data) != checksum {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!("Checksum mismatch for {}. Invalidating.", path.display())
                     );
                     return Ok(None);
                 }
@@ -297,7 +330,10 @@ impl AnalysisCache {
                 )?;
 
                 analysis.file_path = path.display().to_string();
-                debug!("💎 [Cache] HIT (Hash) - {}", path.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!("HIT (Hash) - {}", path.display())
+                );
                 return Ok(Some(analysis));
             }
         }
@@ -333,20 +369,38 @@ impl AnalysisCache {
                 && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
-                    && calculate_checksum(&data)
-                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                {
-                    warn!(
-                        "Cache: Data corruption detected for {}; checksum mismatch (path index)",
-                        path.display()
+                let stored_checksum_opt = row.get::<_, Option<i64>>(1);
+                let valid_checksum = stored_checksum_opt
+                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "quality_checksum"));
+
+                let Some(checksum) = valid_checksum else {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!(
+                            "Missing or invalid checksum for {}. Invalidating.",
+                            path.display()
+                        )
+                    );
+                    return Ok(None);
+                };
+
+                if calculate_checksum(&data) != checksum {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!(
+                            "Data corruption detected for {}; checksum mismatch (path index)",
+                            path.display()
+                        )
                     );
                     return Ok(None);
                 }
 
                 let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
                     .context("Failed to unpack cached quality data (path hit)")?;
-                debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!("Quality HIT (Path) - {}", path.display())
+                );
                 return Ok(Some(analysis));
             }
         }
@@ -360,14 +414,28 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
-            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
-                && calculate_checksum(&data)
-                    != u32::try_from(stored_checksum)
-                        .expect("checksum stored as i64 but always originated from u32; fits by construction")
-            {
-                warn!(
-                    "Cache: Data corruption detected for {}; checksum mismatch (hash index)",
-                    path.display()
+            let stored_checksum_opt = row.get::<_, Option<i64>>(1);
+            let valid_checksum = stored_checksum_opt
+                .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "quality_checksum"));
+
+            let Some(checksum) = valid_checksum else {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!(
+                        "Missing or invalid checksum for {}. Invalidating.",
+                        path.display()
+                    )
+                );
+                return Ok(None);
+            };
+
+            if calculate_checksum(&data) != checksum {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!(
+                        "Data corruption detected for {}; checksum mismatch (hash index)",
+                        path.display()
+                    )
                 );
                 return Ok(None);
             }
@@ -383,7 +451,10 @@ impl AnalysisCache {
                 &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
             )?;
 
-            debug!("📊 [Cache] Quality HIT (Hash) - {}", path.display());
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!("Quality HIT (Hash) - {}", path.display())
+            );
             return Ok(Some(analysis));
         }
 
@@ -423,7 +494,10 @@ impl AnalysisCache {
         )?;
         tx.commit()?;
 
-        debug!("💾 [Cache] Stored analysis for {}", path.display());
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_CACHE,
+            &format!("Stored analysis for {}", path.display())
+        );
         Ok(())
     }
 
@@ -460,7 +534,10 @@ impl AnalysisCache {
         )?;
         tx.commit()?;
 
-        debug!("💾 [Cache] Stored quality analysis for {}", path.display());
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_CACHE,
+            &format!("Stored quality analysis for {}", path.display())
+        );
         Ok(())
     }
 
@@ -492,13 +569,28 @@ impl AnalysisCache {
                 && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
-                if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
-                    && calculate_checksum(&data)
-                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
-                {
-                    warn!(
-                        "Cache: Data corruption detected for {}; video checksum mismatch (path index)",
-                        path.display()
+                let stored_checksum_opt = row.get::<_, Option<i64>>(1);
+                let valid_checksum = stored_checksum_opt
+                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "video_checksum"));
+
+                let Some(checksum) = valid_checksum else {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!(
+                            "Missing or invalid checksum for {}. Invalidating.",
+                            path.display()
+                        )
+                    );
+                    return Ok(None);
+                };
+
+                if calculate_checksum(&data) != checksum {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CACHE,
+                        &format!(
+                            "Data corruption detected for {}; video checksum mismatch (path index)",
+                            path.display()
+                        )
                     );
                     return Ok(None);
                 }
@@ -519,14 +611,28 @@ impl AnalysisCache {
 
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
-            if let Some(stored_checksum) = row.get::<_, Option<i64>>(1)
-                && calculate_checksum(&data)
-                    != u32::try_from(stored_checksum)
-                        .expect("checksum stored as i64 but always originated from u32; fits by construction")
-            {
-                warn!(
-                    "Cache: Data corruption detected for {}; video checksum mismatch (hash index)",
-                    path.display()
+            let stored_checksum_opt = row.get::<_, Option<i64>>(1);
+            let valid_checksum = stored_checksum_opt
+                .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "video_checksum"));
+
+            let Some(checksum) = valid_checksum else {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!(
+                        "Missing or invalid checksum for {}. Invalidating.",
+                        path.display()
+                    )
+                );
+                return Ok(None);
+            };
+
+            if calculate_checksum(&data) != checksum {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CACHE,
+                    &format!(
+                        "Data corruption detected for {}; video checksum mismatch (hash index)",
+                        path.display()
+                    )
                 );
                 return Ok(None);
             }
@@ -578,7 +684,10 @@ impl AnalysisCache {
         )?;
         tx.commit()?;
 
-        debug!("💾 [Cache] Stored video analysis for {}", path.display());
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_CACHE,
+            &format!("Stored video analysis for {}", path.display())
+        );
         Ok(())
     }
 
@@ -599,15 +708,18 @@ impl AnalysisCache {
             &[&threshold],
         )?)
         .unwrap_or_else(|e| {
-            tracing::warn!(
-                "Failed to parse cache pruning result: {:?}, assuming 0 records removed",
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!("Failed to parse cache pruning result: {e:?}, assuming 0 records removed")
             );
             0
         });
 
         if removed > 0 {
-            info!("🧹 [Cache] Pruned {} old records", removed);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!("Pruned {removed} old records")
+            );
         }
         Ok(removed)
     }
@@ -692,11 +804,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(
-            buffer
-                .get(..bytes_read)
-                .expect("bytes_read <= buffer.len() by read() contract"),
-        );
+        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     }
     Ok(hasher.finalize())
 }
@@ -707,11 +815,7 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; crate::constants::IO_BUFFER_SIZE_LARGE];
     let bytes_read = file.read(&mut buffer)?;
-    hasher.update(
-        buffer
-            .get(..bytes_read)
-            .expect("bytes_read <= buffer.len() by read() contract"),
-    );
+    hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     Ok(*hasher.finalize().as_bytes())
 }
 

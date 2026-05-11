@@ -8,8 +8,9 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
 
     // Log warning if lossy conversion occurred (non-UTF-8 path)
     if matches!(s, Cow::Owned(_)) && path.to_str().is_none() {
-        eprintln!(
-            "Warning: Non-UTF-8 path encountered, using lossy conversion: {}",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            "Non-UTF-8 path encountered, using lossy conversion: {}",
             path.display()
         );
     }
@@ -45,7 +46,7 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     // Handle trailing spaces which can cause I/O misinterpretation
     let has_trailing_space = s.ends_with(' ');
 
-    if s.starts_with('-') || s.starts_with('@') || has_meta || has_trailing_space {
+    if (s.starts_with('-') && s != "-") || s.starts_with('@') || has_meta || has_trailing_space {
         let mut out = String::with_capacity(2 + s.len());
         if !s.starts_with("./") && !s.starts_with('/') {
             out.push_str("./");

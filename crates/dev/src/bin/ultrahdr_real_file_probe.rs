@@ -1,11 +1,18 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use shared_utils::image_jpeg_analysis::extract_gainmap_from_jpeg;
 use std::fs;
 use std::path::Path;
 
 fn main() {
-    println!("Running test...");
+    log_detail!("Running test...");
     test_real_hdr_file_extraction_final();
-    println!("✅ Test completed!");
+    log_detail!("✅ Test completed!");
 }
 
 fn test_real_hdr_file_extraction_final() {
@@ -17,13 +24,13 @@ fn test_real_hdr_file_extraction_final() {
     let result = extract_gainmap_from_jpeg(&data);
     match result {
         Ok((base, gain)) => {
-            println!("✅ REAL HDR FILE EXTRACTION SUCCESSFUL!");
-            println!(
+            log_detail!("✅ REAL HDR FILE EXTRACTION SUCCESSFUL!");
+            log_detail!(
                 "   Base: {}x{}, Gain: {}x{}",
                 base.width(),
                 base.height(),
                 gain.width(),
-                gain.height()
+                gain.height(),
             );
         }
         Err(e) => {

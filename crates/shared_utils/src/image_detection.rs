@@ -20,8 +20,8 @@
 //!
 //! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, `TinyPNG`). 16-bit and
 //!   truecolor PNG without tool signature are treated as lossless. Indexed PNG uses a
-//!   **conservative threshold (DETECTION_LOSSY_THRESHOLD)**: only scores ≥ threshold are marked lossy; gray zone
-//!   [DETECTION_LOSSLESS_THRESHOLD, DETECTION_LOSSY_THRESHOLD] is treated as lossless to reduce false positives (e.g. natural palette art).
+//!   **conservative threshold (`DETECTION_LOSSY_THRESHOLD`)**: only scores ≥ threshold are marked lossy; gray zone
+//!   [`DETECTION_LOSSLESS_THRESHOLD`, `DETECTION_LOSSY_THRESHOLD`] is treated as lossless to reduce false positives (e.g. natural palette art).
 //!   Heuristic score includes **palette-index frequency entropy** for indexed images and
 //!   **per-channel RGB entropy** for others. Tool signatures include zTXt decompression.
 //!   We do *not* detect "PNG exported from a lossy source" (e.g. JPEG→PNG screenshot).
@@ -64,9 +64,9 @@
 //! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
 
 use crate::Rational;
-use crate::img_errors::{ImgQualityError, Result};
 use crate::io_utils::ByteSliceExt;
 use crate::tool_builders::JxlinfoBuilder;
+use crate::unified_error::{ImgQualityError, Result};
 use crate::{DjxlBuilder, FfprobeBuilder};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
@@ -404,13 +404,20 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 /// Resolve mif1/msf1 major brand by scanning `compatible_brands` in the ftyp box.
 /// AVIF spec allows mif1 as major brand; without this, such files get routed to
 /// `detect_heic_compression` (hvcC lookup) which always fails → Err.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex brand resolution requiring multiple format checks and error handling"
+)]
 fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> DetectedFormat {
     // Security: Read up to 1MB (1_048_576 bytes) to safely parse FTYP even if it has bloated metadata,
     // while still preventing OOM on multi-GB fake files.
     let Ok(mut file) = std::fs::File::open(path) else {
-        warn!(
-            "☢️ [ANOMALY] Failed to open file for ftyp brand resolution at '{}'. Refusing to forge HEIC.",
-            path.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "Failed to open file for ftyp brand resolution at '{}'. Refusing to forge HEIC.",
+                path.display()
+            )
         );
         return DetectedFormat::Unknown("ISOBMFF file open failure".to_string());
     };
@@ -418,10 +425,13 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     let read_len = match std::io::Read::read(&mut file, &mut data) {
         Ok(n) => n,
         Err(e) => {
-            warn!(
-                "☢️ [ANOMALY] Failed to read ftyp box at '{}': {}. Information invalidated.",
-                path.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!(
+                    "Failed to read ftyp box at '{}': {}. Information invalidated.",
+                    path.display(),
+                    e
+                )
             );
             return DetectedFormat::Unknown("ISOBMFF read failure".to_string());
         }
@@ -433,9 +443,12 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     data.truncate(read_len);
 
     if data.len() < 16 || data.get(4..8) != Some(b"ftyp") {
-        warn!(
-            "☢️ [ANOMALY] ftyp box too short or missing at '{}'. Refusing to forge HEIC.",
-            path.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "ftyp box too short or missing at '{}'. Refusing to forge HEIC.",
+                path.display()
+            )
         );
         return DetectedFormat::Unknown("Malformed ftyp box".to_string());
     }
@@ -443,9 +456,12 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     let box_size_u32 = if data.len() >= 4 {
         u32::from_be_bytes([data[0], data[1], data[2], data[3]])
     } else {
-        warn!(
-            "☢️ [ANOMALY] Truncated ftyp box size at '{}'. Information invalidated.",
-            path.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "Truncated ftyp box size at '{}'. Information invalidated.",
+                path.display()
+            )
         );
         return DetectedFormat::Unknown("Truncated ftyp".to_string());
     };
@@ -460,17 +476,23 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
     if ftyp_end < 16 {
-        warn!(
-            "☢️ [ANOMALY] ftyp box truncated before brands at '{}'. Refusing to forge HEIC.",
-            path.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "ftyp box truncated before brands at '{}'. Refusing to forge HEIC.",
+                path.display()
+            )
         );
         return DetectedFormat::Unknown("ftyp box truncated".to_string());
     }
 
     let Some(compat_data) = data.get(16..ftyp_end) else {
-        warn!(
-            "☢️ [ANOMALY] ftyp box brands out of bounds at '{}'. Information invalidated.",
-            path.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            &format!(
+                "ftyp box brands out of bounds at '{}'. Information invalidated.",
+                path.display()
+            )
         );
         return DetectedFormat::Unknown("ISOBMFF brands OOB".to_string());
     };
@@ -526,7 +548,7 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
+            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data)?;
             return Ok((frame_count > 1, Some(frame_count), None));
         }
         DetectedFormat::WebP => {
@@ -538,7 +560,7 @@ pub fn detect_animation(
             let data = std::fs::read(path)?;
             let is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
             let frame_count = if is_animated {
-                Some(crate::image_formats::webp::count_frames_from_bytes(&data))
+                Some(crate::image_formats::webp::count_frames_from_bytes(&data)?)
             } else {
                 Some(1)
             };
@@ -1151,7 +1173,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         && let Some(p) = path
         && let Ok(img) = open_image_with_limits(p)
     {
-        let dithering_score = detect_dithering_pattern(&img);
+        let dithering_score = detect_dithering_pattern(&img)?;
         factors.dithering_detected = dithering_score;
         if dithering_score > crate::constants::PNG_DITHERING_THRESHOLD {
             explanations.push(format!(
@@ -1160,7 +1182,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         }
 
         let (unique_colors, _expected_colors) =
-            analyze_color_distribution(&img, png_info.palette_size);
+            analyze_color_distribution(&img, png_info.palette_size)?;
         let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
         let is_large_image = pixel_count > 100_000;
 
@@ -1196,7 +1218,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         // Cheap sampled estimate: if a small sampled palette appears (<=256 bins)
         // on a large true-indexed image, treat as strong quantization signal.
-        let sampled_uniques = sample_unique_color_count(&img, 10_000);
+        let sampled_uniques = sample_unique_color_count(&img, 10_000)?;
         if sampled_uniques > 0 && is_large_image {
             if sampled_uniques <= 256 {
                 factors.color_count_anomaly = factors
@@ -1223,7 +1245,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             ));
         }
 
-        let freq_score = detect_color_frequency_distribution(&img);
+        let freq_score = detect_color_frequency_distribution(&img)?;
         factors.color_frequency_distribution = freq_score;
         if freq_score > crate::constants::PNG_FREQ_THRESHOLD {
             explanations.push(format!(
@@ -1357,38 +1379,33 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     );
 
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-        eprintln!("      📈 Score breakdown:");
-        eprintln!(
-            "         Structural: {:.2} (indexed_alpha={:.2}, large_palette={:.2}) × {:.2} = {:.3}",
-            structural_score,
-            factors.indexed_with_alpha,
-            factors.large_palette,
-            weights.structural,
-            structural_score * weights.structural
+        crate::log_debug!(
+            "         Structural: {structural_score:.2} (indexed_alpha={indexed_alpha:.2}, large_palette={large_palette:.2}) × {weight:.2} = {total:.3}",
+            indexed_alpha = factors.indexed_with_alpha,
+            large_palette = factors.large_palette,
+            weight = weights.structural,
+            total = structural_score * weights.structural
         );
-        eprintln!(
-            "         Metadata: {:.2} × {:.2} = {:.3}",
-            metadata_score,
-            weights.metadata,
-            metadata_score * weights.metadata
+        crate::log_debug!(
+            "         Metadata: {metadata_score:.2} × {weight:.2} = {total:.3}",
+            weight = weights.metadata,
+            total = metadata_score * weights.metadata
         );
-        eprintln!(
-            "         Statistical: {:.2} (dither={:.2}, color={:.2}, band={:.2}, freq={:.2}) × {:.2} = {:.3}",
-            statistical_score,
-            factors.dithering_detected,
-            factors.color_count_anomaly,
-            factors.gradient_banding,
-            factors.color_frequency_distribution,
-            weights.statistical,
-            statistical_score * weights.statistical
+        crate::log_debug!(
+            "         Statistical: {statistical_score:.2} (dither={dither:.2}, color={color:.2}, band={band:.2}, freq={freq:.2}) × {weight:.2} = {total:.3}",
+            dither = factors.dithering_detected,
+            color = factors.color_count_anomaly,
+            band = factors.gradient_banding,
+            freq = factors.color_frequency_distribution,
+            weight = weights.statistical,
+            total = statistical_score * weights.statistical
         );
-        eprintln!(
-            "         Heuristic: {:.2} × {:.2} = {:.3}",
-            heuristic_score,
-            weights.heuristic,
-            heuristic_score * weights.heuristic
+        crate::log_debug!(
+            "         Heuristic: {heuristic_score:.2} × {weight:.2} = {total:.3}",
+            weight = weights.heuristic,
+            total = heuristic_score * weights.heuristic
         );
-        eprintln!(
+        crate::log_debug!(
             "         FINAL SCORE: {final_score:.3} (threshold: {LOSSY_THRESHOLD:.2} for lossy, gray zone: [{GRAY_ZONE_LOW:.2}, {LOSSY_THRESHOLD:.2}] → lossless)"
         );
     }
@@ -1411,7 +1428,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
 
             // Signal 1: color frequency concentration
-            let freq_signal = detect_color_frequency_distribution(&img);
+            let freq_signal = detect_color_frequency_distribution(&img)?;
 
             // Signal 2: per-channel entropy
             let rgb_entropy = calculate_rgb_entropy(&img);
@@ -1434,7 +1451,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             let banding_signal = detect_gradient_banding(&img);
             // Sample-based quick check: detect palette-like distribution cheaply.
             let sampled_uniques =
-                sample_unique_color_count(&img, crate::constants::IMAGE_DETECTION_SAMPLING_SIZE);
+                sample_unique_color_count(&img, crate::constants::IMAGE_DETECTION_SAMPLING_SIZE)?;
             if sampled_uniques > 0
                 && pixel_count > crate::constants::IMAGE_DETECTION_LARGE_PIXEL_THRESHOLD
             {
@@ -1464,17 +1481,32 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 .count();
 
             if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!(
+                crate::log_debug!(
                     "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
                 );
             }
 
-            let freq_r = Rational::from_f64(freq_signal)
-                .expect("freq_signal is a normalized [0,1] score; never NaN/Inf");
-            let ent_r = Rational::from_f64(entropy_signal)
-                .expect("entropy_signal is a normalized [0,1] score; never NaN/Inf");
-            let band_r = Rational::from_f64(banding_signal)
-                .expect("banding_signal is a normalized [0,1] score; never NaN/Inf");
+            let freq_r = Rational::from_f64(freq_signal).unwrap_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_NUMERIC,
+                    "Frequency signal NaN/Inf in truecolor; defaulting to 0"
+                );
+                Rational::from(0)
+            });
+            let ent_r = Rational::from_f64(entropy_signal).unwrap_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_NUMERIC,
+                    "Entropy signal NaN/Inf in truecolor; defaulting to 0"
+                );
+                Rational::from(0)
+            });
+            let band_r = Rational::from_f64(banding_signal).unwrap_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_NUMERIC,
+                    "Banding signal NaN/Inf in truecolor; defaulting to 0"
+                );
+                Rational::from(0)
+            });
             let tc_score = (freq_r + ent_r + band_r) / Rational::from(3);
             let tc_score_f = tc_score.to_f64();
             return Ok(PngQuantizationAnalysis {
@@ -1786,22 +1818,28 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     })
 }
 
-fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex dithering detection requiring multiple pattern analysis steps"
+)]
+fn detect_dithering_pattern(img: &DynamicImage) -> anyhow::Result<f64> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
 
     if width < 8 || height < 8 {
-        return 0.0;
+        return Ok(0.0);
     }
 
     let mut high_freq_count = 0u64;
     let mut total_comparisons = 0u64;
 
-    let step = crate::numeric_cast::f64_to_u32_sat(
+    let step = crate::numeric_cast::f64_to_u32_strict(
         (crate::numeric_cast::u64_to_f64(u64::from(width) * u64::from(height))
             / crate::constants::PNG_DITHER_SAMPLING_FACTOR)
             .max(1.0),
-    );
+        "step",
+    )
+    .ok_or_else(|| anyhow::anyhow!("Sampling step overflow during dithering detection"))?;
 
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -1840,7 +1878,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     }
 
     if total_comparisons == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
 
     let dithering_ratio = {
@@ -1850,8 +1888,9 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         match (count, total) {
             (Some(c), Some(t)) if t > 0 => f64::from(c) / f64::from(t),
             _ => {
-                crate::progress_mode::emit_stderr(
-                    "☢️ [ANOMALY] Dithering ratio overflow! Refusing to forge anomaly score.",
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "Dithering ratio overflow! Refusing to forge anomaly score."
                 );
                 0.0
             }
@@ -1902,7 +1941,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         0.0_f64
     };
 
-    floyd_steinberg_score.max(bayer_score)
+    Ok(floyd_steinberg_score.max(bayer_score))
 }
 
 /// Perceptually weighted color difference (Compuphase approximation).
@@ -1928,12 +1967,12 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
 /// Sample image pixels (grid-subsample) and count unique quantized colors.
 /// Uses a small quantization (5 bits per channel) to approximate palette variety
 /// without full quantization work. Returns number of unique colors observed.
-fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
+fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> anyhow::Result<usize> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
 
     if width == 0 || height == 0 {
-        return 0;
+        return Ok(0);
     }
 
     let total = u64::from(width) * u64::from(height);
@@ -1944,7 +1983,7 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
         .ceil(),
         "step",
     )
-    .expect("step fits in u32");
+    .ok_or_else(|| anyhow::anyhow!("Sampling step overflow in unique color count"))?;
     let step = step.max(1);
 
     let mut set = HashSet::new();
@@ -1969,21 +2008,34 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
         }
     }
 
-    set.len()
+    Ok(set.len())
 }
 
 /// Block-based random sampling — divides image into grid cells and randomly samples from each,
 /// avoiding the systematic bias of stride sampling (which creates periodic blind spots on
 /// structured images like game UI screenshots). Quantized images have concentrated color
 /// distributions; stride sampling can miss local color clusters.
-fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) -> (usize, usize) {
+const fn lcg_next(state: &mut u64) -> u32 {
+    // Simple 64-bit LCG; return high bits for better distribution
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005_u64)
+        .wrapping_add(1_442_695_040_888_963_407_u64);
+    (*state >> 32) as u32
+}
+
+fn analyze_color_distribution(
+    img: &DynamicImage,
+    _palette_size: Option<usize>,
+) -> anyhow::Result<(usize, usize)> {
     let rgba = img.to_rgba8();
     let mut color_set: HashMap<[u8; 4], u32> = HashMap::new();
 
     let (width, height) = rgba.dimensions();
     let total_pixels =
         crate::numeric_cast::u64_to_usize_strict(u64::from(width * height), "width * height")
-            .expect("width*height easily fits within 64-bit usize");
+            .ok_or_else(|| {
+                anyhow::anyhow!("Image dimensions overflow usize in color distribution analysis")
+            })?;
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
@@ -1994,12 +2046,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
-    let lcg_next = |state: &mut u64| -> u32 {
-        *state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        u32::try_from(*state >> 32_i32).expect("u64 >> 32 always fits in u32")
-    };
+    crate::numeric_cast::u64_to_u32_strict(rng_state >> 32, "lcg_state")
+        .ok_or_else(|| anyhow::anyhow!("LCG state overflow during random sampling"))?;
 
     for by in 0..grid_size {
         for bx in 0..grid_size {
@@ -2013,7 +2061,9 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
                 u64::from(current_block_width) * u64::from(current_block_height),
                 "block_pixels",
             )
-            .expect("block_pixels easily fits within 64-bit usize");
+            .ok_or_else(|| {
+                anyhow::anyhow!("Block pixels overflow usize in color distribution analysis")
+            })?;
             if block_pixels == 0 {
                 continue;
             }
@@ -2040,7 +2090,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
         crate::constants::SAMPLED_COLORS_EXPECTED_SMALL
     };
 
-    (unique_colors, expected)
+    Ok((unique_colors, expected))
 }
 
 /// Color frequency concentration — quantized images have a few dominant colors
@@ -2050,13 +2100,18 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     clippy::too_many_lines,
     reason = "Histogram + entropy + concentration analysis is one cohesive pass over the pixel buffer; splitting forces redundant copies of the RGBA8 buffer."
 )]
-fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
+fn detect_color_frequency_distribution(img: &DynamicImage) -> anyhow::Result<f64> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total_pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let width_u = crate::numeric_cast::u32_to_usize_strict(width, "width")
+        .ok_or_else(|| anyhow::anyhow!("Width overflow in color frequency analysis"))?;
+    let height_u = crate::numeric_cast::u32_to_usize_strict(height, "height")
+        .ok_or_else(|| anyhow::anyhow!("Height overflow in color frequency analysis"))?;
+    let total_pixels = width_u
+        .checked_mul(height_u)
+        .ok_or_else(|| anyhow::anyhow!("Total pixels overflow in color frequency analysis"))?;
     if total_pixels < crate::constants::COLOR_DIST_MIN_PIXELS {
-        return 0.0;
+        return Ok(0.0);
     }
 
     // Block-random sampling: divide image into a grid of blocks, sample one pixel
@@ -2069,9 +2124,10 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         .max(1.0),
         "block_size",
     )
-    .expect("block_size fits in usize");
-    let blocks_x = crate::numeric_cast::u32_to_usize_sat(width).div_ceil(block_size.max(1));
-    let blocks_y = crate::numeric_cast::u32_to_usize_sat(height).div_ceil(block_size.max(1));
+    .ok_or_else(|| anyhow::anyhow!("Block size overflow in color frequency analysis"))?;
+    let block_size = block_size.max(1);
+    let blocks_x = width_u.div_ceil(block_size);
+    let blocks_y = height_u.div_ceil(block_size);
 
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
     let mut sampled = 0u64;
@@ -2084,12 +2140,14 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
             let px = {
                 let x = (bx as u64) * (block_size as u64) + (block_size as u64) / 2;
                 let max_x = u64::from(width).saturating_sub(1);
-                u32::try_from(x.min(max_x)).expect("Coordinate bounds guaranteed by logic")
+                crate::numeric_cast::u64_to_u32_strict(x.min(max_x), "px")
+                    .ok_or_else(|| anyhow::anyhow!("px overflow in color frequency analysis"))?
             };
             let py = {
                 let y = (by as u64) * (block_size as u64) + (block_size as u64) / 2;
                 let max_y = u64::from(height).saturating_sub(1);
-                u32::try_from(y.min(max_y)).expect("Coordinate bounds guaranteed by logic")
+                crate::numeric_cast::u64_to_u32_strict(y.min(max_y), "py")
+                    .ok_or_else(|| anyhow::anyhow!("py overflow in color frequency analysis"))?
             };
 
             let pixel = rgba.get_pixel(px, py);
@@ -2100,7 +2158,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 
     if sampled == 0 || color_freq.len() < 2 {
-        return 0.0;
+        return Ok(0.0);
     }
 
     let mut freqs: Vec<u32> = color_freq.values().copied().collect();
@@ -2111,7 +2169,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
             * crate::constants::PNG_COLOR_CONCENTRATION_TARGET_RATIO,
         "entropy_target",
     )
-    .expect("85% of sampled fits in u64");
+    .ok_or_else(|| anyhow::anyhow!("Entropy target calculation overflowed u64"))?;
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
@@ -2126,7 +2184,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let coverage_ratio = crate::numeric_cast::u64_to_f64(colors_for_85pct as u64)
         / crate::numeric_cast::u64_to_f64(freqs.len() as u64).max(1.0);
 
-    if coverage_ratio < crate::constants::PNG_COVERAGE_RATIO_ULTRA_LOW {
+    let score = if coverage_ratio < crate::constants::PNG_COVERAGE_RATIO_ULTRA_LOW {
         crate::constants::PNG_COVERAGE_ULTRA_LOW_SCORE
     } else if coverage_ratio < crate::constants::PNG_COVERAGE_TIER1_THRESHOLD {
         crate::constants::PNG_COVERAGE_TIER1_SCORE
@@ -2136,7 +2194,8 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         crate::constants::PNG_COVERAGE_TIER3_SCORE
     } else {
         0.0
-    }
+    };
+    Ok(score)
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
@@ -2330,21 +2389,20 @@ fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
     total_bits.div_ceil(8)
 }
 
-#[must_use]
+/// # Errors
+/// Returns an error if the image data is corrupted and pixels cannot be accessed.
 /// # Panics
 /// Panics if the image data is corrupted and pixels cannot be accessed.
-pub fn calculate_entropy(img: &DynamicImage) -> f64 {
+pub fn calculate_entropy(img: &DynamicImage) -> anyhow::Result<f64> {
     let gray = img.to_luma8();
     let mut histogram = [0u64; 256];
 
     for pixel in gray.pixels() {
-        if let Some(h) = histogram.get_mut(usize::from(
-            pixel
-                .0
-                .first()
-                .copied()
-                .expect("histogram bins are constructed with at least one entry"),
-        )) {
+        if let Some(h) =
+            histogram.get_mut(usize::from(pixel.0.first().copied().ok_or_else(|| {
+                anyhow::anyhow!("Histogram bin corruption: empty pixel data")
+            })?))
+        {
             *h += 1;
         }
     }
@@ -2359,7 +2417,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
         }
     }
 
-    entropy
+    Ok(entropy)
 }
 
 /// Per-channel RGB entropy — avoids the grayscale projection problem where
@@ -2494,7 +2552,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             | image::ColorType::Rgba16 => 16,
             _ => 8,
         };
-        let ent = calculate_entropy(&img);
+        let ent = calculate_entropy(&img)?;
         (w, h, alpha, depth, ent)
     } else {
         // Honest recovery: Extract REAL data from bitstream using identify.
@@ -3102,7 +3160,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                 found_any_compression = true;
 
                 if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!(
+                    crate::log_detail!(&format!(
                         "   📊 EXR part#{} compression: {} ({})",
                         part_count,
                         compression,
@@ -3119,7 +3177,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                             9 => "DWAB",
                             _ => "Unknown",
                         }
-                    );
+                    ));
                 }
 
                 // Any lossy part → entire file is lossy
@@ -3203,7 +3261,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     // Check COD default wavelet
     if let Some(wavelet) = cod_wavelet {
         if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-            eprintln!(
+            crate::log_detail!(&format!(
                 "   📊 JP2 COD wavelet: {} ({})",
                 wavelet,
                 if wavelet == 1 {
@@ -3211,7 +3269,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 } else {
                     "9/7 irreversible — lossy"
                 }
-            );
+            ));
         }
         // If COD is lossy and no COC overrides, it's lossy
         if wavelet == 0 && coc_wavelets.is_empty() {
@@ -3222,7 +3280,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     // Check COC component-specific wavelets
     for (component, wavelet) in &coc_wavelets {
         if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-            eprintln!(
+            crate::log_detail!(&format!(
                 "   📊 JP2 COC component {} wavelet: {} ({})",
                 component,
                 wavelet,
@@ -3231,7 +3289,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 } else {
                     "9/7 irreversible — lossy"
                 }
-            );
+            ));
         }
         // Any lossy component → entire file is lossy
         if *wavelet == 0 {
@@ -3592,7 +3650,7 @@ mod tests {
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
 
         // This should not panic or produce overflow warnings
-        let result = detect_color_frequency_distribution(&dynamic_img);
+        let result = detect_color_frequency_distribution(&dynamic_img).unwrap();
 
         // Result should be a valid f64 in range [0.0, 1.0]
         assert!((0.0..=1.0).contains(&result));
@@ -3604,7 +3662,7 @@ mod tests {
         let img = image::RgbaImage::new(10, 10);
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
 
-        let result = detect_color_frequency_distribution(&dynamic_img);
+        let result = detect_color_frequency_distribution(&dynamic_img).unwrap();
 
         // Small images should return 0.0 (insufficient pixels)
         assert!(result.abs() < f64::EPSILON);
@@ -3620,7 +3678,7 @@ mod tests {
         }
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
 
-        let result = detect_color_frequency_distribution(&dynamic_img);
+        let result = detect_color_frequency_distribution(&dynamic_img).unwrap();
 
         // Uniform image should have valid result in expected range
         // The algorithm may return 0.0 for uniform images due to concentration calculation

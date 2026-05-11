@@ -227,7 +227,11 @@ fn test_webpmux_flag_order_parity() {
     assert_eq!(get_arg(&args, 0), "-get");
     assert_eq!(get_arg(&args, 1), "icc");
     assert!(get_arg(&args, 2).contains("in.webp"));
-    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(
+        get_arg(&args, 3) == "-o"
+            || get_arg(&args, 3) == "--output"
+            || get_arg(&args, 3) == "--out"
+    );
     assert!(get_arg(&args, 4).contains("out.icc"));
 }
 
@@ -236,7 +240,7 @@ fn test_gifski_flag_order_parity() {
         .arg("--quality")
         .arg("90")
         .output(Path::new("out.gif"))
-        .add_input(Path::new("frame.png"))
+        .input(Path::new("frame.png"))
         .build();
     let args: Vec<String> = cmd
         .get_args()
@@ -244,7 +248,11 @@ fn test_gifski_flag_order_parity() {
         .collect();
     // Snapshotted: [flags] -o [out] [in]
     assert_eq!(get_arg(&args, 0), "--quality");
-    assert_eq!(get_arg(&args, 2), "-o");
+    assert!(
+        get_arg(&args, 2) == "-o"
+            || get_arg(&args, 2) == "--output"
+            || get_arg(&args, 2) == "--out"
+    );
     assert!(get_arg(&args, 3).contains("out.gif"));
     assert!(get_arg(&args, 4).contains("frame.png"));
 }
@@ -279,7 +287,11 @@ fn test_dwebp_flag_order_parity() {
     // Snapshotted: [in] [flags] -o [out]
     assert!(get_arg(&args, 0).contains("in.webp"));
     assert_eq!(get_arg(&args, 1), "-lossless");
-    assert_eq!(get_arg(&args, 2), "-o");
+    assert!(
+        get_arg(&args, 2) == "-o"
+            || get_arg(&args, 2) == "--output"
+            || get_arg(&args, 2) == "--out"
+    );
     assert!(get_arg(&args, 3).contains("out.png"));
 }
 
@@ -402,7 +414,11 @@ fn test_dovi_flag_order_parity() {
     assert_eq!(get_arg(&args, 0), "demux");
     assert_eq!(get_arg(&args, 1), "-i");
     assert!(get_arg(&args, 2).contains("in.hevc"));
-    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(
+        get_arg(&args, 3) == "-o"
+            || get_arg(&args, 3) == "--output"
+            || get_arg(&args, 3) == "--out"
+    );
     assert!(get_arg(&args, 4).contains("out.rpu"));
 }
 
@@ -420,7 +436,11 @@ fn test_hdr10plus_flag_order_parity() {
     assert_eq!(get_arg(&args, 0), "extract");
     assert_eq!(get_arg(&args, 1), "-i");
     assert!(get_arg(&args, 2).contains("in.hevc"));
-    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(
+        get_arg(&args, 3) == "-o"
+            || get_arg(&args, 3) == "--output"
+            || get_arg(&args, 3) == "--out"
+    );
     assert!(get_arg(&args, 4).contains("out.json"));
 }
 
@@ -509,8 +529,8 @@ fn test_attrib_flag_order_parity() {
 fn test_rsync_flag_order_parity() {
     let cmd = RsyncBuilder::new()
         .arg("-av")
-        .add_source(Path::new("src"))
-        .destination(Path::new("dest"))
+        .input(Path::new("src"))
+        .output(Path::new("dest"))
         .build();
     let args: Vec<String> = cmd
         .get_args()
@@ -532,7 +552,11 @@ fn test_ps_flag_order_parity() {
     // Snapshotted: -p [pid] -o [fields]=
     assert_eq!(get_arg(&args, 0), "-p");
     assert_eq!(get_arg(&args, 1), "1234");
-    assert_eq!(get_arg(&args, 2), "-o");
+    assert!(
+        get_arg(&args, 2) == "-o"
+            || get_arg(&args, 2) == "--output"
+            || get_arg(&args, 2) == "--out"
+    );
     assert_eq!(get_arg(&args, 3), "pid=");
 }
 

@@ -8,6 +8,7 @@ use crate::{ImgQualityError, Result};
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use shared_utils::ToolBuilder;
+use shared_utils::{log_anomaly, log_detail};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +132,7 @@ fn cleanup_output_file(path: &Path, context: &str) {
     if let Err(e) = std::fs::remove_file(path)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        eprintln!(
+        log_detail!(
             "⚠️ [img] Failed to remove {} {}: {}",
             context,
             path.display(),
@@ -411,7 +412,7 @@ pub fn execute_conversion(
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         )
     {
-        eprintln!("   ⚠️  Safe delete failed: {e}");
+        log_detail!("   ⚠️  Safe delete failed: {e}");
     }
 
     let action = if detection.format == DetectedFormat::JPEG {
@@ -423,7 +424,10 @@ pub fn execute_conversion(
     let reduction =
         shared_utils::numeric_cast::option_f32_strict(size_reduction, "size_reduction_report")
             .unwrap_or_else(|| {
-                tracing::warn!("Missing size reduction report; defaulting to 0.0");
+                log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_REPORT,
+                    "Missing size reduction report; defaulting to 0.0"
+                );
                 0.0
             });
 
@@ -433,7 +437,10 @@ pub fn execute_conversion(
         let out_val = i128::from(
             shared_utils::numeric_cast::option_u64_strict(output_size, "output_size_report")
                 .unwrap_or_else(|| {
-                    tracing::warn!("Missing output size report; defaulting to 0");
+                    log_anomaly!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        "Missing output size report; defaulting to 0"
+                    );
                     0
                 }),
         );
@@ -605,7 +612,7 @@ fn convert_to_avif(
     }
 
     // Verify AVIF file integrity
-    if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(output) {
+    if let Err(e) = shared_utils::quality_verifier_enhanced::verify_avif_health(output) {
         cleanup_output_file(output, "unhealthy AVIF output");
         return Err(ImgQualityError::ConversionError(format!(
             "AVIF health check failed: {e}"

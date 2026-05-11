@@ -8,14 +8,12 @@ use std::process::{Command, Stdio};
 /// Builder for constructing `magick` (`ImageMagick`) commands.
 #[derive(Debug, Default)]
 pub struct MagickBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     strip: bool,
     depth: Option<u8>,
     colorspace: Option<String>,
     defines: Vec<(String, String)>,
     sets: Vec<(String, String)>,
-    extra_args: Vec<String>,
     use_stdout: bool,
     format: Option<String>,
 }
@@ -29,16 +27,6 @@ impl MagickBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn strip(&mut self, enabled: bool) -> &mut Self {
@@ -85,12 +73,9 @@ impl MagickBuilder {
         self.format = Some(format.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(MagickBuilder);
 
 impl ToolBuilder for MagickBuilder {
     fn get_command_name(&self) -> &str {
@@ -101,14 +86,12 @@ impl ToolBuilder for MagickBuilder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        if let Some(input) = &self.input {
+        if let Some(input) = self.base.inputs.first() {
             cmd.arg("--")
                 .arg(crate::path_safety::magick_safe_path(input).as_ref());
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
 
         if self.strip {
             cmd.arg(constants::MAGICK_ARG_STRIP);
@@ -136,13 +119,13 @@ impl ToolBuilder for MagickBuilder {
         }
 
         if self.use_stdout {
-            if !self.extra_args.iter().any(|a| a.ends_with(":-")) {
+            if !self.base.extra_args.iter().any(|a| a.ends_with(":-")) {
                 cmd.arg("png:-");
             }
             cmd.stdin(Stdio::null()); // Default for IM piped
             cmd.stdout(Stdio::piped());
-        } else if let Some(output) = &self.output {
-            cmd.arg(crate::safe_path_arg(output).as_ref());
+        } else {
+            self.base.apply_output(&mut cmd, None);
         }
 
         cmd
@@ -152,9 +135,8 @@ impl ToolBuilder for MagickBuilder {
 /// Builder for constructing `identify` (`ImageMagick`) commands.
 #[derive(Debug, Default)]
 pub struct IdentifyBuilder {
-    input: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     format: Option<String>,
-    extra_args: Vec<String>,
     use_magick: bool, // toggle between 'magick identify' and 'identify'
     verbose: bool,
 }
@@ -168,11 +150,6 @@ impl IdentifyBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub fn format<S: AsRef<str>>(&mut self, format: S) -> &mut Self {
@@ -190,12 +167,9 @@ impl IdentifyBuilder {
         self.verbose = enabled;
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(IdentifyBuilder);
 
 impl ToolBuilder for IdentifyBuilder {
     fn get_command_name(&self) -> &str {
@@ -228,13 +202,8 @@ impl ToolBuilder for IdentifyBuilder {
             cmd.arg(constants::FFMPEG_ARG_VERBOSE);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
 
         cmd
     }
@@ -268,14 +237,12 @@ impl ToolBuilder for IdentifyBuilder {
 /// Builder for constructing `webpmux` commands.
 #[derive(Debug, Default)]
 pub struct WebpmuxBuilder {
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     frames: Vec<(PathBuf, u32, i32, i32, bool)>, // (path, duration, x, y, blend)
     loop_count: Option<u32>,
     bgcolor: Option<String>,
     info: bool,
     get_frame: Option<u32>,
-    input: Option<PathBuf>,
-    extra_args: Vec<String>,
 }
 
 impl WebpmuxBuilder {
@@ -287,16 +254,6 @@ impl WebpmuxBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn info(&mut self, enabled: bool) -> &mut Self {
@@ -331,12 +288,9 @@ impl WebpmuxBuilder {
         self.bgcolor = Some(color.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(WebpmuxBuilder);
 
 impl ToolBuilder for WebpmuxBuilder {
     fn get_command_name(&self) -> &str {
@@ -357,13 +311,8 @@ impl ToolBuilder for WebpmuxBuilder {
                 .arg(i.to_string());
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
 
         for (path, dur, x, y, blend) in &self.frames {
             let blend_str = if *blend { "+b" } else { "-b" };
@@ -380,10 +329,8 @@ impl ToolBuilder for WebpmuxBuilder {
             cmd.arg(constants::WEBPMUX_ARG_BGCOLOR).arg(bg);
         }
 
-        if let Some(output) = &self.output {
-            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
-                .arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base
+            .apply_output(&mut cmd, Some(constants::WEBPMUX_ARG_OUTPUT));
 
         cmd
     }
@@ -392,8 +339,7 @@ impl ToolBuilder for WebpmuxBuilder {
 /// Builder for constructing `gifski` commands.
 #[derive(Debug, Default)]
 pub struct GifskiBuilder {
-    output: Option<PathBuf>,
-    inputs: Vec<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     fps: Option<f32>,
     quality: Option<u8>,
     motion_quality: Option<u8>,
@@ -402,7 +348,6 @@ pub struct GifskiBuilder {
     height: Option<u32>,
     repeat: Option<u32>,
     fast: bool,
-    extra_args: Vec<String>,
 }
 
 impl GifskiBuilder {
@@ -414,16 +359,6 @@ impl GifskiBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn add_input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.inputs.push(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn fps(&mut self, fps: f32) -> &mut Self {
@@ -461,12 +396,9 @@ impl GifskiBuilder {
         self.fast = enabled;
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(GifskiBuilder);
 
 impl ToolBuilder for GifskiBuilder {
     fn get_command_name(&self) -> &str {
@@ -510,18 +442,10 @@ impl ToolBuilder for GifskiBuilder {
             cmd.arg(constants::GIFSKI_ARG_FAST);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
-                .arg(crate::safe_path_arg(output).as_ref());
-        }
-
-        for input in &self.inputs {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base
+            .apply_output(&mut cmd, Some(constants::GIFSKI_ARG_OUTPUT));
+        self.base.apply_all_inputs(&mut cmd, None);
 
         cmd
     }
@@ -530,8 +454,7 @@ impl ToolBuilder for GifskiBuilder {
 /// Builder for constructing `avifenc` commands.
 #[derive(Debug, Default)]
 pub struct AvifencBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     min_quality: Option<u8>,
     max_quality: Option<u8>,
     lossless: bool,
@@ -539,7 +462,6 @@ pub struct AvifencBuilder {
     threads: Option<String>,
     depth: Option<u8>,
     yuv: Option<String>,
-    extra_args: Vec<String>,
 }
 
 impl AvifencBuilder {
@@ -551,16 +473,6 @@ impl AvifencBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn speed(&mut self, speed: u8) -> &mut Self {
@@ -593,12 +505,9 @@ impl AvifencBuilder {
         self.yuv = Some(yuv.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(AvifencBuilder);
 
 impl ToolBuilder for AvifencBuilder {
     fn get_command_name(&self) -> &str {
@@ -636,17 +545,9 @@ impl ToolBuilder for AvifencBuilder {
             cmd.arg(constants::AVIFENC_ARG_YUV).arg(yuv);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
+        self.base.apply_output(&mut cmd, None);
 
         cmd
     }
@@ -655,11 +556,9 @@ impl ToolBuilder for AvifencBuilder {
 /// Builder for constructing `sips` commands (macOS only).
 #[derive(Debug, Default)]
 pub struct SipsBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     format: Option<String>,
     quality: Option<u32>,
-    extra_args: Vec<String>,
 }
 
 impl SipsBuilder {
@@ -673,16 +572,6 @@ impl SipsBuilder {
         Self::default().check_available()
     }
 
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
     pub fn format<S: AsRef<str>>(&mut self, format: S) -> &mut Self {
         self.format = Some(format.as_ref().to_string());
         self
@@ -693,12 +582,9 @@ impl SipsBuilder {
         self.quality = Some(q.clamp(1, 100));
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(SipsBuilder);
 
 impl ToolBuilder for SipsBuilder {
     fn get_command_name(&self) -> &str {
@@ -724,18 +610,10 @@ impl ToolBuilder for SipsBuilder {
                 .arg(q.to_string());
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(constants::SIPS_ARG_OUT)
-                .arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
+        self.base
+            .apply_output(&mut cmd, Some(constants::SIPS_ARG_OUT));
 
         cmd
     }
@@ -758,8 +636,7 @@ impl ToolBuilder for SipsBuilder {
 /// Builder for constructing `exiftool` commands.
 #[derive(Debug, Default)]
 pub struct ExiftoolBuilder {
-    input: Option<PathBuf>,
-    args: Vec<String>,
+    base: crate::builder_base::BaseBuilder,
     overwrite_original: bool,
     use_stdin: bool,
 }
@@ -775,31 +652,10 @@ impl ExiftoolBuilder {
         Self::default().check_available()
     }
 
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
     pub fn tags_from_file<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.arg(constants::EXIFTOOL_ARG_TAGS_FROM_FILE);
         // ExifTool format-interprets % in tagsfromfile argument, so we must double them.
         self.arg(crate::path_safety::property_safe_path(path.as_ref()));
-        self
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
-
-    pub fn args<I, S>(&mut self, args: I) -> &mut Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        for arg in args {
-            self.args.push(arg.as_ref().to_string());
-        }
         self
     }
 
@@ -855,6 +711,8 @@ impl ExiftoolBuilder {
     }
 }
 
+crate::impl_base_builder_accessors!(ExiftoolBuilder);
+
 impl ToolBuilder for ExiftoolBuilder {
     fn get_command_name(&self) -> &str {
         constants::TOOL_EXIFTOOL
@@ -870,13 +728,8 @@ impl ToolBuilder for ExiftoolBuilder {
             cmd.arg(constants::EXIFTOOL_ARG_OVERWRITE_ORIGINAL);
         }
 
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
 
         if self.use_stdin {
             cmd.stdin(std::process::Stdio::piped());
@@ -889,9 +742,7 @@ impl ToolBuilder for ExiftoolBuilder {
 /// Builder for constructing `dwebp` commands.
 #[derive(Debug, Default)]
 pub struct DwebpBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
-    extra_args: Vec<String>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl DwebpBuilder {
@@ -904,22 +755,9 @@ impl DwebpBuilder {
     pub fn check_available() -> bool {
         Self::default().check_available()
     }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(DwebpBuilder);
 
 impl ToolBuilder for DwebpBuilder {
     fn get_command_name(&self) -> &str {
@@ -929,18 +767,10 @@ impl ToolBuilder for DwebpBuilder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(constants::WEBPMUX_ARG_OUTPUT)
-                .arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_first_input(&mut cmd, None);
+        self.base.apply_to_command(&mut cmd);
+        self.base
+            .apply_output(&mut cmd, Some(constants::WEBPMUX_ARG_OUTPUT));
 
         cmd
     }

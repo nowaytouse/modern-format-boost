@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
-use tracing::{debug, error};
 
 /// A running process with deadlock prevention.
 pub struct ManagedProcess {
@@ -27,7 +26,7 @@ impl ManagedProcess {
     /// Panics if the process fails to capture stdout or stderr.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
         let command_line = format!("{cmd:?}");
-        debug!(command = %command_line, "Spawning managed process");
+        crate::log_debug!(&format!("Spawning managed process: {command_line}"));
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -35,8 +34,14 @@ impl ManagedProcess {
             .spawn()
             .with_context(|| format!("Failed to spawn command: {command_line}"))?;
 
-        let stdout = child.stdout.take().expect("Failed to capture stdout");
-        let stderr = child.stderr.take().expect("Failed to capture stderr");
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
 
         let stdout_thread = thread::spawn(move || {
             let mut buf = String::new();
@@ -85,22 +90,24 @@ impl ManagedProcess {
         let stdout = self
             .stdout_thread
             .take()
-            .expect("Stdout thread missing during join")
+            .ok_or_else(|| anyhow::anyhow!("Stdout thread missing during join"))?
             .join()
             .map_err(|_| anyhow::anyhow!("Stdout reader panicked"))?;
         let stderr = self
             .stderr_thread
             .take()
-            .expect("Stderr thread missing during join")
+            .ok_or_else(|| anyhow::anyhow!("Stderr thread missing during join"))?
             .join()
             .map_err(|_| anyhow::anyhow!("Stderr reader panicked"))?;
 
         if !status.success() {
-            error!(
-                command = %self.command_line,
-                exit_code = ?status.code(),
-                stderr = %stderr,
-                "Process failed"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFMPEG,
+                &format!(
+                    "Process failed ({}): {}",
+                    status.code().unwrap_or(-1),
+                    self.command_line
+                )
             );
         }
 
@@ -130,7 +137,8 @@ impl ProcessOutput {
             Ok(self)
         } else {
             let err_msg = format!(
-                "❌ {context} failed (exit code: {})\n   Command: {}\n   Error: {}",
+                "{} failed (exit code: {})\n   Command: {}\n   Error: {}",
+                context,
                 self.status.code().unwrap_or(-1),
                 self.command_line,
                 self.stderr
@@ -139,7 +147,7 @@ impl ProcessOutput {
                     .find(|l| !l.trim().is_empty())
                     .unwrap_or("No error output")
             );
-            crate::progress_mode::emit_stderr(&err_msg);
+            crate::log_failure!("Tool", &err_msg);
             Err(anyhow::anyhow!(err_msg))
         }
     }

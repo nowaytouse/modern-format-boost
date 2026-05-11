@@ -196,9 +196,11 @@ impl ByteSliceExt for [u8] {
     fn get_u32_le_strict(&self, pos: usize, name: &str) -> Option<u32> {
         self.get(pos..pos + 4).map_or_else(
             || {
-                warn!(
-                    "☢️ [ANOMALY] Required 4 bytes for '{}' missing at pos {}! Refusing to forge data.",
-                    name, pos
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Required 4 bytes for '{name}' missing at pos {pos}! Refusing to forge data."
+                    )
                 );
                 None
             },
@@ -212,9 +214,11 @@ impl ByteSliceExt for [u8] {
     fn get_u32_be_strict(&self, pos: usize, name: &str) -> Option<u32> {
         self.get(pos..pos + 4).map_or_else(
             || {
-                warn!(
-                    "☢️ [ANOMALY] Required 4 bytes for '{}' missing at pos {}! Refusing to forge data.",
-                    name, pos
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Required 4 bytes for '{name}' missing at pos {pos}! Refusing to forge data."
+                    )
                 );
                 None
             },
@@ -228,9 +232,11 @@ impl ByteSliceExt for [u8] {
     fn get_u64_be_strict(&self, pos: usize, name: &str) -> Option<u64> {
         self.get(pos..pos + 8).map_or_else(
             || {
-                warn!(
-                    "☢️ [ANOMALY] Required 8 bytes for '{}' missing at pos {}! Refusing to forge data.",
-                    name, pos
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Required 8 bytes for '{name}' missing at pos {pos}! Refusing to forge data."
+                    )
                 );
                 None
             },
@@ -246,9 +252,11 @@ impl ByteSliceExt for [u8] {
     fn get_u16_le_strict(&self, pos: usize, name: &str) -> Option<u16> {
         self.get(pos..pos + 2).map_or_else(
             || {
-                warn!(
-                    "☢️ [ANOMALY] Required 2 bytes for '{}' missing at pos {}! Refusing to forge data.",
-                    name, pos
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Required 2 bytes for '{name}' missing at pos {pos}! Refusing to forge data."
+                    )
                 );
                 None
             },
@@ -262,9 +270,11 @@ impl ByteSliceExt for [u8] {
     fn get_u16_be_strict(&self, pos: usize, name: &str) -> Option<u16> {
         self.get(pos..pos + 2).map_or_else(
             || {
-                warn!(
-                    "☢️ [ANOMALY] Required 2 bytes for '{}' missing at pos {}! Refusing to forge data.",
-                    name, pos
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Required 2 bytes for '{name}' missing at pos {pos}! Refusing to forge data."
+                    )
                 );
                 None
             },
@@ -277,9 +287,11 @@ impl ByteSliceExt for [u8] {
 
     fn get_byte_strict(&self, pos: usize, name: &str) -> Option<u8> {
         self.get(pos).copied().or_else(|| {
-            warn!(
-                "☢️ [ANOMALY] Required byte for '{}' missing at pos {}! Refusing to forge data.",
-                name, pos
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!(
+                    "Required byte for '{name}' missing at pos {pos}! Refusing to forge data."
+                )
             );
             None
         })

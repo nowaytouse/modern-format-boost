@@ -18,17 +18,22 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             .output()
         {
             Ok(output) if !output.status.success() => {
-                eprintln!(
-                    "⚠️ [metadata] PowerShell ACL copy returned non-zero status for {}: {}",
-                    dst.display(),
-                    String::from_utf8_lossy(&output.stderr).trim()
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "PowerShell ACL copy returned non-zero status for {path}: {err}",
+                        path = dst.display(),
+                        err = String::from_utf8_lossy(&output.stderr).trim()
+                    )
                 );
             }
             Err(e) => {
-                eprintln!(
-                    "⚠️ [metadata] Failed to launch PowerShell ACL copy for {}: {}",
-                    dst.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to launch PowerShell ACL copy for {path}: {e}",
+                        path = dst.display()
+                    )
                 );
             }
             _ => {}
@@ -52,17 +57,22 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             cmd.arg(dst);
             match cmd.build().output() {
                 Ok(output) if !output.status.success() => {
-                    eprintln!(
-                        "⚠️ [metadata] attrib returned non-zero status for {}: {}",
-                        dst.display(),
-                        String::from_utf8_lossy(&output.stderr).trim()
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "attrib returned non-zero status for {path}: {err}",
+                            path = dst.display(),
+                            err = String::from_utf8_lossy(&output.stderr).trim()
+                        )
                     );
                 }
                 Err(e) => {
-                    eprintln!(
-                        "⚠️ [metadata] Failed to launch attrib for {}: {}",
-                        dst.display(),
-                        e
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Failed to launch attrib for {path}: {e}",
+                            path = dst.display()
+                        )
                     );
                 }
                 _ => {}
@@ -91,17 +101,23 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
         .build()
         .output();
     let Ok(out) = out else {
-        eprintln!(
-            "⚠️ [metadata] Failed to enumerate ADS streams for {}",
-            src.display()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Failed to enumerate ADS streams for {path}",
+                path = src.display()
+            )
         );
         return;
     };
     if !out.status.success() {
-        eprintln!(
-            "⚠️ [metadata] PowerShell ADS enumeration returned non-zero status for {}: {}",
-            src.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "PowerShell ADS enumeration returned non-zero status for {path}: {err}",
+                path = src.display(),
+                err = String::from_utf8_lossy(&out.stderr).trim()
+            )
         );
         return;
     }
@@ -122,18 +138,21 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
             .output();
         if let Ok(r) = result {
             if !r.status.success() {
-                eprintln!(
-                    "⚠️ [metadata] Failed to copy ADS stream '{}': {}",
-                    stream_name,
-                    String::from_utf8_lossy(&r.stderr)
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to copy ADS stream '{stream_name}': {err}",
+                        err = String::from_utf8_lossy(&r.stderr)
+                    )
                 );
             }
         } else if let Err(e) = result {
-            eprintln!(
-                "⚠️ [metadata] Failed to launch PowerShell while copying ADS stream '{}' to {}: {}",
-                stream_name,
-                dst.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to launch PowerShell while copying ADS stream '{stream_name}' to {path}: {e}",
+                    path = dst.display()
+                )
             );
         }
     }

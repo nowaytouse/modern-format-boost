@@ -7,10 +7,11 @@ use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, SelectedCodec, TargetVideoFormat,
 };
+use shared_utils::{log_anomaly, log_detail, log_success};
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 fn convert_options_from_config(
     config: &ConversionConfig,
@@ -94,11 +95,14 @@ fn cleanup_output_file(path: &Path, context: &str) {
     if let Err(e) = std::fs::remove_file(path)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        warn!(
-            path = %path.display(),
-            error = %e,
-            context = context,
-            "Failed to remove output file during cleanup"
+        log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_CLEANUP,
+            &format!(
+                "Failed to remove output file during cleanup: {} (Path: {}, Context: {})",
+                e,
+                path.display(),
+                context
+            ),
         );
     }
 }
@@ -120,32 +124,36 @@ impl ExploreQualityFailureDecision {
                 .failure_reason()
                 .or(explore_result.enhanced_verify_fail_reason.as_deref())
                 .unwrap_or("quality/size check failed");
-            warn!("   ⚠️  Quality validation FAILED: {reason}");
+            shared_utils::log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_QUALITY_FAIL,
+                reason
+            );
             return Self {
                 fail_reason: format!("Quality validation failed: {reason}"),
                 fail_message: format!("Skipped: {reason}"),
-                protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
-                delete_msg: "Output discarded (quality/size check failed)".to_string(),
+                protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
             };
         }
 
         if actual_ssim.is_none() {
-            warn!(
-                "   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues (VP8/VP9/alpha channel)"
+            shared_utils::log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_SSIM_CALC_FAILED,
+                "cannot validate quality │ may indicate codec compatibility issues (VP8/VP9/alpha channel)",
             );
             return Self {
                 fail_reason: "SSIM calculation failed".to_string(),
                 fail_message: "Skipped: SSIM calculation failed".to_string(),
-                protect_msg: "Original file PROTECTED (SSIM not available)".to_string(),
-                delete_msg: "Output discarded (SSIM calculation failed)".to_string(),
+                protect_msg: shared_utils::static_logs::messages::PROTECT_SSIM_NA.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_SSIM_FAIL.to_string(),
             };
         }
 
         if actual_ssim.is_some_and(|ssim| ssim < threshold) {
             let actual_ssim = actual_ssim.unwrap_or_default();
-            warn!(
-                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
-                actual_ssim, threshold
+            shared_utils::log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_QUALITY_FAIL,
+                &format!("SSIM {actual_ssim:.4} < {threshold:.4}"),
             );
             return Self {
                 fail_reason: format!(
@@ -154,8 +162,8 @@ impl ExploreQualityFailureDecision {
                 fail_message: format!(
                     "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
                 ),
-                protect_msg: "Original file PROTECTED (quality below threshold)".to_string(),
-                delete_msg: "Output discarded (quality below threshold)".to_string(),
+                protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_LOW.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_LOW.to_string(),
             };
         }
 
@@ -164,18 +172,24 @@ impl ExploreQualityFailureDecision {
             .failure_reason()
             .or(explore_result.enhanced_verify_fail_reason.as_deref())
             .unwrap_or("quality/size check failed");
-        warn!("   ⚠️  Quality validation FAILED: {reason}");
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_QUALITY_FAIL,
+            reason
+        );
         Self {
             fail_reason: format!("Quality validation failed: {reason}"),
             fail_message: format!("Skipped: {reason}"),
-            protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
-            delete_msg: "Output discarded (quality/size check failed)".to_string(),
+            protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
+            delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
         }
     }
 
     fn emit(&self) {
         shared_utils::progress_mode::video_skipped(&self.fail_message);
-        warn!("   🛡️  {} │ 🗑️  {}", self.protect_msg, self.delete_msg);
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::PROTECTING_ORIGINAL,
+            &format!("{} │ 🗑️  {}", self.protect_msg, self.delete_msg),
+        );
     }
 
     fn into_skip_output(
@@ -238,9 +252,11 @@ impl FinalQualityGateFailureDecision {
         } else {
             "QUALITY TARGET FAILED"
         };
-        warn!(
-            "   {} ({}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌",
-            failure_label, quality_summary
+        shared_utils::log_anomaly!(
+            failure_label,
+            &format!(
+                "({quality_summary}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌"
+            ),
         );
 
         Self {
@@ -326,9 +342,11 @@ fn build_hdr_ffmpeg_args(detection: &Detection) -> Vec<String> {
     // Derive from color_space field; normalise bt2020ncl → bt2020nc for ffmpeg
     // Skip RGB/GBR colorspace: HEVC doesn't support it, and we're converting to YUV in filter chain
     let cs_str = match &detection.color_space {
-        crate::detection_api::ColorSpace::BT2020 => Some("bt2020nc"),
-        crate::detection_api::ColorSpace::BT709 => Some("bt709"),
-        crate::detection_api::ColorSpace::Unknown(s) if !s.is_empty() && s != "unknown" => {
+        crate::detection_api::ColorSpace::BT2020 => Some(shared_utils::constants::CS_BT2020),
+        crate::detection_api::ColorSpace::BT709 => Some(shared_utils::constants::CS_BT709),
+        crate::detection_api::ColorSpace::Unknown(s)
+            if !s.is_empty() && s != shared_utils::constants::STR_UNKNOWN =>
+        {
             // pass raw string through
             None // handled below separately to avoid lifetime issues
         }
@@ -338,8 +356,10 @@ fn build_hdr_ffmpeg_args(detection: &Detection) -> Vec<String> {
         args.push("-colorspace".to_string());
         args.push(cs.to_string());
     } else if let crate::detection_api::ColorSpace::Unknown(s) = &detection.color_space {
-        let is_rgb_colorspace = s == "gbr" || s == "rgb" || s == "gbrp";
-        if !s.is_empty() && s != "unknown" && !is_rgb_colorspace {
+        let is_rgb_colorspace = s == shared_utils::constants::CS_GBR
+            || s == shared_utils::constants::CS_RGB
+            || s == shared_utils::constants::CS_GBRP;
+        if !s.is_empty() && s != shared_utils::constants::STR_UNKNOWN && !is_rgb_colorspace {
             args.push("-colorspace".to_string());
             args.push(s.clone());
         }
@@ -359,9 +379,9 @@ const fn hdr_pix_fmt(detection: &Detection) -> &'static str {
     if let Some(depth) = detection.bit_depth
         && depth >= 10
     {
-        "yuv420p10le"
+        shared_utils::constants::PIX_FMT_YUV420P10LE
     } else {
-        "yuv420p"
+        shared_utils::constants::PIX_FMT_YUV420P
     }
 }
 
@@ -386,15 +406,18 @@ fn prepare_dv_rpu(detection: &Detection) -> Option<DvRpuResult> {
     }
 
     if !shared_utils::is_dovi_tool_available() {
-        warn!("dovi_tool not found — Dolby Vision RPU cannot be preserved, falling back to HDR10");
-        warn!("Install with: cargo install dovi_tool");
+        shared_utils::log_static!(warn, shared_utils::static_logs::messages::DOVI_TOOL_MISSING);
+        shared_utils::log_static!(warn, shared_utils::static_logs::messages::DOVI_TOOL_INSTALL);
         return None;
     }
 
     let temp_dir = match tempfile::TempDir::new() {
         Ok(d) => d,
         Err(e) => {
-            warn!("Failed to create temp dir for DV RPU extraction: {}", e);
+            shared_utils::log_anomaly!(
+                "DV RPU extraction",
+                &format!("Failed to create temp dir: {e}"),
+            );
             return None;
         }
     };
@@ -405,8 +428,11 @@ fn prepare_dv_rpu(detection: &Detection) -> Option<DvRpuResult> {
     let raw_hevc = match shared_utils::extract_hevc_bitstream(input_path, temp_dir.path()) {
         Ok(p) => p,
         Err(e) => {
-            warn!("DV RPU extraction: bitstream extraction failed: {}", e);
-            warn!("Falling back to HDR10 static layer");
+            shared_utils::log_anomaly!(
+                "DV RPU extraction",
+                &format!("bitstream extraction failed: {e}"),
+            );
+            shared_utils::log_detail!("Falling back to HDR10 static layer");
             return None;
         }
     };
@@ -416,8 +442,11 @@ fn prepare_dv_rpu(detection: &Detection) -> Option<DvRpuResult> {
         match shared_utils::extract_dv_rpu(&raw_hevc, temp_dir.path(), detection.dv_profile) {
             Ok(p) => p,
             Err(e) => {
-                warn!("DV RPU extraction failed: {}", e);
-                warn!("Falling back to HDR10 static layer");
+                shared_utils::log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_DV_FAILED,
+                    &e.to_string()
+                );
+                shared_utils::log_detail!("Falling back to HDR10 static layer");
                 return None;
             }
         };
@@ -427,9 +456,12 @@ fn prepare_dv_rpu(detection: &Detection) -> Option<DvRpuResult> {
         detection.dv_profile,
         detection.dv_bl_signal_compatibility_id,
     ) else {
-        warn!(
-            "Unsupported DV profile {:?} for x265 — falling back to HDR10",
-            detection.dv_profile
+        shared_utils::log_anomaly!(
+            "DV RPU extraction",
+            &format!(
+                "Unsupported DV profile {:?} for x265 — falling back to HDR10",
+                detection.dv_profile
+            ),
         );
         return None;
     };
@@ -464,9 +496,10 @@ fn prepare_hdr10plus_metadata(detection: &Detection) -> Option<Hdr10PlusResult> 
         return None;
     }
 
-    if !shared_utils::hdr_utils::is_hdr10plus_tool_available() {
-        warn!(
-            "hdr10plus_tool not found — HDR10+ dynamic metadata cannot be preserved, falling back to HDR10"
+    if !shared_utils::hdr::is_hdr10plus_tool_available() {
+        shared_utils::log_static!(
+            warn,
+            shared_utils::static_logs::messages::HDR10PLUS_TOOL_MISSING
         );
         return None;
     }
@@ -474,7 +507,10 @@ fn prepare_hdr10plus_metadata(detection: &Detection) -> Option<Hdr10PlusResult> 
     let temp_dir = match tempfile::TempDir::new() {
         Ok(d) => d,
         Err(e) => {
-            warn!("Failed to create temp dir for HDR10+ extraction: {}", e);
+            shared_utils::log_anomaly!(
+                "HDR10+ extraction",
+                &format!("Failed to create temp dir: {e}"),
+            );
             return None;
         }
     };
@@ -485,20 +521,26 @@ fn prepare_hdr10plus_metadata(detection: &Detection) -> Option<Hdr10PlusResult> 
     let raw_hevc = match shared_utils::extract_hevc_bitstream(input_path, temp_dir.path()) {
         Ok(p) => p,
         Err(e) => {
-            warn!("HDR10+ extraction: bitstream extraction failed: {}", e);
+            shared_utils::log_anomaly!(
+                "HDR10+ extraction",
+                &format!("bitstream extraction failed: {e}"),
+            );
             return None;
         }
     };
 
     // Step 2: Extract HDR10+ JSON
-    let json_path =
-        match shared_utils::hdr_utils::extract_hdr10plus_metadata(&raw_hevc, temp_dir.path()) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("HDR10+ extraction failed: {}", e);
-                return None;
-            }
-        };
+    let json_path = match shared_utils::hdr::extract_hdr10plus_metadata(&raw_hevc, temp_dir.path())
+    {
+        Ok(p) => p,
+        Err(e) => {
+            shared_utils::log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_HDR10PLUS_FAILED,
+                &e.to_string()
+            );
+            return None;
+        }
+    };
 
     info!("HDR10+ dynamic metadata extracted — will be preserved via dhdr10-info in x265 output");
 
@@ -526,6 +568,7 @@ const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
+#[must_use]
 pub fn determine_strategy_with_apple_compat(
     result: &Detection,
     input: &Path,
@@ -533,13 +576,13 @@ pub fn determine_strategy_with_apple_compat(
     force: bool,
     codec: SelectedCodec,
 ) -> ConversionStrategy {
-    tracing::debug!(
-        file = %input.display(),
-        apple_compat = apple_compat,
-        force = force,
-        codec = %codec.as_str(),
-        "Determining conversion strategy"
-    );
+    log_detail!(&format!(
+        "Determining conversion strategy for: {} (Apple Compat: {}, Force: {}, Codec: {})",
+        input.display(),
+        apple_compat,
+        force,
+        codec.as_str()
+    ));
     // Enforcement: AV1 strategy does NOT support Apple compatibility
     if codec == SelectedCodec::Av1 && apple_compat {
         return ConversionStrategy {
@@ -832,12 +875,16 @@ pub fn auto_convert_with_cache(
         };
 
         if let Some(corrected) = decoded_frame_count.filter(|count| *count > 1) {
-            tracing::warn!(
-                file = %input.display(),
-                vid_frame_count = detection
-                    .frame_count.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
-                image_frame_count = corrected,
-                "Animated-image reconciliation corrected frame_count before vid static isolation"
+            log_anomaly!(
+                "Animated-image reconciliation",
+                &format!(
+                    "Corrected frame_count for {}: vid saw {}, image saw {} (corrected before static isolation)",
+                    input.display(),
+                    detection
+                        .frame_count
+                        .map_or_else(|| "unknown".to_string(), |count| count.to_string()),
+                    corrected
+                ),
             );
             detection.frame_count = Some(corrected);
             if detection.duration_secs.is_none_or(|d| d <= 0.0_f64)
@@ -847,11 +894,15 @@ pub fn auto_convert_with_cache(
                 detection.duration_secs = Some(f64::from(dur));
             }
         } else if image_is_animated {
-            tracing::warn!(
-                file = %input.display(),
-                vid_frame_count = detection
-                    .frame_count.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
-                "Animated-image reconciliation saw animated image evidence but could not verify a real frame count; leaving vid metadata unchanged"
+            log_anomaly!(
+                "Animated-image reconciliation",
+                &format!(
+                    "Saw animated image evidence for {} but could not verify a real frame count; leaving vid metadata unchanged (vid saw {})",
+                    input.display(),
+                    detection
+                        .frame_count
+                        .map_or_else(|| "unknown".to_string(), |count| count.to_string())
+                ),
             );
         }
     }
@@ -891,14 +942,19 @@ pub fn auto_convert_with_cache(
     // Warn about dynamic HDR metadata that will be stripped during re-encode
     if detection.flags.hdr.is_dolby_vision {
         if shared_utils::is_dovi_tool_available() {
-            info!("Dolby Vision detected: RPU will be preserved via dovi_tool");
+            shared_utils::log_detail!("Dolby Vision detected: RPU will be preserved via dovi_tool",);
         } else {
-            warn!("Dolby Vision detected: dovi_tool not found, falling back to HDR10 static layer");
-            warn!("Install dovi_tool to preserve DV metadata: cargo install dovi_tool");
+            shared_utils::log_static!(warn, shared_utils::static_logs::messages::DOVI_TOOL_MISSING);
+            shared_utils::log_hint!(
+                "Install dovi_tool to preserve DV metadata: cargo install dovi_tool",
+            );
         }
     }
     if detection.flags.hdr.is_hdr10_plus {
-        warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
+        shared_utils::log_static!(
+            warn,
+            shared_utils::static_logs::messages::HDR10PLUS_TOOL_MISSING
+        );
     }
 
     detection.file_path = input.display().to_string();
@@ -911,19 +967,19 @@ pub fn auto_convert_with_cache(
         config.codec,
     );
 
-    tracing::debug!(
-        file = %input.display(),
-        strategy = %strategy.target.extension(),
-        reason = %strategy.reason,
-        crf = strategy.crf,
-        lossless = strategy.lossless,
-        "Conversion strategy determined"
-    );
+    log_detail!(&format!(
+        "Conversion strategy determined for {}: Target={}, Reason={}, CRF={:.1}, Lossless={}",
+        input.display(),
+        strategy.target.extension(),
+        strategy.reason,
+        strategy.crf,
+        strategy.lossless
+    ));
 
     // Enforcement check: if strategy resulted in skip due to AV1/Apple-compat conflict
     if config.codec == SelectedCodec::Av1 && config.apple_compat() {
-        info!("   ❌ Error: AV1 strategy does not support Apple compatibility.");
-        info!("      Tip: remove --apple-compat or change codec to hevc.");
+        shared_utils::log_anomaly!("AV1 strategy", "does not support Apple compatibility.",);
+        shared_utils::log_hint!("remove --apple-compat or change codec to hevc.");
         std::process::exit(1);
     }
 
@@ -1022,18 +1078,23 @@ pub fn auto_convert_with_cache(
     let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
         .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
-    info!(
-        "🎬 Auto Mode: {} → {}",
-        input.display(),
-        strategy.target.as_str()
+
+    shared_utils::static_logs::log_stage(
+        "🎬",
+        "Auto Mode",
+        &format!("{} → {}", input.display(), strategy.target.as_str()),
     );
-    info!("   Reason: {}", strategy.reason);
+    shared_utils::log_detail!(&format!("Reason: {}", strategy.reason));
 
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::HevcLosslessMkv => {
-            info!(
-                "   🚀 Using {} Lossless Mode",
-                config.codec.as_str().to_uppercase()
+            shared_utils::static_logs::log_stage(
+                "🚀",
+                "Lossless Mode",
+                &format!(
+                    "Using {} Lossless Mode",
+                    config.codec.as_str().to_uppercase()
+                ),
             );
             let size = execute_lossless(
                 &detection,
@@ -1086,12 +1147,14 @@ pub fn auto_convert_with_cache(
                 1.0_f64
             };
 
-            info!(
-                "   ✅ GIF Recovery Complete: {} → {} ({:.1}% of original)",
+            log_success!(&format!(
+                "GIF Recovery Complete: {} → {} ({:.1}% of original) - {} → {}",
                 shared_utils::format_bytes(detection.file_size),
                 shared_utils::format_bytes(output_size),
-                size_ratio * 100.0_f64
-            );
+                size_ratio * 100.0_f64,
+                detection.file_size,
+                output_size
+            ));
 
             // Update cache hint for successful GIF recovery
             if result.success {
@@ -1099,9 +1162,12 @@ pub fn auto_convert_with_cache(
                 detection.precision.last_best_effort_crf = None;
                 if let Some(cache) = cache {
                     if let Err(e) = cache.store_video_analysis(input, &detection) {
-                        tracing::warn!("Failed to update video cache hint for GIF: {}", e);
+                        log_anomaly!(
+                            "Cache",
+                            &format!("Failed to update video cache hint for GIF: {e}"),
+                        );
                     } else {
-                        tracing::debug!("Updated video cache with GIF recovery hint");
+                        log_detail!("Updated video cache with GIF recovery hint");
                     }
                 }
             }
@@ -1160,52 +1226,51 @@ pub fn auto_convert_with_cache(
             let use_gpu = config.use_gpu();
             if !use_gpu {
                 let encoder_name = match config.codec {
-                    SelectedCodec::Hevc => "libx265",
-                    SelectedCodec::Av1 => "libsvtav1",
-                    SelectedCodec::Av2 => "libaom-av2",
-                    SelectedCodec::Vvc => "libvvenc",
+                    SelectedCodec::Hevc => shared_utils::constants::LIB_X265,
+                    SelectedCodec::Av1 => shared_utils::constants::LIB_SVTAV1,
+                    SelectedCodec::Av2 => shared_utils::constants::LIB_AV2,
+                    SelectedCodec::Vvc => shared_utils::constants::LIB_VVENC,
                 };
-                info!(
-                    "   🖥️  CPU Mode: Using {} for higher SSIM (≥{:.2})",
-                    encoder_name,
+                shared_utils::log_detail!(&format!(
+                    "🖥️  CPU Mode: Using {encoder_name} for higher SSIM (≥{:.2})",
                     shared_utils::constants::UI_QUALITY_GOOD_THRESHOLD
-                );
+                ));
             }
 
             let ultimate = flag_mode.is_ultimate();
 
             let predicted_crf = calculate_matched_crf(&detection, &config.codec)?;
             let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
-                info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
+                shared_utils::log_hint!(&format!(
+                    "Using cached CRF hint: {hint:.1} (warm start only)"
+                ));
                 Some(hint)
             } else if let Some(hint) = detection.precision.last_best_effort_crf {
-                info!(
-                    "   💡 Using cached best-effort CRF hint: {:.1} (warm start only)",
-                    hint
-                );
+                shared_utils::log_hint!(&format!(
+                    "Using cached best-effort CRF hint: {hint:.1} (warm start only)"
+                ));
                 Some(hint)
             } else if let Some(hint) = match config.codec {
                 SelectedCodec::Hevc => shared_utils::crf_constants::get_global_last_hit_crf_hevc(),
                 SelectedCodec::Av1 => shared_utils::crf_constants::get_global_last_hit_crf_av1(),
                 SelectedCodec::Av2 | SelectedCodec::Vvc => None, // No global hints for experimental codecs yet
             } {
-                info!(
-                    "   💡 Using global last hit {} CRF: {:.1} (warm start only)",
-                    config.codec.as_str().to_uppercase(),
-                    hint
-                );
+                shared_utils::log_hint!(&format!(
+                    "Using global last hit {} CRF: {hint:.1} (warm start only)",
+                    config.codec.as_str().to_uppercase()
+                ));
                 Some(shared_utils::numeric_cast::f64_to_f32_lossy(hint))
             } else {
                 None
             };
             let search_crf = warm_start_crf.unwrap_or(predicted_crf);
-            info!(
-                "   {} {}: base CRF {:.1} → search anchor {:.1}",
+            shared_utils::log_detail!(&format!(
+                "{} {}: base CRF {:.1} → search anchor {:.1}",
                 if ultimate { "🔥" } else { "🔬" },
                 flag_mode.description_en(),
                 predicted_crf,
                 search_crf
-            );
+            ));
             let mut hdr_x265_params = String::new();
 
             // Inject DV RPU path and profile into x265 params when available
@@ -1361,9 +1426,12 @@ pub fn auto_convert_with_cache(
                         },
                     },
                 ) {
-                    warn!(
-                        "   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets",
-                        explore_result.optimal_crf, explore_result.iterations
+                    shared_utils::log_anomaly!(
+                        "APPLE COMPAT FALLBACK",
+                        &format!(
+                            "keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets",
+                            explore_result.optimal_crf, explore_result.iterations
+                        ),
                     );
                     shared_utils::conversion::commit_temp_to_output_with_metadata(
                         &temp_path,
@@ -1408,10 +1476,13 @@ pub fn auto_convert_with_cache(
                 }
 
                 if let Err(e) = std::fs::remove_file(&temp_path) {
-                    warn!(
-                        "Failed to clean up temp file {}: {}",
-                        temp_path.display(),
-                        e
+                    log_anomaly!(
+                        "Cleanup",
+                        &format!(
+                            "Failed to clean up temp file {}: {}",
+                            temp_path.display(),
+                            e
+                        ),
                     );
                 }
                 shared_utils::copy_on_skip_or_fail(
@@ -1470,9 +1541,9 @@ pub fn auto_convert_with_cache(
             detection.precision.last_best_effort_crf = Some(final_crf);
         }
         if let Err(e) = cache.store_video_analysis(input, &detection) {
-            tracing::warn!("Failed to update video cache hint: {}", e);
+            log_anomaly!("Cache", &format!("Failed to update video cache hint: {e}"),);
         } else {
-            tracing::debug!(
+            log_detail!(&format!(
                 "Updated video cache with {} CRF hint: {:.1}",
                 if cache_exact_hint {
                     "exact"
@@ -1480,15 +1551,15 @@ pub fn auto_convert_with_cache(
                     "best-effort"
                 },
                 final_crf
-            );
+            ));
         }
     }
 
     // Verify temp file exists before commit
     if !temp_path.exists() {
-        warn!(
-            "⚠️  Temp file missing before commit: {}",
-            temp_path.display()
+        shared_utils::log_anomaly!(
+            "Temp file missing before commit",
+            &temp_path.display().to_string(),
         );
         return Err(VidQualityError::ConversionError(format!(
             "Temp file not found: {}",
@@ -1510,7 +1581,7 @@ pub fn auto_convert_with_cache(
             output_path.display()
         ))
     })? {
-        info!("⏭️ Output was created concurrently, skipping overwrite");
+        log_detail!("Output was created concurrently, skipping overwrite");
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: String::new(),
@@ -1538,11 +1609,14 @@ pub fn auto_convert_with_cache(
             && !source_is_gif
             && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
         {
-            warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality below target");
-            warn!(
-                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
-                result.optimal_crf, result.iterations
+            shared_utils::log_anomaly!(
+                "APPLE COMPAT FALLBACK (not full success)",
+                "quality below target",
             );
+            shared_utils::log_detail!(&format!(
+                "Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
+                result.optimal_crf, result.iterations
+            ));
             return Ok(ConversionOutput {
                 input_path: input.display().to_string(),
                 output_path: output_path.display().to_string(),
@@ -1620,12 +1694,12 @@ pub fn auto_convert_with_cache(
         || output_stream_info.container_overhead
             > shared_utils::constants::CONTAINER_OVERHEAD_REPORT_THRESHOLD
     {
-        info!("   📋 Metadata: +{} bytes", metadata_delta);
-        info!(
-            "   📦 Container overhead: {} bytes ({:.1}%)",
+        shared_utils::log_detail!(&format!("📋 Metadata: +{metadata_delta} bytes"));
+        shared_utils::log_detail!(&format!(
+            "📦 Container overhead: {} bytes ({:.1}%)",
             output_stream_info.container_overhead,
             output_stream_info.container_overhead_percent()
-        );
+        ));
     }
 
     let total_file_compressed = actual_output_size < detection.file_size;
@@ -1647,21 +1721,23 @@ pub fn auto_convert_with_cache(
 
     // --- require_compression phase: primary decision by total file size. ---
     if config.require_compression() && !total_within_tolerance {
-        warn!("   ⚠️  COMPRESSION FAILED (total file comparison):");
-        warn!(
-            "   ⚠️  Total file: {} → {} ({:+.1}%)",
-            shared_utils::format_bytes(input_stream_info.total_file_size),
-            shared_utils::format_bytes(output_stream_info.total_file_size),
-            verify_result.total_size_change_percent()
+        shared_utils::log_anomaly!(
+            "COMPRESSION FAILED (total file comparison)",
+            &format!(
+                "Total file: {} → {} ({:+.1}%)",
+                shared_utils::format_bytes(input_stream_info.total_file_size),
+                shared_utils::format_bytes(output_stream_info.total_file_size),
+                verify_result.total_size_change_percent()
+            ),
         );
-        tracing::debug!(
+        log_detail!(&format!(
             "video stream diagnostic: {} -> {} ({:+.1}%), container_overhead={}B",
             shared_utils::format_bytes(input_stream_info.video_stream_size),
             shared_utils::format_bytes(output_stream_info.video_stream_size),
             verify_result.video_size_change_percent(),
             output_stream_info.container_overhead
-        );
-        warn!("   🛡️  Original file PROTECTED");
+        ));
+        shared_utils::log_detail!("🛡️  Original file PROTECTED");
 
         // Apple-compat fallback: still decided purely by total file behavior (video stream is internal detail).
         if shared_utils::should_keep_apple_fallback_hevc_output(
@@ -1680,13 +1756,13 @@ pub fn auto_convert_with_cache(
                 },
             },
         ) {
-            warn!(
-                "   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (total file not smaller enough)"
+            shared_utils::log_anomaly!(
+                "APPLE COMPAT FALLBACK (not full success)",
+                "compression check failed (total file not smaller enough)",
             );
-            warn!(
-                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
-                final_crf, attempts
-            );
+            shared_utils::log_detail!(&format!(
+                "Keeping best-effort output: last attempt CRF {final_crf:.1} ({attempts} iterations), file is HEVC and importable"
+            ));
             return Ok(ConversionOutput {
                 input_path: input.display().to_string(),
                 output_path: output_path.display().to_string(),
@@ -1766,12 +1842,12 @@ pub fn auto_convert_with_cache(
     }
 
     if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0_f64 {
-        tracing::debug!(
+        log_detail!(&format!(
             "video stream shrank ({:+.1}%) but total file grew ({:+.1}%) due to container overhead diff {:+}B",
             verify_result.video_size_change_percent(),
             verify_result.total_size_change_percent(),
             verify_result.container_overhead_diff
-        );
+        ));
     }
 
     let output_size = actual_output_size;
@@ -1786,13 +1862,19 @@ pub fn auto_convert_with_cache(
             &output_path,
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
         ) {
-            warn!("   ⚠️  Safe delete failed: {}", e);
+            shared_utils::log_anomaly!(
+                shared_utils::static_logs::messages::LABEL_DELETE_FAILED,
+                &e.to_string()
+            );
         } else {
-            info!("   🗑️  Original deleted (integrity verified)");
+            shared_utils::log_detail!("🗑️  Original deleted (integrity verified)");
         }
     }
 
-    info!("   ✅ Complete: {:.1}% of original", size_ratio * 100.0_f64);
+    shared_utils::log_detail!(&format!(
+        "✅ Complete: {:.1}% of original",
+        size_ratio * 100.0_f64
+    ));
 
     Ok(ConversionOutput {
         input_path: input.display().to_string(),
@@ -1945,9 +2027,9 @@ fn execute_lossless(
     ultimate: bool,
 ) -> Result<u64> {
     let codec_name = codec.as_str().to_uppercase();
-    warn!(
-        "⚠️  {} Lossless encoding - this will be slow and produce large files!",
-        codec_name
+    shared_utils::log_anomaly!(
+        &format!("{codec_name} Lossless encoding"),
+        "this will be slow and produce large files!",
     );
 
     // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
@@ -2032,10 +2114,10 @@ fn execute_lossless(
     );
 
     let encoder = match codec {
-        SelectedCodec::Hevc => "libx265",
-        SelectedCodec::Av1 => "libsvtav1",
-        SelectedCodec::Av2 => "libaom-av2",
-        SelectedCodec::Vvc => "libvvenc",
+        SelectedCodec::Hevc => shared_utils::constants::LIB_X265,
+        SelectedCodec::Av1 => shared_utils::constants::LIB_SVTAV1,
+        SelectedCodec::Av2 => shared_utils::constants::LIB_AV2,
+        SelectedCodec::Vvc => shared_utils::constants::LIB_VVENC,
     };
 
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
@@ -2876,7 +2958,7 @@ mod tests {
         assert!(final_params.contains("repeat-headers=1"));
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
 
-        println!("✅ HDR10+ x265-params injection verified: {final_params}");
+        log_detail!("✅ HDR10+ x265-params injection verified: {final_params}");
     }
 
     #[test]

@@ -98,28 +98,16 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
                 if d == 0.0 {
                     return None;
                 }
-                Some(crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::f64_to_u64_strict(
                     ((n / d) * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
-                ))
+                    "hdr_coord",
+                )
             } else {
                 let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_gx_val")?;
-                if f <= 1.0 {
-                    Some(crate::numeric_cast::f64_to_u64_sat(
-                        (f * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
-                    ))
-                } else {
-                    Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
-                }
-            }
-        }
-        serde_json::Value::Number(n) => {
-            let f = n.as_f64()?;
-            if f <= 1.0 {
-                Some(crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::f64_to_u64_strict(
                     (f * crate::constants::HDR_COORD_SCALING_FACTOR).round(),
-                ))
-            } else {
-                Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
+                    "hdr_coord",
+                )
             }
         }
         _ => None,
@@ -135,29 +123,24 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
                 if d == 0.0 {
                     return None;
                 }
-                Some(crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::f64_to_u64_strict(
                     ((n / d) * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
-                ))
+                    "hdr_luma",
+                )
             } else {
                 let f: f64 = crate::numeric_cast::parse_strict(s, "hdr_lmax_val")?;
-                if f <= crate::constants::HDR_LUMA_SCALING_FACTOR {
-                    Some(crate::numeric_cast::f64_to_u64_sat(
-                        (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
-                    ))
-                } else {
-                    Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
-                }
+                crate::numeric_cast::f64_to_u64_strict(
+                    (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
+                    "hdr_luma_f",
+                )
             }
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= crate::constants::HDR_LUMA_SCALING_FACTOR {
-                Some(crate::numeric_cast::f64_to_u64_sat(
-                    (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
-                ))
-            } else {
-                Some(crate::numeric_cast::f64_to_u64_sat(f.round()))
-            }
+            crate::numeric_cast::f64_to_u64_strict(
+                (f * crate::constants::HDR_LUMA_SCALING_FACTOR).round(),
+                "hdr_luma_n",
+            )
         }
         _ => None,
     }

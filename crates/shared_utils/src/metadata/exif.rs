@@ -45,7 +45,14 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
     let output = match builder.build().output() {
         Ok(out) => out,
         Err(e) => {
-            tracing::warn!(path = %src.display(), error = %e, "Failed to run ExifTool to extract source date");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to run ExifTool to extract source date (path={}): {}",
+                    src.display(),
+                    e
+                )
+            );
             return None;
         }
     };
@@ -79,21 +86,39 @@ pub fn preserve_internal(src: &Path, dst: &Path) -> io::Result<()> {
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("Not a valid") || err_str.contains("looks more like") {
-                eprintln!("⚠️ Metadata preservation failed: {err_str}");
-                eprintln!("⚠️ Attempting content-aware fallback...");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Metadata preservation failed: {err_str}")
+                );
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    "Attempting content-aware fallback..."
+                );
 
                 let hint = crate::extract_suggested_extension(&err_str);
                 if let Some(ref h) = hint {
-                    eprintln!("💡 ExifTool suggests content is: {h}");
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!("ExifTool suggests content is: {h}")
+                    );
                 }
 
                 match preserve_internal_fallback(src, dst, hint.as_deref()) {
                     Ok(()) => {
-                        eprintln!("✅ Metadata fallback successful for {}", dst.display());
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "Metadata fallback successful for {path}",
+                                path = dst.display()
+                            )
+                        );
                         return Ok(());
                     }
                     Err(fallback_err) => {
-                        eprintln!("❌ Metadata fallback failed: {fallback_err}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!("Metadata fallback failed: {fallback_err}")
+                        );
                     }
                 }
             }
@@ -108,7 +133,13 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
     } else {
         crate::common_utils::detect_real_extension(dst)
             .ok_or_else(|| {
-                tracing::warn!(path = %dst.display(), "Extension detection failed for content-aware metadata fallback");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Extension detection failed for content-aware metadata fallback (path={})",
+                        dst.display()
+                    )
+                );
                 io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content")
             })?
             .to_string()
@@ -122,7 +153,10 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
         )));
     }
 
-    eprintln!("⚠️ Temporary rename to .{detected_ext} for metadata preservation...");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_METADATA,
+        &format!("Temporary rename to .{detected_ext} for metadata preservation...")
+    );
 
     let temp_path = dst.with_extension(&detected_ext);
     if temp_path.exists() {
@@ -137,27 +171,40 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
     let result = preserve_internal_core(src, &temp_path);
 
     if let Err(e) = std::fs::rename(&temp_path, dst) {
-        eprintln!(
-            "❌ CRITICAL: Failed to restore filename from {} to {}: {}",
-            temp_path.display(),
-            dst.display(),
-            e
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "CRITICAL: Failed to restore filename from {src} to {dst}: {e}",
+                src = temp_path.display(),
+                dst = dst.display()
+            )
         );
         if temp_path.exists() && !dst.exists() {
-            eprintln!("   🔧 Attempting emergency recovery via copy...");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "Attempting emergency recovery via copy..."
+            );
             if matches!(std::fs::copy(&temp_path, dst).map(|_| ()), Ok(())) {
                 if let Err(cleanup_err) = std::fs::remove_file(&temp_path) {
-                    eprintln!(
-                        "   ⚠️ Emergency recovery succeeded but cleanup failed for {}: {}",
-                        temp_path.display(),
-                        cleanup_err
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Emergency recovery succeeded but cleanup failed for {path}: {cleanup_err}",
+                            path = temp_path.display()
+                        )
                     );
                 }
-                eprintln!("   ✅ Emergency recovery succeeded");
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    "Emergency recovery succeeded"
+                );
             } else {
-                eprintln!(
-                    "   ❌ Emergency recovery FAILED. File stranded at: {}",
-                    temp_path.display()
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Emergency recovery FAILED. File stranded at: {path}",
+                        path = temp_path.display()
+                    )
                 );
             }
         }
@@ -203,7 +250,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
-            eprintln!("⚠️ [metadata] ExifTool not found. EXIF/IPTC will NOT be preserved.");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "ExifTool not found. EXIF/IPTC will NOT be preserved."
+            );
         });
         return Ok(());
     }
@@ -214,10 +264,12 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         if let Err(e) = std::fs::remove_file(&tmp_path)
             && e.kind() != io::ErrorKind::NotFound
         {
-            eprintln!(
-                "⚠️ [metadata] Failed to remove stale ExifTool temp file {}: {}",
-                tmp_path.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to remove stale ExifTool temp file {path}: {e}",
+                    path = tmp_path.display()
+                )
             );
         }
     }
@@ -239,14 +291,20 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     // allow exiftool to inject it as a safety net so the output is never ICC-less.
     let jxl_already_has_icc = is_jxl_output && crate::jxl_utils::verify_jxl_has_icc(dst);
     if jxl_already_has_icc {
-        tracing::debug!(
-            dst = %dst.display(),
-            "JXL already has embedded ICC — skipping ExifTool ICC injection"
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "JXL already has embedded ICC — skipping ExifTool ICC injection (path={})",
+                dst.display()
+            )
         );
     } else if is_jxl_output {
-        tracing::debug!(
-            dst = %dst.display(),
-            "JXL has no embedded ICC — ExifTool fallback will inject ICC"
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "JXL has no embedded ICC — ExifTool fallback will inject ICC (path={})",
+                dst.display()
+            )
         );
     }
 
@@ -287,23 +345,29 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     {
         let stderr_str = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
-            tracing::warn!(
-                src = %src.display(),
-                dst = %dst.display(),
-                exit_code = ?output.status.code(),
-                stderr = %stderr_str.trim(),
-                "exiftool metadata copy failed"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "exiftool metadata copy failed (src={}, dst={}, exit_code={:?}, stderr={})",
+                    src.display(),
+                    dst.display(),
+                    output.status.code(),
+                    stderr_str.trim()
+                )
             );
         } else if !stderr_str.trim().is_empty() {
             let trimmed = stderr_str.trim();
             if !trimmed.contains("No writable tags set")
                 && !trimmed.contains("Wrapped JXL codestream")
             {
-                tracing::debug!(
-                    src = %src.display(),
-                    dst = %dst.display(),
-                    stderr = %trimmed,
-                    "exiftool completed with warnings (suppressed by -m)"
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "exiftool completed with warnings (suppressed by -m) (src={}, dst={}, stderr={})",
+                        src.display(),
+                        dst.display(),
+                        trimmed
+                    )
                 );
             }
         }
@@ -321,10 +385,13 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
                 || stderr.contains("Not a valid");
 
             if is_corrupt {
-                eprintln!(
-                    "⚠️  [Structural Repair] {} detected metadata corruption：{}",
-                    dst.display(),
-                    stderr.lines().next().unwrap_or("unknown error")
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Structural Repair: {path} detected metadata corruption: {err}",
+                        path = dst.display(),
+                        err = stderr.lines().next().unwrap_or("unknown error")
+                    )
                 );
             }
 
@@ -333,7 +400,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     };
 
     if needs_repair {
-        eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "Structural Repair: executing ImageMagick rebuild..."
+        );
 
         let mut magick_builder = crate::MagickBuilder::new();
         // ImageMagick repair requires proper protocol shielding
@@ -346,7 +416,13 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         match magick_result {
             Ok(out) => {
                 if out.status.success() {
-                    eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Structural Repair: Complete for {path}",
+                            path = dst.display()
+                        )
+                    );
 
                     let mut repair_builder = crate::ExiftoolBuilder::new();
                     repair_builder
@@ -375,9 +451,12 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
 
                     output = repair_builder.build().output()?;
                 } else {
-                    eprintln!(
-                        "⚠️  [Structural Repair] magick failed：{}",
-                        String::from_utf8_lossy(&out.stderr)
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Structural Repair: magick failed: {err}",
+                            err = String::from_utf8_lossy(&out.stderr)
+                        )
                     );
                     if let Some(msg) = exiftool_error_message(&output) {
                         return Err(io::Error::other(format!("ExifTool failed: {msg}")));
@@ -385,7 +464,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!("⚠️  [Structural Repair] magick unavailable：{e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Structural Repair: magick unavailable: {e}")
+                );
                 if let Some(msg) = exiftool_error_message(&output) {
                     return Err(io::Error::other(format!("ExifTool failed: {msg}")));
                 }
@@ -399,16 +481,24 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         return Err(io::Error::other(format!("ExifTool failed: {msg}")));
     }
 
-    let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
+    let file_name = dst.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Failed to get filename for backup: {}", dst.display()),
+        )
+    })?;
+    let mut backup_name = file_name.to_os_string();
     backup_name.push("_original");
     let backup_path = dst.with_file_name(backup_name);
     if let Err(e) = std::fs::remove_file(&backup_path)
         && e.kind() != io::ErrorKind::NotFound
     {
-        eprintln!(
-            "⚠️ [metadata] Failed to remove ExifTool backup file {}: {}",
-            backup_path.display(),
-            e
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Failed to remove ExifTool backup file {path}: {e}",
+                path = backup_path.display()
+            )
         );
     }
 
@@ -423,7 +513,10 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
     // because the date may have been reset to encode time rather than original capture time.
     let Some(best_date) = get_best_date_from_source(src) else {
-        eprintln!("⚠️ [metadata] Cannot determine date for QuickTime metadata");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "Cannot determine date for QuickTime metadata"
+        );
         return Ok(());
     };
 
@@ -457,9 +550,12 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Warnings are non-fatal (e.g. tag not writable for this format)
         if !stderr.trim().is_empty() && !stderr.contains("Warning") {
-            eprintln!(
-                "⚠️ [metadata] Failed to set QuickTime/EXIF dates: {}",
-                stderr.trim()
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to set QuickTime/EXIF dates: {err}",
+                    err = stderr.trim()
+                )
             );
         }
     }
@@ -483,7 +579,10 @@ mod tests {
     #[test]
     fn test_safe_path_arg_prefixes() {
         if !is_exiftool_available() {
-            eprintln!("ExifTool not available, skipping test");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "ExifTool not available, skipping test"
+            );
             return;
         }
         let _temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -493,7 +592,10 @@ mod tests {
     #[test]
     fn test_preserve_mismatch() {
         if !is_exiftool_available() {
-            eprintln!("ExifTool not available, skipping test");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "ExifTool not available, skipping test"
+            );
             return;
         }
         let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -516,7 +618,10 @@ mod tests {
         let result = preserve_internal(&src_path, &dst_path);
 
         if let Err(e) = &result {
-            println!("Test failed with error: {e}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Test failed with error: {e}")
+            );
         }
         assert!(
             result.is_ok(),

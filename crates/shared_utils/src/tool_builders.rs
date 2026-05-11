@@ -8,14 +8,13 @@ use std::process::Command;
 /// Builder for constructing `vmaf` commands.
 #[derive(Debug, Default)]
 pub struct VmafBuilder {
+    base: crate::builder_base::BaseBuilder,
     reference: Option<PathBuf>,
     distorted: Option<PathBuf>,
-    output: Option<PathBuf>,
     features: Vec<String>,
     json: bool,
     threads: Option<usize>,
     model: Option<String>,
-    extra_args: Vec<String>,
 }
 
 impl VmafBuilder {
@@ -36,11 +35,6 @@ impl VmafBuilder {
 
     pub fn distorted<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.distorted = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
         self
     }
 
@@ -65,12 +59,9 @@ impl VmafBuilder {
         self.model = Some(path.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(VmafBuilder);
 
 impl ToolBuilder for VmafBuilder {
     fn get_command_name(&self) -> &str {
@@ -106,14 +97,9 @@ impl ToolBuilder for VmafBuilder {
             cmd.arg("--model").arg(model);
         }
 
-        if let Some(output) = &self.output {
-            cmd.arg("--output")
-                .arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_output(&mut cmd, Some("--output"));
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
 
         cmd
     }
@@ -122,8 +108,7 @@ impl ToolBuilder for VmafBuilder {
 /// Builder for constructing `exiv2` commands.
 #[derive(Debug, Default)]
 pub struct Exiv2Builder {
-    input: Option<PathBuf>,
-    args: Vec<String>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl Exiv2Builder {
@@ -137,28 +122,20 @@ impl Exiv2Builder {
         Self::default().check_available()
     }
 
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
-
     /// Adds -pa (print all metadata).
     pub fn print_all(&mut self) -> &mut Self {
-        self.args.push("-pa".to_string());
+        self.base.arg("-pa");
         self
     }
 
     /// Adds -ps (print metadata summary).
     pub fn print_summary(&mut self) -> &mut Self {
-        self.args.push("-ps".to_string());
+        self.base.arg("-ps");
         self
     }
 }
+
+crate::impl_base_builder_accessors!(Exiv2Builder);
 
 impl ToolBuilder for Exiv2Builder {
     fn get_command_name(&self) -> &str {
@@ -172,13 +149,8 @@ impl ToolBuilder for Exiv2Builder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
 
         cmd
     }
@@ -187,7 +159,7 @@ impl ToolBuilder for Exiv2Builder {
 /// Builder for constructing `jxlinfo` commands.
 #[derive(Debug, Default)]
 pub struct JxlinfoBuilder {
-    input: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl JxlinfoBuilder {
@@ -200,12 +172,9 @@ impl JxlinfoBuilder {
     pub fn check_available() -> bool {
         Self::default().check_available()
     }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(JxlinfoBuilder);
 
 impl ToolBuilder for JxlinfoBuilder {
     fn get_command_name(&self) -> &str {
@@ -215,9 +184,7 @@ impl ToolBuilder for JxlinfoBuilder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_first_input(&mut cmd, None);
 
         cmd
     }
@@ -226,10 +193,8 @@ impl ToolBuilder for JxlinfoBuilder {
 /// Builder for constructing `dovi_tool` commands.
 #[derive(Debug, Default)]
 pub struct DoviBuilder {
+    base: crate::builder_base::BaseBuilder,
     mode: Option<String>,
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
-    extra_args: Vec<String>,
 }
 
 impl DoviBuilder {
@@ -247,22 +212,9 @@ impl DoviBuilder {
         self.mode = Some(mode.as_ref().to_string());
         self
     }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(DoviBuilder);
 
 impl ToolBuilder for DoviBuilder {
     fn get_command_name(&self) -> &str {
@@ -276,17 +228,9 @@ impl ToolBuilder for DoviBuilder {
             cmd.arg(mode);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg("-i").arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, Some("-i"));
+        self.base.apply_output(&mut cmd, Some("-o"));
 
         cmd
     }
@@ -295,9 +239,8 @@ impl ToolBuilder for DoviBuilder {
 /// Builder for constructing `hdr10plus_tool` commands.
 #[derive(Debug, Default)]
 pub struct Hdr10PlusBuilder {
+    base: crate::builder_base::BaseBuilder,
     mode: Option<String>,
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
     skip_validation: bool,
 }
 
@@ -317,21 +260,13 @@ impl Hdr10PlusBuilder {
         self
     }
 
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
     pub const fn skip_validation(&mut self, enabled: bool) -> &mut Self {
         self.skip_validation = enabled;
         self
     }
 }
+
+crate::impl_base_builder_accessors_full!(Hdr10PlusBuilder);
 
 impl ToolBuilder for Hdr10PlusBuilder {
     fn get_command_name(&self) -> &str {
@@ -353,13 +288,9 @@ impl ToolBuilder for Hdr10PlusBuilder {
             cmd.arg("--skip-validation");
         }
 
-        if let Some(input) = &self.input {
-            cmd.arg("-i").arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, Some("-i"));
+        self.base.apply_output(&mut cmd, Some("-o"));
 
         cmd
     }
@@ -387,8 +318,7 @@ pub struct X265Flags {
 /// Builder for constructing `x265` commands.
 #[derive(Debug, Default)]
 pub struct X265Builder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     crf: Option<f32>,
     preset: Option<String>,
     pools: Option<String>,
@@ -398,18 +328,7 @@ pub struct X265Builder {
     colormatrix: Option<String>,
     master_display: Option<String>,
     max_cll: Option<String>,
-    extra_args: Vec<String>,
     flags: X265Flags,
-}
-
-fn x265_io_arg(path: &Path) -> std::borrow::Cow<'_, str> {
-    // x265 uses a bare "-" to mean stdin/stdout. Do not armor it into "./-",
-    // otherwise x265 tries to open a literal file named "-" and the pipe path breaks.
-    if path == Path::new("-") {
-        std::borrow::Cow::Borrowed("-")
-    } else {
-        crate::safe_path_arg(path)
-    }
 }
 
 impl X265Builder {
@@ -420,17 +339,8 @@ impl X265Builder {
 
     #[must_use]
     pub fn check_available() -> bool {
+        use crate::builder_base::ToolBuilder;
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn y4m(&mut self, enabled: bool) -> &mut Self {
@@ -498,12 +408,9 @@ impl X265Builder {
         self.max_cll = Some(cll.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(X265Builder);
 
 impl ToolBuilder for X265Builder {
     fn get_command_name(&self) -> &str {
@@ -565,17 +472,9 @@ impl ToolBuilder for X265Builder {
             cmd.arg("--max-cll").arg(cll);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        if let Some(input) = &self.input {
-            cmd.arg("--input").arg(x265_io_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg("--output").arg(x265_io_arg(output).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, Some("--input"));
+        self.base.apply_output(&mut cmd, Some("--output"));
 
         cmd
     }
@@ -584,8 +483,8 @@ impl ToolBuilder for X265Builder {
 /// Builder for constructing `osascript` commands.
 #[derive(Debug, Default)]
 pub struct OsascriptBuilder {
+    base: crate::builder_base::BaseBuilder,
     script: Option<String>,
-    extra_args: Vec<String>,
 }
 
 impl OsascriptBuilder {
@@ -594,21 +493,13 @@ impl OsascriptBuilder {
         Self::default()
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
-
     pub fn script<S: AsRef<str>>(&mut self, script: S) -> &mut Self {
         self.script = Some(script.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(OsascriptBuilder);
 
 impl ToolBuilder for OsascriptBuilder {
     fn get_command_name(&self) -> &str {
@@ -622,9 +513,7 @@ impl ToolBuilder for OsascriptBuilder {
             cmd.arg("-e").arg(script);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
 
         cmd
     }
@@ -648,8 +537,8 @@ impl ToolBuilder for OsascriptBuilder {
 /// Builder for constructing `powershell` (Windows) commands.
 #[derive(Debug, Default)]
 pub struct PowershellBuilder {
+    base: crate::builder_base::BaseBuilder,
     command: Option<String>,
-    args: Vec<String>,
 }
 
 impl PowershellBuilder {
@@ -658,21 +547,13 @@ impl PowershellBuilder {
         Self::default()
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
-
     pub fn command<S: AsRef<str>>(&mut self, command: S) -> &mut Self {
         self.command = Some(command.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(PowershellBuilder);
 
 impl ToolBuilder for PowershellBuilder {
     fn get_command_name(&self) -> &str {
@@ -685,9 +566,7 @@ impl ToolBuilder for PowershellBuilder {
         if let Some(command) = &self.command {
             cmd.arg("-Command").arg(command);
         }
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
         cmd
     }
 
@@ -710,9 +589,8 @@ impl ToolBuilder for PowershellBuilder {
 /// Builder for constructing `getfacl`/`setfacl` (Linux ACL) commands.
 #[derive(Debug, Default)]
 pub struct AclBuilder {
+    base: crate::builder_base::BaseBuilder,
     tool: String, // "getfacl" or "setfacl"
-    args: Vec<String>,
-    input: Option<PathBuf>,
 }
 
 impl AclBuilder {
@@ -739,17 +617,9 @@ impl AclBuilder {
             ..Default::default()
         }
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(AclBuilder);
 
 impl ToolBuilder for AclBuilder {
     fn get_command_name(&self) -> &str {
@@ -758,12 +628,8 @@ impl ToolBuilder for AclBuilder {
 
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
         cmd
     }
 
@@ -778,7 +644,7 @@ impl ToolBuilder for AclBuilder {
 /// Builder for constructing `sysctl` (macOS/Linux) commands.
 #[derive(Debug, Default)]
 pub struct SysctlBuilder {
-    args: Vec<String>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl SysctlBuilder {
@@ -786,17 +652,9 @@ impl SysctlBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(SysctlBuilder);
 
 impl ToolBuilder for SysctlBuilder {
     fn get_command_name(&self) -> &str {
@@ -805,9 +663,7 @@ impl ToolBuilder for SysctlBuilder {
 
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
         cmd
     }
 
@@ -821,19 +677,18 @@ impl ToolBuilder for SysctlBuilder {
 
 /// Builder for constructing `vm_stat` (macOS) commands.
 #[derive(Debug, Default)]
-pub struct VmstatBuilder {}
+pub struct VmstatBuilder {
+    base: crate::builder_base::BaseBuilder,
+}
 
 impl VmstatBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
 }
+
+crate::impl_base_builder_accessors!(VmstatBuilder);
 
 impl ToolBuilder for VmstatBuilder {
     fn get_command_name(&self) -> &str {
@@ -841,7 +696,9 @@ impl ToolBuilder for VmstatBuilder {
     }
 
     fn build(&self) -> Command {
-        self.get_resolved_command()
+        let mut cmd = self.get_resolved_command();
+        self.base.apply_to_command(&mut cmd);
+        cmd
     }
 
     fn check_available(&self) -> bool {
@@ -854,8 +711,7 @@ impl ToolBuilder for VmstatBuilder {
 /// Builder for constructing `attrib` (Windows) commands.
 #[derive(Debug, Default)]
 pub struct AttribBuilder {
-    args: Vec<String>,
-    input: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl AttribBuilder {
@@ -863,22 +719,9 @@ impl AttribBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors!(AttribBuilder);
 
 impl ToolBuilder for AttribBuilder {
     fn get_command_name(&self) -> &str {
@@ -887,12 +730,8 @@ impl ToolBuilder for AttribBuilder {
 
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_first_input(&mut cmd, None);
         cmd
     }
 
@@ -907,10 +746,8 @@ impl ToolBuilder for AttribBuilder {
 /// Builder for constructing `rsync` commands.
 #[derive(Debug, Default)]
 pub struct RsyncBuilder {
+    base: crate::builder_base::BaseBuilder,
     executable: Option<String>,
-    args: Vec<String>,
-    sources: Vec<PathBuf>,
-    destination: Option<PathBuf>,
 }
 
 impl RsyncBuilder {
@@ -919,31 +756,13 @@ impl RsyncBuilder {
         Self::default()
     }
 
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
-
     pub fn executable<S: AsRef<str>>(&mut self, path: S) -> &mut Self {
         self.executable = Some(path.as_ref().to_string());
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.args.push(arg.as_ref().to_string());
-        self
-    }
-
-    pub fn add_source<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.sources.push(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn destination<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.destination = Some(path.as_ref().to_path_buf());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(RsyncBuilder);
 
 impl ToolBuilder for RsyncBuilder {
     fn get_command_name(&self) -> &str {
@@ -956,15 +775,10 @@ impl ToolBuilder for RsyncBuilder {
         // Protect args against shell/remote interpretation (requires rsync 3.0.0+)
         cmd.arg("--protect-args");
 
-        for arg in &self.args {
-            cmd.arg(arg);
-        }
-        for src in &self.sources {
-            cmd.arg(crate::safe_path_arg(src).as_ref());
-        }
-        if let Some(dest) = &self.destination {
-            cmd.arg(crate::safe_path_arg(dest).as_ref());
-        }
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_all_inputs(&mut cmd, None);
+        self.base.apply_output(&mut cmd, None);
+
         cmd
     }
 }
@@ -972,6 +786,7 @@ impl ToolBuilder for RsyncBuilder {
 /// Builder for constructing `ps` commands (Unix).
 #[derive(Debug, Default)]
 pub struct PsBuilder {
+    base: crate::builder_base::BaseBuilder,
     pid: Option<u32>,
     output_fields: Vec<String>,
 }
@@ -980,11 +795,6 @@ impl PsBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
     }
 
     pub const fn pid(&mut self, pid: u32) -> &mut Self {
@@ -997,6 +807,8 @@ impl PsBuilder {
         self
     }
 }
+
+crate::impl_base_builder_accessors!(PsBuilder);
 
 impl ToolBuilder for PsBuilder {
     fn get_command_name(&self) -> &str {
@@ -1012,6 +824,7 @@ impl ToolBuilder for PsBuilder {
             cmd.arg("-o");
             cmd.arg(format!("{}=", self.output_fields.join(",")));
         }
+        self.base.apply_to_command(&mut cmd);
         cmd
     }
 }
@@ -1019,6 +832,7 @@ impl ToolBuilder for PsBuilder {
 /// Builder for constructing `kill` commands (Unix).
 #[derive(Debug, Default)]
 pub struct KillBuilder {
+    base: crate::builder_base::BaseBuilder,
     signal: Option<String>,
     pid: Option<u32>,
 }
@@ -1027,11 +841,6 @@ impl KillBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
     }
 
     pub fn signal<S: AsRef<str>>(&mut self, sig: S) -> &mut Self {
@@ -1044,6 +853,8 @@ impl KillBuilder {
         self
     }
 }
+
+crate::impl_base_builder_accessors!(KillBuilder);
 
 impl ToolBuilder for KillBuilder {
     fn get_command_name(&self) -> &str {
@@ -1058,25 +869,25 @@ impl ToolBuilder for KillBuilder {
         if let Some(pid) = self.pid {
             cmd.arg(pid.to_string());
         }
+        self.base.apply_to_command(&mut cmd);
         cmd
     }
 }
 
 /// Builder for constructing `hostname` commands.
 #[derive(Debug, Default)]
-pub struct HostnameBuilder {}
+pub struct HostnameBuilder {
+    base: crate::builder_base::BaseBuilder,
+}
 
 impl HostnameBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
-    }
 }
+
+crate::impl_base_builder_accessors!(HostnameBuilder);
 
 impl ToolBuilder for HostnameBuilder {
     fn get_command_name(&self) -> &str {
@@ -1084,13 +895,16 @@ impl ToolBuilder for HostnameBuilder {
     }
 
     fn build(&self) -> Command {
-        self.get_resolved_command()
+        let mut cmd = self.get_resolved_command();
+        self.base.apply_to_command(&mut cmd);
+        cmd
     }
 }
 
 /// Builder for constructing `taskkill` commands (Windows).
 #[derive(Debug, Default)]
 pub struct TaskkillBuilder {
+    base: crate::builder_base::BaseBuilder,
     pid: Option<u32>,
     force: bool,
 }
@@ -1099,11 +913,6 @@ impl TaskkillBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn check_available() -> bool {
-        Self::default().check_available()
     }
 
     pub const fn pid(&mut self, pid: u32) -> &mut Self {
@@ -1116,6 +925,8 @@ impl TaskkillBuilder {
         self
     }
 }
+
+crate::impl_base_builder_accessors!(TaskkillBuilder);
 
 impl ToolBuilder for TaskkillBuilder {
     fn get_command_name(&self) -> &str {
@@ -1130,6 +941,7 @@ impl ToolBuilder for TaskkillBuilder {
         if self.force {
             cmd.arg("/F");
         }
+        self.base.apply_to_command(&mut cmd);
         cmd
     }
 }

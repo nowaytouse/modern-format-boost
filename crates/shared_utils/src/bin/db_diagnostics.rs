@@ -85,8 +85,14 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     for (verdict, count) in &summary.verdict_counts {
         let ratio = Rational::from(*count) / Rational::from(summary.total_records.max(1));
         let pct = ratio.to_f64() * 100.0_f64;
-        let bar = "█".repeat(shared_utils::numeric_cast::f64_to_usize_sat(pct / 5.0));
-        println!("     {verdict:<14} {count:>5} ({pct:>5.1}%) {bar}");
+        if let Some(bar_len) =
+            shared_utils::numeric_cast::f64_to_usize_strict(pct / 5.0, "verdict_ratio")
+        {
+            let bar = "█".repeat(bar_len);
+            println!("     {verdict:<14} {count:>5} ({pct:>5.1}%) {bar}");
+        } else {
+            println!("     {verdict:<14} {count:>5} ({pct:>5.1}%) [ANOMALY]");
+        }
     }
 
     println!();

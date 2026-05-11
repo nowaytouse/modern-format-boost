@@ -122,10 +122,9 @@ pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), St
     let path_str = canonical.to_string_lossy();
 
     if path_str.contains("/Desktop") || path_str.contains("/Downloads") {
-        eprintln!(
-            "⚠️  WARNING: You are about to {} files in '{}'.\n\
-             ⚠️  This is a common location for important files.\n\
-             ⚠️  Make sure you have backups before proceeding.",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            "WARNING: You are about to {} files in '{}'. This is a common location for important files. Make sure you have backups before proceeding.",
             operation,
             path.display()
         );

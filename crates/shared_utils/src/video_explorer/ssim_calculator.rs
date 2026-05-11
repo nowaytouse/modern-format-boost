@@ -28,14 +28,20 @@ fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32,
     let (input_width, input_height) = match crate::conversion::get_input_dimensions(input) {
         Ok(d) => d,
         Err(err) => {
-            eprintln!("      ❌ Failed to read reference dimensions for quality metric: {err}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFPROBE,
+                &format!("Failed to read reference dimensions for quality metric: {err}")
+            );
             return None;
         }
     };
     let (output_width, output_height) = match crate::conversion::get_input_dimensions(output) {
         Ok(d) => d,
         Err(err) => {
-            eprintln!("      ❌ Failed to read distorted dimensions for quality metric: {err}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFPROBE,
+                &format!("Failed to read distorted dimensions for quality metric: {err}")
+            );
             return None;
         }
     };
@@ -64,50 +70,63 @@ pub fn calculate_ms_ssim_yuv(
     if let Some(ext) = input.extension().and_then(|e| e.to_str())
         && matches!(ext.to_lowercase().as_str(), "gif")
     {
-        eprintln!(
-            "   ℹ️  GIF format: skipping MS-SSIM (libvmaf incompatible), caller will use SSIM-All."
+        crate::log_hint!(
+            crate::static_logs::messages::LABEL_MS_SSIM,
+            "GIF format: skipping MS-SSIM (libvmaf incompatible), caller will use SSIM-All."
         );
         return None;
     }
 
     let Some(duration) = super::stream_analysis::get_video_duration(input) else {
-        eprintln!("   ❌ Cannot determine video duration, skipping MS-SSIM");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_MS_SSIM,
+            "Cannot determine video duration, skipping MS-SSIM"
+        );
         return None;
     };
     let duration_min = duration / 60.0_f64;
 
     // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
-    let (sample_rate, should_calculate) = if duration_min <= 1.0_f64 {
-        (1, true)
-    } else if duration_min <= max_duration_min {
-        (3, true)
-    } else {
-        (0, false)
-    };
+    let (sample_rate, should_calculate) =
+        if duration_min <= crate::constants::QUALITY_ANALYSIS_SHORT_DURATION_MIN {
+            (crate::constants::QUALITY_ANALYSIS_SAMPLE_RATE_SHORT, true)
+        } else if duration_min <= max_duration_min {
+            (crate::constants::QUALITY_ANALYSIS_SAMPLE_RATE_LONG, true)
+        } else {
+            (0, false)
+        };
 
     if !should_calculate {
-        eprintln!(
-            "   ⚠️  Quality verification: video too long ({duration_min:.1}min > {max_duration_min:.0}min), MS-SSIM skipped."
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_MS_SSIM,
+            &format!(
+                "video too long ({duration_min:.1}min > {max_duration_min:.0}min), MS-SSIM skipped."
+            )
         );
-        eprintln!("   📊 Using SSIM-only verification (faster; multi-scale not computed).");
+        crate::log_detail!("Using SSIM-only verification (faster; multi-scale not computed).");
         return None;
     }
 
     let start_ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-    eprintln!("   📊 Calculating 3-channel MS-SSIM (Y+U+V)...");
-    eprintln!("   🕐 Start time: {start_ts}");
-    eprintln!("   📹 Video: {duration:.1}s ({duration_min:.1}min)");
+    crate::log_detail!("Calculating 3-channel MS-SSIM (Y+U+V)...");
+    crate::log_detail!(&format!("Start time: {start_ts}"));
+    crate::log_detail!(&format!("Video: {duration:.1}s ({duration_min:.1}min)"));
 
     if sample_rate > 1 {
-        let sample_rate_u32 = crate::numeric_cast::usize_to_u32_sat(sample_rate);
-        let estimated_time =
-            crate::numeric_cast::f64_to_u64_sat(duration / f64::from(sample_rate_u32) * 3.0);
-        eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");
+        let sample_rate_u32 = crate::numeric_cast::usize_to_u32_strict(sample_rate, "sample_rate")?;
+        let estimated_time = crate::numeric_cast::f64_to_u64_strict(
+            duration / f64::from(sample_rate_u32) * 3.0,
+            "estimated_time",
+        )?;
+        crate::log_detail!(&format!(
+            "⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)"
+        ));
     } else {
-        let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration * 3.0);
-        eprintln!("   🎯 Full calculation (est. {estimated_time}s)");
+        let estimated_time =
+            crate::numeric_cast::f64_to_u64_strict(duration * 3.0, "estimated_time")?;
+        crate::log_detail!(&format!("🎯 Full calculation (est. {estimated_time}s)"));
     }
-    eprintln!("   🔄 Parallel processing: Y+U+V channels simultaneously");
+    crate::log_detail!("🔄 Parallel processing: Y+U+V channels simultaneously");
 
     let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
 
@@ -152,7 +171,10 @@ pub fn calculate_ms_ssim_yuv(
     });
 
     let Ok(Some(y_ms_ssim)) = y_handle.join() else {
-        eprintln!("   ❌ Y channel calculation failed");
+        crate::log_failure!(
+            crate::static_logs::messages::LABEL_MS_SSIM,
+            "Y channel calculation failed"
+        );
         return None;
     };
     let u_ms_ssim = match u_handle.join() {
@@ -164,21 +186,21 @@ pub fn calculate_ms_ssim_yuv(
         _ => None,
     };
 
-    eprintln!("      Y channel... {y_ms_ssim:.4} ✅");
+    crate::log_detail!(&format!("      Y channel... {y_ms_ssim:.4} ✅"));
     if let Some(u) = u_ms_ssim {
-        eprintln!("      U channel... {u:.4} ✅");
+        crate::log_detail!(&format!("      U channel... {u:.4} ✅"));
     } else {
-        eprintln!("      U channel... skipped (resolution too small)");
+        crate::log_detail!("      U channel... skipped (resolution too small)");
     }
     if let Some(v) = v_ms_ssim {
-        eprintln!("      V channel... {v:.4} ✅");
+        crate::log_detail!(&format!("      V channel... {v:.4} ✅"));
     } else {
-        eprintln!("      V channel... skipped (resolution too small)");
+        crate::log_detail!("      V channel... skipped (resolution too small)");
     }
 
     let elapsed = start_time.elapsed().as_secs();
     let end_time = Local::now().format("%Y-%m-%d %H:%M:%S");
-    eprintln!("   ⏱️  Completed in {elapsed}s (End: {end_time})");
+    crate::log_detail!(&format!("⏱️  Completed in {elapsed}s (End: {end_time})"));
 
     // If chroma channels are available, weight by 4:2:0 sample counts (Y:U:V = 4:1:1).
     // In YUV 4:2:0, each 2x2 luma block has 4 Y samples but only 1 U and 1 V sample,
@@ -188,7 +210,7 @@ pub fn calculate_ms_ssim_yuv(
         let avg = (y_ms_ssim.mul_add(4.0, u) + v) / 6.0_f64;
         (u, v, avg)
     } else {
-        eprintln!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");
+        crate::log_detail!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");
         (y_ms_ssim, y_ms_ssim, y_ms_ssim)
     };
 
@@ -211,7 +233,9 @@ fn calculate_ms_ssim_channel_sampled(
     if let Some(ext) = input.extension().and_then(|e| e.to_str())
         && matches!(ext.to_lowercase().as_str(), "gif")
     {
-        eprintln!("      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)");
+        crate::log_detail!(
+            "      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)"
+        );
         return None;
     }
 
@@ -219,13 +243,18 @@ fn calculate_ms_ssim_channel_sampled(
     // luma resolution. libvmaf MS-SSIM performs multi-scale downsampling and
     // fails with "scale below 1x1" when the plane is too small.
     // Minimum safe luma resolution for chroma MS-SSIM: 256x256 (chroma = 128x128).
-    if matches!(channel, "u" | "v") && (target_width < 256 || target_height < 256) {
-        eprintln!(
-            "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min 256x256), skipping",
+    if matches!(channel, "u" | "v")
+        && (target_width < crate::constants::MS_SSIM_CHROMA_MIN_DIM
+            || target_height < crate::constants::MS_SSIM_CHROMA_MIN_DIM)
+    {
+        crate::log_detail!(&format!(
+            "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min {}x{}), skipping",
             channel.to_uppercase(),
             target_width,
-            target_height
-        );
+            target_height,
+            crate::constants::MS_SSIM_CHROMA_MIN_DIM,
+            crate::constants::MS_SSIM_CHROMA_MIN_DIM
+        ));
         return None;
     }
 
@@ -266,21 +295,21 @@ fn calculate_ms_ssim_channel_sampled(
             // Only report failure if we truly got no usable result
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!(
-                    "\n      ❌ Channel {} MS-SSIM failed!",
-                    channel.to_uppercase()
+                crate::log_failure!(
+                    crate::static_logs::messages::LABEL_MS_SSIM,
+                    &format!("Channel {} MS-SSIM failed!", channel.to_uppercase())
                 );
 
                 if stderr.contains("No such filter: 'libvmaf'") {
-                    eprintln!("         Cause: libvmaf filter not available in ffmpeg");
-                    eprintln!(
+                    crate::log_detail!("         Cause: libvmaf filter not available in ffmpeg");
+                    crate::log_detail!(
                         "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
                     );
                 } else if stderr.contains("Invalid pixel format")
                     || stderr.contains("Discarding mismatched")
                 {
-                    eprintln!("         Cause: Pixel format incompatibility");
-                    eprintln!("         Input: {}", input.display());
+                    crate::log_detail!("         Cause: Pixel format incompatibility");
+                    crate::log_detail!(&format!("         Input: {}", input.display()));
                 } else {
                     let error_lines: Vec<&str> = stderr
                         .lines()
@@ -291,17 +320,16 @@ fn calculate_ms_ssim_channel_sampled(
                         .take(3)
                         .collect();
                     if !error_lines.is_empty() {
-                        eprintln!("         Error: {}", error_lines.join(" | "));
+                        crate::log_detail!(&format!("         Error: {}", error_lines.join(" | ")));
                     }
                 }
             }
             None
         }
         Err(e) => {
-            eprintln!(
-                "\n      ❌ Channel {} command failed: {}",
-                channel.to_uppercase(),
-                e
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_MS_SSIM,
+                &format!("Channel {} command failed: {e}", channel.to_uppercase())
             );
             None
         }
@@ -313,14 +341,17 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     if let Ok(info) = crate::ffprobe::probe_video(input)
         && (info.width < 64 || info.height < 64)
     {
-        eprintln!(
-            "   ⚠️  Skipping MS-SSIM: Image too small ({}x{}) for multi-scale analysis",
-            info.width, info.height
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_MS_SSIM,
+            &format!(
+                "Skipping MS-SSIM: Image too small ({}x{}) for multi-scale analysis",
+                info.width, info.height
+            )
         );
         return None;
     }
 
-    eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
+    crate::log_detail!("Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
     let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
 
@@ -349,47 +380,65 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
             if let Some(ms_ssim) = parse_ms_ssim_from_json(&stdout) {
                 let clamped = ms_ssim.clamp(0.0, 1.0);
                 if (ms_ssim - clamped).abs() > 0.000_1_f64 {
-                    eprintln!(
-                        "   ⚠️  MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_MS_SSIM,
+                        &format!(
+                            "MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
+                        )
                     );
                 }
-                eprintln!("   📊 MS-SSIM score: {clamped:.4}");
+                crate::log_detail!(&format!("MS-SSIM score: {clamped:.4}"));
                 return Some(clamped);
             }
 
             if let Some(ms_ssim) = parse_ms_ssim_from_legacy(&stderr) {
                 let clamped = ms_ssim.clamp(0.0, 1.0);
                 if (ms_ssim - clamped).abs() > 0.000_1_f64 {
-                    eprintln!(
-                        "   ⚠️  MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_MS_SSIM,
+                        &format!(
+                            "MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
+                        )
                     );
                 }
-                eprintln!("   📊 MS-SSIM score: {clamped:.4}");
+                crate::log_detail!(&format!("MS-SSIM score: {clamped:.4}"));
                 return Some(clamped);
             }
 
             // No parseable score found
             if out.status.success() {
-                eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_MS_SSIM,
+                    "MS-SSIM calculated but failed to parse score"
+                );
             } else {
-                eprintln!("   ⚠️  ffmpeg libvmaf MS-SSIM failed");
-                eprintln!("   🔄 Trying standalone vmaf tool as fallback...");
+                crate::log_failure!(
+                    crate::static_logs::messages::LABEL_MS_SSIM,
+                    "ffmpeg libvmaf MS-SSIM failed"
+                );
+                crate::log_detail!("🔄 Trying standalone vmaf tool as fallback...");
 
                 if crate::vmaf_standalone::is_vmaf_available() {
                     match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
                         Ok(score) => {
-                            eprintln!("   ✅ Standalone vmaf MS-SSIM: {score:.4}");
+                            crate::log_detail!(&format!("✅ Standalone vmaf MS-SSIM: {score:.4}"));
                             return Some(score);
                         }
                         Err(e) => {
-                            eprintln!("   ⚠️  Standalone vmaf also failed: {e}");
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_MS_SSIM,
+                                &format!("Standalone vmaf also failed: {e}")
+                            );
                         }
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!("   ⚠️  ffmpeg MS-SSIM failed: {e}");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_MS_SSIM,
+                &format!("ffmpeg MS-SSIM failed: {e}")
+            );
         }
     }
 
@@ -412,10 +461,13 @@ fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
                         match after_colon[..end].parse::<f64>() {
                             Ok(f) => return Some(f),
                             Err(e) => {
-                                tracing::warn!(
-                                    "Failed to parse float_ms_ssim value '{}': {}",
-                                    &after_colon[..end],
-                                    e
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_MS_SSIM,
+                                    &format!(
+                                        "Failed to parse float_ms_ssim value '{}': {}",
+                                        &after_colon[..end],
+                                        e
+                                    )
                                 );
                                 return None;
                             }
@@ -442,10 +494,13 @@ fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
                 match after_score[..end].parse::<f64>() {
                     Ok(f) => return Some(f),
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse legacy ms_ssim value '{}': {}",
-                            &after_score[..end],
-                            e
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_MS_SSIM,
+                            &format!(
+                                "Failed to parse legacy ms_ssim value '{}': {}",
+                                &after_score[..end],
+                                e
+                            )
                         );
                         return None;
                     }
@@ -500,10 +555,15 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("\n      ❌ VMAF-Y calculation failed!");
+                crate::log_failure!(
+                    crate::static_logs::messages::LABEL_VMAF,
+                    "VMAF-Y calculation failed!"
+                );
                 if stderr.contains("No such filter: 'libvmaf'") {
-                    eprintln!("         Cause: libvmaf not available in this ffmpeg build");
-                    eprintln!(
+                    crate::log_detail!(
+                        "         Cause: libvmaf not available in this ffmpeg build"
+                    );
+                    crate::log_detail!(
                         "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
                     );
                 } else {
@@ -516,14 +576,17 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
                         .take(3)
                         .collect();
                     if !error_lines.is_empty() {
-                        eprintln!("         Error: {}", error_lines.join(" | "));
+                        crate::log_detail!(&format!("         Error: {}", error_lines.join(" | ")));
                     }
                 }
             }
             None
         }
         Err(e) => {
-            eprintln!("\n      ❌ VMAF-Y command failed: {e}");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_VMAF,
+                &format!("VMAF-Y command failed: {e}")
+            );
             None
         }
     }
@@ -540,7 +603,10 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     let log_file = match tempfile::Builder::new().suffix(".json").tempfile() {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!("Failed to create temp file for CAMBI calculation: {}", e);
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CAMBI,
+                &format!("Failed to create temp file for CAMBI calculation: {e}")
+            );
             return None;
         }
     };
@@ -574,10 +640,13 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
             let json = match std::fs::read_to_string(&log_path) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to read CAMBI log file at {}: {}",
-                        log_path.display(),
-                        e
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CAMBI,
+                        &format!(
+                            "Failed to read CAMBI log file at {}: {}",
+                            log_path.display(),
+                            e
+                        )
                     );
                     return None;
                 }
@@ -586,16 +655,19 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("\n      ❌ CAMBI calculation failed!");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_CAMBI,
+                "CAMBI calculation failed!"
+            );
             if stderr.contains("No such filter: 'libvmaf'") {
-                eprintln!("         Cause: libvmaf not available in this ffmpeg build");
+                crate::log_detail!("         Cause: libvmaf not available in this ffmpeg build");
             } else if stderr.contains("cambi")
                 && (stderr.contains("unknown") || stderr.contains("No such"))
             {
-                eprintln!(
+                crate::log_detail!(
                     "         Cause: libvmaf in this ffmpeg does not support the 'cambi' feature"
                 );
-                eprintln!("         Fix: upgrade to ffmpeg with libvmaf >= 2.x");
+                crate::log_detail!("         Fix: upgrade to ffmpeg with libvmaf >= 2.x");
             } else {
                 let error_lines: Vec<&str> = stderr
                     .lines()
@@ -603,13 +675,16 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
                     .take(2)
                     .collect();
                 if !error_lines.is_empty() {
-                    eprintln!("         Error: {}", error_lines.join(" | "));
+                    crate::log_detail!(&format!("         Error: {}", error_lines.join(" | ")));
                 }
             }
             None
         }
         Err(e) => {
-            eprintln!("\n      ❌ CAMBI command failed: {e}");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_CAMBI,
+                &format!("CAMBI command failed: {e}")
+            );
             None
         }
     }
@@ -651,11 +726,17 @@ pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Opt
     });
 
     let Ok(Some(psnr_u)) = u_handle.join() else {
-        eprintln!("   ❌ PSNR-U channel calculation failed");
+        crate::log_failure!(
+            crate::static_logs::messages::LABEL_QUALITY,
+            "PSNR-U channel calculation failed"
+        );
         return None;
     };
     let Ok(Some(psnr_v)) = v_handle.join() else {
-        eprintln!("   ❌ PSNR-V channel calculation failed");
+        crate::log_failure!(
+            crate::static_logs::messages::LABEL_QUALITY,
+            "PSNR-V channel calculation failed"
+        );
         return None;
     };
 
@@ -700,10 +781,9 @@ fn psnr_single_channel(
             parse_psnr_average_y_from_stderr(&stderr)
         }
         Err(e) => {
-            eprintln!(
-                "\n      ❌ PSNR-{} command failed: {}",
-                channel.to_uppercase(),
-                e
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                &format!("PSNR-{} command failed: {}", channel.to_uppercase(), e)
             );
             None
         }
@@ -772,10 +852,13 @@ fn parse_vmaf_mean_from_json(stdout: &str) -> Option<f64> {
                         match after_colon[..end].parse::<f64>() {
                             Ok(f) => return Some(f),
                             Err(e) => {
-                                tracing::warn!(
-                                    "Failed to parse vmaf mean value '{}': {}",
-                                    &after_colon[..end],
-                                    e
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_VMAF,
+                                    &format!(
+                                        "Failed to parse vmaf mean value '{}': {}",
+                                        &after_colon[..end],
+                                        e
+                                    )
                                 );
                                 return None;
                             }
@@ -805,10 +888,13 @@ fn parse_cambi_mean_from_json(stdout: &str) -> Option<f64> {
                         match after_colon[..end].parse::<f64>() {
                             Ok(f) => return Some(f),
                             Err(e) => {
-                                tracing::warn!(
-                                    "Failed to parse cambi mean value '{}': {}",
-                                    &after_colon[..end],
-                                    e
+                                crate::log_anomaly!(
+                                    crate::static_logs::messages::LABEL_CAMBI,
+                                    &format!(
+                                        "Failed to parse cambi mean value '{}': {}",
+                                        &after_colon[..end],
+                                        e
+                                    )
                                 );
                                 return None;
                             }

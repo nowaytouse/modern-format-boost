@@ -43,6 +43,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -55,10 +56,16 @@ static TEST_RESERVATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(
 
 pub fn next_temp_output_suffix() -> String {
     const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_nanos(),
+        Err(e) => {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_SYSTEM,
+                &format!("System time before Unix Epoch: {e}")
+            );
+            0
+        }
+    };
     let pid = u128::from(std::process::id());
     let counter = u128::from(TEMP_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed));
     let mut value = timestamp ^ (pid << crate::constants::PID_SHIFT_FOR_HASH) ^ counter;
@@ -332,15 +339,16 @@ pub struct VideoExplorationMetrics<'a> {
 }
 
 impl VideoExplorationMetrics<'_> {
-    #[must_use]
-    pub fn format_message(&self, reduction_pct: f64) -> String {
+    /// # Errors
+    /// Returns an error if the size difference is out of i64 range.
+    pub fn format_message(&self, reduction_pct: f64) -> anyhow::Result<String> {
         let reduction = reduction_pct / crate::constants::PERCENTAGE_FACTOR;
         let size_tag = if reduction >= 0.0_f64 {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = i128::from(self.output_size) - i128::from(self.input_size);
-            let diff_bytes_i64 = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff")
-                .unwrap_or(i64::MAX);
+            let diff_bytes_i64 = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "diff_bytes")
+                .ok_or_else(|| anyhow::anyhow!("Value out of i64 range for diff_bytes"))?;
             let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
             format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
@@ -364,19 +372,16 @@ impl VideoExplorationMetrics<'_> {
             .unwrap_or_default();
 
         let core_msg = format!(
-            "{} (CRF {}{}, {} iter{}): {}",
-            self.codec_name.to_uppercase(),
-            crf_display,
-            explored_msg,
-            self.iterations,
-            ssim_msg,
-            size_tag
+            "{codec} (CRF {crf_display}{explored_msg}, {iterations} iter{ssim_msg}): {size_tag}",
+            codec = self.codec_name.to_uppercase(),
+            iterations = self.iterations,
         );
 
-        self.quality_label.filter(|q| !q.is_empty()).map_or_else(
+        let formatted = self.quality_label.filter(|q| !q.is_empty()).map_or_else(
             || format!("✅ {core_msg}"),
             |q| format!("✅ {q} | {core_msg}"),
-        )
+        );
+        Ok(formatted)
     }
 }
 
@@ -384,7 +389,7 @@ impl TaskResult {
     fn copy_original_for_fallback(
         input: &Path,
         options: &ConvertOptions,
-        phase: &str,
+        _phase: &str,
     ) -> Option<PathBuf> {
         if options.should_copy_original_on_skip(input) {
             crate::smart_file_copier::copy_on_skip_or_fail(
@@ -396,13 +401,19 @@ impl TaskResult {
             .ok()
             .flatten()
         } else {
-            tracing::warn!(
-                input = %input.display(),
-                phase,
-                "Apple-compat fallback: not copying incompatible original"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CONVERSION,
+                &format!(
+                    "{}: (input={input_display})",
+                    crate::static_logs::messages::APPLE_COMPAT_NOT_COPYING,
+                    input_display = input.display()
+                )
             );
             if options.verbose() {
-                eprintln!("   ⚠️  Apple compatibility mode: not copying incompatible original");
+                crate::log_hint!(
+                    crate::static_logs::messages::LABEL_CONVERSION,
+                    crate::static_logs::messages::APPLE_COMPAT_NOT_COPYING_DETAILED
+                );
             }
             None
         }
@@ -437,15 +448,17 @@ impl TaskResult {
     }
 
     #[must_use]
+    /// # Panics
+    /// Panics if file metadata cannot be accessed.
     pub fn skipped_duplicate(input: &Path) -> Self {
+        let input_size = fs::metadata(input)
+            .unwrap_or_else(|e| panic!("FATAL: Metadata unreachable during duplicate check: {e}"))
+            .len();
         Self {
             success: true,
             input_path: input.display().to_string(),
             output_path: None,
-            input_size: fs::metadata(input).map_or_else(|e| {
-                tracing::warn!("Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}", input.display());
-                0
-            }, |m| m.len()),
+            input_size,
             output_size: None,
             size_reduction: None,
             message: "Skipped: Already processed".to_string(),
@@ -457,17 +470,12 @@ impl TaskResult {
     }
 
     #[must_use]
+    /// # Panics
+    /// Panics if file metadata cannot be accessed.
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
-        let input_size = fs::metadata(input).map_or_else(
-            |e| {
-                tracing::warn!(
-                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                    input.display()
-                );
-                0
-            },
-            |m| m.len(),
-        );
+        let input_size = fs::metadata(input)
+            .unwrap_or_else(|e| panic!("FATAL: Metadata unreachable during exist check: {e}"))
+            .len();
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -567,9 +575,12 @@ impl TaskResult {
     ) -> Self {
         let input_size = fs::metadata(input).map_or_else(
             |e| {
-                tracing::warn!(
-                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                    input.display()
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CONVERSION,
+                    &format!(
+                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                        input.display()
+                    )
                 );
                 0
             },
@@ -623,9 +634,12 @@ impl TaskResult {
     ) -> Self {
         let input_size = fs::metadata(input).map_or_else(
             |e| {
-                tracing::warn!(
-                    "Conversion: Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                    input.display()
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CONVERSION,
+                    &format!(
+                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
+                        input.display()
+                    )
                 );
                 0
             },
@@ -793,7 +807,13 @@ impl TaskResult {
                 * crate::constants::PERCENTAGE_FACTOR
         };
 
-        let message = metrics.format_message(reduction_pct);
+        let message = match metrics.format_message(reduction_pct) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("Failed to format video exploration message: {}", e);
+                String::from("(formatting error)")
+            }
+        };
 
         Self {
             success: true,
@@ -1068,8 +1088,12 @@ pub fn determine_output_path_with_base(
     Ok(reserve_unique_output_path(input, output))
 }
 
-#[must_use]
-pub fn format_size_change(input_size: u64, output_size: u64) -> String {
+/// # Errors
+/// Returns an error if the size difference calculation overflows i64.
+pub fn format_size_change(
+    input_size: u64,
+    output_size: u64,
+) -> crate::unified_error::Result<String> {
     let reduction = if input_size == 0 {
         0.0_f64
     } else {
@@ -1078,12 +1102,20 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction_pct = reduction * crate::constants::PERCENTAGE_FACTOR;
 
     if reduction >= 0.0 {
-        format!("size reduced {reduction_pct:.1}%")
+        Ok(format!("size reduced {reduction_pct:.1}%"))
     } else {
-        let diff_bytes = crate::numeric_cast::u64_to_i64_sat(output_size)
+        let diff_bytes = crate::numeric_cast::u64_to_i64_strict(output_size, "output_size")
+            .ok_or_else(|| {
+                crate::unified_error::ImgQualityError::NumericError(
+                    "output_size cast to i64 failed".into(),
+                )
+            })?
             .saturating_sub(crate::numeric_cast::u64_to_i64_sat(input_size));
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
-        format!("size increased {:.1}% ({})", -reduction_pct, size_diff)
+        Ok(format!(
+            "size increased {:.1}% ({})",
+            -reduction_pct, size_diff
+        ))
     }
 }
 
@@ -1167,7 +1199,10 @@ pub fn post_conversion_actions(
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
     if let Err(e) = preserve(input, output) {
-        eprintln!("⚠️ Failed to preserve metadata: {e}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("Failed to preserve metadata: {e}")
+        );
     }
 
     mark_as_processed(input);
@@ -1308,7 +1343,10 @@ pub fn commit_temp_to_output_with_metadata(
             if (ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif")
                 && let Err(e) = crate::metadata::append_mfb_branding(output)
             {
-                tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to append MFB branding to Finder comment: {e}")
+                );
             }
         }
 
@@ -1733,8 +1771,8 @@ impl SizeDeltaSummary {
 
         Self {
             increase_bytes,
-            increase_kb: increase_bytes_f64 / 1024.0,
-            increase_mb: increase_bytes_f64 / (1024.0 * 1024.0),
+            increase_kb: increase_bytes_f64 / crate::constants::KB_DIVISOR,
+            increase_mb: increase_bytes_f64 / crate::constants::MB_DIVISOR,
             change_pct: if input_size == 0 {
                 0.0
             } else {
@@ -1839,12 +1877,12 @@ impl SizeToleranceCheck<'_> {
         let delta = self.delta();
 
         if delta.change_pct.abs() < 0.01_f64 {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "   🗑️  {} output deleted: {}",
                 self.format_label,
                 "\x1b[1;33msize unchanged (compression goal not achieved)\x1b[0m"
             );
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "   📊 Size: {} → {} bytes",
                 format!("\x1b[2m{}\x1b[0m", self.input_size),
                 format!("\x1b[2m{}\x1b[0m", self.output_size)
@@ -1863,7 +1901,7 @@ impl SizeToleranceCheck<'_> {
     fn log_discard(&self, delta: SizeDeltaSummary, mode: Option<&str>) {
         if delta.uses_mb() {
             if let Some(mode_label) = mode {
-                crate::log_eprintln!(
+                crate::log_detail!(
                     "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{} │ {}",
                     symbols::CROSS,
                     self.format_label,
@@ -1876,7 +1914,7 @@ impl SizeToleranceCheck<'_> {
                     mode_label
                 );
             } else {
-                crate::log_eprintln!(
+                crate::log_detail!(
                     "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
                     symbols::CROSS,
                     self.format_label,
@@ -1888,7 +1926,7 @@ impl SizeToleranceCheck<'_> {
                     colors::RESET
                 );
             }
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "   {} Size: {} → {} (Δ +{:.2}MB)",
                 symbols::CHART,
                 format!("{}{}{} bytes", colors::DIM, self.input_size, colors::RESET),
@@ -1904,7 +1942,7 @@ impl SizeToleranceCheck<'_> {
         }
 
         if let Some(mode_label) = mode {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{} │ {}",
                 symbols::CROSS,
                 self.format_label,
@@ -1917,7 +1955,7 @@ impl SizeToleranceCheck<'_> {
                 mode_label
             );
         } else {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{}",
                 symbols::CROSS,
                 self.format_label,
@@ -1929,7 +1967,7 @@ impl SizeToleranceCheck<'_> {
                 colors::RESET
             );
         }
-        crate::log_eprintln!(
+        crate::log_detail!(
             "   {} Size: {} → {} (Δ +{:.1}KB)",
             symbols::CHART,
             format!("{}{}{} bytes", colors::DIM, self.input_size, colors::RESET),
@@ -1947,7 +1985,7 @@ impl SizeToleranceCheck<'_> {
         if let Err(err) = fs::remove_file(self.output) {
             match failure {
                 SizeGuardFailure::ToleranceExceeded => {
-                    crate::log_eprintln!("   {} Cleanup failed: {}", symbols::WARNING, err);
+                    crate::log_detail!("   {} Cleanup failed: {}", symbols::WARNING, err);
                 }
                 SizeGuardFailure::CompressionGoalMissed => {
                     crate::log_upstream_error!(
@@ -1969,14 +2007,14 @@ impl SizeToleranceCheck<'_> {
         ) {
             Ok(Some(dest)) => match failure {
                 SizeGuardFailure::ToleranceExceeded => {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "   {} Original preserved: {}",
                         symbols::SHIELD,
                         format!("{}{}{}", colors::DIM, dest.display(), colors::RESET)
                     );
                 }
                 SizeGuardFailure::CompressionGoalMissed => {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "   📋 Original copied to: {}",
                         format!("\x1b[2m{}\x1b[0m", dest.display())
                     );
@@ -1985,7 +2023,10 @@ impl SizeToleranceCheck<'_> {
             Ok(None) => {}
             Err(err) => match failure {
                 SizeGuardFailure::ToleranceExceeded => {
-                    eprintln!("   ⚠️  Failed to copy original: {err}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_COPY,
+                        &format!("Failed to copy original: {err}")
+                    );
                 }
                 SizeGuardFailure::CompressionGoalMissed => {
                     crate::log_upstream_error!(
@@ -2195,13 +2236,19 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
             {
                 let target_aae = output_dir.join(filename);
                 if let Err(e) = fs::copy(&aae, &target_aae) {
-                    eprintln!("⚠️  Failed to migrate AAE file: {e}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!("Failed to migrate AAE file: {e}")
+                    );
                 }
             }
         } else {
             // Delete orphaned AAE file
             if let Err(e) = fs::remove_file(&aae) {
-                eprintln!("⚠️  Failed to delete orphaned AAE file: {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CLEANUP,
+                    &format!("Failed to delete orphaned AAE file: {e}")
+                );
             }
         }
     }
@@ -2267,7 +2314,7 @@ mod tests {
 
     #[test]
     fn test_format_size_change_reduction() {
-        let msg = format_size_change(1000, 500);
+        let msg = format_size_change(1000, 500).unwrap();
         assert!(
             msg.contains("reduced"),
             "Should say 'reduced' for smaller output"
@@ -2404,7 +2451,7 @@ mod tests {
 
     #[test]
     fn test_format_size_change_increase() {
-        let msg = format_size_change(500, 1000);
+        let msg = format_size_change(500, 1000).unwrap();
         assert!(
             msg.contains("increased"),
             "Should say 'increased' for larger output"
@@ -2417,7 +2464,7 @@ mod tests {
 
     #[test]
     fn test_format_size_change_no_change() {
-        let msg = format_size_change(1000, 1000);
+        let msg = format_size_change(1000, 1000).unwrap();
         assert!(msg.contains("reduced"), "Same size shows as 0% reduced");
         assert!(msg.contains("0.0%"), "Should show 0.0% for same size");
     }

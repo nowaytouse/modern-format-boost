@@ -116,23 +116,29 @@ impl SamplingConfig {
     /// Print sampling information to the log.
     pub fn print_info(&self) {
         if self.strategy == SamplingStrategy::Skip {
-            eprintln!(
-                "⚠️  Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                "Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
                 self.duration_secs
             );
         } else {
             let Some(rate) = self.strategy.sampling_rate() else {
-                eprintln!(
-                    "⚠️  Quality verification sampling rate unavailable; continuing without MS-SSIM sampling detail."
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "Quality verification sampling rate unavailable; continuing without MS-SSIM sampling detail."
                 );
                 return;
             };
             let accuracy = self.strategy.accuracy_description();
-            eprintln!(
-                "📊 MS-SSIM: Sampling 1/{} frames (duration: {:.1}s, accuracy: {})",
-                rate, self.duration_secs, accuracy
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                "MS-SSIM: Sampling 1/{} frames (duration: {:.1}s, accuracy: {})",
+                rate,
+                self.duration_secs,
+                accuracy
             );
-            eprintln!(
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DETECTION,
                 "   Frames: {} → {} (speedup: {:.1}x)",
                 self.total_frames,
                 self.sampled_frames,

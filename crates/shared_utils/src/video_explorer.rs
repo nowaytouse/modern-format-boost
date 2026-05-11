@@ -82,6 +82,8 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 
 /// Calculates the target metadata margin for a given input size.
 #[inline]
+/// # Panics
+/// Panics if `METADATA_MARGIN_PERCENT` constant is not finite.
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     let percent_based = {
@@ -91,14 +93,16 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
                 METADATA_MARGIN_PERCENT,
                 "METADATA_MARGIN_PERCENT",
             )
-            .map(|r| Rational::from(input_size) * r);
-
-            margin.map_or(0, |m| crate::numeric_cast::f64_to_u64_sat(m.to_f64()))
+            .expect("METADATA_MARGIN_PERCENT constant must be finite");
+            let m = Rational::from(input_size) * margin;
+            crate::numeric_cast::f64_to_u64_strict(m.to_f64(), "margin")
+                .expect("Computed metadata margin is invalid (NaN/Inf/overflow)")
         }
         #[cfg(not(feature = "high-precision"))]
         {
-            crate::numeric_cast::f64_to_u64_sat(
+            crate::numeric_cast::f64_to_u64_strict(
                 crate::numeric_cast::u64_to_f64(input_size) * METADATA_MARGIN_PERCENT,
+                "metadata_margin",
             )
         }
     };
@@ -229,8 +233,12 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
 }
 
 /// Calculates the required zero-gain encodes for saturation detection based on video duration.
-#[must_use]
-pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
+/// # Errors
+/// Returns an error if the calculation fails due to invalid parameters.
+pub fn calculate_zero_gains_for_duration(
+    duration_secs: f32,
+    ultimate_mode: bool,
+) -> anyhow::Result<u32> {
     calculate_zero_gains_for_duration_and_range(
         duration_secs,
         crate::constants::SATURATION_CRF_RANGE_THRESHOLD,
@@ -241,12 +249,13 @@ pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool
 /// Calculates the required zero-gain encodes for saturation detection, with explicit CRF range.
 ///
 /// Scales the base requirement based on video duration and CRF range.
-#[must_use]
+/// # Errors
+/// Returns an error if the calculation fails due to invalid parameters.
 pub fn calculate_zero_gains_for_duration_and_range(
     duration_secs: f32,
     crf_range: f32,
     ultimate_mode: bool,
-) -> u32 {
+) -> anyhow::Result<u32> {
     let base = if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
         LONG_VIDEO_REQUIRED_ZERO_GAINS
     } else if ultimate_mode {
@@ -261,15 +270,18 @@ pub fn calculate_zero_gains_for_duration_and_range(
         1.0
     };
 
-    let scaled = crate::numeric_cast::f32_to_u32_sat(
+    let scaled = crate::numeric_cast::f32_to_u32_strict(
         (crate::numeric_cast::u32_to_f32(base) * factor).round(),
-    );
+        "zero_gain_threshold",
+    )
+    .ok_or_else(|| anyhow::anyhow!("Zero gain threshold calculation overflowed u32"))?;
+
     let min_gains = if ultimate_mode {
         crate::constants::ULTIMATE_MIN_GAINS
     } else {
         crate::constants::NORMAL_MIN_GAINS
     };
-    scaled.max(min_gains)
+    Ok(scaled.max(min_gains))
 }
 
 /// Logarithmic base constant used in adaptive wall-hit calculations.
@@ -278,14 +290,20 @@ pub const ADAPTIVE_WALL_LOG_BASE: u32 = crate::constants::ADAPTIVE_WALL_LOG_BASE
 /// Calculates the adaptive maximum wall-clock hits based on CRF search range.
 ///
 /// Uses a logarithmic formula to scale the hit requirement with search range breadth.
-#[must_use]
-pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
+/// # Errors
+/// Returns an error if the calculation fails due to invalid parameters.
+pub fn calculate_adaptive_max_walls(crf_range: f32) -> anyhow::Result<u32> {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
-        return ULTIMATE_MIN_WALL_HITS;
+        return Ok(crate::constants::ULTIMATE_MIN_WALL_HITS);
     }
-    let log_component = crate::numeric_cast::f32_to_u32_sat(crf_range.log2().ceil());
-    let total = log_component + ADAPTIVE_WALL_LOG_BASE;
-    total.clamp(ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS)
+    let log_component =
+        crate::numeric_cast::f32_to_u32_strict(crf_range.log2().ceil(), "crf_range_log")
+            .ok_or_else(|| anyhow::anyhow!("CRF range log calculation overflowed u32"))?;
+    let total = log_component.saturating_add(crate::constants::ADAPTIVE_WALL_LOG_BASE);
+    Ok(total.clamp(
+        crate::constants::ULTIMATE_MIN_WALL_HITS,
+        crate::constants::ULTIMATE_MAX_WALL_HITS,
+    ))
 }
 
 /// Minimum number of threads to use for video encoding.
@@ -438,32 +456,35 @@ impl ConfidenceBreakdown {
             "Low"
         };
 
-        crate::log_eprintln!("┌─────────────────────────────────────────────────────");
-        crate::log_eprintln!("│ Confidence Report");
-        crate::log_eprintln!("├─────────────────────────────────────────────────────");
-        crate::log_eprintln!(
-            "│ Overall Confidence: {:.0}% ({})",
-            overall * crate::constants::SCALE_100,
-            grade
+        crate::log_summary_header!("Confidence Report");
+        crate::log_stat!(
+            "Overall Confidence",
+            format!("{:.0}% ({})", overall * crate::constants::SCALE_100, grade)
         );
-        crate::log_eprintln!("├─────────────────────────────────────────────────────");
-        crate::log_eprintln!(
-            "│ Sampling Coverage: {:.0}% (weight 30%)",
-            self.sampling_coverage * crate::constants::SCALE_100
+        crate::log_detail!("");
+        crate::log_stat!(
+            "Sampling Coverage",
+            format!(
+                "{:.0}%",
+                self.sampling_coverage * crate::constants::SCALE_100
+            )
         );
-        crate::log_eprintln!(
-            "│ Prediction Accuracy: {:.0}% (weight 30%)",
-            self.prediction_accuracy * crate::constants::SCALE_100
+        crate::log_stat!(
+            "Prediction Accuracy",
+            format!(
+                "{:.0}%",
+                self.prediction_accuracy * crate::constants::SCALE_100
+            )
         );
-        crate::log_eprintln!(
-            "│ Safety Margin: {:.0}% (weight 20%)",
-            self.margin_safety * crate::constants::SCALE_100
+        crate::log_stat!(
+            "Safety Margin",
+            format!("{:.0}%", self.margin_safety * crate::constants::SCALE_100)
         );
-        crate::log_eprintln!(
-            "│ SSIM Reliability: {:.0}% (weight 20%)",
-            self.ssim_confidence * crate::constants::SCALE_100
+        crate::log_stat!(
+            "SSIM Reliability",
+            format!("{:.0}%", self.ssim_confidence * crate::constants::SCALE_100)
         );
-        crate::log_eprintln!("└─────────────────────────────────────────────────────");
+        crate::log_detail!("═══════════════════════════════════════");
     }
 }
 
@@ -863,7 +884,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available(crate::constants::FFMPEG_ENCODER_X265) {
                     crate::constants::FFMPEG_ENCODER_X265
                 } else {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "⚠️  libx265 not available, falling back to hevc_videotoolbox"
                     );
                     "hevc_videotoolbox"
@@ -874,7 +895,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
                 } else {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "⚠️  libx264 not available, falling back to h264_videotoolbox"
                     );
                     "h264_videotoolbox"
@@ -1023,7 +1044,7 @@ impl IterationMetrics {
             CheckResult::NotChecked => "--",
         };
 
-        crate::log_eprintln!(
+        crate::log_detail!(
             "│ {:>2} │ {:>12} │ CRF {:>5.1} │ {:>+6.1}% {} │ SSIM {} {} │ PSNR {} │ {}",
             self.iteration,
             self.phase,
@@ -1080,26 +1101,26 @@ impl TransparencyReport {
 
     /// Prints the header row for the transparency report table.
     pub fn print_header(&self) {
-        crate::log_eprintln!(
+        crate::log_detail!(
             "┌────────────────────────────────────────────────────────────────────────────────────────────┐"
         );
-        crate::log_eprintln!(
+        crate::log_detail!(
             "│ 📊 Transparency Report - CRF Search Process                                               │"
         );
-        crate::log_eprintln!(
+        crate::log_detail!(
             "├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤"
         );
-        crate::log_eprintln!(
+        crate::log_detail!(
             "│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │"
         );
-        crate::log_eprintln!(
+        crate::log_detail!(
             "├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤"
         );
     }
 
     /// Prints the footer and summary statistics (iterations, time, final CRF/SSIM/PSNR).
     pub fn print_summary(&self) {
-        crate::log_eprintln!(
+        crate::log_detail!(
             "└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘"
         );
 
@@ -1108,20 +1129,20 @@ impl TransparencyReport {
             .map_or(0.0_f64, |t| t.elapsed().as_secs_f64());
         let total_iterations = self.iterations.len();
 
-        crate::log_eprintln!();
-        crate::log_eprintln!("📈 Summary:");
-        crate::log_eprintln!("   • Total iterations: {}", total_iterations);
-        crate::log_eprintln!("   • Time elapsed: {:.1}s", elapsed);
+        crate::log_summary_header!("Exploration");
+        crate::log_stat!("Total iterations", total_iterations.to_string());
+        crate::log_stat!("Time elapsed", format!("{elapsed:.1}s"));
 
         if let Some(crf) = self.final_crf {
-            crate::log_eprintln!("   • Final CRF: {:.1}", crf);
+            crate::log_stat!("Final CRF", format!("{crf:.1}"));
         }
         if let Some(ssim) = self.final_ssim {
-            crate::log_eprintln!("   • Final SSIM: {:.4}", ssim);
+            crate::log_stat!("Final SSIM", format!("{ssim:.4}"));
         }
         if let Some(psnr) = self.final_psnr {
-            crate::log_eprintln!("   • Final PSNR: {:.1} dB", psnr);
+            crate::log_stat!("Final PSNR", format!("{psnr:.1} dB"));
         }
+        crate::log_detail!("═══════════════════════════════════════");
     }
 }
 
@@ -1370,7 +1391,7 @@ impl VideoExplorer {
         });
 
         let strategy = create_strategy(self.config.mode);
-        crate::log_eprintln!(
+        crate::log_detail!(
             "🔥 Using Strategy: {} - {}",
             strategy.name(),
             strategy.description()
@@ -1388,8 +1409,8 @@ impl VideoExplorer {
         let progress_done = || {};
 
         pb.suspend(|| {
-            crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
-            crate::log_eprintln!(
+            crate::log_detail!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
+            crate::log_detail!(
                 "└ 📁 Input: {:.2} MB",
                 crate::numeric_cast::f64_to_f32_lossy(
                     crate::numeric_cast::u64_to_f64(self.input_size)
@@ -1416,7 +1437,7 @@ impl VideoExplorer {
         let ssim = self.calculate_ssim();
         if ssim.is_none() {
             pb.suspend(|| {
-                crate::log_eprintln!("⚠️  SSIM calculation failed during size-only explore");
+                crate::log_detail!("⚠️  SSIM calculation failed during size-only explore");
             });
         }
         progress_done();
@@ -1428,7 +1449,7 @@ impl VideoExplorer {
         pb.finish_and_clear();
         let ssim_str = ssim.map_or_else(|| "---".to_string(), |s| format!("{s:.4}"));
         let status = if quality_passed { "💾" } else { "⚠️" };
-        crate::log_eprintln!(
+        crate::log_detail!(
             "✅ Result: CRF {:.1} • SSIM {} • Size {:+.1}% ({}) • {:.1}s",
             best_crf,
             ssim_str,
@@ -1542,8 +1563,8 @@ impl VideoExplorer {
         let progress_done = || {};
 
         pb.suspend(|| {
-            crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
-            crate::log_eprintln!(
+            crate::log_detail!("┌ 📦 Compress-Only ({:?})", self.encoder);
+            crate::log_detail!(
                 "└ 📁 Input: {:.2} MB",
                 crate::numeric_cast::f64_to_f32_lossy(
                     crate::numeric_cast::u64_to_f64(self.input_size)
@@ -1569,7 +1590,7 @@ impl VideoExplorer {
             let elapsed = start_time.elapsed();
 
             pb.finish_and_clear();
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "✅ Result: CRF {:.1} • {:+.1}% ✅ • ({:.1}s)",
                 self.config.initial_crf,
                 size_pct,
@@ -1639,7 +1660,7 @@ impl VideoExplorer {
 
         pb.finish_and_clear();
         let status = if compressed { "✅" } else { "⚠️" };
-        crate::log_eprintln!(
+        crate::log_detail!(
             "✅ Result: CRF {:.1} • {:+.1}% {} • Iter {} ({:.1}s)",
             final_crf,
             size_change_pct,
@@ -1689,16 +1710,16 @@ impl VideoExplorer {
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                pb.suspend(|| crate::log_eprintln!("{}", msg));
+                pb.suspend(|| crate::log_detail!("{}", msg));
                 log.push(msg);
             }};
         }
 
         let min_ssim = self.config.quality_thresholds.min_ssim;
         pb.suspend(|| {
-            crate::log_eprintln!("┌ 📦 Compress + Quality v4.8 ({:?})", self.encoder);
-            crate::log_eprintln!("├ 📁 Input: {} bytes", self.input_size);
-            crate::log_eprintln!("└ 🎯 Goal: output < input + SSIM >= {:.2}", min_ssim);
+            crate::log_detail!("┌ 📦 Compress + Quality v4.8 ({:?})", self.encoder);
+            crate::log_detail!("├ 📁 Input: {} bytes", self.input_size);
+            crate::log_detail!("└ 🎯 Goal: output < input + SSIM >= {:.2}", min_ssim);
         });
 
         let mut iterations = 0u32;
@@ -1837,7 +1858,7 @@ impl VideoExplorer {
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                crate::log_eprintln!("{}", msg);
+                crate::log_detail!("{}", msg);
                 log.push(msg);
             }};
         }
@@ -1960,14 +1981,11 @@ impl VideoExplorer {
             while high - low > crate::constants::SEARCH_OFFSET_NORMAL && iterations < max_iterations
             {
                 if iterations >= EMERGENCY_MAX_ITERATIONS {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "   ⚠️ EMERGENCY LIMIT: Reached {} iterations, stopping search!",
                         EMERGENCY_MAX_ITERATIONS
                     );
-                    crate::log_eprintln!(
-                        "   ⚠️ Using best result found so far: CRF {:.1}",
-                        best_crf
-                    );
+                    crate::log_detail!("   ⚠️ Using best result found so far: CRF {:.1}", best_crf);
                     break;
                 }
 
@@ -2165,7 +2183,7 @@ impl VideoExplorer {
         macro_rules! log_header {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                pb.suspend(|| crate::log_eprintln!("{}", msg));
+                pb.suspend(|| crate::log_detail!("{}", msg));
                 log.push(msg);
             }};
         }
@@ -2173,17 +2191,12 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    let permille = crate::numeric_cast::u64_to_u32_strict(
+                    let permille = crate::numeric_cast::u64_to_u32_sat(
                         u64::try_from(
                             (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
                         )
                         .unwrap_or(u64::MAX),
-                        "size_percentage_permille",
-                    )
-                    .unwrap_or_else(|| {
-                        tracing::warn!("Failed to calculate size percentage for stage {}", $stage);
-                        0
-                    });
+                    );
                     (f64::from(permille) / 100.0_f64) - 100.0_f64
                 } else {
                     0.0_f64
@@ -2237,7 +2250,7 @@ impl VideoExplorer {
             "🔬 Precise Quality + Compression ({:?}) • Input: {:.2} MB",
             self.encoder,
             crate::numeric_cast::f64_to_f32_lossy(
-                crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                crate::numeric_cast::u64_to_f64(self.input_size) / crate::constants::MB_DIVISOR
             )
         );
         log_header!(
@@ -2335,7 +2348,7 @@ impl VideoExplorer {
             let elapsed = start_time.elapsed();
             let saved = self.input_size - best_size;
             pb.finish_and_clear();
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
                 best_crf,
                 ssim,
@@ -2385,7 +2398,7 @@ impl VideoExplorer {
 
             let elapsed = start_time.elapsed();
             pb.finish_and_clear();
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "⚠️ Cannot compress file (already optimized) • {} iter in {:.1}s",
                 iterations,
                 elapsed.as_secs_f64()
@@ -2626,7 +2639,7 @@ impl VideoExplorer {
         let elapsed = start_time.elapsed();
         let saved = self.input_size - final_size;
         pb.finish_and_clear();
-        crate::log_eprintln!(
+        crate::log_detail!(
             "✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
             boundary_crf,
             ssim,
@@ -2664,7 +2677,7 @@ impl VideoExplorer {
         let result = self.encode_with_ffmpeg(crf);
 
         if result.is_err() && self.use_gpu {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "      ⚠️  GPU encoding failed, falling back to CPU (FFmpeg Native)"
             );
             let cpu_fallback = Self {
@@ -2759,7 +2772,7 @@ impl VideoExplorer {
 
         let pts_integrity = crate::ffprobe_json::check_pts_integrity(&self.input_path);
         if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "      ⚠️  {} input: {:?}, applying safety measures",
                 if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
                     "Broken PTS"
@@ -2871,10 +2884,7 @@ impl VideoExplorer {
                 let line = match line {
                     Ok(line) => line,
                     Err(err) => {
-                        crate::verbose_eprintln!(
-                            "⚠️  Failed to read ffmpeg progress output: {}",
-                            err
-                        );
+                        crate::log_detail!("⚠️  Failed to read ffmpeg progress output: {}", err);
                         break;
                     }
                 };
@@ -2896,7 +2906,8 @@ impl VideoExplorer {
                             "progress_time_millis",
                         )
                         .unwrap_or_else(|| {
-                            tracing::warn!(
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_ANOMALY,
                                 "Video Explorer: Failed to convert progress time from float to integer; defaulting to 0 for progress reporting (ETA may be inaccurate)"
                             );
                             0
@@ -2934,7 +2945,7 @@ impl VideoExplorer {
 
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
-        crate::log_eprintln!(
+        crate::log_detail!(
             "\r      ✅ {} Encoding complete                                    ",
             accel_type
         );
@@ -3046,7 +3057,7 @@ impl VideoExplorer {
             };
             let should_skip = duration.map_or_else(
                 || {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "   ⚠️  Cannot detect video duration, skipping MS-SSIM verification"
                     );
                     true
@@ -3060,12 +3071,12 @@ impl VideoExplorer {
             if should_skip {
                 if let Some(d) = duration {
                     let threshold_min = ms_ssim_skip_threshold_secs / 60.0_f64;
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "   ⚠️  Quality verification: long video ({:.1}min > {:.0}min), MS-SSIM skipped.",
                         d / 60.0_f64,
                         threshold_min
                     );
-                    crate::log_eprintln!("   Use --force-ms-ssim-long to enable.");
+                    crate::log_detail!("   Use --force-ms-ssim-long to enable.");
                 }
                 None
             } else {
@@ -3153,7 +3164,7 @@ impl VideoExplorer {
 
                 let ssim_str = ssim.map_or_else(|| "N/A".to_string(), |s| format!("{s:.4}"));
                 let psnr_str = psnr.map_or_else(|| "N/A".to_string(), |p| format!("{p:.1}"));
-                crate::log_eprintln!(
+                crate::log_detail!(
                     "\r      📊 SSIM: {} | PSNR: {} dB          ",
                     ssim_str,
                     psnr_str
@@ -3162,7 +3173,7 @@ impl VideoExplorer {
                 Ok((ssim, psnr))
             }
             Err(e) => {
-                crate::log_eprintln!("\r      ⚠️  SSIM+PSNR calculation failed: {}          ", e);
+                crate::log_detail!("\r      ⚠️  SSIM+PSNR calculation failed: {}          ", e);
                 Ok((None, None))
             }
         }
@@ -3183,7 +3194,7 @@ impl VideoExplorer {
 
             match result {
                 Ok(Some(ssim)) if precision::is_valid_ssim(ssim) => {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "\r      📊 SSIM: {:.6} (method {})          ",
                         ssim,
                         idx + 1
@@ -3191,7 +3202,7 @@ impl VideoExplorer {
                     return Some(ssim);
                 }
                 Ok(Some(ssim)) => {
-                    crate::log_eprintln!(
+                    crate::log_detail!(
                         "\r      ⚠️  Method {} returned invalid SSIM: {:.6}, trying next...",
                         idx + 1,
                         ssim
@@ -3210,7 +3221,7 @@ impl VideoExplorer {
             }
         }
 
-        crate::log_eprintln!(
+        crate::log_detail!(
             "\r      ⚠️  SSIM calculation failed (all {} methods tried; pixel format/resolution/corruption possible)",
             filters.len()
         );
@@ -3312,8 +3323,9 @@ impl VideoExplorer {
                 let mid_end = dur * (0.5_f64 + segment_pct / 2.0_f64);
                 let tail_start = dur * (1.0_f64 - segment_pct);
 
-                let pct_label = crate::numeric_cast::f64_to_u32_sat(segment_pct * 100.0);
-                crate::log_eprintln!(
+                let pct_label = crate::numeric_cast::f64_to_u32_strict(segment_pct * 100.0, "pct")
+                    .ok_or_else(|| anyhow::anyhow!("Failed to calculate MS-SSIM segment label"))?;
+                crate::log_detail!(
                     "   MS-SSIM: 3-segment sampling (start {}% + mid {}% + end {}%)",
                     pct_label,
                     pct_label,
@@ -3353,7 +3365,7 @@ impl VideoExplorer {
                             && precision::is_valid_ms_ssim(vmaf)
                         {
                             if use_sampling {
-                                crate::log_eprintln!("   VMAF (sampled): {:.2}", vmaf);
+                                crate::log_detail!("   VMAF (sampled): {:.2}", vmaf);
                             }
                             return Ok(Some(vmaf));
                         }
@@ -4102,7 +4114,7 @@ mod tests {
     #[test]
 
     fn test_precision_crf_search_range_hevc() {
-        let iterations = required_iterations(10, 28);
+        let iterations = required_iterations(10, 28).unwrap();
         assert!(
             iterations <= 8,
             "HEVC range [10,28] should need <= 8 iterations, got {iterations}"
@@ -4113,7 +4125,7 @@ mod tests {
     #[test]
 
     fn test_precision_crf_search_range_av1() {
-        let iterations = required_iterations(10, 35);
+        let iterations = required_iterations(10, 35).unwrap();
         assert!(
             iterations <= 8,
             "AV1 range [10,35] should need <= 8 iterations, got {iterations}"
@@ -4124,7 +4136,7 @@ mod tests {
     #[test]
 
     fn test_precision_crf_search_range_wide() {
-        let iterations = required_iterations(0, 51);
+        let iterations = required_iterations(0, 51).unwrap();
         assert!(
             iterations <= 8,
             "Wide range [0,51] should need <= 8 iterations, got {iterations}"
@@ -4179,7 +4191,8 @@ mod tests {
             "coarse_iterations",
         )
         .unwrap_or_else(|| {
-            tracing::warn!(
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
                 "Video Explorer: Failed to calculate coarse iterations (possible overflow); defaulting to 0 (search will skip coarse phase)"
             );
             0
@@ -4189,7 +4202,8 @@ mod tests {
             "fine_iterations",
         )
         .unwrap_or_else(|| {
-            tracing::warn!(
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
                 "Video Explorer: Failed to calculate fine iterations (possible overflow); defaulting to 0 (search will skip fine phase)"
             );
             0
@@ -4210,8 +4224,11 @@ mod tests {
 
     fn test_binary_search_worst_case() {
         let range = 51.0 - 0.0;
-        let coarse_iterations =
-            crate::numeric_cast::f32_to_u32_sat((range / precision::SEARCH_STEP_COARSE).ceil());
+        let coarse_iterations = crate::numeric_cast::f32_to_u32_strict(
+            (range / precision::SEARCH_STEP_COARSE).ceil(),
+            "coarse_iterations",
+        )
+        .expect("coarse_iterations: invalid value (NaN/Inf/overflow)");
         let fine_iterations = crate::numeric_cast::f32_to_u32_sat(
             (precision::SEARCH_STEP_COARSE / precision::SEARCH_STEP_FINE).ceil(),
         );
@@ -4439,9 +4456,11 @@ mod tests {
         assert_eq!(coarse_up, 5, "Coarse search up should be 5 iterations");
 
         let boundary_range = 4.0_f32;
-        let fine_iterations = crate::numeric_cast::f32_to_u32_sat(
+        let fine_iterations = crate::numeric_cast::f32_to_u32_strict(
             (boundary_range / precision::SEARCH_STEP_FINE).ceil(),
-        );
+            "fine_iterations",
+        )
+        .expect("fine_iterations: invalid value (NaN/Inf/overflow)");
         assert_eq!(fine_iterations, 8, "Fine search should be 8 iterations");
 
         let total = 1 + coarse_up + fine_iterations + 1;
@@ -4682,19 +4701,19 @@ mod tests {
         let phase1_step = 1.0_f32;
         let range = 28.0 - 10.0;
         let phase1_iterations = crate::numeric_cast::f32_to_u32_sat((range / phase1_step).ceil());
-        assert_eq!(phase1_iterations, 18, "Phase 1 should scan 18 CRF values");
+        assert_eq!(phase1_iterations, 18);
 
         let phase2_step = 0.5_f32;
         let phase2_range = 4.0_f32;
         let phase2_iterations =
             crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
-        assert_eq!(phase2_iterations, 8, "Phase 2 should test 8 CRF values");
+        assert_eq!(phase2_iterations, 8);
 
         let phase3_step = 0.1_f32;
         let phase3_range = 1.0_f32;
         let phase3_iterations =
             crate::numeric_cast::f32_to_u32_sat((phase3_range / phase3_step).ceil());
-        assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
+        assert_eq!(phase3_iterations, 10);
     }
 
     #[test]
@@ -4808,32 +4827,32 @@ mod tests {
     fn test_v4_crf_cache_mechanism() {
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
 
-        cache.insert(precision::crf_to_cache_key(20.0), 0.985_0_f64);
-        cache.insert(precision::crf_to_cache_key(20.1), 0.985_5_f64);
-        cache.insert(precision::crf_to_cache_key(20.5), 0.986_0_f64);
-        cache.insert(precision::crf_to_cache_key(20.05), 0.985_2_f64);
-        cache.insert(precision::crf_to_cache_key(20.45), 0.985_8_f64);
+        cache.insert(precision::crf_to_cache_key(20.0).unwrap(), 0.985_0_f64);
+        cache.insert(precision::crf_to_cache_key(20.1).unwrap(), 0.985_5_f64);
+        cache.insert(precision::crf_to_cache_key(20.5).unwrap(), 0.986_0_f64);
+        cache.insert(precision::crf_to_cache_key(20.05).unwrap(), 0.985_2_f64);
+        cache.insert(precision::crf_to_cache_key(20.45).unwrap(), 0.985_8_f64);
 
-        assert!(cache.contains_key(&precision::crf_to_cache_key(20.0)));
-        assert!(cache.contains_key(&precision::crf_to_cache_key(20.1)));
-        assert!(cache.contains_key(&precision::crf_to_cache_key(20.5)));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.0).unwrap()));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.1).unwrap()));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.5).unwrap()));
         assert!(
-            cache.contains_key(&precision::crf_to_cache_key(20.05)),
+            cache.contains_key(&precision::crf_to_cache_key(20.05).unwrap()),
             "20.05 should have its own key and hit cache"
         );
         assert!(
-            cache.contains_key(&precision::crf_to_cache_key(20.45)),
+            cache.contains_key(&precision::crf_to_cache_key(20.45).unwrap()),
             "20.45 should have its own key and hit cache"
         );
 
-        assert!(!cache.contains_key(&precision::crf_to_cache_key(20.75)));
-        assert!(!cache.contains_key(&precision::crf_to_cache_key(19.75)));
+        assert!(!cache.contains_key(&precision::crf_to_cache_key(20.75).unwrap()));
+        assert!(!cache.contains_key(&precision::crf_to_cache_key(19.75).unwrap()));
 
-        assert_eq!(precision::crf_to_cache_key(20.0), 2_000_i32);
-        assert_eq!(precision::crf_to_cache_key(20.1), 2_010_i32);
-        assert_eq!(precision::crf_to_cache_key(20.5), 2_050_i32);
-        assert_eq!(precision::crf_to_cache_key(20.05), 2_005_i32);
-        assert_eq!(precision::crf_to_cache_key(20.15), 2_015_i32);
+        assert_eq!(precision::crf_to_cache_key(20.0), Some(2_000_i32));
+        assert_eq!(precision::crf_to_cache_key(20.1), Some(2_010_i32));
+        assert_eq!(precision::crf_to_cache_key(20.5), Some(2_050_i32));
+        assert_eq!(precision::crf_to_cache_key(20.05), Some(2_005_i32));
+        assert_eq!(precision::crf_to_cache_key(20.15), Some(2_015_i32));
     }
 
     #[test]
@@ -5064,12 +5083,21 @@ mod tests {
     #[test]
 
     fn test_adaptive_max_walls_boundary_conditions() {
-        assert_eq!(calculate_adaptive_max_walls(0.0), ULTIMATE_MIN_WALL_HITS);
-        assert_eq!(calculate_adaptive_max_walls(0.5), ULTIMATE_MIN_WALL_HITS);
-        assert_eq!(calculate_adaptive_max_walls(1.0), ULTIMATE_MIN_WALL_HITS);
+        assert_eq!(
+            calculate_adaptive_max_walls(0.0).unwrap(),
+            ULTIMATE_MIN_WALL_HITS
+        );
+        assert_eq!(
+            calculate_adaptive_max_walls(0.5).unwrap(),
+            ULTIMATE_MIN_WALL_HITS
+        );
+        assert_eq!(
+            calculate_adaptive_max_walls(1.0).unwrap(),
+            ULTIMATE_MIN_WALL_HITS
+        );
 
         for range in [2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 1000.0] {
-            let result = calculate_adaptive_max_walls(range);
+            let result = calculate_adaptive_max_walls(range).unwrap();
             assert!(
                 result >= ULTIMATE_MIN_WALL_HITS,
                 "range {range} -> {result} should >= {ULTIMATE_MIN_WALL_HITS}"
@@ -5084,9 +5112,9 @@ mod tests {
     #[test]
 
     fn test_adaptive_max_walls_monotonicity() {
-        let mut prev = calculate_adaptive_max_walls(2.0);
+        let mut prev = calculate_adaptive_max_walls(2.0).unwrap();
         for range in [4.0, 8.0, 16.0, 32.0, 64.0] {
-            let curr = calculate_adaptive_max_walls(range);
+            let curr = calculate_adaptive_max_walls(range).unwrap();
             assert!(
                 curr >= prev,
                 "monotonicity violated: range {range} -> {curr} < prev {prev}"
@@ -5099,16 +5127,16 @@ mod tests {
 
     fn test_adaptive_max_walls_formula_correctness() {
         // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS changed from 4 to 15
-        assert_eq!(calculate_adaptive_max_walls(10.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
+        assert_eq!(calculate_adaptive_max_walls(10.0).unwrap(), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(18.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
+        assert_eq!(calculate_adaptive_max_walls(18.0).unwrap(), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(30.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
+        assert_eq!(calculate_adaptive_max_walls(30.0).unwrap(), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(50.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
+        assert_eq!(calculate_adaptive_max_walls(50.0).unwrap(), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
         assert_eq!(
-            calculate_adaptive_max_walls(100_000.0),
+            calculate_adaptive_max_walls(100_000.0).unwrap(),
             (crate::numeric_cast::f32_to_u32_sat(100_000.0_f32.log2().ceil())
                 + ADAPTIVE_WALL_LOG_BASE)
                 .min(ULTIMATE_MAX_WALL_HITS)
@@ -5128,20 +5156,26 @@ mod tests {
     #[test]
 
     fn test_adaptive_max_walls_defensive_checks() {
-        assert_eq!(calculate_adaptive_max_walls(-1.0), ULTIMATE_MIN_WALL_HITS);
-        assert_eq!(calculate_adaptive_max_walls(-100.0), ULTIMATE_MIN_WALL_HITS);
-
         assert_eq!(
-            calculate_adaptive_max_walls(f32::NAN),
+            calculate_adaptive_max_walls(-1.0).unwrap(),
+            ULTIMATE_MIN_WALL_HITS
+        );
+        assert_eq!(
+            calculate_adaptive_max_walls(-100.0).unwrap(),
             ULTIMATE_MIN_WALL_HITS
         );
 
         assert_eq!(
-            calculate_adaptive_max_walls(f32::INFINITY),
+            calculate_adaptive_max_walls(f32::NAN).unwrap(),
+            ULTIMATE_MIN_WALL_HITS
+        );
+
+        assert_eq!(
+            calculate_adaptive_max_walls(f32::INFINITY).unwrap(),
             ULTIMATE_MIN_WALL_HITS
         );
         assert_eq!(
-            calculate_adaptive_max_walls(f32::NEG_INFINITY),
+            calculate_adaptive_max_walls(f32::NEG_INFINITY).unwrap(),
             ULTIMATE_MIN_WALL_HITS
         );
     }
@@ -5151,16 +5185,16 @@ mod tests {
     fn test_crf_to_cache_key_precision() {
         use precision::crf_to_cache_key;
 
-        assert_eq!(crf_to_cache_key(20.0), 2_000_i32);
-        assert_eq!(crf_to_cache_key(20.1), 2_010_i32);
-        assert_eq!(crf_to_cache_key(20.5), 2_050_i32);
+        assert_eq!(crf_to_cache_key(20.0), Some(2_000_i32));
+        assert_eq!(crf_to_cache_key(20.1), Some(2_010_i32));
+        assert_eq!(crf_to_cache_key(20.5), Some(2_050_i32));
 
-        assert_eq!(crf_to_cache_key(0.0), 0_i32);
-        assert_eq!(crf_to_cache_key(51.0), 5_100_i32);
-        assert_eq!(crf_to_cache_key(63.0), 6_300_i32);
+        assert_eq!(crf_to_cache_key(0.0), Some(0_i32));
+        assert_eq!(crf_to_cache_key(51.0), Some(5_100_i32));
+        assert_eq!(crf_to_cache_key(63.0), Some(6_300_i32));
 
-        assert_eq!(crf_to_cache_key(20.05), 2_005_i32);
-        assert_eq!(crf_to_cache_key(20.04), 2_004_i32);
+        assert_eq!(crf_to_cache_key(20.05), Some(2_005_i32));
+        assert_eq!(crf_to_cache_key(20.04), Some(2_004_i32));
     }
 
     #[test]
@@ -5169,7 +5203,7 @@ mod tests {
         use precision::{cache_key_to_crf, crf_to_cache_key};
 
         for crf in [10.0, 15.0, 20.0, 25.0, 30.0, 51.0] {
-            let key = crf_to_cache_key(crf);
+            let key = crf_to_cache_key(crf).expect("Valid CRF must yield key");
             let back = cache_key_to_crf(key);
             assert!(
                 (crf - back).abs() < 0.001,
@@ -5178,7 +5212,7 @@ mod tests {
         }
 
         for crf in [20.1, 20.5, 20.9, 25.3, 30.7] {
-            let key = crf_to_cache_key(crf);
+            let key = crf_to_cache_key(crf).expect("Valid CRF must yield key");
             let back = cache_key_to_crf(key);
             assert!(
                 (crf - back).abs() < 0.001,
@@ -5190,28 +5224,28 @@ mod tests {
     #[test]
     fn test_zero_gains_scaling_basic() {
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(60.0, 41.0, true),
+            calculate_zero_gains_for_duration_and_range(60.0, 41.0, true).unwrap(),
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(60.0, 20.0, true),
+            calculate_zero_gains_for_duration_and_range(60.0, 20.0, true).unwrap(),
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
 
         // ultimate_mode: base 100, crf_range 15 -> factor 0.75, scaled = 100 * 0.75 = 75
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
+            calculate_zero_gains_for_duration_and_range(60.0, 15.0, true).unwrap(),
             75
         );
 
         // crf_range 10 -> factor 0.5, scaled = 100 * 0.5 = 50
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
+            calculate_zero_gains_for_duration_and_range(60.0, 10.0, true).unwrap(),
             50
         );
 
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
+            calculate_zero_gains_for_duration_and_range(60.0, 5.0, true).unwrap(),
             50
         );
     }
@@ -5219,9 +5253,9 @@ mod tests {
     #[test]
 
     fn test_zero_gains_minimum_guarantee() {
-        assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true) >= 15);
-        assert!(calculate_zero_gains_for_duration_and_range(60.0, 0.1, true) >= 15);
-        assert!(calculate_zero_gains_for_duration_and_range(60.0, 5.0, false) >= 3);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true).unwrap() >= 15);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 0.1, true).unwrap() >= 15);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 5.0, false).unwrap() >= 3);
     }
 
     #[test]
@@ -5229,16 +5263,16 @@ mod tests {
     fn test_zero_gains_long_video_override() {
         // Long video uses LONG_VIDEO_REQUIRED_ZERO_GAINS as base, but ultimate_mode still enforces min 15
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(300.0, 41.0, true),
+            calculate_zero_gains_for_duration_and_range(300.0, 41.0, true).unwrap(),
             15
         );
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(600.0, 10.0, true),
+            calculate_zero_gains_for_duration_and_range(600.0, 10.0, true).unwrap(),
             15
         );
         // Non-ultimate: long video returns base (3) scaled
         assert_eq!(
-            calculate_zero_gains_for_duration_and_range(300.0, 41.0, false),
+            calculate_zero_gains_for_duration_and_range(300.0, 41.0, false).unwrap(),
             LONG_VIDEO_REQUIRED_ZERO_GAINS
         );
     }
@@ -5280,8 +5314,8 @@ mod prop_tests_v69 {
             crf_range_small in 1.0f32..19.9f32,
             crf_range_large in 20.0f32..50.0f32,
         ) {
-            let small_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_small, true);
-            let large_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_large, true);
+            let small_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_small, true).unwrap();
+            let large_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_large, true).unwrap();
 
             prop_assert!(small_result <= large_result,
                 "zero-gains({}) for small CRF range ({}) should be <= zero-gains({}) for large CRF range ({})",
@@ -5298,7 +5332,7 @@ mod prop_tests_v69 {
             crf_range in 0.1f32..100.0f32,
             ultimate_mode in proptest::bool::ANY,
         ) {
-            let result = calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
+            let result = calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode).unwrap();
 
             let min_expected = if ultimate_mode { 15 } else { 3 };
             prop_assert!(result >= min_expected,

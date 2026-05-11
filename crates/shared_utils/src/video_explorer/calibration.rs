@@ -60,19 +60,46 @@ impl Point {
             / crate::numeric_cast::u64_to_f64(input_size);
         let size_pct = (size_ratio - 1.0_f64) * 100.0_f64;
 
-        eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ GPU→CPU Calibration Report");
-        eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!(
-            "│ GPU Boundary: CRF {:.1} → {:.1}% size",
-            self.gpu_crf, size_pct
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "┌─────────────────────────────────────────────────────"
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "│ GPU→CPU Calibration Report"
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "├─────────────────────────────────────────────────────"
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!(
+                "│ GPU Boundary: CRF {:.1} → {:.1}% size",
+                self.gpu_crf, size_pct
+            )
         );
         if let Some(ssim) = self.gpu_ssim {
-            eprintln!("│ GPU SSIM: {ssim:.4}");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_DYNAMIC,
+                &format!("│ GPU SSIM: {ssim:.4}")
+            );
         }
-        eprintln!("│ Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf);
-        eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0_f64);
-        eprintln!("│ Reason: {}", self.reason);
-        eprintln!("└─────────────────────────────────────────────────────");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!("│ Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf)
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!("│ Confidence: {:.0}%", self.confidence * 100.0_f64)
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            &format!("│ Reason: {}", self.reason)
+        );
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_DYNAMIC,
+            "└─────────────────────────────────────────────────────"
+        );
     }
 }

@@ -1,3 +1,10 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use shared_utils::media_meta_utils::scan_gif_headers;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -45,7 +52,7 @@ fn create_test_animated_gif() -> Vec<u8> {
 
 fn main() {
     let gif = create_test_animated_gif();
-    println!("GIF length: {}", gif.len());
+    log_detail!("GIF length: {}", gif.len());
 
     // Manual parsing to verify frame count
     let mut frame_count = 0;
@@ -54,15 +61,15 @@ fn main() {
     // Skip global color table
     pos += 6; // 2 colors * 3 bytes = 6 bytes
 
-    println!("Starting position after header and color table: {pos}");
+    log_detail!("Starting position after header and color table: {pos}");
 
     while pos < gif.len() {
         let byte = gif[pos];
-        println!("Position {pos}: 0x{byte:02X}");
+        log_detail!("Position {pos}: 0x{byte:02X}");
 
         if byte == 0x2C {
             frame_count += 1;
-            println!("  Found frame {frame_count}!");
+            log_detail!("  Found frame {frame_count}!");
             pos += 11; // Skip image descriptor
             if pos < gif.len() {
                 pos += 1; // Skip LZW min code size
@@ -100,7 +107,7 @@ fn main() {
         }
     }
 
-    println!("Manual frame count: {frame_count}");
+    log_detail!("Manual frame count: {frame_count}");
 
     // Use actual scan function
     let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
@@ -109,8 +116,8 @@ fn main() {
     let scan_result = scan_gif_headers(temp_file.path());
     match &scan_result {
         Ok(scan) => {
-            println!("Scan result frame_count: {:?}", scan.frame_count);
+            log_detail!("Scan result frame_count: {:?}", scan.frame_count);
         }
-        Err(e) => println!("Scan error: {e:?}"),
+        Err(e) => log_detail!("Scan error: {e:?}"),
     }
 }

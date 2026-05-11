@@ -89,7 +89,7 @@ impl Bar {
         self.bar.set_message(msg.into());
     }
     pub fn println(&self, msg: &str) {
-        self.bar.suspend(|| eprintln!("{msg}"));
+        crate::progress_mode::emit_stderr(msg);
     }
 
     pub fn inc_iteration(&self, crf: f32, size: u64, ssim: Option<f64>) {

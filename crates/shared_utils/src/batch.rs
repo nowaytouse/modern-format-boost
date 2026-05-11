@@ -528,7 +528,16 @@ fn relative_depth_from_root(root: &Path, path: &Path) -> usize {
     path.strip_prefix(root)
         .ok()
         .and_then(Path::parent)
-        .map_or(0, |parent| parent.components().count())
+        .map_or_else(
+            || {
+                // If parent is None, log an anomaly; returning 0 is a conservative fallback for UI display.
+                warn!(
+                    "Unexpected missing parent component when calculating path components count."
+                );
+                0
+            },
+            |p| p.components().count(),
+        )
 }
 
 /// Determines the format priority for an image file.
@@ -579,8 +588,7 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
 /// Sortable ordinal key for comparison
 fn float_ord_key(value: f64) -> u64 {
     if value.is_finite() && value >= 0.0 {
-        crate::numeric_cast::f64_to_u64_strict((value * 1000.0).round(), "float_ord_key")
-            .unwrap_or(u64::MAX)
+        crate::numeric_cast::f64_to_u64_sat((value * 1000.0).round())
     } else {
         u64::MAX
     }
@@ -1019,9 +1027,10 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
     let frame_count = probe.frame_count.map_or_else(
         || {
             if let (Some(dur), Some(fps)) = (duration_secs, frame_rate) {
-                Some(crate::numeric_cast::f64_to_u64_sat(
+                Some(crate::numeric_cast::f64_to_u64_strict(
                     (dur * fps).round().max(1.0_f64),
-                ))
+                    "frames",
+                )?)
             } else {
                 None
             }

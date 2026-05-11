@@ -50,24 +50,28 @@ fn main() -> Result<()> {
         anyhow::bail!("❌ Training directory not found: {}", cli.input.display());
     }
 
-    println!("🧠 Starting Dynamic Content KNN Training...");
-    println!("📂 Source: {}", cli.input.display());
+    shared_utils::progress_mode::emit_stderr("🧠 Starting Dynamic Content KNN Training...");
+    shared_utils::progress_mode::emit_stderr(&format!("📂 Source: {}", cli.input.display()));
     if let Some(l) = cli.label {
-        println!(
+        shared_utils::progress_mode::emit_stderr(&format!(
             "🏷️  Manual Override Label: {:?} (mapped to '{}')",
             l,
             l.to_db_label()
-        );
+        ));
     } else {
-        println!("🔍 Mode: Automatic Heuristic Labeling");
+        shared_utils::progress_mode::emit_stderr("🔍 Mode: Automatic Heuristic Labeling");
     }
 
     // Pass the label override to the batch ingestion engine
     let label_str = cli.label.map(IntentLabel::to_db_label);
     let count = batch_ingest_samples(&cli.input, label_str).context("Batch ingestion failed")?;
 
-    println!("✅ Success! Ingested {count} dynamic samples.");
-    println!("📊 Global feature stats and baselines have been auto-refreshed.");
+    shared_utils::progress_mode::emit_stderr(&format!(
+        "✅ Success! Ingested {count} dynamic samples."
+    ));
+    shared_utils::progress_mode::emit_stderr(
+        "📊 Global feature stats and baselines have been auto-refreshed.",
+    );
 
     Ok(())
 }

@@ -141,7 +141,7 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 /// 📋 Version Information - For display and debugging
 #[derive(Debug, Clone)]
 pub struct Info {
-    /// Program version string (e.g., "0.10.102")
+    /// Program version string (e.g.)
     pub program_version: String,
 
     /// Cache algorithm version code (e.g., 1102)

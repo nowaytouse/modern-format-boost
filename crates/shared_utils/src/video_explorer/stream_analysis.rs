@@ -11,7 +11,6 @@
 use crate::FfmpegBuilder;
 use crate::builder_base::ToolBuilder;
 use std::path::Path;
-use tracing::{info, warn};
 
 pub const LONG_VIDEO_THRESHOLD: f32 = crate::constants::LONG_VIDEO_THRESHOLD_SECS;
 
@@ -54,6 +53,7 @@ impl Default for QualityThresholds {
     }
 }
 
+#[must_use]
 pub fn get_video_duration(input: &Path) -> Option<f64> {
     let output = crate::FfprobeBuilder::new()
         .input(input)
@@ -65,17 +65,24 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .arg("default=noprint_wrappers=1:nokey=1")
         .build()
         .output()
-        .map_err(|e| {
-            warn!(path = %input.display(), error = %e, "ffprobe: Subprocess failed to start for duration check; verify ffprobe is in PATH");
-            e
+        .inspect_err(|_e| {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFPROBE,
+                &format!(
+                    "Subprocess failed to start for duration check ({}): verify ffprobe is in PATH",
+                    input.display()
+                )
+            );
         })
         .ok()?;
 
     if !output.status.success() {
-        warn!(
-            path = %input.display(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "ffprobe: Failed to read video duration (non-zero exit status); container may be malformed"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_FFPROBE,
+            &format!(
+                "Failed to read video duration for {} (non-zero exit status); container may be malformed",
+                input.display()
+            )
         );
         return None;
     }
@@ -85,11 +92,12 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
     match trimmed.parse::<f64>() {
         Ok(duration) => Some(duration),
         Err(err) => {
-            warn!(
-                path = %input.display(),
-                output = %trimmed,
-                error = %err,
-                "ffprobe: Failed to parse duration output as float"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFPROBE,
+                &format!(
+                    "Failed to parse duration output for {} as float: {err}",
+                    input.display()
+                )
             );
             None
         }
@@ -98,13 +106,15 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
 
 fn count_video_frames(path: &Path) -> Option<u64> {
     if is_gif_magic(path) {
-        let frames = crate::numeric_cast::usize_to_u64_strict(
-            crate::image_formats::gif::get_frame_count(path),
-            "gif_frame_count",
-        )
-        .expect("usize always fits in u64");
+        let frames = crate::image_formats::gif::get_frame_count(path).unwrap_or_else(|e| {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("GIF frame count failed for {}: {}", path.display(), e)
+            );
+            0
+        });
         if frames > 0 {
-            return Some(frames);
+            return Some(crate::numeric_cast::usize_to_u64(frames));
         }
     }
 
@@ -116,13 +126,26 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         let data = match std::fs::read(path) {
             Ok(d) => d,
             Err(e) => {
-                warn!(path = %path.display(), error = %e, "Failed to read WebP file for frame counting");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "Failed to read WebP file for frame counting ({}): {e}",
+                        path.display()
+                    )
+                );
                 return None;
             }
         };
-        let frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
+        let frames =
+            crate::image_formats::webp::count_frames_from_bytes(&data).unwrap_or_else(|e| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!("WebP frame count failed for {}: {}", path.display(), e)
+                );
+                0
+            });
         if frames > 0 {
-            return Some(frames);
+            return Some(u64::from(frames));
         }
     }
 
@@ -138,17 +161,25 @@ fn count_video_frames(path: &Path) -> Option<u64> {
             .output()
         {
             Ok(o) => o,
-            Err(e) => {
-                warn!(path = %path.display(), error = %e, "ffprobe: Subprocess failed to start for frame count; verify ffprobe is in PATH");
+            Err(_e) => {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_FFPROBE,
+                    &format!(
+                        "Subprocess failed to start for frame count ({}): verify ffprobe is in PATH",
+                        path.display()
+                    )
+                );
                 return None;
             }
         };
 
         if !out.status.success() {
-            warn!(
-                path = %path.display(),
-                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
-                "ffprobe: Failed to count frames (non-zero exit status)"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFPROBE,
+                &format!(
+                    "Failed to count frames for {} (non-zero exit status)",
+                    path.display()
+                )
             );
             return None;
         }
@@ -158,7 +189,13 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         match trimmed.parse::<u64>() {
             Ok(count) => Some(count),
             Err(e) => {
-                warn!(path = %path.display(), output = %trimmed, error = %e, "ffprobe: Failed to parse frame count output as integer");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_FFPROBE,
+                    &format!(
+                        "Failed to parse frame count output for {} as integer: {e}",
+                        path.display()
+                    )
+                );
                 None
             }
         }
@@ -180,6 +217,7 @@ pub fn is_gif_magic(path: &Path) -> bool {
         .is_ok_and(|()| &magic == b"GIF8")
 }
 
+#[must_use]
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     // GIF-specific path: force palette → yuv420p conversion on the reference side
     // before comparing with the yuv420p-encoded output.  This avoids all three
@@ -189,7 +227,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 
     let mut filters: Vec<(String, String)> = Vec::new();
     if is_gif {
-        let ms = crate::numeric_cast::f64_to_u64_sat(crate::constants::MS_PER_SEC_F64);
+        let ms = crate::numeric_cast::f64_to_u64_strict(crate::constants::MS_PER_SEC_F64, "ms")?;
         filters.push((
             "gif_sync".to_string(),
             format!("[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"),
@@ -230,18 +268,30 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
                 if let Some(ssim) = parse_ssim_from_output(&stderr)
                     && is_valid_ssim_value(ssim)
                 {
-                    info!(method = %name, ssim = %ssim, "SSIM calculated");
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_FFMPEG,
+                        &format!("SSIM calculated via {name}: {ssim:.4}")
+                    );
                     return Some(ssim);
                 }
-                warn!(method = %name, "SSIM method failed, trying next method");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_SSIM_CALC_FAILED,
+                    &format!("SSIM method {name} failed, trying next method")
+                );
             }
             Err(e) => {
-                warn!(method = %name, error = %e, "ffmpeg failed");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_FFMPEG,
+                    &format!("ffmpeg failed for {name}: {e}")
+                );
             }
         }
     }
 
-    tracing::error!("ALL SSIM CALCULATION METHODS FAILED");
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_SSIM_CALC_FAILED,
+        "ALL SSIM CALCULATION METHODS FAILED"
+    );
     None
 }
 
@@ -258,7 +308,14 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
     {
         Ok(o) => o,
         Err(e) => {
-            warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to start ffmpeg for SSIM-All calculation");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_FFMPEG,
+                &format!(
+                    "Failed to start ffmpeg for SSIM-All calculation ({} -> {}): {e}",
+                    input.display(),
+                    output.display()
+                )
+            );
             return None;
         }
     };
@@ -311,7 +368,8 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     // swscale path) then convert to yuv420p for comparison.
     const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
 
-    let ms = crate::numeric_cast::f64_to_u64_sat(crate::constants::MS_PER_SEC_F64);
+    let ms =
+        crate::numeric_cast::f64_to_u64_strict(crate::constants::MS_PER_SEC_F64, "MS_PER_SEC")?;
     let gif_sync = format!(
         "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"
     );
@@ -406,7 +464,10 @@ pub fn check_lossless_integrity(
 ) -> Result<bool, String> {
     // Guard: output must not be empty
     if output_size == 0 {
-        warn!("CRF=0 integrity: output file is empty (silent encode failure?)");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_ANOMALY,
+            "CRF=0 integrity: output file is empty (silent encode failure?)"
+        );
         return Ok(false);
     }
 
@@ -415,11 +476,9 @@ pub fn check_lossless_integrity(
 
     match (input_frames, output_frames) {
         (Some(i), Some(o)) if o >= i => {
-            info!(
-                input_frames = i,
-                output_frames = o,
-                "CRF=0 integrity: frame count OK"
-            );
+            crate::log_detail!(&format!(
+                "CRF=0 integrity: frame count OK (input={i}, output={o})"
+            ));
             Ok(true)
         }
         (Some(i), Some(o)) => {
@@ -443,34 +502,36 @@ pub fn check_lossless_integrity(
                 let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
 
                 if dur_ratio >= crate::constants::STREAM_ANALYSIS_DURATION_MATCH_THRESHOLD {
-                    warn!(
-                        input_frames = i,
-                        output_frames = o,
-                        dur_ratio = format!("{:.4}", dur_ratio),
-                        "CRF=0 integrity: frame count decreased but duration OK (VFR→CFR alignment). Soft-accepting."
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        &format!(
+                            "CRF=0 integrity: frame count decreased but duration OK (VFR→CFR alignment). Soft-accepting. (input={i}, output={o}, ratio={dur_ratio:.4})"
+                        )
                     );
                     Ok(true)
                 } else {
-                    warn!(
-                        input_frames = i,
-                        output_frames = o,
-                        dur_ratio = format!("{:.4}", dur_ratio),
-                        "CRF=0 integrity: both frame count AND duration dropped significantly — possible frame drop error"
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        &format!(
+                            "CRF=0 integrity: both frame count AND duration dropped significantly — possible frame drop error (input={i}, output={o}, ratio={dur_ratio:.4})"
+                        )
                     );
                     Ok(false)
                 }
             } else {
-                warn!(
-                    input_frames = i,
-                    output_frames = o,
-                    "CRF=0 integrity: output has FEWER frames than input — possible encode error"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!(
+                        "CRF=0 integrity: output has FEWER frames than input — possible encode error (input={i}, output={o})"
+                    )
                 );
                 Ok(false)
             }
         }
         (None, _) | (_, None) => {
             // Cannot determine frame count — treat as a soft warning, not a hard failure
-            warn!(
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
                 "CRF=0 integrity: could not determine frame count via ffprobe; skipping frame check"
             );
             // File is non-empty (checked above), so accept

@@ -408,12 +408,39 @@ pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
     Some(unsafe { val.to_int_unchecked::<i64>() })
 }
 
-/// Convert `f64` to `usize` with loud warning on overflow/NaN.
+/// Convert `u32` to `usize` with loud warning on overflow/NaN.
 #[must_use]
 pub fn u32_to_usize_strict(val: u32, name: &str) -> Option<usize> {
     usize::try_from(val).map_or_else(|_| {
             warn!(
                 "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `i32` to `u64` with loud warning on sign loss.
+#[must_use]
+pub fn i32_to_u64_strict(val: i32, name: &str) -> Option<u64> {
+    u64::try_from(val).map_or_else(
+        |_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) is negative! Refusing to forge u64. Information invalidated.",
+                name, val
+            );
+            None
+        },
+        Some,
+    )
+}
+
+/// Convert `i32` to `usize` with loud warning on sign loss or overflow.
+#[must_use]
+pub fn i32_to_usize_strict(val: i32, name: &str) -> Option<usize> {
+    usize::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of usize range! Refusing to forge data. Information invalidated.",
                 name, val
             );
             None
@@ -501,6 +528,26 @@ pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
     Some(raw::f32_to_i32(val))
 }
 
+/// Convert `f64` to `i32` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f64_to_i32_strict(val: f64, name: &str) -> Option<i32> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN or Inf! Refusing to forge i32.",
+            name, val
+        );
+        return None;
+    }
+    if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&val) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows i32! Refusing to forge data.",
+            name, val
+        );
+        return None;
+    }
+    Some(raw::f64_to_i32(val))
+}
+
 /// Convert `u32` to `u8` with loud warning on overflow.
 #[must_use]
 pub fn u32_to_u8_strict(val: u32, name: &str) -> Option<u8> {
@@ -523,6 +570,69 @@ pub fn usize_to_i64_strict(val: usize, name: &str) -> Option<i64> {
             );
             None
         }, Some)
+}
+
+/// Convert `u128` to `i64` with loud warning on overflow.
+/// Convert `f64` to `f32` with loud warning on NaN/Inf/overflow.
+#[must_use]
+pub fn f64_to_f32_strict(val: f64, name: &str) -> Option<f32> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN or Infinite! Refusing to forge f32.",
+            name, val
+        );
+        return None;
+    }
+    if val < f64::from(f32::MIN) || val > f64::from(f32::MAX) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) out of f32 range! Refusing to forge data.",
+            name, val
+        );
+        return None;
+    }
+    Some(raw::f64_to_f32(val))
+}
+
+/// Convert `f32` to `u16` with loud warning on NaN/Inf/overflow.
+#[must_use]
+pub fn f32_to_u16_strict(val: f32, name: &str) -> Option<u16> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN/Inf! Refusing to forge u16.",
+            name, val
+        );
+        return None;
+    }
+    let rounded = val.round();
+    if !(0.0..=f32::from(u16::MAX)).contains(&rounded) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) out of u16 range! Refusing to forge data.",
+            name, rounded
+        );
+        return None;
+    }
+    Some(raw::f32_to_u16(rounded))
+}
+
+/// Convert `f64` to `u16` with loud warning on NaN/Inf/overflow.
+#[must_use]
+pub fn f64_to_u16_strict(val: f64, name: &str) -> Option<u16> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN/Inf! Refusing to forge u16.",
+            name, val
+        );
+        return None;
+    }
+    let rounded = val.round();
+    if !(0.0..=f64::from(u16::MAX)).contains(&rounded) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) out of u16 range! Refusing to forge data.",
+            name, rounded
+        );
+        return None;
+    }
+    Some(raw::f64_to_u16(rounded))
 }
 
 /// Convert `u128` to `i64` with loud warning on overflow.
@@ -658,6 +768,9 @@ mod raw {
 // ---------------------------------------------------------------------------
 
 /// Saturating cast: `f64` → `u64`.
+///
+/// **WARNING**: This function performs silent data forgery (saturates to 0 on NaN/negative).
+/// Use `f64_to_u64_strict` for non-UI data paths.
 ///
 /// - `NaN` or negative → `0`
 /// - `> u64::MAX` → `u64::MAX`
@@ -1268,13 +1381,20 @@ pub fn u128_to_u64_sat(v: u128) -> u64 {
 /// `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64` pattern
 /// and handles the `u64 → i64` wrap safely (current timestamps fit in i64
 /// until year 292,277,026,596).
+/// # Panics
+/// Panics if system time is before `UNIX_EPOCH`.
 #[inline]
 #[must_use]
 pub fn unix_secs_i64() -> i64 {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(dur) => dur.as_secs(),
+        Err(e) => {
+            warn!(
+                "☢️ [ANOMALY] System time before UNIX_EPOCH: {e}. Refusing to forge data; panicking to honestly report the failure."
+            );
+            unreachable!("System time before UNIX_EPOCH: {e}");
+        }
+    };
     u64_to_i64_sat(secs)
 }
 
@@ -1515,7 +1635,7 @@ mod tests {
     #[test]
     fn unix_secs_i64_is_positive() {
         let ts = unix_secs_i64();
-        assert!(ts > 1_700_000_000, "Timestamp should be after 2023");
+        assert!(ts > 1_700_000_000);
     }
 
     #[test]

@@ -8,8 +8,7 @@ use std::process::{Command, Stdio};
 /// Builder for constructing `cjxl` commands.
 #[derive(Debug, Default)]
 pub struct CjxlBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    base: crate::builder_base::BaseBuilder,
     distance: Option<f32>,
     effort: Option<u8>,
     threads: Option<usize>,
@@ -18,7 +17,6 @@ pub struct CjxlBuilder {
     cicp: Option<String>,
     icc_profile: Option<PathBuf>,
     apple_compat: bool,
-    extra_args: Vec<String>,
     use_stdin: bool,
     intensity_target: Option<f32>,
 }
@@ -32,16 +30,6 @@ impl CjxlBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Self::default().check_available()
-    }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
     }
 
     pub const fn distance(&mut self, distance: f32) -> &mut Self {
@@ -100,12 +88,9 @@ impl CjxlBuilder {
         self.intensity_target = Some(target);
         self
     }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(CjxlBuilder);
 
 impl ToolBuilder for CjxlBuilder {
     fn get_command_name(&self) -> &str {
@@ -118,11 +103,11 @@ impl ToolBuilder for CjxlBuilder {
 
         if self.use_stdin {
             cmd.arg("-");
-        } else if let Some(input) = &self.input {
+        } else if let Some(input) = self.base.inputs.first() {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
 
-        if let Some(output) = &self.output {
+        if let Some(output) = &self.base.output {
             cmd.arg(crate::safe_path_arg(output).as_ref());
         } else {
             cmd.arg("-");
@@ -173,9 +158,7 @@ impl ToolBuilder for CjxlBuilder {
             cmd.arg("--intensity_target").arg(format!("{it:.2}"));
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
 
         if self.use_stdin {
             cmd.stdin(Stdio::piped());
@@ -188,9 +171,7 @@ impl ToolBuilder for CjxlBuilder {
 /// Builder for constructing `djxl` commands.
 #[derive(Debug, Default)]
 pub struct DjxlBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
-    extra_args: Vec<String>,
+    base: crate::builder_base::BaseBuilder,
 }
 
 impl DjxlBuilder {
@@ -203,22 +184,9 @@ impl DjxlBuilder {
     pub fn check_available() -> bool {
         Self::default().check_available()
     }
-
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
 }
+
+crate::impl_base_builder_accessors_full!(DjxlBuilder);
 
 impl ToolBuilder for DjxlBuilder {
     fn get_command_name(&self) -> &str {
@@ -229,17 +197,9 @@ impl ToolBuilder for DjxlBuilder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(crate::safe_path_arg(output).as_ref());
-        }
-
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_first_input(&mut cmd, None);
+        self.base.apply_output(&mut cmd, None);
+        self.base.apply_to_command(&mut cmd);
 
         cmd
     }

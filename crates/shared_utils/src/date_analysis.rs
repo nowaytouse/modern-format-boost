@@ -366,41 +366,58 @@ fn parse_date(date_str: &str, config: &AnalysisConfig) -> Option<NaiveDateTime> 
 }
 
 pub fn print_analysis(result: &AnalysisResult) {
-    println!("\n📊 Deep Analysis Results");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    crate::progress_mode::emit_stderr("\n📊 Deep Analysis Results");
+    crate::progress_mode::emit_stderr(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    );
 
-    println!("\n📈 Statistics:");
-    println!("   Total files:           {}", result.total_files);
-    println!("   With reliable dates:   {}", result.files_with_dates);
-    println!("   Without dates:         {}", result.files_without_dates);
+    crate::progress_mode::emit_stderr("\n📈 Statistics:");
+    crate::progress_mode::emit_stderr(&format!("   Total files:           {}", result.total_files));
+    crate::progress_mode::emit_stderr(&format!(
+        "   With reliable dates:   {}",
+        result.files_with_dates
+    ));
+    crate::progress_mode::emit_stderr(&format!(
+        "   Without dates:         {}",
+        result.files_without_dates
+    ));
 
-    println!("\n📋 Date Source Distribution:");
+    crate::progress_mode::emit_stderr("\n📋 Date Source Distribution:");
     let mut sources: Vec<_> = result.by_source.iter().collect();
     sources.sort_by(|a, b| b.1.cmp(a.1));
     for (source, count) in sources {
-        println!("   {source}: {count} files");
+        crate::progress_mode::emit_stderr(&format!("   {source}: {count} files"));
     }
 
     if let Some(earliest) = &result.earliest {
-        println!("\n📅 TRUE Date Range (Original Creation Time):");
+        crate::progress_mode::emit_stderr("\n📅 TRUE Date Range (Original Creation Time):");
         if let Some(date) = &earliest.best_date {
-            println!("   Earliest: {}", date.format("%Y-%m-%d %H:%M:%S"));
-            println!("   File:     {}", earliest.filename);
-            println!("   Source:   {}", earliest.date_source.name());
+            crate::progress_mode::emit_stderr(&format!(
+                "   Earliest: {}",
+                date.format("%Y-%m-%d %H:%M:%S")
+            ));
+            crate::progress_mode::emit_stderr(&format!("   File:     {}", earliest.filename));
+            crate::progress_mode::emit_stderr(&format!(
+                "   Source:   {}",
+                earliest.date_source.name()
+            ));
         }
     }
 
     if let Some(latest) = &result.latest
         && let Some(date) = &latest.best_date
     {
-        println!();
-        println!("   Latest:   {}", date.format("%Y-%m-%d %H:%M:%S"));
-        println!("   File:     {}", latest.filename);
-        println!("   Source:   {}", latest.date_source.name());
+        crate::progress_mode::emit_stderr("");
+        crate::progress_mode::emit_stderr(&format!(
+            "   Latest:   {}",
+            date.format("%Y-%m-%d %H:%M:%S")
+        ));
+        crate::progress_mode::emit_stderr(&format!("   File:     {}", latest.filename));
+        crate::progress_mode::emit_stderr(&format!("   Source:   {}", latest.date_source.name()));
     }
 
     if !result.by_year.is_empty() {
-        println!("\n📆 Distribution by Year:");
+        crate::progress_mode::emit_stderr("\n📆 Distribution by Year:");
         let mut years: Vec<_> = result.by_year.iter().collect();
         years.sort_by_key(|&(y, _)| y);
         let total = crate::numeric_cast::usize_to_f64(result.files_with_dates);
@@ -408,21 +425,28 @@ pub fn print_analysis(result: &AnalysisResult) {
             let pct = crate::numeric_cast::f64_to_usize_sat(
                 crate::numeric_cast::usize_to_f64(*count) / total * 100.0,
             );
-            let bar: String = "█".repeat(pct / 3 + 1);
-            println!("   {year}: {count:4} files ({pct:2}%) {bar}");
+            let bar: String = "█".repeat(
+                crate::numeric_cast::f64_to_usize_sat(
+                    (crate::numeric_cast::usize_to_f64(pct) / 3.0).round(),
+                ) + 1,
+            );
+
+            crate::progress_mode::emit_stderr(&format!(
+                "   {year}: {count:4} files ({pct:2}%) {bar}"
+            ));
         }
     }
 
     if !result.by_month.is_empty() {
-        println!("\n📆 Distribution by Month (Top 15):");
+        crate::progress_mode::emit_stderr("\n📆 Distribution by Month (Top 15):");
         let mut months: Vec<_> = result.by_month.iter().collect();
         months.sort_by(|a, b| b.1.cmp(a.1));
         for (month, count) in months.iter().take(15) {
-            println!("   {month}: {count:4} files");
+            crate::progress_mode::emit_stderr(&format!("   {month}: {count:4} files"));
         }
     }
 
-    println!("\n✅ Deep analysis complete!");
+    crate::progress_mode::emit_stderr("\n✅ Deep analysis complete!");
 }
 
 #[cfg(test)]

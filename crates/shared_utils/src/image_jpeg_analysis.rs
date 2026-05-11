@@ -9,7 +9,6 @@ use image::{DynamicImage, GenericImageView, ImageReader};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::io::Cursor;
-use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JpegQualityAnalysis {
@@ -48,11 +47,13 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
         for (cell, &base_value) in row.iter_mut().zip(base_row.iter()) {
             let value = ((scale * f64::from(base_value)) + JPEG_IJG_ROUNDING_OFFSET)
                 / JPEG_IJG_ROUNDING_DIVISOR;
-            *cell = crate::numeric_cast::f64_to_u16_sat(
+            *cell = crate::numeric_cast::f64_to_u16_strict(
                 value
                     .floor()
                     .clamp(1.0, crate::constants::MAX_8BIT_VALUE_F64),
-            );
+                "generate_standard_qt",
+            )
+            .expect("JPEG QT value out of range");
         }
     }
 
@@ -318,7 +319,10 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         }
 
         let Some(marker) = data.get(pos).copied() else {
-            warn!("☢️ [FATAL] Truncated JPEG at position {pos}: expected marker byte");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Truncated JPEG at position {pos}: expected marker byte")
+            );
             return Err(format!("Truncated JPEG at position {pos}: expected marker"));
         };
         pos += 1;
@@ -328,22 +332,31 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         }
 
         if pos + 2 > data.len() {
-            warn!("☢️ [FATAL] Truncated JPEG segment at position {pos}: expected length field");
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Truncated JPEG segment at position {pos}: expected length field")
+            );
             return Err(format!(
                 "Truncated JPEG at position {pos}: expected segment length"
             ));
         }
 
         let Some(length_high) = data.get(pos).copied() else {
-            warn!(
-                "☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte"
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Truncated JPEG at position {pos}: failed to read segment length high byte"
+                )
             );
             return Err("Failed to read segment length high byte".to_string());
         };
         let Some(length_low) = data.get(pos + 1).copied() else {
-            warn!(
-                "☢️ [FATAL] Truncated JPEG at position {}: failed to read segment length low byte",
-                pos + 1
+            crate::log_failure!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Truncated JPEG at position {}: failed to read segment length low byte",
+                    pos + 1
+                )
             );
             return Err("Failed to read segment length low byte".to_string());
         };
@@ -359,7 +372,10 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                 }
 
                 let Some(pq_tq) = data.get(seg_pos).copied() else {
-                    warn!("☢️ [FATAL] Truncated DQT segment at position {seg_pos}");
+                    crate::log_failure!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        &format!("Truncated DQT segment at position {seg_pos}")
+                    );
                     return Err(format!("Truncated DQT segment at position {seg_pos}"));
                 };
                 let precision = (pq_tq >> 4_i32) & 0x0F;
@@ -369,7 +385,10 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
 
                 if precision == 0 {
                     if seg_pos + 64 > data.len() {
-                        warn!("☢️ [CORRUPTION] DQT segment too short for 8-bit table at {seg_pos}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_IMAGE,
+                            &format!("DQT segment too short for 8-bit table at {seg_pos}")
+                        );
                         return Err(format!(
                             "DQT segment too short for 8-bit table at {seg_pos}"
                         ));
@@ -384,8 +403,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     }
                 } else {
                     if seg_pos + 128 > data.len() {
-                        warn!(
-                            "☢️ [CORRUPTION] DQT segment too short for 16-bit table at {seg_pos}"
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_IMAGE,
+                            &format!("DQT segment too short for 16-bit table at {seg_pos}")
                         );
                         return Err(format!(
                             "DQT segment too short for 16-bit table at {seg_pos}"
@@ -478,7 +498,8 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
                     crate::constants::JPEG_LUMA_WEIGHT,
                     chroma.interpolated_quality * crate::constants::JPEG_CHROMA_WEIGHT,
                 );
-                crate::numeric_cast::f64_to_u8_sat(weighted.round())
+                crate::numeric_cast::f64_to_u8_strict(weighted.round(), "jpeg_weighted_quality")
+                    .unwrap_or(luma_estimate.quality)
             } else {
                 luma_estimate.quality
             }
@@ -525,13 +546,12 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         encoder_hint,
     };
 
-    debug!(
-        quality = final_quality,
-        confidence = confidence,
-        standard = is_standard_table,
-        luma_sse = luma_estimate.sse,
-        complete = is_complete,
-        "JPEG quality analysis complete"
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "JPEG quality analysis complete: quality={}, confidence={:.2}, standard={}, luma_sse={:.2}, complete={}",
+            final_quality, confidence, is_standard_table, luma_estimate.sse, is_complete
+        )
     );
 
     Ok(analysis)
@@ -574,9 +594,12 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
         }
 
         let Some(marker) = data.get(pos + 1).copied() else {
-            warn!(
-                "☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte",
-                pos + 1
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Truncated JPEG at position {}: expected marker byte",
+                    pos + 1
+                )
             );
             break;
         };
@@ -594,19 +617,25 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
 
         // Read length
         if pos + 2 > data.len() {
-            warn!("☢️ [ANOMALY] Truncated JPEG segment length at position {pos}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Truncated JPEG segment length at position {pos}")
+            );
             break;
         }
         let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
-            warn!("☢️ [ANOMALY] Invalid segment length {seg_len} at position {pos}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Invalid segment length {seg_len} at position {pos}")
+            );
             break;
         }
 
         let Some(payload) = data.get(pos + 2..pos + seg_len) else {
-            warn!(
-                "☢️ [ANOMALY] Truncated segment payload at position {}",
-                pos + 2
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Truncated segment payload at position {}", pos + 2)
             );
             break;
         };
@@ -617,7 +646,10 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
                 let xmp_slice = if let Some(s) = payload.get(29..) {
                     s
                 } else {
-                    warn!("☢️ [ANOMALY] APP1 XMP payload truncated at position 29");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        "APP1 XMP payload truncated at position 29"
+                    );
                     &[]
                 };
                 let xmp = String::from_utf8_lossy(xmp_slice);
@@ -635,7 +667,10 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.len() > 29
         {
             let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
-                warn!("☢️ [ANOMALY] APP1 XMP payload truncated before namespace offset; defaulting to empty slice (XMP metadata will be lost)");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_IMAGE,
+                    "APP1 XMP payload truncated before namespace offset; defaulting to empty slice (XMP metadata will be lost)"
+                );
                 &[]
             }));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
@@ -667,6 +702,7 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
 /// # Returns
 /// - `Some(String)`: XMP metadata content
 /// - `None`: No XMP segment found
+#[must_use]
 pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
     let mut xmp_blocks = Vec::new();
     let mut pos = 0;
@@ -680,7 +716,10 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             let seg_len = if let Some((b1, b2)) = data.get(pos + 2).zip(data.get(pos + 3)) {
                 usize::from(u16::from_be_bytes([*b1, *b2]))
             } else {
-                tracing::warn!("JPEG segment length bytes missing at position {}", pos);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_IMAGE,
+                    &format!("JPEG segment length bytes missing at position {pos}")
+                );
                 break;
             };
             if seg_len < 2 || pos + 2 + seg_len > data.len() {
@@ -689,9 +728,9 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             }
 
             let payload = data.get(pos + 4..pos + 2 + seg_len).unwrap_or_else(|| {
-                warn!(
-                    "☢️ [ANOMALY] JPEG segment payload truncated at position {}",
-                    pos + 4
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_IMAGE,
+                    &format!("JPEG segment payload truncated at position {}", pos + 4)
                 );
                 &[]
             });
@@ -699,7 +738,10 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or_else(|| {
-                    warn!("☢️ [ANOMALY] APP1 XMP standard payload truncated; defaulting to empty slice (standard XMP metadata will be lost)");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        "APP1 XMP standard payload truncated; defaulting to empty slice (standard XMP metadata will be lost)"
+                    );
                     &[]
                 }))
                 .to_string();
@@ -711,7 +753,10 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             {
                 let xmp =
                     String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or_else(|| {
-                        warn!("☢️ [ANOMALY] APP1 XMP extended payload truncated; defaulting to empty slice (extended XMP metadata will be lost)");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_IMAGE,
+                            "APP1 XMP extended payload truncated; defaulting to empty slice (extended XMP metadata will be lost)"
+                        );
                         &[]
                     }))
                     .to_string();
@@ -726,7 +771,10 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
     if xmp_blocks.is_empty() {
         None
     } else {
-        info!("Extracted {} XMP blocks from JPEG stream", xmp_blocks.len());
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!("Extracted {} XMP blocks from JPEG stream", xmp_blocks.len())
+        );
         Some(xmp_blocks)
     }
 }
@@ -742,6 +790,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 /// - No MPF segment is found (not a valid `UltraHDR` JPEG)
 /// - The extracted gainmap has invalid dimensions
 /// - Base image decoding fails
+#[allow(clippy::too_many_lines)]
 /// - MPF parsing fails
 ///
 /// Extract base image and gainmap from an `UltraHDR` JPEG byte stream.
@@ -750,7 +799,13 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 ///
 /// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
 pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicImage), String> {
-    tracing::debug!(size = data.len(), "Extracting gainmap from UltraHDR JPEG");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "Extracting gainmap from UltraHDR JPEG (size={} bytes)",
+            data.len()
+        )
+    );
 
     // Validate JPEG signature
     if data.len() < 4 || data.get(0..2) != Some(&[0xFF, 0xD8]) {
@@ -786,20 +841,31 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
         ));
     }
 
-    tracing::debug!(
-        width = base_dims.0,
-        height = base_dims.1,
-        "Base image decoded successfully"
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "Base image decoded successfully ({}x{})",
+            base_dims.0, base_dims.1
+        )
     );
     let base_aspect = f64::from(base_dims.0) / f64::from(base_dims.1);
 
     // Find and parse MPF segment
     let mpf_segment = find_mpf_segment(data)?;
-    tracing::debug!(size = mpf_segment.len(), "MPF segment found");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!("MPF segment found (size={} bytes)", mpf_segment.len())
+    );
 
     // Extract gainmap from MPF
     let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment, Some(base_aspect))?;
-    tracing::debug!(size = gainmap_data.len(), "Gainmap data extracted from MPF");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "Gainmap data extracted from MPF (size={} bytes)",
+            gainmap_data.len()
+        )
+    );
 
     // Decode gainmap image
     let gainmap_image = ImageReader::new(Cursor::new(&gainmap_data))
@@ -828,22 +894,27 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     let gainmap_aspect = f64::from(gainmap_dims.0) / f64::from(gainmap_dims.1);
     let aspect_diff = (base_aspect - gainmap_aspect).abs();
     if aspect_diff > 0.01_f64 {
-        warn!(
-            "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). \
-             Difference: {:.4}. This may indicate incorrect gainmap extraction.",
-            base_aspect,
-            base_dims.0,
-            base_dims.1,
-            gainmap_aspect,
-            gainmap_dims.0,
-            gainmap_dims.1,
-            aspect_diff
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!(
+                "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). Difference: {:.4}. This may indicate incorrect gainmap extraction.",
+                base_aspect,
+                base_dims.0,
+                base_dims.1,
+                gainmap_aspect,
+                gainmap_dims.0,
+                gainmap_dims.1,
+                aspect_diff
+            )
         );
     }
 
-    info!(
-        "Gainmap extracted successfully: base={}x{}, gainmap={}x{}, aspect_diff={:.4}",
-        base_dims.0, base_dims.1, gainmap_dims.0, gainmap_dims.1, aspect_diff
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "Gainmap extracted successfully: base={}x{}, gainmap={}x{}, aspect_diff={:.4}",
+            base_dims.0, base_dims.1, gainmap_dims.0, gainmap_dims.1, aspect_diff
+        )
     );
 
     Ok((base_image, gainmap_image))
@@ -1035,7 +1106,10 @@ fn candidate_gainmap_bytes(
     let mut candidate = jpeg_data
         .get(start..end)
         .unwrap_or_else(|| {
-            tracing::warn!("☢️ [ANOMALY] Gainmap candidate slice out of bounds; defaulting to empty slice (HDR gainmap detection will fail)");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                "Gainmap candidate slice out of bounds; defaulting to empty slice (HDR gainmap detection will fail)"
+            );
             &[]
         })
         .to_vec();
@@ -1054,14 +1128,20 @@ fn decode_gainmap_dimensions(candidate: &[u8]) -> Option<(u32, u32)> {
     let reader = match ImageReader::new(Cursor::new(candidate)).with_guessed_format() {
         Ok(r) => r,
         Err(e) => {
-            debug!("Gainmap candidate format detection failed: {}", e);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Gainmap candidate format detection failed: {e}")
+            );
             return None;
         }
     };
     let decoded = match reader.decode() {
         Ok(d) => d,
         Err(e) => {
-            debug!("Gainmap candidate decoding failed: {}", e);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Gainmap candidate decoding failed: {e}")
+            );
             return None;
         }
     };
@@ -1086,10 +1166,16 @@ fn gainmap_candidate_score(
         GainmapCandidateSource::NearbyScan => crate::constants::JPEG_GAINMAP_SCORE_NEARBY_SCAN,
         GainmapCandidateSource::TailScan => crate::constants::JPEG_GAINMAP_SCORE_TAIL_SCAN,
     };
-    let aspect_penalty = aspect_diff.map_or_else(|| {
-            warn!("☢️ [ANOMALY] Gainmap candidate aspect ratio missing; using moderate penalty fallback");
+    let aspect_penalty = aspect_diff.map_or_else(
+        || {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                "Gainmap candidate aspect ratio missing; using moderate penalty fallback"
+            );
             2_000.0_f64
-        }, |d| d * 10_000.0_f64);
+        },
+        |d| d * 10_000.0_f64,
+    );
     let length_penalty = if claimed_len == 0 {
         0.0_f64
     } else {
@@ -1241,9 +1327,12 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
         }
 
         let Some(marker) = data.get(pos + 1).copied() else {
-            warn!(
-                "☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte",
-                pos + 1
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Truncated JPEG at position {}: expected marker byte",
+                    pos + 1
+                )
             );
             break;
         };
@@ -1262,13 +1351,19 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
         }
 
         let Some(length_high) = data.get(pos).copied() else {
-            warn!("☢️ [ANOMALY] Truncated segment at position {pos}: missing length high byte");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Truncated segment at position {pos}: missing length high byte")
+            );
             break;
         };
         let Some(length_low) = data.get(pos + 1).copied() else {
-            warn!(
-                "☢️ [ANOMALY] Truncated segment at position {}: missing length low byte",
-                pos + 1
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Truncated segment at position {}: missing length low byte",
+                    pos + 1
+                )
             );
             break;
         };
@@ -1281,16 +1376,19 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 
         let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
-            warn!("☢️ [ANOMALY] Invalid APP2 segment length {seg_len} at position {pos}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Invalid APP2 segment length {seg_len} at position {pos}")
+            );
             return Err(format!(
                 "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
             ));
         }
 
         let payload = data.get(pos + 2..pos + seg_len).ok_or_else(|| {
-            warn!(
-                "☢️ [CORRUPTION] Failed to extract APP2 payload at position {}",
-                pos + 2
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("Failed to extract APP2 payload at position {}", pos + 2)
             );
             format!("Failed to extract APP2 payload at position {}", pos + 2)
         })?;
@@ -1323,7 +1421,10 @@ fn extract_gainmap_from_mpf(
     } else if mpf_data.starts_with(mpf::TIFF_LITTLE_ENDIAN) {
         false
     } else {
-        warn!("☢️ [CORRUPTION] Invalid MPF endianness marker");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            "Invalid MPF endianness marker"
+        );
         return Err(format!(
             "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {:02X} {:02X} {:02X} {:02X}",
             mpf_data.first().copied().unwrap_or(0xFF),
@@ -1333,18 +1434,24 @@ fn extract_gainmap_from_mpf(
         ));
     };
 
-    info!(
-        "MPF endianness: {}",
-        if is_big_endian {
-            "big-endian (MM)"
-        } else {
-            "little-endian (II)"
-        }
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "MPF endianness: {}",
+            if is_big_endian {
+                "big-endian (MM)"
+            } else {
+                "little-endian (II)"
+            }
+        )
     );
 
     // Read first IFD offset (4 bytes after endianness marker)
     let first_ifd_offset = read_u32(mpf_data.get(4..8).unwrap_or(&[]), is_big_endian)?;
-    info!("First IFD offset: {}", first_ifd_offset);
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!("First IFD offset: {first_ifd_offset}")
+    );
 
     // Navigate to first IFD
     // first_ifd_offset is u32 from read_u32(); usize::try_from only fails if u32 > usize::MAX,
@@ -1370,14 +1477,20 @@ fn extract_gainmap_from_mpf(
         })?,
         is_big_endian,
     )?;
-    info!("IFD entries: {}", num_entries);
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!("IFD entries: {num_entries}")
+    );
 
     // Find MPEntry tag
     let mut mp_entry_offset: Option<u32> = None;
     let mut num_images: Option<u32> = None;
 
     let Ok(ifd_start) = usize::try_from(first_ifd_offset) else {
-        warn!("☢️ [ANOMALY] first_ifd_offset {first_ifd_offset} overflows usize");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!("first_ifd_offset {first_ifd_offset} overflows usize")
+        );
         return Err(format!(
             "first_ifd_offset {first_ifd_offset} overflows usize"
         ));
@@ -1396,15 +1509,18 @@ fn extract_gainmap_from_mpf(
         let tag = if let Some(p) = mpf_data.get(entry_offset..entry_offset + 2) {
             read_u16(p, is_big_endian)?
         } else {
-            warn!("☢️ [CORRUPTION] IFD entry {i} tag at {entry_offset} truncated");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("IFD entry {i} tag at {entry_offset} truncated")
+            );
             return Err(format!("IFD entry {i} tag at {entry_offset} truncated"));
         };
         let _data_type = if let Some(p) = mpf_data.get(entry_offset + 2..entry_offset + 4) {
             read_u16(p, is_big_endian)?
         } else {
-            warn!(
-                "☢️ [CORRUPTION] IFD entry {i} type at {} truncated",
-                entry_offset + 2
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("IFD entry {i} type at {} truncated", entry_offset + 2)
             );
             return Err(format!(
                 "IFD entry {i} type at {} truncated",
@@ -1414,10 +1530,9 @@ fn extract_gainmap_from_mpf(
         let num_components = if let Some(p) = mpf_data.get(entry_offset + 4..entry_offset + 8) {
             read_u32(p, is_big_endian)?
         } else {
-            warn!(
-                "☢️ [CORRUPTION] IFD entry {} count at {} truncated",
-                i,
-                entry_offset + 4
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!("IFD entry {} count at {} truncated", i, entry_offset + 4)
             );
             return Err(format!(
                 "IFD entry {} count at {} truncated",
@@ -1428,10 +1543,13 @@ fn extract_gainmap_from_mpf(
         let value_offset = if let Some(p) = mpf_data.get(entry_offset + 8..entry_offset + 12) {
             read_u32(p, is_big_endian)?
         } else {
-            warn!(
-                "☢️ [CORRUPTION] IFD entry {} value/offset at {} truncated",
-                i,
-                entry_offset + 8
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "IFD entry {} value/offset at {} truncated",
+                    i,
+                    entry_offset + 8
+                )
             );
             return Err(format!(
                 "IFD entry {} value/offset at {} truncated",
@@ -1446,20 +1564,23 @@ fn extract_gainmap_from_mpf(
                 // If count is 1, the value is in value_offset.
                 if num_components == 1 {
                     num_images = Some(value_offset);
-                    info!("NumberOfImages: {}", value_offset);
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        &format!("NumberOfImages: {value_offset}")
+                    );
                 } else {
-                    warn!(
-                        "NumberOfImages has unexpected component count: {}",
-                        num_components
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        &format!("NumberOfImages has unexpected component count: {num_components}")
                     );
                     num_images = Some(num_components); // Fallback
                 }
             }
             mpf::TAG_MP_ENTRY => {
                 mp_entry_offset = Some(value_offset);
-                info!(
-                    "MPEntry offset: {}, count: {}",
-                    value_offset, num_components
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_IMAGE,
+                    &format!("MPEntry offset: {value_offset}, count: {num_components}")
                 );
             }
             _ => {}
@@ -1481,7 +1602,10 @@ fn extract_gainmap_from_mpf(
 
     // Navigate to MP Entry array
     let Ok(mp_entry_array_offset) = usize::try_from(mp_entry_offset) else {
-        warn!("☢️ [ANOMALY] mp_entry_offset {mp_entry_offset} overflows usize");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!("mp_entry_offset {mp_entry_offset} overflows usize")
+        );
         return Err(format!("mp_entry_offset {mp_entry_offset} overflows usize"));
     };
     if mp_entry_array_offset + 16 > mpf_data.len() {
@@ -1511,9 +1635,9 @@ fn extract_gainmap_from_mpf(
     let attributes = if let Some(p) = mpf_data.get(gainmap_entry_offset..gainmap_entry_offset + 4) {
         read_u32(p, is_big_endian)?
     } else {
-        warn!(
-            "☢️ [CORRUPTION] Gainmap entry attributes truncated at {}",
-            gainmap_entry_offset
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!("Gainmap entry attributes truncated at {gainmap_entry_offset}")
         );
         return Err("Gainmap entry attributes truncated".to_string());
     };
@@ -1521,9 +1645,12 @@ fn extract_gainmap_from_mpf(
         if let Some(p) = mpf_data.get(gainmap_entry_offset + 4..gainmap_entry_offset + 8) {
             read_u32(p, is_big_endian)?
         } else {
-            warn!(
-                "☢️ [CORRUPTION] Gainmap entry length truncated at {}",
-                gainmap_entry_offset + 4
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Gainmap entry length truncated at {}",
+                    gainmap_entry_offset + 4
+                )
             );
             return Err("Gainmap entry length truncated".to_string());
         };
@@ -1531,16 +1658,21 @@ fn extract_gainmap_from_mpf(
         if let Some(p) = mpf_data.get(gainmap_entry_offset + 8..gainmap_entry_offset + 12) {
             read_u32(p, is_big_endian)?
         } else {
-            warn!(
-                "☢️ [CORRUPTION] Gainmap entry offset truncated at {}",
-                gainmap_entry_offset + 8
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_IMAGE,
+                &format!(
+                    "Gainmap entry offset truncated at {}",
+                    gainmap_entry_offset + 8
+                )
             );
             return Err("Gainmap entry offset truncated".to_string());
         };
 
-    info!(
-        "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
-        attributes, gainmap_length, gainmap_offset
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_IMAGE,
+        &format!(
+            "Gainmap entry: attributes=0x{attributes:08X}, length={gainmap_length}, offset={gainmap_offset}"
+        )
     );
 
     // Validate gainmap length
@@ -1549,10 +1681,13 @@ fn extract_gainmap_from_mpf(
     }
 
     if (gainmap_length as usize) > jpeg_data.len() {
-        warn!(
-            gainmap_length,
-            jpeg_len = jpeg_data.len(),
-            "Gainmap length exceeds JPEG file size; attempting recovery from available bytes"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!(
+                "Gainmap length {} exceeds JPEG file size {}; attempting recovery from available bytes",
+                gainmap_length,
+                jpeg_data.len()
+            )
         );
     }
 
@@ -1584,13 +1719,18 @@ fn extract_gainmap_from_mpf(
         || gainmap_candidate.repaired_eoi
         || !gainmap_candidate.decoded
     {
-        warn!(
-            start = gainmap_candidate.start,
-            source = ?gainmap_candidate.source,
-            repaired_eoi = gainmap_candidate.repaired_eoi,
-            decoded = gainmap_candidate.decoded,
-            aspect_diff = %gainmap_candidate.aspect_diff.map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}")),
-            "Recovered gainmap using MPF fallback candidate"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!(
+                "Recovered gainmap using MPF fallback candidate: start={}, source={:?}, repaired_eoi={}, decoded={}, aspect_diff={}",
+                gainmap_candidate.start,
+                gainmap_candidate.source,
+                gainmap_candidate.repaired_eoi,
+                gainmap_candidate.decoded,
+                gainmap_candidate
+                    .aspect_diff
+                    .map_or_else(|| "N/A".to_string(), |v| format!("{v:.4}"))
+            )
         );
     }
 
@@ -1919,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_gainmap_params_default() {
-        use crate::hdr_synthesis::GainMapParams;
+        use crate::hdr::GainMapParams;
         let params = GainMapParams::default();
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
@@ -1943,14 +2083,14 @@ mod tests {
 
     #[test]
     fn test_hdr_intermediate_format_default() {
-        use crate::hdr_synthesis::HdrIntermediateFormat;
+        use crate::hdr::HdrIntermediateFormat;
         let format = HdrIntermediateFormat::default();
         assert_eq!(format, HdrIntermediateFormat::OpenExr32);
     }
 
     #[test]
     fn test_hdr_intermediate_format_debug() {
-        use crate::hdr_synthesis::HdrIntermediateFormat;
+        use crate::hdr::HdrIntermediateFormat;
         let exr = HdrIntermediateFormat::OpenExr32;
         let png = HdrIntermediateFormat::Png16;
 
@@ -1964,7 +2104,7 @@ mod tests {
 
     #[test]
     fn test_hdr_intermediate_format_equality() {
-        use crate::hdr_synthesis::HdrIntermediateFormat;
+        use crate::hdr::HdrIntermediateFormat;
         assert_eq!(
             HdrIntermediateFormat::OpenExr32,
             HdrIntermediateFormat::OpenExr32

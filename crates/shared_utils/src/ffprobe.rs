@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -378,7 +377,8 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     // `bit_rate` is absent for many image containers (WebP, AVIF) — treat as optional.
     let bit_rate = parse_u64_string_field(&format["bit_rate"]);
     if bit_rate.is_none() {
-        debug!(
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_PROBE,
             "ffprobe: 'bit_rate' metadata missing from format section (expected for static image containers like WebP/AVIF)"
         );
     }
@@ -386,7 +386,8 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     // `duration` is optional in the format section for some containers.
     let duration = parse_f64_string_field(&format["duration"]);
     if duration.is_none() {
-        debug!(
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_PROBE,
             "ffprobe: 'duration' metadata missing from format section (expected for static image containers or malformed streams)"
         );
     }
@@ -438,7 +439,8 @@ fn select_video_stream<'a>(
                 // `nb_frames` absent → treat as 0 (lowest sort priority); this is
                 // intentional: a stream with unknown frame count loses to one with known count.
                 let nb = parse_u64_string_field(&stream["nb_frames"]).unwrap_or_else(|| {
-                    debug!(
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_PROBE,
                         "ffprobe: 'nb_frames' (total frames) not reported by stream; defaulting to 0 for stream selection"
                     );
                     0
@@ -600,7 +602,10 @@ fn parse_video_stream_fields(
         && let Ok(data) = std::fs::read(path)
         && crate::image_formats::webp::is_animated_from_bytes(&data)
     {
-        let native_frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
+        let native_frames = u64::from(
+            crate::image_formats::webp::count_frames_from_bytes(&data)
+                .map_err(|e| FFprobeError::ParseError(e.to_string()))?,
+        );
         if native_frames > 1 {
             frame_count = Some(native_frames);
         }
@@ -624,9 +629,13 @@ fn parse_video_stream_fields(
     // did not advertise B-frame usage — treat as None to avoid forgery.
     let max_b_frames = video_stream["has_b_frames"].as_i64().map(|v| {
         u8::try_from(v.clamp(0, i64::from(u8::MAX))).unwrap_or_else(|_| {
-            warn!(
-                has_b_frames_raw = v,
-                "has_b_frames out of u8 range; clamping to 255"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_PROBE,
+                &format!(
+                    "has_b_frames out of u8 range (val={}); clamping to 255 (path={})",
+                    v,
+                    path.display()
+                )
             );
             u8::MAX
         })
@@ -951,16 +960,21 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
                 if let Ok(v) = u8::try_from(profile) {
                     dolby_vision.profile = Some(v);
                 } else {
-                    warn!(dv_profile = profile, "DV profile out of u8 range; ignoring");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_DETECTION,
+                        &format!("DV profile {profile} out of u8 range; ignoring")
+                    );
                 }
             }
             if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
                 if let Ok(v) = u8::try_from(compat_id) {
                     dolby_vision.bl_signal_compatibility_id = Some(v);
                 } else {
-                    warn!(
-                        dv_compat_id = compat_id,
-                        "DV bl_signal_compatibility_id out of u8 range; ignoring"
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_DETECTION,
+                        &format!(
+                            "DV bl_signal_compatibility_id {compat_id} out of u8 range; ignoring"
+                        )
                     );
                 }
             }
@@ -1001,18 +1015,19 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
             return None;
         }
         // Normalise to denominator 50000
-        let val = crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::f64_to_u64_strict(
             (n / d) * crate::constants::HDR_COORD_SCALING_FACTOR,
-        );
-        Some(val)
+            "hdr_coord",
+        )
     } else {
         // plain float
         let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
         // Already normalised value (some ffprobe versions give 0.265 style)
         if v <= 1.0 {
-            let val =
-                crate::numeric_cast::f64_to_u64_sat(v * crate::constants::HDR_COORD_SCALING_FACTOR);
-            Some(val)
+            crate::numeric_cast::f64_to_u64_strict(
+                v * crate::constants::HDR_COORD_SCALING_FACTOR,
+                "hdr_coord",
+            )
         } else {
             // raw integer-style already in 50k units
             let val = crate::numeric_cast::f64_to_u64_sat(v);
@@ -1030,16 +1045,17 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
         if d == 0.0 {
             return None;
         }
-        let val = crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::f64_to_u64_strict(
             (n / d) * crate::constants::HDR_LUMA_SCALING_FACTOR,
-        );
-        Some(val)
+            "hdr_luma",
+        )
     } else {
         let v: f64 = crate::numeric_cast::parse_strict(s.trim(), "hdr_val")?;
         if v <= crate::constants::HDR_LUMA_SCALING_FACTOR {
-            let val =
-                crate::numeric_cast::f64_to_u64_sat(v * crate::constants::HDR_LUMA_SCALING_FACTOR);
-            Some(val)
+            crate::numeric_cast::f64_to_u64_strict(
+                v * crate::constants::HDR_LUMA_SCALING_FACTOR,
+                "hdr_luma",
+            )
         } else {
             let val = crate::numeric_cast::f64_to_u64_sat(v);
             Some(val)
@@ -1102,6 +1118,7 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
     Some(format!("{max_content},{max_average}"))
 }
 
+#[must_use]
 pub fn get_duration(path: &Path) -> Option<f64> {
     let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
@@ -1113,20 +1130,26 @@ pub fn get_duration(path: &Path) -> Option<f64> {
     {
         Ok(output) => output,
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "Failed to launch ffprobe duration query"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Failed to launch ffprobe duration query for {}: {}",
+                    path.display(),
+                    err
+                )
             );
             return None;
         }
     };
 
     if !output.status.success() {
-        warn!(
-            path = %path.display(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "ffprobe duration query failed"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe duration query failed for {} (stderr: {})",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
         );
         return None;
     }
@@ -1136,17 +1159,21 @@ pub fn get_duration(path: &Path) -> Option<f64> {
     match trimmed.parse::<f64>() {
         Ok(duration) => Some(duration),
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                output = %trimmed,
-                error = %err,
-                "Failed to parse ffprobe duration output"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Failed to parse ffprobe duration output for {} (output: {}): {}",
+                    path.display(),
+                    trimmed,
+                    err
+                )
             );
             None
         }
     }
 }
 
+#[must_use]
 pub fn get_frame_count(path: &Path) -> Option<u64> {
     let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
@@ -1160,20 +1187,26 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     {
         Ok(output) => output,
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                error = %err,
-                "Failed to launch ffprobe frame-count query"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Failed to launch ffprobe frame-count query for {}: {}",
+                    path.display(),
+                    err
+                )
             );
             return None;
         }
     };
 
     if !output.status.success() {
-        warn!(
-            path = %path.display(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "ffprobe frame-count query failed"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "ffprobe frame-count query failed for {} (stderr: {})",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
         );
         return None;
     }
@@ -1183,11 +1216,14 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     match trimmed.parse::<u64>() {
         Ok(frame_count) => Some(frame_count),
         Err(err) => {
-            warn!(
-                path = %path.display(),
-                output = %trimmed,
-                error = %err,
-                "Failed to parse ffprobe frame-count output"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "Failed to parse ffprobe frame-count output for {} (output: {}): {}",
+                    path.display(),
+                    trimmed,
+                    err
+                )
             );
             None
         }

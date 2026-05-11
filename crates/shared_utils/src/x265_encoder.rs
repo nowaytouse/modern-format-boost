@@ -155,7 +155,10 @@ fn encode_y4m_direct(
             "x265 direct encode failed"
         );
         if !stderr.is_empty() {
-            eprintln!("x265 stderr:\n{stderr}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ENCODER,
+                &format!("x265 stderr:\n{stderr}")
+            );
         }
         bail!(
             "x265 encode failed with exit code {:?}",
@@ -360,11 +363,17 @@ fn encode_to_hevc(
                     "Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream"
                 );
                 if !x265_stderr.is_empty() {
-                    eprintln!("x265 stderr (often shows why pipe closed):\n{x265_stderr}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ENCODER,
+                        &format!("x265 stderr (often shows why pipe closed):\n{x265_stderr}")
+                    );
                 }
             }
             if !ffmpeg_stderr.is_empty() {
-                eprintln!("FFmpeg error output:\n{ffmpeg_stderr}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ENCODER,
+                    &format!("FFmpeg error output:\n{ffmpeg_stderr}")
+                );
             }
             bail!(
                 "FFmpeg decode failed (exit_code: {:?})\n\nStderr:\n{}",
@@ -385,7 +394,10 @@ fn encode_to_hevc(
                 warn!("Pipe broken: encoder (x265) likely exited first; check x265 stderr above");
             }
             if !x265_stderr.is_empty() {
-                eprintln!("x265 error output:\n{x265_stderr}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ENCODER,
+                    &format!("x265 error output:\n{x265_stderr}")
+                );
             }
             bail!("x265 encode failed with exit code {:?}", x265_status.code());
         }
@@ -572,11 +584,7 @@ mod tests {
 
     #[test]
     fn test_x265_available() {
-        if is_x265_available() {
-            println!("✅ x265 is available");
-        } else {
-            println!("⚠️  x265 not found - install with: brew install x265");
-        }
+        let _ = is_x265_available();
     }
 
     #[test]

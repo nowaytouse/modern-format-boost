@@ -86,7 +86,10 @@ pub fn init() {
         // Best-effort: if we cannot install the handler (e.g. another crate
         // already did), log a warning but continue — the program still works,
         // Ctrl+C will just exit immediately via the OS default.
-        eprintln!("  ⚠️  ctrlc_guard: could not install Ctrl+C handler: {e}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!("ctrlc_guard: could not install Ctrl+C handler: {e}")
+        );
         return;
     }
 
@@ -95,7 +98,10 @@ pub fn init() {
         .name("ctrlc-watcher".into())
         .spawn(move || watcher_thread(&signal_received))
     {
-        eprintln!("  ⚠️  ctrlc_guard: failed to spawn Ctrl+C watcher thread: {err}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!("ctrlc_guard: failed to spawn Ctrl+C watcher thread: {err}")
+        );
     }
 }
 
@@ -116,7 +122,7 @@ fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
 
         if elapsed_secs < crate::constants::CTRLC_CONFIRM_THRESHOLD_SECS {
             // Under threshold → exit immediately (user made a deliberate Ctrl+C).
-            eprintln!("\n  ⚠️  Interrupted by user.");
+            crate::progress_mode::emit_stderr("\n  ⚠️  Interrupted by user.");
             std::process::exit(crate::constants::EXIT_CODE_SIGINT);
         }
 

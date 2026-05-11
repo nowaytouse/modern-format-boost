@@ -151,7 +151,10 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                     error = %e,
                     "Path computation failed"
                 );
-                eprintln!("❌ Path error for {}: {}", path.display(), error_msg);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    &format!("Path error for {}: {}", path.display(), error_msg)
+                );
                 result.failed += 1;
                 result
                     .errors
@@ -185,10 +188,13 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                 error = %e,
                 "Directory creation failed"
             );
-            eprintln!(
-                "❌ Failed to create directory for {}: {}",
-                path.display(),
-                error_msg
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_COPY,
+                &format!(
+                    "Failed to create directory for {}: {}",
+                    path.display(),
+                    error_msg
+                )
             );
             result.failed += 1;
             result
@@ -202,12 +208,15 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                 result.copied += 1;
 
                 crate::copy(path, &dest);
-
                 let ext = path
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("unknown");
-                println!("📦 Copied unsupported file (.{}): {}", ext, path.display());
+
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    &format!("Copied unsupported file (.{}): {}", ext, path.display())
+                );
 
                 debug!(
                     source = %path.display(),
@@ -229,7 +238,10 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                             error = %e,
                             "XMP merge failed, trying to copy sidecar"
                         );
-                        println!("⚠️ XMP merge failed ({e}), trying to copy sidecar...");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_XMP,
+                            &format!("XMP merge failed ({e}), trying to copy sidecar...")
+                        );
                         copy_xmp_sidecar_if_exists(path, &dest);
                     }
                 }
@@ -243,7 +255,10 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                     error_kind = ?e.kind(),
                     "File copy operation failed"
                 );
-                eprintln!("❌ Failed to copy {}: {}", path.display(), e);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_COPY,
+                    &format!("Failed to copy {}: {}", path.display(), e)
+                );
                 result.failed += 1;
                 result
                     .errors
@@ -265,9 +280,12 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
             failed_count = result.failed,
             "Some files failed to copy, see errors for details"
         );
-        eprintln!(
-            "⚠️ Batch copy completed with {} failures out of {} files",
-            result.failed, result.total_files
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_COPY,
+            &format!(
+                "Batch copy completed with {} failures out of {} files",
+                result.failed, result.total_files
+            )
         );
     }
 
@@ -292,7 +310,10 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
             match std::fs::copy(xmp_path, &xmp_dest) {
                 Ok(_) => {
                     crate::copy(xmp_path, Path::new(&xmp_dest));
-                    println!("   📋 Copied XMP sidecar: {}", xmp_path.display());
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!("Copied XMP sidecar: {}", xmp_path.display())
+                    );
 
                     debug!(
                         source = %xmp_path.display(),
@@ -308,10 +329,9 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
                         error_kind = ?e.kind(),
                         "Failed to copy XMP sidecar"
                     );
-                    eprintln!(
-                        "⚠️ Failed to copy XMP sidecar {}: {}",
-                        xmp_path.display(),
-                        e
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_XMP,
+                        &format!("Failed to copy XMP sidecar {}: {}", xmp_path.display(), e)
                     );
                 }
             }

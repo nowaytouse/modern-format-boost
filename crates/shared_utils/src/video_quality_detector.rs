@@ -226,14 +226,16 @@ impl CompressionLevel {
         };
 
         let Some(bpp_r) = f64_to_rational_strict(bpp, "bpp") else {
-            crate::progress_mode::emit_stderr(
-                "☢️ [ANOMALY] BPP NaN/Inf! Refusing to forge data. Information invalidated.",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                "BPP NaN/Inf! Refusing to forge data. Information invalidated."
             );
             return Self::Unknown;
         };
         let Some(efficiency_r) = f64_to_rational_strict(efficiency, "efficiency") else {
-            crate::progress_mode::emit_stderr(
-                "☢️ [ANOMALY] Efficiency NaN/Inf! Refusing to forge data. Information invalidated.",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                "Efficiency NaN/Inf! Refusing to forge data. Information invalidated."
             );
             return Self::Unknown;
         };
@@ -359,7 +361,8 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         || estimate_crf_from_bpp(bpp, codec_type),
         |params| {
             extract_crf_from_params(params).unwrap_or_else(|| {
-                tracing::warn!(
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_PHASE_3,
                     "Video Analysis: Metadata search for CRF failed; falling back to BPP heuristic"
                 );
                 estimate_crf_from_bpp(bpp, codec_type)
@@ -577,9 +580,9 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         "bt709"
     };
     if analysis.color_space.is_none() {
-        tracing::warn!(
-            "Video Analysis: Missing color space; defaulting to {} based on resolution",
-            color_fallback
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_COLOR_SPACE,
+            &format!("Missing color space; defaulting to {color_fallback} based on resolution")
         );
     }
     VideoAnalysisBuilder::new()
@@ -673,9 +676,12 @@ fn calculate_quality_score(
         CompressionLevel::Standard => crate::constants::QUALITY_SCORE_STANDARD,
         CompressionLevel::LowQuality => crate::constants::QUALITY_SCORE_LOW,
         CompressionLevel::Unknown => {
-            tracing::warn!(
-                "Video Analysis: [ANOMALY] Unknown compression level; using neutral score ({})",
-                crate::constants::VIDEO_QUALITY_SCORE_NEUTRAL
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                &format!(
+                    "[ANOMALY] Unknown compression level; using neutral score ({})",
+                    crate::constants::VIDEO_QUALITY_SCORE_NEUTRAL
+                )
             );
             crate::constants::VIDEO_QUALITY_SCORE_NEUTRAL
         }
@@ -702,9 +708,9 @@ fn calculate_quality_score(
                 * f64::from(crate::constants::QUALITY_TWEAK_MAX_BONUS))
             .round();
             let t = crate::numeric_cast::f64_to_u32_checked(val).unwrap_or_else(|| {
-                tracing::warn!(
-                    "Quality calculation anomaly: bpp_tweak NaN/Inf for bpp={}",
-                    bpp
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!("Quality calculation anomaly: bpp_tweak NaN/Inf for bpp={bpp}")
                 );
                 0
             });
@@ -722,7 +728,10 @@ fn calculate_quality_score(
                 "bpp_tweak",
             )
             .unwrap_or_else(|| {
-                tracing::warn!("Invalid BPP value {} for tweak calculation", bpp);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!("Invalid BPP value {bpp} for tweak calculation")
+                );
                 1 // Default middle value
             });
             // t is clamped to 0..=3, always fits u8.
@@ -761,12 +770,18 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
             return crf;
         }
     }
-    tracing::warn!(
-        "Video Analysis: BPP-to-CRF LUT failed for adjusted_bpp={:.4}; using fallback CRF ({})",
-        adjusted_bpp,
-        crate::constants::FALLBACK_CRF_VIDEO
+    crate::log_anomaly!(
+        crate::static_logs::messages::LABEL_PHASE_3,
+        &format!(
+            "Video Analysis: BPP-to-CRF LUT failed for adjusted_bpp={adjusted_bpp:.4}; using fallback CRF ({})",
+            crate::constants::FALLBACK_CRF_VIDEO
+        )
     );
-    crate::numeric_cast::f32_to_u8_sat(crate::constants::FALLBACK_CRF_VIDEO)
+    crate::numeric_cast::f64_to_u8_strict(
+        f64::from(crate::constants::FALLBACK_CRF_VIDEO),
+        "fallback",
+    )
+    .expect("fallback CRF constant invalid")
 }
 
 fn calculate_video_confidence(

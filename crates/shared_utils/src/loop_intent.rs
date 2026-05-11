@@ -1415,9 +1415,12 @@ fn apply_weak_heuristics(
     if is_short_clip {
         let range = (thresholds.short_clip_secs - thresholds.duration_override_secs)
             .max(crate::constants::HEURISTIC_SAFETY_FLOOR);
-        let headroom = meta.duration_secs.map_or(0.0_f64, |dur| {
-            1.0_f64 - ((dur - thresholds.duration_override_secs) / range).clamp(0.0, 1.0)
-        });
+        let Some(headroom) = meta.duration_secs else {
+            tracing::warn!("Video duration is missing; skipping short-clip heuristics");
+            return;
+        };
+        let headroom =
+            1.0_f64 - ((headroom - thresholds.duration_override_secs) / range).clamp(0.0, 1.0);
         let format_bonus = if is_image {
             crate::constants::SHORT_CLIP_FORMAT_BONUS_IMAGE
         } else {
@@ -2766,17 +2769,23 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
             match detect_audio_silence(p) {
                 crate::media_penetration::PenetrationResult::Verified(is_silent) => {
                     mutable_meta.audio_is_silent = Some(is_silent);
-                    emit_stderr(&format!(
-                        "🔊 Audio penetration: {}",
-                        if is_silent {
-                            "SILENT (< -70 dB or empty)"
-                        } else {
-                            "AUDIBLE"
-                        }
-                    ));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!(
+                            "Audio penetration: {}",
+                            if is_silent {
+                                "SILENT (< -70 dB or empty)"
+                            } else {
+                                "AUDIBLE"
+                            }
+                        )
+                    );
                 }
                 crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Audio penetration failed, trusting metadata");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        "Audio penetration failed, trusting metadata"
+                    );
                 }
                 crate::media_penetration::PenetrationResult::Skipped => {}
             }
@@ -2790,16 +2799,23 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                 crate::media_penetration::PenetrationResult::Verified(is_real) => {
                     mutable_meta.transparency_is_real = Some(is_real);
                     if is_real {
-                        emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_INTENT,
+                            "Transparency penetration: REAL (alpha variance detected)"
+                        );
                     } else {
-                        emit_stderr(
-                            "⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata",
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_INTENT,
+                            "Transparency penetration: FAKE (alpha unused), overriding metadata"
                         );
                         mutable_meta.flags.streams.has_transparency = false;
                     }
                 }
                 crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Transparency penetration failed, trusting metadata");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        "Transparency penetration failed, trusting metadata"
+                    );
                 }
                 crate::media_penetration::PenetrationResult::Skipped => {}
             }
@@ -2818,16 +2834,25 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                 crate::media_penetration::PenetrationResult::Verified(real_count) => {
                     mutable_meta.real_frame_count = Some(real_count);
                     if real_count == fc_for_detection {
-                        emit_stderr(&format!("✅ Frame count verified: {real_count}"));
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_INTENT,
+                            &format!("Frame count verified: {real_count}")
+                        );
                     } else {
-                        emit_stderr(&format!(
-                            "⚠️  Frame count mismatch: metadata={fc_for_detection}, actual={real_count}, overriding"
-                        ));
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_INTENT,
+                            &format!(
+                                "Frame count mismatch: metadata={fc_for_detection}, actual={real_count}, overriding"
+                            )
+                        );
                         mutable_meta.frame_count = Some(real_count);
                     }
                 }
                 crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Frame count penetration failed, trusting metadata");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        "Frame count penetration failed, trusting metadata"
+                    );
                 }
                 crate::media_penetration::PenetrationResult::Skipped => {}
             }
@@ -2836,19 +2861,26 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
 
     // ── Layer 0: Legacy Fallback ──
     if is_legacy_mode {
-        emit_stderr(
-            "⚠️  Loop DB unavailable or disabled — running tree without KNN and refusing fabricated priors",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_INTENT,
+            "Loop DB unavailable or disabled — running tree without KNN and refusing fabricated priors"
         );
         let tree_only = evaluate_loop_tree(&mutable_meta, None);
         match &tree_only.verdict {
             Verdict::LoopStrong(reason) | Verdict::LoopWeak(reason) | Verdict::Error(reason) => {
-                emit_stderr(&format!("💡 Tree-only Result: {reason}"));
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_INTENT,
+                    &format!("Tree-only Result: {reason}")
+                );
                 return tree_only.verdict;
             }
             Verdict::Uncertain(reason) => {
-                emit_stderr(&format!(
-                    "⚠️  Tree-only result remained uncertain ({reason}) — attempting Layer 6-B arbitration"
-                ));
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_INTENT,
+                    &format!(
+                        "Tree-only result remained uncertain ({reason}) — attempting Layer 6-B arbitration"
+                    )
+                );
                 if let Some(arbitrated) = layer6_directional_arbitration(
                     &mutable_meta,
                     &thresholds,
@@ -2859,15 +2891,18 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                     None,
                     reason,
                 ) {
-                    emit_stderr(&format!(
-                        "⚖️  Tree-only Arbitration: {}",
-                        arbitrated.reason()
-                    ));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!("Tree-only Arbitration: {}", arbitrated.reason())
+                    );
                     return arbitrated;
                 }
                 let fallback =
                     layer7_fallback(&mutable_meta, "Layer 0: DB unavailable / KNN disabled");
-                emit_stderr(&format!("💡 Fallback Result: {}", fallback.reason()));
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_INTENT,
+                    &format!("Fallback Result: {}", fallback.reason())
+                );
                 return fallback;
             }
         }
@@ -2888,15 +2923,17 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
 
     let verdict = match &tree.verdict {
         Verdict::LoopStrong(reason) | Verdict::LoopWeak(reason) => {
-            if tree.verdict.is_keep_gif() {
-                emit_stderr(&format!("✅ Tree Decisive: {reason}"));
-            } else {
-                emit_stderr(&format!("ℹ️  Tree Decisive: {reason}"));
-            }
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_INTENT,
+                &format!("Tree Decisive: {reason}")
+            );
             tree.verdict.clone()
         }
         Verdict::Error(reason) => {
-            emit_stderr(&format!("❌ Tree Error: {reason}"));
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_INTENT,
+                &format!("Tree Error: {reason}")
+            );
             tree.verdict.clone()
         }
         Verdict::Uncertain(reason) => {
@@ -3029,7 +3066,10 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                         confidence,
                         m.neighbor_count
                     ));
-                    emit_stderr(&format!("✅ KNN Fusion Success: {}", v.reason()));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!("KNN Fusion Success: {}", v.reason())
+                    );
                     v
                 } else if confidence >= crate::constants::LAYER6_CONFIDENCE_HIGH
                     && final_score <= crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
@@ -3045,12 +3085,18 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                         confidence,
                         m.neighbor_count
                     ));
-                    emit_stderr(&format!("ℹ️  KNN Fusion Exit: {}", v.reason()));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!("KNN Fusion Exit: {}", v.reason())
+                    );
                     v
                 } else {
-                    emit_stderr(&format!(
-                        "   ℹ️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — attempting Layer 6-B arbitration"
-                    ));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!(
+                            "KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — attempting Layer 6-B arbitration"
+                        )
+                    );
                     if let Some(arbitrated) = layer6_directional_arbitration(
                         &mutable_meta,
                         &thresholds,
@@ -3061,21 +3107,26 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                         Some(m.neighbor_count),
                         reason,
                     ) {
-                        emit_stderr(&format!("⚖️  Arbitration Result: {}", arbitrated.reason()));
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_INTENT,
+                            &format!("Arbitration Result: {}", arbitrated.reason())
+                        );
                         return arbitrated;
                     }
                     let final_v = layer7_fallback(&mutable_meta, reason);
-                    if final_v.is_keep_gif() {
-                        emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
-                    } else {
-                        emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
-                    }
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!("Fallback Result: {}", final_v.reason())
+                    );
                     final_v
                 }
             } else {
-                emit_stderr(&format!(
-                    "   ℹ️  KNN similarity match unavailable (tree_prob={tree_probability:.2}) — attempting Layer 6-B arbitration"
-                ));
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_INTENT,
+                    &format!(
+                        "KNN similarity match unavailable (tree_prob={tree_probability:.2}) — attempting Layer 6-B arbitration"
+                    )
+                );
                 if let Some(arbitrated) = layer6_directional_arbitration(
                     &mutable_meta,
                     &thresholds,
@@ -3086,15 +3137,17 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
                     None,
                     reason,
                 ) {
-                    emit_stderr(&format!("⚖️  Arbitration Result: {}", arbitrated.reason()));
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_INTENT,
+                        &format!("Arbitration Result: {}", arbitrated.reason())
+                    );
                     return arbitrated;
                 }
                 let final_v = layer7_fallback(&mutable_meta, reason);
-                if final_v.is_keep_gif() {
-                    emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
-                } else {
-                    emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
-                }
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_INTENT,
+                    &format!("Fallback Result: {}", final_v.reason())
+                );
                 final_v
             }
         }

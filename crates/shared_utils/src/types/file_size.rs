@@ -105,17 +105,18 @@ impl FileSize {
     }
 
     #[must_use]
-    pub fn metadata_margin(&self) -> Self {
-        let percent_based = crate::numeric_cast::f64_to_u64_sat(
+    pub fn metadata_margin(&self) -> Option<Self> {
+        let percent_based = crate::numeric_cast::f64_to_u64_strict(
             crate::numeric_cast::u64_to_f64(self.0) * METADATA_MARGIN_PERCENT,
-        );
+            "metadata_margin",
+        )?;
         let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
-        Self(margin)
+        Some(Self(margin))
     }
 
     #[must_use]
-    pub fn compression_target(&self) -> Self {
-        self.saturating_sub(self.metadata_margin())
+    pub fn compression_target(&self) -> Option<Self> {
+        Some(self.saturating_sub(self.metadata_margin()?))
     }
 
     #[must_use]
@@ -218,17 +219,33 @@ mod tests {
     #[test]
     fn test_metadata_margin() {
         let small = FileSize::new(100 * 1024);
-        assert_eq!(small.metadata_margin().bytes(), METADATA_MARGIN_MIN);
+        assert_eq!(
+            small
+                .metadata_margin()
+                .expect("metadata_margin missing")
+                .bytes(),
+            METADATA_MARGIN_MIN
+        );
 
         let medium = FileSize::new(10 * 1_048_576);
         let expected = crate::numeric_cast::u64_to_f64(10 * 1_048_576) * METADATA_MARGIN_PERCENT;
         assert_eq!(
-            medium.metadata_margin().bytes(),
-            crate::numeric_cast::f64_to_u64_sat(expected)
+            medium
+                .metadata_margin()
+                .expect("metadata_margin missing")
+                .bytes(),
+            crate::numeric_cast::f64_to_u64_strict(expected, "expected_margin")
+                .expect("Test failure: Invalid expected margin")
         );
 
         let large = FileSize::new(100 * 1_048_576 * 1024);
-        assert_eq!(large.metadata_margin().bytes(), METADATA_MARGIN_MAX);
+        assert_eq!(
+            large
+                .metadata_margin()
+                .expect("metadata_margin missing")
+                .bytes(),
+            METADATA_MARGIN_MAX
+        );
     }
 
     #[test]

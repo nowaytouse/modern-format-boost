@@ -15,12 +15,11 @@ pub fn approx_eq_f64(a: f64, b: f64) -> bool {
     }
     if diff.abs() < F64_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory float comparison passed: a={}, b={}, diff={} (threshold={})",
-            a,
-            b,
-            diff,
-            F64_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!(
+                "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} (threshold={F64_EPSILON})"
+            )
         );
         return true;
     }
@@ -36,12 +35,11 @@ pub fn approx_eq_f32(a: f32, b: f32) -> bool {
     }
     if diff.abs() < F32_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory float comparison passed: a={}, b={}, diff={} (threshold={})",
-            a,
-            b,
-            diff,
-            F32_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!(
+                "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} (threshold={F32_EPSILON})"
+            )
         );
         return true;
     }
@@ -56,10 +54,9 @@ pub fn approx_zero_f64(a: f64) -> bool {
     }
     if a.abs() < F64_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory zero comparison passed: a={} (threshold={})",
-            a,
-            F64_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!("Perfunctory zero comparison passed: a={a} (threshold={F64_EPSILON})")
         );
         return true;
     }
@@ -74,10 +71,9 @@ pub fn approx_zero_f32(a: f32) -> bool {
     }
     if a.abs() < F32_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory zero comparison passed: a={} (threshold={})",
-            a,
-            F32_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!("Perfunctory zero comparison passed: a={a} (threshold={F32_EPSILON})")
         );
         return true;
     }
@@ -109,12 +105,11 @@ pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
     }
     if diff.abs() < SSIM_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory SSIM comparison passed: a={}, b={}, diff={} (threshold={})",
-            a,
-            b,
-            diff,
-            SSIM_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!(
+                "Perfunctory SSIM comparison passed: a={a}, b={b}, diff={diff} (threshold={SSIM_EPSILON})"
+            )
         );
         return true;
     }
@@ -130,12 +125,11 @@ pub fn approx_eq_crf(a: f32, b: f32) -> bool {
     }
     if diff.abs() < CRF_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory CRF comparison passed: a={}, b={}, diff={} (threshold={})",
-            a,
-            b,
-            diff,
-            CRF_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!(
+                "Perfunctory CRF comparison passed: a={a}, b={b}, diff={diff} (threshold={CRF_EPSILON})"
+            )
         );
         return true;
     }
@@ -151,12 +145,11 @@ pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
     }
     if diff.abs() < PSNR_EPSILON {
         #[cfg(not(test))]
-        tracing::warn!(
-            "☢️ [ANOMALY] Perfunctory PSNR comparison passed: a={}, b={}, diff={} (threshold={})",
-            a,
-            b,
-            diff,
-            PSNR_EPSILON
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_NUMERIC,
+            &format!(
+                "Perfunctory PSNR comparison passed: a={a}, b={b}, diff={diff} (threshold={PSNR_EPSILON})"
+            )
         );
         return true;
     }

@@ -117,11 +117,12 @@ pub fn validate_flags_result_with_ultimate(request: FlagRequest) -> Result<FlagM
 }
 
 pub fn print_flag_help() {
-    eprintln!("📋 Flag (simplified): Only the recommended combination is supported.");
-    eprintln!("   Default: explore + match-quality + compress (all on).");
-    eprintln!("   Optional: --ultimate for tighter 3D quality plateau search.");
-    eprintln!(
-        "   To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance"
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_METADATA,
+        "Flag (simplified): Only the recommended combination is supported.\n\
+           Default: explore + match-quality + compress (all on).\n\
+           Optional: --ultimate for tighter 3D quality plateau search.\n\
+           To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance"
     );
 }
 

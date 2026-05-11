@@ -5,5 +5,7 @@
 //! under `src/bin/`.
 
 fn main() {
-    eprintln!("calc_hashes is a developer-only utility and is currently a placeholder.");
+    shared_utils::progress_mode::emit_stderr(
+        "calc_hashes is a developer-only utility and is currently a placeholder.",
+    );
 }

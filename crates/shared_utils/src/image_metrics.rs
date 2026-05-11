@@ -10,17 +10,17 @@ use crate::types::ssim::Ssim;
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
-const K1: f64 = 0.01;
-const K2: f64 = 0.03;
+const K1: f64 = crate::constants::SSIM_K1;
+const K2: f64 = crate::constants::SSIM_K2;
 const L: f64 = crate::constants::MAX_8BIT_VALUE_F64;
 /// Wang et al. SSIM stability constants: (`k_i` * L)^2 to avoid division-by-zero in low-contrast regions.
 const C1: f64 = (K1 * L) * (K1 * L);
 const C2: f64 = (K2 * L) * (K2 * L);
 
-const WINDOW_SIZE: usize = 11;
+const WINDOW_SIZE: usize = crate::constants::SSIM_WINDOW_SIZE;
 
 fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
-    let sigma = 1.5_f64;
+    let sigma = crate::constants::SSIM_GAUSSIAN_SIGMA;
     let mut window = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
     let center = crate::numeric_cast::usize_to_f64(WINDOW_SIZE / 2);
     let mut sum = 0.0_f64;
@@ -79,10 +79,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
             use rug::Integer;
             // mse_sum is a sum of squared differences (f64).
             // Convert to Integer only after summing to avoid heap allocs in loop.
-            let mse_sum_int = Integer::from(
-                crate::numeric_cast::f64_to_i64_strict(mse_sum.round(), "mse_sum_rounded")
-                    .expect("mse_sum easily fits in i64 bounds"),
-            );
+            let mse_sum_int = Integer::from(crate::numeric_cast::f64_to_u64_sat(mse_sum.round()));
             let pixel_count_int = Integer::from(orig_pixels.len());
             let three_int = Integer::from(3);
             let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
@@ -122,8 +119,8 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let width = crate::numeric_cast::u32_to_usize_sat(w1);
-    let height = crate::numeric_cast::u32_to_usize_sat(h1);
+    let width = crate::numeric_cast::u32_to_usize_strict(w1, "w1")?;
+    let height = crate::numeric_cast::u32_to_usize_strict(h1, "h1")?;
 
     if width < WINDOW_SIZE || height < WINDOW_SIZE {
         return calculate_ssim_simple(original, converted);
@@ -167,8 +164,10 @@ fn calculate_window_ssim(
             let px = x + j;
             let py = y + i;
             // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
-            let pixel_x = crate::numeric_cast::usize_to_u32_sat(px);
-            let pixel_y = crate::numeric_cast::usize_to_u32_sat(py);
+            let pixel_x = crate::numeric_cast::usize_to_u32_strict(px, "px")
+                .expect("px overflow in calculate_window_ssim");
+            let pixel_y = crate::numeric_cast::usize_to_u32_strict(py, "py")
+                .expect("py overflow in calculate_window_ssim");
             if let Some(r) = buf_x.get_mut(i)
                 && let Some(c) = r.get_mut(j)
             {

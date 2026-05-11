@@ -2,7 +2,7 @@
 //! Format-specific utilities and helpers
 
 pub mod tiff {
-    use crate::img_errors::{ImgQualityError, Result};
+    use crate::unified_error::{ImgQualityError, Result};
     use anyhow::anyhow;
     use std::fs;
     use std::path::Path;
@@ -43,9 +43,23 @@ pub mod tiff {
         }
 
         let version = if is_little_endian {
-            u16::from_le_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
+            u16::from_le_bytes([
+                *data.get(2).ok_or_else(|| {
+                    ImgQualityError::AnalysisError("TIFF header truncated".into())
+                })?,
+                *data.get(3).ok_or_else(|| {
+                    ImgQualityError::AnalysisError("TIFF header truncated".into())
+                })?,
+            ])
         } else {
-            u16::from_be_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
+            u16::from_be_bytes([
+                *data.get(2).ok_or_else(|| {
+                    ImgQualityError::AnalysisError("TIFF header truncated".into())
+                })?,
+                *data.get(3).ok_or_else(|| {
+                    ImgQualityError::AnalysisError("TIFF header truncated".into())
+                })?,
+            ])
         };
         let is_bigtiff = version == 0x002B;
 
@@ -112,15 +126,27 @@ pub mod tiff {
         let mut ifd_count = 0u32;
         while ifd_offset != 0 && ifd_count < 100 {
             ifd_count += 1;
-            let ifd_pos = crate::numeric_cast::u64_to_usize_sat(ifd_offset);
+            let ifd_pos = crate::numeric_cast::u64_to_usize_strict(ifd_offset, "ifd_offset")
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(format!(
+                        "TIFF IFD offset {ifd_offset} is too large for memory"
+                    ))
+                })?;
             let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
                 if ifd_pos + 8 > data.len() {
                     break;
                 }
-                let n =
-                    crate::numeric_cast::u64_to_usize_sat(read_u64(ifd_pos).ok_or_else(|| {
+                let n = crate::numeric_cast::u64_to_usize_strict(
+                    read_u64(ifd_pos).ok_or_else(|| {
                         anyhow::anyhow!("TIFF BigTiff IFD entry count missing at offset {ifd_pos}")
-                    })?);
+                    })?,
+                    "bigtiff_entry_count",
+                )
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(format!(
+                        "BigTIFF entry count at {ifd_pos} is too large"
+                    ))
+                })?;
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
@@ -135,11 +161,14 @@ pub mod tiff {
             let mut pos = entries_start;
             for entries_scanned in 0..num_entries {
                 if pos + entry_size > data.len() {
-                    tracing::warn!(
-                        "☢️ [ANOMALY] TIFF IFD truncated: only scanned {}/{} entries for {}",
-                        entries_scanned,
-                        num_entries,
-                        path.display()
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_IMAGE,
+                        &format!(
+                            "TIFF IFD truncated: only scanned {}/{} entries for {}",
+                            entries_scanned,
+                            num_entries,
+                            path.display()
+                        )
                     );
                     break;
                 }
@@ -209,7 +238,14 @@ pub mod png {
                 return crate::constants::FALLBACK_COMPRESSION_PNG;
             }
         }
-        tracing::warn!(path = %path.display(), "PNG Analysis: Could not read header to estimate compression; using default medium ({})", crate::constants::FALLBACK_COMPRESSION_PNG);
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!(
+                "PNG Analysis: Could not read header to estimate compression for {}; using default medium ({})",
+                path.display(),
+                crate::constants::FALLBACK_COMPRESSION_PNG
+            )
+        );
         crate::constants::FALLBACK_COMPRESSION_PNG
     }
 }
@@ -245,7 +281,14 @@ pub mod jpeg {
                 }
             }
         }
-        tracing::warn!(path = %path.display(), "JPEG Analysis: No DQT markers found in first 4KB; using default quality ({})", crate::constants::FALLBACK_QUALITY_JPEG);
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_IMAGE,
+            &format!(
+                "JPEG Analysis: No DQT markers found in first 4KB for {}; using default quality ({})",
+                path.display(),
+                crate::constants::FALLBACK_QUALITY_JPEG
+            )
+        );
         crate::constants::FALLBACK_QUALITY_JPEG
     }
 
@@ -266,7 +309,7 @@ pub mod jpeg {
 }
 
 pub mod webp {
-    use crate::img_errors::{ImgQualityError, Result};
+    use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
 
@@ -296,12 +339,15 @@ pub mod webp {
                 break;
             }
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]));
+            let chunk_size = crate::numeric_cast::u32_to_usize_strict(
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
+                "webp_chunk_size",
+            )
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "WebP chunk size at {pos} is too large for memory"
+                ))
+            })?;
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -361,12 +407,15 @@ pub mod webp {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]));
+            let chunk_size = crate::numeric_cast::u32_to_usize_strict(
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
+                "webp_chunk_size",
+            )
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "WebP chunk size at {pos} is too large for memory"
+                ))
+            })?;
             let payload_start = pos + 8;
             let chunk_end = (payload_start + chunk_size).min(data.len());
 
@@ -379,11 +428,10 @@ pub mod webp {
                 let y_ac_qi = vp8_data[10] & 0x7F;
                 let quality = (u32::from(127 - y_ac_qi) * 100)
                     .checked_div(127)
-                    .map(|q| crate::numeric_cast::u32_to_u8_sat(q.min(100)))
+                    .and_then(|q| crate::numeric_cast::u32_to_u8_strict(q.min(100), "webp_quality"))
                     .ok_or_else(|| {
                         ImgQualityError::AnalysisError(
-                            "WebP Analysis: Division by 127 failed in quality calculation"
-                                .to_string(),
+                            "WebP Analysis: Division by 127 failed or quality overflow".to_string(),
                         )
                     })?;
                 return Ok(quality);
@@ -401,9 +449,8 @@ pub mod webp {
     /// # Errors
     /// Returns an error if detection is not possible for the format.
     pub fn estimate_quality(path: &Path) -> Result<u8> {
-        fs::read(path)
-            .map_err(ImgQualityError::IoError)
-            .and_then(|b| estimate_quality_from_bytes(&b))
+        let bytes = fs::read(path).map_err(crate::unified_error::UnifiedError::IoError)?;
+        estimate_quality_from_bytes(&bytes)
     }
 
     #[must_use]
@@ -416,9 +463,16 @@ pub mod webp {
         data.windows(4).any(|w| w == b"ANIM")
     }
 
-    #[must_use]
-    pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
-        crate::numeric_cast::usize_to_u32_sat(data.windows(4).filter(|w| *w == b"ANMF").count()) // Marker
+    /// # Errors
+    /// Returns an error if the frame count overflows u32.
+    pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
+        crate::numeric_cast::usize_to_u32_strict(
+            data.windows(4).filter(|w| *w == b"ANMF").count(),
+            "webp_frame_count",
+        )
+        .ok_or_else(|| {
+            crate::unified_error::ImgQualityError::NumericError("WebP frame count overflow".into())
+        })
     }
 
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.
@@ -429,7 +483,6 @@ pub mod webp {
     /// # Panics
     /// Panics if the WebP animation header is corrupted beyond recognition.
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
-        use crate::numeric_cast::AuditedCast;
         if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
             return None;
         }
@@ -440,14 +493,24 @@ pub mod webp {
         let mut total_ms = 0u64;
 
         while pos + 8 <= data.len() {
-            let chunk_id = data.get(pos..pos + 4).unwrap_or(b"NULL");
-            let chunk_size = u32::from_le_bytes([
-                *data.get(pos + 4).unwrap_or(&0),
-                *data.get(pos + 5).unwrap_or(&0),
-                *data.get(pos + 6).unwrap_or(&0),
-                *data.get(pos + 7).unwrap_or(&0),
-            ]);
-            let chunk_size: usize = crate::numeric_cast::u32_to_f64(chunk_size).cast_sat();
+            let chunk_id = data
+                .get(pos..pos + 4)
+                .ok_or_else(|| {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        "WebP chunk ID truncated"
+                    );
+                    b"TRUN"
+                })
+                .unwrap_or(b"TRUN"); // safe due to while condition
+            if chunk_id == b"TRUN" {
+                break;
+            }
+
+            let chunk_size_u32 =
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+            let chunk_size =
+                crate::numeric_cast::u32_to_usize_strict(chunk_size_u32, "webp_chunk_size")?;
             let payload_start = pos + 8;
             // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
             if chunk_size > data.len().saturating_sub(payload_start) {
@@ -516,18 +579,20 @@ pub mod webp {
 }
 
 pub mod gif {
+    use crate::unified_error::ImgQualityError;
     use std::fs;
     use std::path::Path;
 
-    #[must_use]
-    pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
+    /// # Errors
+    /// Returns an error if the frame count overflows u32.
+    pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
         if data.len() < 24 || data.get(0..3) != Some(b"GIF") {
-            return 0;
+            return Ok(0);
         }
 
         let mut pos = 6;
         if pos + 7 > data.len() {
-            return 0;
+            return Ok(0);
         }
         let packed = data[pos + 4];
         let has_gct = (packed & 0x80) != 0;
@@ -570,7 +635,13 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        let block_size =
+                            crate::numeric_cast::u8_to_usize_strict(data[pos], "gif_block_size")
+                                .ok_or_else(|| {
+                                    crate::unified_error::ImgQualityError::NumericError(
+                                        "GIF block size cast failed".into(),
+                                    )
+                                })?;
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -595,7 +666,15 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        let block_size = crate::numeric_cast::u8_to_usize_strict(
+                            data[pos],
+                            "gif_ext_block_size",
+                        )
+                        .ok_or_else(|| {
+                            crate::unified_error::ImgQualityError::NumericError(
+                                "GIF extension block size cast failed".into(),
+                            )
+                        })?;
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -612,12 +691,12 @@ pub mod gif {
         }
 
         // A GIF is animated if it has more than one image descriptor
-        // OR if it has Graphic Control Extensions (usually one per frame)
-        // Correct for some GIFs having one GCE for a 1-frame static image:
-        if gce_count > 1 || image_descriptors > 1 {
-            image_descriptors.max(gce_count)
+        // Rationale: We prefer Graphic Control Extension count if available, as it directly corresponds to animated frames.
+        // If not, we fall back to Image Descriptor count.
+        if gce_count > 1 {
+            Ok(gce_count)
         } else {
-            1
+            Ok(image_descriptors)
         }
     }
 
@@ -664,7 +743,8 @@ pub mod gif {
                         pos += 1; // LZW Minimum Code Size
                     }
                     while pos < data.len() {
-                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        let block_size =
+                            crate::numeric_cast::u8_to_usize_strict(data[pos], "gif_block_size")?;
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -678,7 +758,10 @@ pub mod gif {
                     }
                     let label = data[pos + 1];
                     let block_size_idx = pos + 2;
-                    let block_size = crate::numeric_cast::u8_to_usize_sat(data[block_size_idx]);
+                    let block_size = crate::numeric_cast::u8_to_usize_strict(
+                        data[block_size_idx],
+                        "gif_block_size",
+                    )?;
 
                     if label == 0xF9 && block_size >= 4 && pos + 6 < data.len() {
                         // GCE block: [0x21, 0xF9, 0x04, <Packed>, <Delay LSB>, <Delay MSB>, <Trans Index>, 0x00]
@@ -692,7 +775,10 @@ pub mod gif {
 
                     pos += 2;
                     while pos < data.len() {
-                        let inner_block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
+                        let inner_block_size = crate::numeric_cast::u8_to_usize_strict(
+                            data[pos],
+                            "gif_inner_block_size",
+                        )?;
                         pos += 1;
                         if inner_block_size == 0 {
                             break;
@@ -721,31 +807,32 @@ pub mod gif {
             .and_then(|b| duration_secs_from_bytes(&b))
     }
 
-    #[must_use]
-    pub fn is_animated_from_bytes(data: &[u8]) -> bool {
-        count_frames_from_bytes(data) > 1
+    /// # Errors
+    /// Returns an error if the animation detection fails due to invalid data.
+    pub fn is_animated_from_bytes(data: &[u8]) -> crate::unified_error::Result<bool> {
+        Ok(count_frames_from_bytes(data)? > 1)
     }
 
-    #[must_use]
-    pub fn is_animated(path: &Path) -> bool {
-        fs::read(path).is_ok_and(|b| is_animated_from_bytes(&b))
+    /// # Errors
+    /// Returns an error if the file cannot be read or animation detection fails.
+    pub fn is_animated(path: &Path) -> crate::unified_error::Result<bool> {
+        let b = fs::read(path)?;
+        is_animated_from_bytes(&b)
     }
 
-    #[must_use]
-    pub fn get_frame_count(path: &Path) -> usize {
-        match fs::read(path) {
-            Ok(b) => crate::numeric_cast::u32_to_usize_sat(count_frames_from_bytes(&b)),
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "Failed to read GIF for frame counting");
-                0
-            }
-        }
+    /// # Errors
+/// Returns an error if the file cannot be read or frame count detection fails.
+pub fn get_frame_count(path: &Path) -> crate::unified_error::Result<usize> {
+        let b = fs::read(path)?;
+        let count = count_frames_from_bytes(&b)?;
+        crate::numeric_cast::u32_to_usize_strict(count, "gif_frame_count")
+            .ok_or_else(|| ImgQualityError::NumericError("GIF frame count overflow".to_string()))
     }
 }
 
 pub mod avif {
     use crate::common_utils::find_box_data_recursive;
-    use crate::img_errors::{ImgQualityError, Result};
+    use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
 
@@ -816,13 +903,18 @@ pub mod avif {
                 && let Some(pixi_data) = find_box_data_recursive(data, *b"pixi")
                 && !pixi_data.is_empty()
             {
-                let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
+                let num_ch =
+                    crate::numeric_cast::u8_to_usize_strict(pixi_data[0], "avif_pixi_num_ch")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError("AVIF pixi num_ch overflow".to_string())
+                        })?;
                 if num_ch > 0 && pixi_data.len() > num_ch {
                     let max_depth = pixi_data
                         .get(1..=num_ch)
                         .and_then(|slice| slice.iter().copied().max())
                         .unwrap_or_else(|| {
-                            tracing::warn!(
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_IMAGE,
                                 "AVIF Analysis: Failed to find max depth in pixi data; defaulting to 8-bit depth (lossless detection may be inaccurate)"
                             );
                             8
@@ -864,7 +956,7 @@ pub mod avif {
 
 pub mod jxl {
     use crate::common_utils::{find_any_box_recursive, find_box_data_recursive};
-    use crate::img_errors::{ImgQualityError, Result};
+    use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
 
@@ -948,8 +1040,8 @@ pub mod jxl {
             self.read_bits(1).map(|v| v == 1)
         }
         fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
-            let sel = crate::numeric_cast::u32_to_usize_sat(self.read_bits(2)?);
-            let (base, extra_bits) = *dists.get(sel).unwrap_or(&(0, 0));
+            let sel = crate::numeric_cast::u32_to_usize_strict(self.read_bits(2)?, "jxl_sel")?;
+            let (base, extra_bits) = *dists.get(sel)?;
             let extra = self.read_bits(extra_bits)?;
             Some(base + extra)
         }
@@ -1192,10 +1284,10 @@ mod tests {
         file.write_all(&gif_data)
             .unwrap_or_else(|_| panic!("Failed to write"));
 
-        let count = gif::get_frame_count(file.path());
+        let count = gif::get_frame_count(file.path()).unwrap();
         assert_eq!(count, 2, "Expected 2 frames, got: {count}");
         assert!(
-            gif::is_animated(file.path()),
+            gif::is_animated(file.path()).unwrap(),
             "2-frame GIF should be detected as animated"
         );
     }
@@ -1227,13 +1319,12 @@ mod tests {
             "Non-existent file must surface an Err (no silent forgery)"
         );
         assert!(
-            !gif::is_animated(path),
-            "Non-existent file should return false"
+            gif::is_animated(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
         );
-        assert_eq!(
-            gif::get_frame_count(path),
-            0,
-            "Non-existent file should return 0"
+        assert!(
+            gif::get_frame_count(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
         );
         assert!(
             !jxl::verify_signature(path),

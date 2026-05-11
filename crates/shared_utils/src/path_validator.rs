@@ -71,7 +71,10 @@ pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
             path_display: path.to_string_lossy().to_string(),
             reason: "Path contains non-UTF-8 characters".to_string(),
         };
-        eprintln!("{err}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("{err}")
+        );
         err
     })
 }
@@ -97,18 +100,27 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     let path_str = path.to_string_lossy();
 
     if path_str.is_empty() {
-        eprintln!("⚠️ PATH VALIDATION FAILED: Empty path");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "PATH VALIDATION FAILED: Empty path"
+        );
         return Err(PathValidationError::EmptyPath);
     }
 
     if path_str.contains('\0') {
-        eprintln!("⚠️ PATH VALIDATION FAILED: Null byte in: {path_str}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("PATH VALIDATION FAILED: Null byte in: {path_str}")
+        );
         return Err(PathValidationError::NullByte(path_str.to_string()));
     }
 
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
-            eprintln!("⚠️ PATH VALIDATION FAILED: Dangerous character '{c}' in: {path_str}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("PATH VALIDATION FAILED: Dangerous character '{c}' in: {path_str}")
+            );
             return Err(PathValidationError::DangerousCharacter {
                 character: c,
                 path: path_str.to_string(),

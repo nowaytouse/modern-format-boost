@@ -20,7 +20,7 @@ pub use crate::error_handler::{
     ErrorAction, ErrorCategory, ResultExt, add_context, handle_error, install_panic_handler,
     report_error,
 };
-pub use crate::error_logging::{ErrorSeverity, classify_error, log_enhanced_error};
+pub use crate::static_logs::{ErrorSeverity, classify_error, log_enhanced_error};
 pub use crate::types::{CrfError, IterationError, SsimError};
 
 // ─── Unified Error Types ─────────────────────────────────────────────────────
@@ -95,10 +95,14 @@ pub enum UnifiedError {
         path: PathBuf,
         operation: Option<String>,
     },
-    Io(std::io::Error),
+    IoError(std::io::Error),
     NotImplemented(String),
     SkipFile(String),
     ResultAnomaly(String),
+    // Arithmetic & Calculation Errors
+    NumericError(String),
+    NumericOverflow(String),
+
     Other(anyhow::Error),
 }
 
@@ -122,7 +126,7 @@ impl UnifiedError {
             Self::FileNotFound { .. }
             | Self::DirectoryNotFound { .. }
             | Self::FileWriteError { .. }
-            | Self::Io(_)
+            | Self::IoError(_)
             | Self::ToolNotFound { .. }
             | Self::NotImplemented(_) => ErrorCategory::Fatal,
 
@@ -199,7 +203,7 @@ impl UnifiedError {
                 }
                 Some(msg)
             }
-            Self::Io(e) => Some(format!("❌ IO error: {e}")),
+            Self::IoError(e) => Some(format!("❌ IO error: {e}")),
             _ => None,
         }
     }
@@ -505,7 +509,7 @@ impl UnifiedError {
                     }
                     Ok(())
                 }
-                Self::Io(e) => write!(f, "IO error: {e}"),
+                Self::IoError(e) => write!(f, "IO error: {e}"),
                 _ => unreachable!(),
             }
         };
@@ -516,7 +520,7 @@ impl UnifiedError {
                 | Self::DirectoryNotFound { .. }
                 | Self::FileReadError { .. }
                 | Self::FileWriteError { .. }
-                | Self::Io(_)
+                | Self::IoError(_)
         ) {
             Some(fmt_closure(f))
         } else {
@@ -651,6 +655,8 @@ impl UnifiedError {
             Self::VideoReadError(err) => write!(f, "Failed to read video: {err}"),
             Self::ConversionError(err) => write!(f, "Conversion error: {err}"),
             Self::AnalysisError(err) => write!(f, "Analysis error: {err}"),
+            Self::NumericError(err) => write!(f, "Numeric error: {err}"),
+            Self::NumericOverflow(err) => write!(f, "Numeric overflow: {err}"),
             Self::GeneralError(err) => write!(f, "General error: {err}"),
             Self::Other(e) => write!(f, "{e}"),
             _ => write!(f, "{self:?}"),
@@ -682,7 +688,7 @@ impl std::error::Error for UnifiedError {
             Self::FileReadError { source, .. } | Self::FileWriteError { source, .. } => {
                 Some(source)
             }
-            Self::Io(e) => Some(e),
+            Self::IoError(e) => Some(e),
             Self::ImageProcessingError(e) => Some(e),
             _ => None,
         }
@@ -692,7 +698,7 @@ impl std::error::Error for UnifiedError {
 // From implementations for easy conversion
 impl From<std::io::Error> for UnifiedError {
     fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
+        Self::IoError(e)
     }
 }
 
@@ -733,7 +739,7 @@ impl From<crate::ffprobe::FFprobeError> for UnifiedError {
                 tool_name: s,
                 operation: Some("video probing".to_string()),
             },
-            crate::ffprobe::FFprobeError::IoError(e) => Self::Io(e),
+            crate::ffprobe::FFprobeError::IoError(e) => Self::IoError(e),
             other => Self::FFprobeError(other.to_string()),
         }
     }
@@ -744,8 +750,9 @@ pub type Result<T> = std::result::Result<T, UnifiedError>;
 pub type ImgResult<T> = std::result::Result<T, UnifiedError>;
 pub type VidResult<T> = std::result::Result<T, UnifiedError>;
 
-// Legacy type alias for VidQualityError
+// Legacy type aliases for backward compatibility
 pub type VidQualityError = UnifiedError;
+pub type ImgQualityError = UnifiedError;
 
 // Convenience constructors
 impl UnifiedError {
@@ -836,7 +843,7 @@ mod tests {
     fn test_unified_error_from_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
         let err: UnifiedError = io_err.into();
-        assert!(matches!(err, UnifiedError::Io(_)));
+        assert!(matches!(err, UnifiedError::IoError(_)));
     }
 
     #[test]
@@ -881,7 +888,7 @@ mod tests {
         assert_eq!(tool_err.category(), ErrorCategory::Fatal);
         assert!(!tool_err.is_skip(), "Tool missing must NOT be skips");
 
-        let io_err = UnifiedError::Io(std::io::Error::other("disk crash"));
+        let io_err = UnifiedError::IoError(std::io::Error::other("disk crash"));
         assert_eq!(io_err.category(), ErrorCategory::Fatal);
         assert!(!io_err.is_skip(), "IO errors must NOT be skips");
     }

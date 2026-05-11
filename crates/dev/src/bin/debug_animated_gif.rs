@@ -1,3 +1,10 @@
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use shared_utils::media_meta_utils::scan_gif_headers;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -37,30 +44,30 @@ fn create_test_animated_gif() -> Vec<u8> {
 
 fn main() {
     let gif = create_test_animated_gif();
-    println!("GIF length: {}", gif.len());
+    log_detail!("GIF length: {}", gif.len());
 
     // Print complete GIF byte structure with key markers
-    println!("GIF structure with markers:");
+    log_detail!("GIF structure with markers:");
     for (i, chunk) in gif.chunks(16).enumerate() {
         print!("{:04X}: ", i * 16);
         for &byte in chunk {
             print!("{byte:02X} ");
         }
-        println!();
+        log_detail!();
     }
 
     // Manually mark key positions
-    println!("\nKey positions:");
+    log_detail!("\nKey positions:");
     for (i, &byte) in gif.iter().enumerate() {
         if byte == 0x21 {
-            println!("Pos {i}: Extension (0x21)");
+            log_detail!("Pos {i}: Extension (0x21)");
             if i + 1 < gif.len() {
-                println!("  Extension type: 0x{:02X}", gif[i + 1]);
+                log_detail!("  Extension type: 0x{:02X}", gif[i + 1]);
             }
         } else if byte == 0x2C {
-            println!("Pos {i}: Image descriptor (0x2C) - FRAME!");
+            log_detail!("Pos {i}: Image descriptor (0x2C) - FRAME!");
         } else if byte == 0x3B {
-            println!("Pos {i}: GIF trailer (0x3B)");
+            log_detail!("Pos {i}: GIF trailer (0x3B)");
         }
     }
 
@@ -72,12 +79,12 @@ fn main() {
     let scan_result = scan_gif_headers(temp_file.path());
     match &scan_result {
         Ok(scan) => {
-            println!("\nScan result:");
-            println!("  frame_count: {:?}", scan.frame_count);
-            println!("  duration: {:?}", scan.duration_secs);
-            println!("  app_extensions: {:?}", scan.app_extensions);
-            println!("  loop_count: {:?}", scan.loop_count);
+            log_detail!("\nScan result:");
+            log_detail!("  frame_count: {:?}", scan.frame_count);
+            log_detail!("  duration: {:?}", scan.duration_secs);
+            log_detail!("  app_extensions: {:?}", scan.app_extensions);
+            log_detail!("  loop_count: {:?}", scan.loop_count);
         }
-        Err(e) => println!("Scan error: {e:?}"),
+        Err(e) => log_detail!("Scan error: {e:?}"),
     }
 }

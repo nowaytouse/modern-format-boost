@@ -9,19 +9,23 @@ use shared_utils::loop_intent::LoopMeta;
 use std::path::Path;
 
 fn main() {
-    println!("🚀 Starting DB Logging verification...");
+    shared_utils::progress_mode::emit_stderr("🚀 Starting DB Logging verification...");
 
     // 1. Open DB connection
     let mut conn = match open_pg_client() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("❌ Failed to connect to database: {e}");
-            println!("   (Ensure PostgreSQL is running and 'modern_format_boost' database exists)");
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "❌ Failed to connect to database: {e}"
+            ));
+            shared_utils::progress_mode::emit_stderr(
+                "   (Ensure PostgreSQL is running and 'modern_format_boost' database exists)",
+            );
             std::process::exit(1);
         }
     };
 
-    println!("✅ Connected to database.");
+    shared_utils::progress_mode::emit_stderr("✅ Connected to database.");
 
     // 2. Create mock LoopMeta using only existing public fields
     let meta = LoopMeta {
@@ -57,7 +61,7 @@ fn main() {
     };
 
     // 4. Call log_inference_record
-    println!("📡 Sending inference log to DB...");
+    shared_utils::progress_mode::emit_stderr("📡 Sending inference log to DB...");
     log_inference_record(
         &mut conn,
         &meta,
@@ -66,7 +70,7 @@ fn main() {
     );
 
     // 5. Verify result (Query the last record)
-    println!("🔍 Verifying last record in 'inference_log'...");
+    shared_utils::progress_mode::emit_stderr("🔍 Verifying last record in 'inference_log'...");
     let row_result = conn.query_one(
         "SELECT id, duration_secs, final_verdict, signal_snapshot 
          FROM inference_log 
@@ -81,22 +85,26 @@ fn main() {
             let verdict: String = row.get(2);
             let snapshot: serde_json::Value = row.get(3);
 
-            println!("✅ VERIFICATION SUCCESSFUL!");
-            println!("   - Record ID: {id}");
-            println!("   - Duration: {dur}s (expected 2.5)");
-            println!("   - Verdict: {verdict} (expected LoopStrong)");
-            println!("   - Snapshot: {snapshot}");
+            shared_utils::progress_mode::emit_stderr("✅ VERIFICATION SUCCESSFUL!");
+            shared_utils::progress_mode::emit_stderr(&format!("   - Record ID: {id}"));
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "   - Duration: {dur}s (expected 2.5)"
+            ));
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "   - Verdict: {verdict} (expected LoopStrong)"
+            ));
+            shared_utils::progress_mode::emit_stderr(&format!("   - Snapshot: {snapshot}"));
 
             if snapshot.get("width").and_then(serde_json::Value::as_u64) == Some(640) {
-                println!("   - Snapshot data integrity: OK");
+                shared_utils::progress_mode::emit_stderr("   - Snapshot data integrity: OK");
             } else {
-                println!(
+                shared_utils::progress_mode::emit_stderr(&format!(
                     "   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})"
-                );
+                ));
             }
         }
         Err(e) => {
-            eprintln!("❌ Verification check failed: {e}");
+            shared_utils::progress_mode::emit_stderr(&format!("❌ Verification check failed: {e}"));
             std::process::exit(1);
         }
     }

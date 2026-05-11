@@ -152,20 +152,32 @@ impl<T> CrfCache<T> {
     #[must_use]
     pub fn key(crf: f32) -> Option<u32> {
         if crf < 0.0 {
-            eprintln!("⚠️ CRF_CACHE: Negative CRF {crf} rejected");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!("Negative CRF {crf} rejected")
+            );
             return None;
         }
         if crf.is_nan() || crf.is_infinite() {
-            eprintln!("⚠️ CRF_CACHE: Invalid CRF (NaN/Inf) rejected");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CACHE,
+                "Invalid CRF (NaN/Inf) rejected"
+            );
             return None;
         }
-        if f64::from(crf) > CRF_CACHE_MAX_VALID {
-            eprintln!("⚠️ CRF_CACHE: CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected");
+        #[allow(clippy::cast_possible_truncation)]
+        if crf > (CRF_CACHE_MAX_VALID as f32) {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CACHE,
+                &format!("CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected")
+            );
             return None;
         }
-        Some(crate::numeric_cast::f64_to_u32_sat(
+
+        crate::numeric_cast::f64_to_u32_strict(
             (f64::from(crf) * CRF_CACHE_MULTIPLIER).round(),
-        ))
+            "crf_cache_key",
+        )
     }
 
     #[inline]
@@ -601,15 +613,22 @@ impl ExploreContext {
             }
         }
 
-        eprintln!("   ⚠️ SSIM calculation failed, trying PSNR fallback...");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_VMAF,
+            "SSIM calculation failed, trying PSNR fallback..."
+        );
 
         if let Some(psnr) = self.calculate_psnr()? {
             let ssim = crate::ssim_mapping::psnr_to_ssim_estimate(psnr);
-            eprintln!("   📊 PSNR: {psnr:.1} dB → Estimated SSIM: {ssim:.4}");
+            crate::log_stat!("PSNR", &format!("{psnr:.1} dB"));
+            crate::log_stat!("Estimated SSIM", &format!("{ssim:.4}"));
             return Ok(SsimResult::predicted(ssim, psnr));
         }
 
-        eprintln!("   ⚠️ Both SSIM and PSNR measurement failed");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_VMAF,
+            "Both SSIM and PSNR measurement failed"
+        );
         Err(anyhow::anyhow!(
             "Both SSIM and PSNR calculation failed for {}",
             self.output_path.display()

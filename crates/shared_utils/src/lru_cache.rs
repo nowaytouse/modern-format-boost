@@ -127,7 +127,7 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
         if let Some(key) = oldest_key {
             self.entries.remove(&key);
             self.eviction_count += 1;
-            eprintln!(
+            crate::log_debug!(
                 "📦 LRU Cache: evicted 1 entry (total evictions: {})",
                 self.eviction_count
             );
@@ -205,12 +205,16 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
             |json| {
                 Self::from_json(&json).map_or_else(
                     |e| {
-                        eprintln!("⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_ANOMALY,
+                            "LRU Cache: failed to parse cache file, starting fresh: {e}"
+                        );
                         Self::new(capacity)
                     },
                     |cache| {
-                        eprintln!(
-                            "📦 LRU Cache: loaded {} entries from {}",
+                        crate::log_info!(
+                            crate::static_logs::messages::LABEL_DETECTION,
+                            "LRU Cache: loaded {} entries from {}",
                             cache.len(),
                             path.display()
                         );

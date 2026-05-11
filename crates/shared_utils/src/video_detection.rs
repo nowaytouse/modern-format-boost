@@ -6,6 +6,7 @@
 //! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate duplication.
 
 use crate::ffprobe::{FFprobeError, probe_video};
+use crate::media_index_types::MediaIndexRow;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,6 +24,15 @@ pub struct VideoPrecisionMetadata {
     /// 🚀 Hint: The last kept best-effort CRF value when exploration produced a usable
     /// output but did not fully satisfy the quality target.
     pub last_best_effort_crf: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoRecommendation {
+    pub current_codec: String,
+    pub recommended_codec: String,
+    pub reason: String,
+    pub is_archival_upgrade: bool,
+    pub command_hint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,14 +435,19 @@ pub fn detect_video_with_cache(
         match cache.get_video_analysis(path) {
             Ok(Some(mut cached)) => {
                 if should_refresh_cached_result(&cached) {
-                    tracing::warn!(
-                        path = %path.display(),
-                        cached_frames = cached.frame_count,
-                        "Invalidating stale cached WebP frame metadata and re-running detection"
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_DETECTION,
+                        &format!(
+                            "Invalidating stale cached WebP frame metadata and re-running detection (path={})",
+                            path.display()
+                        )
                     );
                 } else {
                     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                        eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+                        crate::progress_mode::emit_stderr(&format!(
+                            "🔍 [Video Cache] Hit: {}",
+                            path.display()
+                        ));
                     }
                     cached.file_path = path.display().to_string();
                     return Ok(cached);
@@ -440,10 +455,13 @@ pub fn detect_video_with_cache(
             }
             Ok(None) => {}
             Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "Failed to load cached video analysis"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_DETECTION,
+                    &format!(
+                        "Failed to load cached video analysis (path={}): {}",
+                        path.display(),
+                        err
+                    )
                 );
             }
         }
@@ -454,10 +472,13 @@ pub fn detect_video_with_cache(
     if let Some(cache) = cache
         && let Err(err) = cache.store_video_analysis(path, &result)
     {
-        tracing::warn!(
-            path = %path.display(),
-            error = %err,
-            "Failed to store video analysis in cache"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_DETECTION,
+            &format!(
+                "Failed to store video analysis in cache (path={}): {}",
+                path.display(),
+                err
+            )
         );
     }
 
@@ -477,24 +498,35 @@ pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError>
     let probe = match probe_video(path) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(
-                file = %path.display(),
-                error = %e,
-                "ffprobe failed to analyze file; attempting secondary recovery via direct bitstream analysis"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_DETECTION,
+                &format!(
+                    "ffprobe failed to analyze file; attempting secondary recovery via direct bitstream analysis (file={}): {}",
+                    path.display(),
+                    e
+                )
             );
 
             let (width, height, channel_type, depth) = crate::conversion::media_info_without_ffprobe(path)
                 .ok_or_else(|| {
-                    tracing::error!(file = %path.display(), "Secondary recovery failed: could not determine REAL media properties via bitstream fallback");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_DETECTION,
+                        &format!("Secondary recovery failed: could not determine REAL media properties via bitstream fallback (file={})", path.display())
+                    );
                     e // Return original ffprobe error (e) if fallback also fails
                 })?;
 
-            let file_size = std::fs::metadata(path)
-                .map(|m| m.len())
-                .map_err(|io_err| {
-                    tracing::error!(file = %path.display(), error = %io_err, "Failed to read REAL file metadata during recovery");
-                    crate::ffprobe::FFprobeError::from(io_err)
-                })?;
+            let file_size = std::fs::metadata(path).map(|m| m.len()).map_err(|io_err| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_DETECTION,
+                    &format!(
+                        "Failed to read REAL file metadata during recovery (file={}): {}",
+                        path.display(),
+                        io_err
+                    )
+                );
+                crate::ffprobe::FFprobeError::from(io_err)
+            })?;
 
             crate::ffprobe::FFprobeResult {
                 format_name: path
@@ -553,9 +585,12 @@ pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError>
             let derived =
                 crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(bits) / dur);
             if derived > 0 {
-                tracing::debug!(
-                    "ffprobe: Derived bitrate {:.1} kbps from file size and duration",
-                    crate::numeric_cast::u64_to_f64(derived) / 1000.0
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_DETECTION,
+                    &format!(
+                        "ffprobe: Derived bitrate {:.1} kbps from file size and duration",
+                        crate::numeric_cast::u64_to_f64(derived) / 1000.0
+                    )
                 );
                 Some(derived)
             } else {
@@ -792,4 +827,58 @@ fn extract_video_precision(
     }
 
     precision
+}
+
+/// 🚀 New Entry Point: Subscribes to `MediaIndexRow` (Database-driven decision)
+///
+/// # Errors
+/// Returns an error if the recommendation cannot be generated.
+pub fn get_video_recommendation_from_row(
+    row: &MediaIndexRow,
+) -> std::result::Result<VideoRecommendation, serde_json::Error> {
+    let features: Detection = serde_json::from_str(&row.raw_features_json)?;
+
+    Ok(generate_video_recommendation(&features))
+}
+
+#[must_use]
+pub fn generate_video_recommendation(features: &Detection) -> VideoRecommendation {
+    let mut recommended_codec = features.codec.as_str().to_string();
+    let mut reason = "Current codec is optimal or sufficient".to_string();
+    let mut is_archival_upgrade = false;
+    let mut command_hint = String::new();
+
+    // Decision Logic: If it's a high-fidelity archival candidate but not yet in modern modern formats
+    let is_old_lossless = matches!(
+        features.codec,
+        DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG
+    );
+    let is_high_bitrate_h264 = features.codec == DetectedCodec::H264
+        && features
+            .bitrate
+            .is_some_and(|b| b > crate::constants::VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD);
+
+    if is_old_lossless || is_high_bitrate_h264 {
+        recommended_codec = "AV1 (SVT-AV1)".to_string();
+        is_archival_upgrade = true;
+        reason = if is_old_lossless {
+            "Professional archival format detected; recommend AV1 for space efficiency with zero visual loss".to_string()
+        } else {
+            "High-bitrate H.264 detected; recommend AV1 for 50%+ size reduction".to_string()
+        };
+        command_hint = format!(
+            "ffmpeg -i '{}' -c:v libsvtav1 -preset {} -crf {} output.mp4",
+            features.file_path,
+            crate::constants::FFMPEG_SVTAV1_DEFAULT_PRESET,
+            crate::constants::AV1_CRF_DEFAULT_F64
+        );
+    }
+
+    VideoRecommendation {
+        current_codec: features.codec.as_str().to_string(),
+        recommended_codec,
+        reason,
+        is_archival_upgrade,
+        command_hint,
+    }
 }

@@ -14,20 +14,13 @@ pub const CACHE_KEY_MULTIPLIER: f64 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[inline]
 #[must_use]
-pub fn crf_to_cache_key(crf: f32) -> i32 {
+pub fn crf_to_cache_key(crf: f32) -> Option<i32> {
     if !crf.is_finite() || crf < 0.0 {
-        return 0;
+        return None;
     }
     let capped = f64::from(crf).min(CRF_CACHE_MAX_VALID);
     let normalized = (capped * CACHE_KEY_MULTIPLIER).round();
-    let key = crate::numeric_cast::f64_to_i32_sat(normalized);
-    debug_assert!(
-        key >= 0_i32
-            && key
-                <= crate::numeric_cast::f64_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
-        "Cache key {key} out of expected range for CRF {crf}"
-    );
-    key
+    crate::numeric_cast::f64_to_i32_strict(normalized, "crf_precision_key")
 }
 
 #[inline]
@@ -127,14 +120,14 @@ pub const PSNR_DISPLAY_PRECISION: u32 = crate::constants::PSNR_DISPLAY_PRECISION
 pub const DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
 pub const HIGH_QUALITY_MIN_PSNR: f64 = crate::constants::HIGH_QUALITY_MIN_PSNR;
 
-/// Returns binary-search iteration count for CRF range. Requires `max_crf >= min_crf` (otherwise saturates to 0 range).
+/// Returns binary-search iteration count for CRF range. Returns None if calculation fails.
 #[must_use]
-pub fn required_iterations(min_crf: u8, max_crf: u8) -> u32 {
+pub fn required_iterations(min_crf: u8, max_crf: u8) -> Option<u32> {
     let range = f64::from(max_crf.saturating_sub(min_crf));
     if range <= 0.0_f64 {
-        return 1;
+        return Some(1);
     }
-    crate::numeric_cast::f64_to_u32_sat(range.log2().ceil()) + 1
+    Some(crate::numeric_cast::f64_to_u32_strict(range.log2().ceil(), "crf_range_iterations")? + 1)
 }
 
 #[must_use]

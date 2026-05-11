@@ -3,7 +3,7 @@
 use arbitrary::{Arbitrary, Unstructured};
 use image::{DynamicImage, GrayImage, RgbImage};
 use libfuzzer_sys::fuzz_target;
-use shared_utils::hdr_synthesis::{synthesize_hdr, GainMapParams};
+use shared_utils::hdr::{synthesize_hdr, GainMapParams};
 
 fuzz_target!(|data: &[u8]| {
     let mut u = Unstructured::new(data);

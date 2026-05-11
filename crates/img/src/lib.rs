@@ -39,4 +39,4 @@ pub use detection_api::{
     CompressionType, DetectedFormat, DetectionResult, ImageType, detect_image,
 };
 
-pub use shared_utils::img_errors::{ImgQualityError, Result};
+pub use shared_utils::unified_error::{ImgQualityError, Result};

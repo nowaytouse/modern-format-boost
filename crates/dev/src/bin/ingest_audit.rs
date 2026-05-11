@@ -2,6 +2,13 @@
 //!
 //! Syncs production decision logs (JSONL) into the `SQLite` Media Index.
 
+#![allow(unused_imports)]
+
+use shared_utils::{
+    log_anomaly, log_corruption, log_detail, log_failure, log_fatal, log_hint, log_ignore,
+    log_skip, log_success,
+};
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use dev::media_index::MediaIndex;
@@ -41,7 +48,7 @@ fn main() -> Result<()> {
 
     if !args.input.exists() {
         let input_display = args.input.display();
-        println!("ℹ️ No audit log found at {input_display}. Nothing to ingest.");
+        log_detail!("ℹ️ No audit log found at {input_display}. Nothing to ingest.");
         return Ok(());
     }
 
@@ -53,7 +60,7 @@ fn main() -> Result<()> {
 
     let input_display = args.input.display();
     let db_display = args.db.display();
-    println!("📥 Ingesting logs from {input_display} into {db_display}...");
+    log_detail!("📥 Ingesting logs from {input_display} into {db_display}...");
 
     for line in reader.lines() {
         let line = line?;
@@ -73,6 +80,6 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("✅ Successfully ingested {count} decision records.");
+    log_detail!("✅ Successfully ingested {count} decision records.");
     Ok(())
 }

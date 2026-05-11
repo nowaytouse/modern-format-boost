@@ -46,6 +46,45 @@ pub struct ImageQualityAnalysis {
     pub perception: crate::types::Visual,
 }
 
+impl ImageQualityAnalysis {
+    /// Calculates a "Lossless Affinity Score" (0.0 to 1.0) indicating how likely the image
+    /// is to be a clean, digital, or master-quality source that warrants lossless preservation.
+    ///
+    /// Combines complexity, noise, and content-type heuristics.
+    #[must_use]
+    pub fn lossless_affinity_score(&self) -> Option<f64> {
+        let complexity_factor = 1.0 - self.complexity?;
+        let noise_factor = 1.0 - self.noise_level?;
+        let texture_factor = 1.0 - self.texture_variance?;
+        let color_factor = self.color_diversity?; // high diversity is neutral/positive
+
+        let mut score = complexity_factor.mul_add(
+            crate::constants::AFFINITY_WEIGHT_COMPLEXITY,
+            noise_factor.mul_add(
+                crate::constants::AFFINITY_WEIGHT_NOISE,
+                texture_factor.mul_add(
+                    crate::constants::AFFINITY_WEIGHT_TEXTURE,
+                    color_factor * crate::constants::AFFINITY_WEIGHT_COLOR,
+                ),
+            ),
+        );
+
+        // Content-type bonus (e.g. Screenshot, Icon)
+        if crate::constants::HEURISTIC_LOSSLESS_CREDIBLE_TYPES
+            .contains(&self.content_type.name.as_str())
+        {
+            score += crate::constants::AFFINITY_BONUS_CREDIBLE_TYPE;
+        }
+
+        // Alpha channel bonus (lossless preservation is critical for alpha)
+        if self.has_alpha {
+            score += crate::constants::AFFINITY_BONUS_ALPHA;
+        }
+
+        Some(score.clamp(0.0, 1.0))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ImageContentType {
     pub name: String,
@@ -128,11 +167,19 @@ static CLASSIFIER_RULES: std::sync::OnceLock<Vec<ClassifierRule>> = std::sync::O
 fn get_classifier_rules() -> &'static [ClassifierRule] {
     CLASSIFIER_RULES.get_or_init(|| {
         let json = include_str!("image_classifiers.json");
+        #[allow(
+            clippy::expect_used,
+            reason = "Compile-time validated embedded JSON data"
+        )]
         let wrapper: serde_json::Value =
             serde_json::from_str(json).expect("embedded image_classifiers.json is malformed");
         wrapper
             .get("classifiers")
             .map_or_else(Vec::new, |rules_array| {
+                #[allow(
+                    clippy::expect_used,
+                    reason = "Compile-time validated embedded JSON data"
+                )]
                 serde_json::from_value(rules_array.clone())
                     .expect("embedded image_classifiers.json 'classifiers' array is malformed")
             })
@@ -152,9 +199,15 @@ pub fn analyze_image_quality(
     frame_count: Option<u32>,
     precision: PrecisionMetadata,
 ) -> Result<ImageQualityAnalysis, String> {
-    let expected_size = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height)
-        * 4;
+    let expected_size = crate::numeric_cast::u32_to_usize_strict(width, "width")
+        .ok_or_else(|| "Width too large for processing".to_string())?
+        .checked_mul(
+            crate::numeric_cast::u32_to_usize_strict(height, "height")
+                .ok_or_else(|| "Height too large for processing".to_string())?,
+        )
+        .ok_or_else(|| "Image dimensions overflow processing limits".to_string())?
+        .checked_mul(4)
+        .ok_or_else(|| "Image data size overflows processing limits".to_string())?;
     if rgba_data.len() < expected_size {
         return Err(format!(
             "❌ Invalid RGBA data: expected {} bytes for {}x{}, got {}",
@@ -264,8 +317,8 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
         return None;
     }
 
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?)?;
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_SAMPLING_PIXELS_ULTRA_LARGE
     {
@@ -281,10 +334,14 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut edge_count = 0usize;
     let mut sample_count = 0usize;
 
-    let w = crate::numeric_cast::u32_to_usize_sat(width);
+    let w = crate::numeric_cast::u32_to_usize_strict(width, "width")?;
 
-    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
-        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (1..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
                 let r = i32::from(rgba[idx]);
@@ -331,14 +388,17 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
 fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     use std::collections::HashSet;
 
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?)?;
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         crate::constants::COLOR_DIVERSITY_STEP_LARGE
     } else if pixels
-        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+        > crate::numeric_cast::u64_to_usize_strict(
+            crate::constants::IMAGE_SIZE_THRESHOLD_LARGE,
+            "threshold_large",
+        )?
     {
         crate::constants::COLOR_DIVERSITY_STEP_MEDIUM
     } else {
@@ -387,14 +447,17 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
         return None;
     }
 
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?)?;
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         crate::constants::TEXTURE_VARIANCE_STEP_LARGE
     } else if pixels
-        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+        > crate::numeric_cast::u64_to_usize_strict(
+            crate::constants::IMAGE_SIZE_THRESHOLD_LARGE,
+            "threshold_large",
+        )?
     {
         crate::constants::TEXTURE_VARIANCE_STEP_MEDIUM
     } else {
@@ -404,20 +467,27 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
     let mut variance_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
-    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
-        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (1..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
             let mut sum = 0i32;
             let mut sq_sum = 0i64;
 
             for dy in -1i32..=1_i32 {
                 for dx in -1i32..=1_i32 {
-                    let px = crate::numeric_cast::i32_to_usize_sat(
-                        crate::numeric_cast::usize_to_i32_sat(x) + dx,
-                    );
-                    let py = crate::numeric_cast::i32_to_usize_sat(
-                        crate::numeric_cast::usize_to_i32_sat(y) + dy,
-                    );
-                    let idx = (py * crate::numeric_cast::u32_to_usize_sat(width) + px) * 4;
+                    let px = crate::numeric_cast::i32_to_usize_strict(
+                        crate::numeric_cast::usize_to_i32_strict(x, "x")? + dx,
+                        "px",
+                    )?;
+                    let py = crate::numeric_cast::i32_to_usize_strict(
+                        crate::numeric_cast::usize_to_i32_strict(y, "y")? + dy,
+                        "py",
+                    )?;
+                    let idx =
+                        (py * crate::numeric_cast::u32_to_usize_strict(width, "width")? + px) * 4;
 
                     let gray = (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
                         + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
@@ -463,14 +533,17 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
         return None;
     }
 
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?)?;
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         crate::constants::NOISE_LEVEL_STEP_LARGE
     } else if pixels
-        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+        > crate::numeric_cast::u64_to_usize_strict(
+            crate::constants::IMAGE_SIZE_THRESHOLD_LARGE,
+            "threshold_large",
+        )?
     {
         crate::constants::NOISE_LEVEL_STEP_MEDIUM
     } else {
@@ -480,11 +553,15 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut diff_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
-    for y in (0..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
-        for x in (0..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
-            let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
+    for y in (0..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (0..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
+            let idx = (y * crate::numeric_cast::u32_to_usize_strict(width, "width")? + x) * 4;
             let idx_right = idx + 4;
-            let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
+            let idx_down = idx + (crate::numeric_cast::u32_to_usize_strict(width, "width")? * 4);
 
             if idx_down + 2 < rgba.len() {
                 let curr =
@@ -531,14 +608,17 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
         return None;
     }
 
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?)?;
     let step = if crate::numeric_cast::usize_to_u64(pixels)
         > crate::constants::SHARPNESS_SAMPLING_PIXELS_LARGE
     {
         crate::constants::SHARPNESS_SAMPLING_STEP_LARGE
     } else if pixels
-        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+        > crate::numeric_cast::u64_to_usize_strict(
+            crate::constants::IMAGE_SIZE_THRESHOLD_LARGE,
+            "threshold_large",
+        )?
     {
         crate::constants::SHARPNESS_SAMPLING_STEP_MEDIUM
     } else {
@@ -548,21 +628,27 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut laplacian_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
-    let get_gray = |x: usize, y: usize| -> i32 {
-        let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
-        (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
-            + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
-            + i32::from(rgba[idx + 2]) * crate::constants::LUMA_COEFF_B)
-            / crate::constants::LUMA_DIVISOR
+    let get_gray = |x: usize, y: usize| -> Option<i32> {
+        let idx = (y * crate::numeric_cast::u32_to_usize_strict(width, "width")? + x) * 4;
+        Some(
+            (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
+                + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
+                + i32::from(rgba[idx + 2]) * crate::constants::LUMA_COEFF_B)
+                / crate::constants::LUMA_DIVISOR,
+        )
     };
 
-    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
-        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
-            let center = get_gray(x, y);
-            let top = get_gray(x, y - 1);
-            let bottom = get_gray(x, y + 1);
-            let left = get_gray(x - 1, y);
-            let right = get_gray(x + 1, y);
+    for y in (1..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (1..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
+            let center = get_gray(x, y)?;
+            let top = get_gray(x, y - 1)?;
+            let bottom = get_gray(x, y + 1)?;
+            let left = get_gray(x - 1, y)?;
+            let right = get_gray(x + 1, y)?;
 
             let laplacian =
                 (crate::constants::IMAGE_LAPLACIAN_CENTER * center - top - bottom - left - right)
@@ -593,14 +679,18 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
 /// # Returns
 /// Contrast value (0.0 to 1.0, higher is better)
 fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
-    let pixels = crate::numeric_cast::u32_to_usize_sat(width)
-        * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if crate::numeric_cast::usize_to_u64(pixels)
-        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    let pixels = crate::numeric_cast::u32_to_usize_strict(width, "width")?
+        .checked_mul(crate::numeric_cast::u32_to_usize_strict(height, "height")?);
+    let step = if let Some(p) = pixels
+        && crate::numeric_cast::usize_to_u64(p)
+            > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
     {
         crate::constants::CONTRAST_SAMPLING_STEP_LARGE
-    } else if pixels
-        > crate::numeric_cast::u64_to_usize_sat(crate::constants::IMAGE_SIZE_THRESHOLD_LARGE)
+    } else if let Some(p) = pixels
+        && p > crate::numeric_cast::u64_to_usize_strict(
+            crate::constants::IMAGE_SIZE_THRESHOLD_LARGE,
+            "large_img_threshold",
+        )?
     {
         crate::constants::CONTRAST_SAMPLING_STEP_MEDIUM
     } else {
@@ -611,16 +701,29 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut sq_sum = 0u64;
     let mut sample_count = 0usize;
 
-    for i in (0..pixels).step_by(step) {
+    let p = pixels?;
+    for i in (0..p).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
             let gray = (u64::from(rgba[idx])
-                * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
+                * crate::numeric_cast::i32_to_u64_strict(
+                    crate::constants::LUMA_COEFF_R,
+                    "luma_coeff_r",
+                )?
                 + u64::from(rgba[idx + 1])
-                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
+                    * crate::numeric_cast::i32_to_u64_strict(
+                        crate::constants::LUMA_COEFF_G,
+                        "luma_coeff_g",
+                    )?
                 + u64::from(rgba[idx + 2])
-                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
-                / crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_DIVISOR);
+                    * crate::numeric_cast::i32_to_u64_strict(
+                        crate::constants::LUMA_COEFF_B,
+                        "luma_coeff_b",
+                    )?)
+                / crate::numeric_cast::i32_to_u64_strict(
+                    crate::constants::LUMA_DIVISOR,
+                    "luma_divisor",
+                )?;
             sum += gray;
             sq_sum += gray * gray;
             sample_count += 1;
@@ -880,6 +983,7 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
     analyze_image_quality_with_cache(path, None)
 }
 
+#[must_use]
 pub fn analyze_image_quality_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -898,10 +1002,13 @@ pub fn analyze_image_quality_with_cache(
             Ok(Some(cached)) => return Some(cached),
             Ok(None) => {}
             Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "Failed to load cached image quality analysis"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_QUALITY,
+                    &format!(
+                        "Failed to load cached image quality analysis (path={}): {}",
+                        path.display(),
+                        err
+                    )
                 );
             }
         }
@@ -911,10 +1018,13 @@ pub fn analyze_image_quality_with_cache(
     if let Some(cache) = cache
         && let Err(err) = cache.store_quality_analysis(path, &analysis)
     {
-        tracing::warn!(
-            path = %path.display(),
-            error = %err,
-            "Failed to store image quality analysis in cache"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_QUALITY,
+            &format!(
+                "Failed to store image quality analysis in cache (path={}): {}",
+                path.display(),
+                err
+            )
         );
     }
     Some(analysis)
@@ -934,7 +1044,14 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     let img = match open(path) {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Failed to open image for quality analysis");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                &format!(
+                    "Failed to open image for quality analysis (path={}): {}",
+                    path.display(),
+                    e
+                )
+            );
             return None;
         }
     };
@@ -943,7 +1060,14 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Failed to get metadata for quality analysis");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                &format!(
+                    "Failed to get metadata for quality analysis (path={}): {}",
+                    path.display(),
+                    e
+                )
+            );
             return None;
         }
     };
@@ -962,7 +1086,14 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     ) {
         Ok(res) => Some(res),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Image quality analysis calculation failed");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_QUALITY,
+                &format!(
+                    "Image quality analysis calculation failed (path={}): {}",
+                    path.display(),
+                    e
+                )
+            );
             None
         }
     }
@@ -1055,5 +1186,70 @@ mod property_tests {
             let conf = calculate_analysis_confidence(pixels, size, Some(edge), Some(div));
             prop_assert!((0.0_f64..=1.0_f64).contains(&conf), "Confidence must be in [0, 1] (got {:?})", conf);
         }
+    }
+
+    #[test]
+    fn test_lossless_affinity_score() {
+        use super::{ImageContentType, ImageQualityAnalysis};
+        use crate::image_detection::PrecisionMetadata;
+
+        // 1. High-integrity digital source (Screenshot)
+        let screenshot = ImageQualityAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 500_000,
+            format: "PNG".to_string(),
+            has_alpha: true,
+            is_animated: false,
+            frame_count: Some(1),
+            complexity: Some(0.1), // Very simple
+            edge_density: Some(0.05),
+            color_diversity: Some(0.2),
+            texture_variance: Some(0.05),
+            noise_level: Some(0.01), // Very clean
+            sharpness: Some(0.9),
+            contrast: Some(0.8),
+            content_type: ImageContentType {
+                name: "SCREENSHOT".to_string(),
+            },
+            confidence: Some(0.95),
+            precision: PrecisionMetadata::default(),
+            history: crate::types::ProcessHistory::default(),
+            perception: crate::types::Visual::default(),
+        };
+
+        let score = screenshot.lossless_affinity_score().unwrap();
+        // Base affinity (approx): 0.9*0.4 + 0.99*0.3 + 0.95*0.2 + 0.2*0.1 = 0.36 + 0.297 + 0.19 + 0.02 = 0.867
+        // + Credible bonus (0.15) = 1.017 -> clamp 1.0
+        assert!(score >= 0.95);
+
+        // 2. Noisy Photo
+        let photo = ImageQualityAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 2_000_000,
+            format: "JPEG".to_string(),
+            has_alpha: false,
+            is_animated: false,
+            frame_count: Some(1),
+            complexity: Some(0.7), // Complex
+            edge_density: Some(0.4),
+            color_diversity: Some(0.8),
+            texture_variance: Some(0.6),
+            noise_level: Some(0.5), // Noisy
+            sharpness: Some(0.5),
+            contrast: Some(0.5),
+            content_type: ImageContentType {
+                name: "PHOTO".to_string(),
+            },
+            confidence: Some(0.8),
+            precision: PrecisionMetadata::default(),
+            history: crate::types::ProcessHistory::default(),
+            perception: crate::types::Visual::default(),
+        };
+
+        let score_photo = photo.lossless_affinity_score().unwrap();
+        // Base affinity (approx): 0.3*0.4 + 0.5*0.3 + 0.4*0.2 + 0.8*0.1 = 0.12 + 0.15 + 0.08 + 0.08 = 0.43
+        assert!(score_photo < 0.6);
     }
 }

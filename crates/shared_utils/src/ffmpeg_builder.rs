@@ -28,12 +28,6 @@ struct FfmpegParams {
     tag_video: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-enum OutputTarget {
-    Path(PathBuf),
-    Pipe,
-}
-
 impl VideoCodec {
     #[must_use]
     pub const fn ffmpeg_name(&self, is_gpu: bool) -> &'static str {
@@ -132,14 +126,14 @@ impl PixFmt {
     #[must_use]
     pub const fn ffmpeg_name(&self) -> &'static str {
         match self {
-            Self::Yuv420p => "yuv420p",
-            Self::Yuv420p10le => "yuv420p10le",
-            Self::Yuv444p => "yuv444p",
-            Self::Yuv444p10le => "yuv444p10le",
-            Self::Rgb24 => "rgb24",
-            Self::Rgba => "rgba",
+            Self::Yuv420p => constants::PIX_FMT_YUV420P,
+            Self::Yuv420p10le => constants::PIX_FMT_YUV420P10LE,
+            Self::Yuv444p => constants::PIX_FMT_YUV444P,
+            Self::Yuv444p10le => constants::PIX_FMT_YUV444P10LE,
+            Self::Rgb24 => constants::PIX_FMT_RGB24,
+            Self::Rgba => constants::PIX_FMT_RGBA,
             Self::Rgb48le => "rgb48le",
-            Self::Gray => "gray",
+            Self::Gray => constants::PIX_FMT_GRAY,
         }
     }
 }
@@ -208,8 +202,8 @@ pub struct FfmpegFlags {
 /// Builder for constructing `ffmpeg` commands.
 #[derive(Debug, Default, Clone)]
 pub struct FfmpegBuilder {
-    inputs: Vec<PathBuf>,
-    output_target: Option<OutputTarget>,
+    base: crate::builder_base::BaseBuilder,
+    output_set: bool,
     vcodec: Option<VideoCodec>,
     input_format: Option<String>,
     format: Option<String>,
@@ -223,7 +217,6 @@ pub struct FfmpegBuilder {
     map: Vec<String>,
     filter_complex: Option<String>,
     input_args: Vec<String>,
-    extra_args: Vec<String>,
     params: FfmpegParams,
     flags: FfmpegFlags,
 }
@@ -233,19 +226,17 @@ impl FfmpegBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.inputs.push(path.as_ref().to_path_buf());
-        self
-    }
 
-    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output_target = Some(OutputTarget::Path(path.as_ref().to_path_buf()));
+    pub fn output<P: AsRef<std::path::Path>>(&mut self, path: P) -> &mut Self {
+        self.base.output(path);
+        self.output_set = true;
         self
     }
 
     /// Emit the `FFmpeg` output to `-` (stdout/pipe target).
     pub fn output_pipe(&mut self) -> &mut Self {
-        self.output_target = Some(OutputTarget::Pipe);
+        self.base.output = None;
+        self.output_set = true;
         self
     }
 
@@ -258,8 +249,8 @@ impl FfmpegBuilder {
         if let Ok(c) = VideoCodec::from_str(codec.as_ref()) {
             self.vcodec = Some(c);
         } else {
-            self.extra_args.push("-c:v".to_string());
-            self.extra_args.push(codec.as_ref().to_string());
+            self.base.arg("-c:v");
+            self.base.arg(codec.as_ref());
         }
         self
     }
@@ -273,8 +264,8 @@ impl FfmpegBuilder {
     }
 
     pub fn codec_audio<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
-        self.extra_args.push("-c:a".to_string());
-        self.extra_args.push(codec.as_ref().to_string());
+        self.base.arg("-c:a");
+        self.base.arg(codec.as_ref());
         self
     }
 
@@ -314,8 +305,8 @@ impl FfmpegBuilder {
     }
 
     pub fn pix_fmt_str<S: AsRef<str>>(&mut self, fmt: S) -> &mut Self {
-        self.extra_args.push("-pix_fmt".to_string());
-        self.extra_args.push(fmt.as_ref().to_string());
+        self.base.arg("-pix_fmt");
+        self.base.arg(fmt.as_ref());
         self
     }
 
@@ -375,11 +366,6 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
-        self.extra_args.push(arg.as_ref().to_string());
-        self
-    }
-
     pub fn input_arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.input_args.push(arg.as_ref().to_string());
         self
@@ -402,20 +388,11 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn args<I, S>(&mut self, args: I) -> &mut Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        for arg in args {
-            self.extra_args.push(arg.as_ref().to_string());
-        }
-        self
-    }
-
     fn assert_output_target(&self) {
         assert!(
-            self.output_target.is_some(),
+            self.output_set
+                || self.base.output.is_some()
+                || self.base.extra_args.iter().any(|a| a == "-"),
             "FFmpeg output target is required; use output(...) or output_pipe() before build()"
         );
     }
@@ -464,6 +441,8 @@ impl FfmpegBuilder {
     }
 }
 
+crate::impl_base_builder_accessors!(FfmpegBuilder);
+
 impl ToolBuilder for FfmpegBuilder {
     fn get_command_name(&self) -> &str {
         constants::TOOL_FFMPEG
@@ -509,10 +488,8 @@ impl ToolBuilder for FfmpegBuilder {
             cmd.arg(constants::FFMPEG_ARG_F).arg(fmt);
         }
 
-        for input in &self.inputs {
-            cmd.arg(constants::FFMPEG_ARG_INPUT);
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
+        self.base
+            .apply_all_inputs(&mut cmd, Some(constants::FFMPEG_ARG_INPUT));
 
         if let Some(mut filter) = self.filter_complex.clone() {
             if self.flags.hw.odd_dim_correction {
@@ -577,18 +554,15 @@ impl ToolBuilder for FfmpegBuilder {
             cmd.arg(constants::FFMPEG_ARG_TAG_VIDEO).arg(t);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
+        self.base.apply_to_command(&mut cmd);
 
-        match &self.output_target {
-            Some(OutputTarget::Pipe) => {
+        match &self.base.output {
+            None => {
                 cmd.arg("-");
             }
-            Some(OutputTarget::Path(output)) => {
+            Some(output) => {
                 cmd.arg(crate::safe_path_arg(output).as_ref());
             }
-            None => unreachable!("output target is asserted above"),
         }
 
         cmd

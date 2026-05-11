@@ -252,8 +252,12 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
         {
             Ok(o) => o,
             Err(err) => {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to query process age for PID {pid} via ps {field}: {err}"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Failed to query process age for PID {} via ps {}: {}",
+                    pid,
+                    field,
+                    err
                 );
                 return None;
             }
@@ -271,8 +275,9 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
                 return Some(current_unix_secs().saturating_sub(elapsed_secs));
             }
 
-            eprintln!(
-                "⚠️ [checkpoint] Failed to parse process age for PID {} from ps {} output: {}",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to parse process age for PID {} from ps {} output: {}",
                 pid,
                 field,
                 stdout.trim()
@@ -285,8 +290,11 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
             continue;
         }
 
-        eprintln!(
-            "⚠️ [checkpoint] ps {field} returned non-zero while querying PID {pid}: {}",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            "ps {} returned non-zero while querying PID {}: {}",
+            field,
+            pid,
             stderr.trim()
         );
     }
@@ -373,21 +381,30 @@ fn get_hostname() -> String {
         match HostnameBuilder::new().build().output() {
             Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(
                 |err| {
-                    eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        "Non-UTF-8 hostname output: {}",
+                        err
+                    );
                     "unknown".to_string()
                 },
                 |s| s.trim().to_string(),
             ),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!(
-                    "⚠️ [checkpoint] hostname returned non-zero status: {}",
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "hostname returned non-zero status: {}",
                     stderr.trim()
                 );
                 "unknown".to_string()
             }
             Err(err) => {
-                eprintln!("⚠️ [checkpoint] Failed to query hostname: {err}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Failed to query hostname: {}",
+                    err
+                );
                 "unknown".to_string()
             }
         }
@@ -436,12 +453,13 @@ impl Manager {
             Self::validate_loaded_state(&loaded, &header, output_root);
 
         if let Some(reason) = reset_reason.as_deref() {
-            eprintln!("⚠️ [checkpoint] {reason}");
+            crate::log_anomaly!(crate::static_logs::messages::LABEL_CHECKPOINT, &reason);
             if progress_file.exists()
                 && let Err(err) = fs::remove_file(&progress_file)
             {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to remove invalidated checkpoint file {}: {}",
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Failed to remove invalidated checkpoint file {}: {}",
                     progress_file.display(),
                     err
                 );
@@ -460,7 +478,11 @@ impl Manager {
         if manager.resume_mode.load(Ordering::Relaxed)
             && let Err(err) = manager.rewrite_progress_file()
         {
-            eprintln!("⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to compact validated checkpoint state: {}",
+                err
+            );
         }
 
         Ok(manager)
@@ -483,16 +505,24 @@ impl Manager {
 
         if let Ok(lock_info) = serde_json::from_str::<LockInfo>(&content) {
             if lock_info.pid == std::process::id() {
-                if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {e}");
-                }
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Found existing lock file with own PID; assuming clean reuse"
+                );
                 return Ok(None);
             }
 
             if lock_info.is_stale() {
-                eprintln!("⚠️ LOCK STALE: Lock file older than 24 hours, removing");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "LOCK STALE: Lock file older than 24 hours, removing"
+                );
                 if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        "Failed to remove stale lock file: {}",
+                        e
+                    );
                 }
                 return Ok(None);
             }
@@ -507,21 +537,28 @@ impl Manager {
                 {
                     Ok(status) => status.success(),
                     Err(err) => {
-                        eprintln!(
-                            "⚠️ [checkpoint] Failed to probe lock owner PID {} via kill -0: {err}",
-                            lock_info.pid
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_CHECKPOINT,
+                            "Failed to probe lock owner PID {} via kill -0: {}",
+                            lock_info.pid,
+                            err
                         );
                         false
                     }
                 };
 
                 if !exists {
-                    eprintln!(
-                        "⚠️ LOCK STALE: PID {} no longer exists, removing",
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        "LOCK STALE: PID {} no longer exists, removing",
                         lock_info.pid
                     );
                     if let Err(e) = fs::remove_file(&self.lock_file) {
-                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_CHECKPOINT,
+                            "Failed to remove stale lock file: {}",
+                            e
+                        );
                     }
                     return Ok(None);
                 }
@@ -529,12 +566,17 @@ impl Manager {
                 if let Some(current_start) = get_process_start_time_for_pid(lock_info.pid)
                     && current_start != lock_info.start_time
                 {
-                    eprintln!(
-                        "⚠️ LOCK STALE: PID {} reused (start time mismatch), removing",
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        "LOCK STALE: PID {} reused (start time mismatch), removing",
                         lock_info.pid
                     );
                     if let Err(e) = fs::remove_file(&self.lock_file) {
-                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_CHECKPOINT,
+                            "Failed to remove stale lock file: {}",
+                            e
+                        );
                     }
                     return Ok(None);
                 }
@@ -550,9 +592,10 @@ impl Manager {
 
         if let Ok(pid) = content.trim().parse::<u32>() {
             if pid == std::process::id() {
-                if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {e}");
-                }
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Found existing lock file with own PID; assuming clean reuse"
+                );
                 return Ok(None);
             }
             if let Ok(meta) = fs::metadata(&self.lock_file)
@@ -561,16 +604,27 @@ impl Manager {
                 && elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS
             {
                 if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_CHECKPOINT,
+                        "Failed to remove stale lock file: {}",
+                        e
+                    );
                 }
                 return Ok(None);
             }
             return Ok(Some(pid));
         }
 
-        eprintln!("⚠️ LOCK INVALID: Cannot parse lock file, removing");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            "LOCK INVALID: Cannot parse lock file, removing"
+        );
         if let Err(e) = fs::remove_file(&self.lock_file) {
-            eprintln!("⚠️ [checkpoint] Failed to remove invalid lock file: {e}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to remove invalid lock file: {}",
+                e
+            );
         }
         Ok(None)
     }
@@ -650,16 +704,18 @@ impl Manager {
         match entry.matches_current_file(path) {
             Ok(true) => true,
             Ok(false) => {
-                eprintln!(
-                    "⚠️ [checkpoint] Resume entry became stale after input changed: {}. Reprocessing.",
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Resume entry became stale after input changed: {}. Reprocessing.",
                     path.display()
                 );
                 self.drop_completed_entry(&key);
                 false
             }
             Err(err) => {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to validate checkpoint entry {}: {}. Reprocessing.",
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_CHECKPOINT,
+                    "Failed to validate checkpoint entry {}: {}. Reprocessing.",
                     path.display(),
                     err
                 );
@@ -740,8 +796,9 @@ impl Manager {
         }
 
         let completed = self.completed_count();
-        eprintln!(
-            "⚠️ [checkpoint] Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
             completed,
             output_root.display()
         );
@@ -757,8 +814,9 @@ impl Manager {
         if self.progress_file.exists()
             && let Err(err) = fs::remove_file(&self.progress_file)
         {
-            eprintln!(
-                "⚠️ [checkpoint] Failed to remove progress file {}: {}",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to remove progress file {}: {}",
                 self.progress_file.display(),
                 err
             );
@@ -766,8 +824,9 @@ impl Manager {
         if self.lock_file.exists()
             && let Err(err) = fs::remove_file(&self.lock_file)
         {
-            eprintln!(
-                "⚠️ [checkpoint] Failed to remove lock file {}: {}",
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to remove lock file {}: {}",
                 self.lock_file.display(),
                 err
             );
@@ -943,8 +1002,9 @@ impl Manager {
         }
 
         if changed > 0 || missing > 0 || unreadable > 0 {
-            eprintln!(
-                "⚠️ [checkpoint] Dropped stale resume entries during validation (changed: {changed}, missing: {missing}, unreadable: {unreadable})."
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Dropped stale resume entries during validation (changed: {changed}, missing: {missing}, unreadable: {unreadable})."
             );
         }
 
@@ -996,8 +1056,10 @@ impl Manager {
             self.resume_mode.store(false, Ordering::Relaxed);
         }
         if let Err(err) = self.rewrite_progress_file() {
-            eprintln!(
-                "⚠️ [checkpoint] Failed to rewrite checkpoint state after dropping stale entry: {err}"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to rewrite checkpoint state after dropping stale entry: {}",
+                err
             );
         }
     }
@@ -1006,9 +1068,11 @@ impl Manager {
 impl Drop for Manager {
     fn drop(&mut self) {
         if let Err(err) = self.release_lock() {
-            eprintln!(
-                "⚠️ [checkpoint] Failed to release lock on drop {}: {err}",
-                self.lock_file.display()
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_CHECKPOINT,
+                "Failed to release lock on drop {}: {}",
+                self.lock_file.display(),
+                err
             );
         }
     }
@@ -1052,8 +1116,14 @@ pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), Strin
 /// Returns an error if the source file does not exist, is not a regular file, or is protected.
 pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -> io::Result<()> {
     if let Err(reason) = verify_output_integrity(output, min_output_size) {
-        eprintln!("   ⚠️  Output integrity check FAILED: {reason}");
-        eprintln!("   🛡️  Original file PROTECTED: {}", input.display());
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            &format!("Output integrity check FAILED: {reason}")
+        );
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            &format!("Original file PROTECTED: {}", input.display())
+        );
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Output integrity check failed: {reason}"),
@@ -1067,8 +1137,9 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
     if let Some(xmp) = companion_xmp
         && let Err(e) = fs::remove_file(&xmp)
     {
-        eprintln!(
-            "⚠️  XMP sidecar cleanup failed for {}: {}",
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_CHECKPOINT,
+            "XMP sidecar cleanup failed for {}: {}",
             xmp.display(),
             e
         );

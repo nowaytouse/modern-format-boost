@@ -120,9 +120,10 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
         return Err(io::Error::last_os_error());
     }
     let duration = std::time::Duration::new(
-        crate::numeric_cast::i64_to_u64_sat(buf.added_time.tv_sec),
+        crate::numeric_cast::i64_to_u64_strict(buf.added_time.tv_sec, "added_time_sec")
+            .ok_or_else(|| io::Error::other("Invalid added_time (overflow or negative)"))?,
         u32::try_from(buf.added_time.tv_nsec)
-            .expect("Failed to parse integer or missing required value"),
+            .map_err(|e| io::Error::other(format!("Invalid nsec: {e}")))?,
     );
     Ok(std::time::SystemTime::UNIX_EPOCH + duration)
 }
@@ -151,7 +152,8 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map_err(io::Error::other)?;
     let mut buf = Timespec {
-        tv_sec: crate::numeric_cast::u64_to_i64_sat(duration.as_secs()),
+        tv_sec: crate::numeric_cast::u64_to_i64_strict(duration.as_secs(), "timestamp_sec")
+            .ok_or_else(|| io::Error::other("Timestamp overflows i64"))?,
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
     // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.

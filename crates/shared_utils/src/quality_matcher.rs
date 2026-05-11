@@ -227,29 +227,29 @@ impl SourceCodec {
             | Self::Vp9
             | Self::Av1
             | Self::Av2
-            | Self::Mpeg4 => "mp4",
+            | Self::Mpeg4 => crate::constants::EXT_MP4,
             Self::Mpeg2 | Self::Mpeg1 => "mpg",
             Self::Wmv => "wmv",
             Self::Theora => "ogv",
             Self::RealVideo => "rm",
             Self::FlashVideo => "flv",
-            Self::ProRes | Self::DnxHD => "mov",
+            Self::ProRes | Self::DnxHD => crate::constants::EXT_MOV,
             Self::Ffv1
             | Self::UtVideo
             | Self::HuffYuv
             | Self::RawVideo
             | Self::Lagarith
-            | Self::MagicYuv => "mkv",
-            Self::Gif => "gif",
-            Self::Apng => "apng",
-            Self::WebpAnimated | Self::WebpStatic => "webp",
-            Self::Mjpeg | Self::Jpeg => "jpg",
-            Self::JpegXl => "jxl",
-            Self::Png => "png",
-            Self::Avif => "avif",
-            Self::Heic => "heic",
-            Self::Bmp => "bmp",
-            Self::Tiff => "tiff",
+            | Self::MagicYuv => crate::constants::EXT_MKV,
+            Self::Gif => crate::constants::EXT_GIF,
+            Self::Apng => crate::constants::EXT_APNG,
+            Self::WebpAnimated | Self::WebpStatic => crate::constants::EXT_WEBP,
+            Self::Mjpeg | Self::Jpeg => crate::constants::EXT_JPG,
+            Self::JpegXl => crate::constants::EXT_JXL,
+            Self::Png => crate::constants::EXT_PNG,
+            Self::Avif => crate::constants::EXT_AVIF,
+            Self::Heic => crate::constants::EXT_HEIC,
+            Self::Bmp => crate::constants::EXT_BMP,
+            Self::Tiff => crate::constants::EXT_TIFF,
             Self::Unknown => "bin",
         }
     }
@@ -297,19 +297,17 @@ impl SourceCodec {
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).map_err(|e| {
-            warn!(
-                path = %path.display(),
-                error = %e,
-                "☢️ [ANOMALY] Failed to open file for content identification! Codec detection aborted."
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("Failed to open file for content identification at '{}': {}. Codec detection aborted.", path.display(), e)
             );
             e
         }).ok()?;
         let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
         let n = file.read(&mut header).map_err(|e| {
-            warn!(
-                path = %path.display(),
-                error = %e,
-                "☢️ [ANOMALY] Failed to read file header for content identification! Codec detection aborted."
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("Failed to read file header for content identification at '{}': {}. Codec detection aborted.", path.display(), e)
             );
             e
         }).ok()?;
@@ -318,9 +316,9 @@ impl SourceCodec {
         }
 
         let Some(header_slice) = header.get(..n) else {
-            warn!(
-                "☢️ [ANOMALY] Failed to slice header for identification (n={})",
-                n
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("Failed to slice header for identification (n={n})")
             );
             return None;
         };
@@ -1758,56 +1756,60 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
 }
 
 fn log_analysis_header(encoder_name: &str, d: &AnalysisDetails) {
-    eprintln!("   Quality Analysis v3.0 ({encoder_name}):");
-    eprintln!(
+    crate::progress_mode::emit_stderr(&format!("   Quality Analysis v3.0 ({encoder_name}):"));
+    crate::progress_mode::emit_stderr(&format!(
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
-    );
+    ));
     let conf_str = d.confidence.map_or_else(
         || "N/A".to_string(),
         |c| format!("{:.0}%", c * crate::constants::PERCENTAGE_FACTOR),
     );
-    eprintln!("      Confidence: {conf_str}");
-    eprintln!();
+    crate::progress_mode::emit_stderr(&format!("      Confidence: {conf_str}"));
+    crate::progress_mode::emit_stderr("");
 }
 
 fn log_source_info(analysis: &QualityAnalysis, codec: SourceCodec, d: &AnalysisDetails) {
-    eprintln!("      Source:");
-    eprintln!(
+    crate::progress_mode::emit_stderr("      Source:");
+    crate::progress_mode::emit_stderr(&format!(
         "         Codec: {} ({:?}, efficiency: {:.2})",
         analysis.source_codec, codec, d.codec_factor
-    );
+    ));
     if codec.is_cutting_edge() {
-        eprintln!("         CUTTING-EDGE codec (VVC/AV2) - SKIP RECOMMENDED");
+        crate::progress_mode::emit_stderr(
+            "         CUTTING-EDGE codec (VVC/AV2) - SKIP RECOMMENDED",
+        );
     } else if codec.is_modern() {
-        eprintln!("         ⚠️  Modern codec - consider skipping re-encode");
+        crate::progress_mode::emit_stderr(
+            "         ⚠️  Modern codec - consider skipping re-encode",
+        );
     }
-    eprintln!(
+    crate::progress_mode::emit_stderr(&format!(
         "         Resolution: {}x{} (factor: {:.2})",
         analysis.width, analysis.height, d.resolution_factor
-    );
-    eprintln!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "         Bit depth: {}-bit (factor: {:.2})",
         analysis
             .bit_depth
             .map_or_else(|| "N/A".to_string(), |v| format!("{v}")),
         d.color_depth_factor
-    );
-    eprintln!();
+    ));
+    crate::progress_mode::emit_stderr("");
 }
 
 fn log_high_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
-    eprintln!("      High Priority Factors:");
-    eprintln!("         Raw BPP: {:.4}", d.raw_bpp);
+    crate::progress_mode::emit_stderr("      High Priority Factors:");
+    crate::progress_mode::emit_stderr(&format!("         Raw BPP: {:.4}", d.raw_bpp));
     if let Some(vbr) = analysis.video_bitrate {
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "         Video bitrate: {} kbps (audio excluded)",
             vbr / 1000
-        );
+        ));
     }
-    eprintln!("         GOP factor: {:.2}", d.gop_factor);
+    crate::progress_mode::emit_stderr(&format!("         GOP factor: {:.2}", d.gop_factor));
     if let Some(gop) = analysis.gop_size {
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "            └─ GOP size: {}, B-frames: {:?}",
             gop,
             analysis
@@ -1816,63 +1818,75 @@ fn log_high_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
                     warn!("☢️ [ANOMALY] b_frame_count missing during analysis reporting. Information invalidated.");
                     None
                 })
-        );
+        ));
     }
-    eprintln!("         Chroma factor: {:.2}", d.chroma_factor);
+    crate::progress_mode::emit_stderr(&format!("         Chroma factor: {:.2}", d.chroma_factor));
     if let Some(ref pf) = analysis.pix_fmt {
-        eprintln!("            └─ Pixel format: {pf}");
+        crate::progress_mode::emit_stderr(&format!("            └─ Pixel format: {pf}"));
     }
-    eprintln!("         HDR factor: {:.2}", d.hdr_factor);
+    crate::progress_mode::emit_stderr(&format!("         HDR factor: {:.2}", d.hdr_factor));
     if analysis.is_hdr == Some(true) {
-        eprintln!("            └─ HDR content detected");
+        crate::progress_mode::emit_stderr("            └─ HDR content detected");
     }
     if d.content_type_adjustment != 0 {
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "         Content type adjustment: {:+} CRF",
             d.content_type_adjustment
-        );
+        ));
         if let Some(ct) = analysis.content_type {
-            eprintln!("            └─ Type: {ct:?}");
+            crate::progress_mode::emit_stderr(&format!("            └─ Type: {ct:?}"));
         }
     }
-    eprintln!();
+    crate::progress_mode::emit_stderr("");
 }
 
 fn log_medium_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
-    eprintln!("      Medium Priority Factors:");
-    eprintln!("         Aspect factor: {:.2}", d.aspect_factor);
-    eprintln!("         Complexity factor: {:.2}", d.complexity_factor);
+    crate::progress_mode::emit_stderr("      Medium Priority Factors:");
+    crate::progress_mode::emit_stderr(&format!("         Aspect factor: {:.2}", d.aspect_factor));
+    crate::progress_mode::emit_stderr(&format!(
+        "         Complexity factor: {:.2}",
+        d.complexity_factor
+    ));
     if analysis.spatial_complexity.is_some() || analysis.temporal_complexity.is_some() {
         let fmt_complexity = |v: Option<f64>| -> String {
             v.map_or_else(|| "—".to_string(), |x| format!("{x:.1}"))
         };
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "            └─ SI: {}, TI: {}",
             fmt_complexity(analysis.spatial_complexity),
             fmt_complexity(analysis.temporal_complexity)
-        );
+        ));
     }
-    eprintln!("         Grain factor: {:.2}", d.grain_factor);
-    eprintln!("         Alpha factor: {:.2}", d.alpha_factor);
-    eprintln!();
+    crate::progress_mode::emit_stderr(&format!("         Grain factor: {:.2}", d.grain_factor));
+    crate::progress_mode::emit_stderr(&format!("         Alpha factor: {:.2}", d.alpha_factor));
+    crate::progress_mode::emit_stderr("");
 }
 
 fn log_result_info(analysis: &QualityAnalysis, result: &MatchedQuality, encoder: EncoderType) {
-    eprintln!("      Result:");
-    eprintln!("         Effective BPP: {:.4}", result.effective_bpp);
+    crate::progress_mode::emit_stderr("      Result:");
+    crate::progress_mode::emit_stderr(&format!(
+        "         Effective BPP: {:.4}",
+        result.effective_bpp
+    ));
     if let Some(fps) = analysis.fps {
-        eprintln!("         FPS: {fps:.2}");
+        crate::progress_mode::emit_stderr(&format!("         FPS: {fps:.2}"));
     }
     if let Some(duration) = analysis.duration_secs {
-        eprintln!("         Duration: {duration:.1}s");
+        crate::progress_mode::emit_stderr(&format!("         Duration: {duration:.1}s"));
     }
 
     match encoder {
         EncoderType::Av1 | EncoderType::Hevc => {
-            eprintln!("         ✅ Calculated CRF: {}", result.crf);
+            crate::progress_mode::emit_stderr(&format!(
+                "         ✅ Calculated CRF: {}",
+                result.crf
+            ));
         }
         EncoderType::Jxl => {
-            eprintln!("         ✅ Calculated distance: {:.2}", result.distance);
+            crate::progress_mode::emit_stderr(&format!(
+                "         ✅ Calculated distance: {:.2}",
+                result.distance
+            ));
         }
     }
 }
@@ -1924,10 +1938,16 @@ pub fn from_video_detection(
         crate::numeric_cast::u64_to_f64(bitrate) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0_f64 {
-            eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_VIDEO,
+                &format!("Warning: pixels_per_second is {pixels_per_second} for {file_path}")
+            );
         }
         if bitrate == 0 {
-            eprintln!("   ⚠️  Warning: bitrate is 0 for {file_path}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_VIDEO,
+                &format!("Warning: bitrate is 0 for {file_path}")
+            );
         }
         0.0_f64
     };
@@ -2239,6 +2259,7 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     }
 }
 
+/// Calculate quality analysis from raw image analysis results. Returns None if calculation fails.
 #[must_use]
 pub fn from_image_analysis(
     format: &str,
@@ -2250,12 +2271,13 @@ pub fn from_image_analysis(
     duration_secs: Option<f64>,
     fps: Option<f64>,
     estimated_quality: Option<u8>,
-) -> QualityAnalysis {
+) -> Option<QualityAnalysis> {
     let pixels = u64::from(width) * u64::from(height);
 
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
         if duration > 0.0_f64 && frame_rate > 0.0_f64 {
-            let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * frame_rate);
+            let total_frames =
+                crate::numeric_cast::f64_to_u64_strict(duration * frame_rate, "total_frames")?;
             let bits_per_frame = crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64
                 / crate::numeric_cast::u64_to_f64(total_frames.max(1));
             bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1))
@@ -2267,7 +2289,7 @@ pub fn from_image_analysis(
         crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(pixels.max(1))
     };
 
-    QualityAnalysis {
+    Some(QualityAnalysis {
         bpp,
         source_codec: format.to_string(),
         width,
@@ -2280,7 +2302,7 @@ pub fn from_image_analysis(
         file_size,
         estimated_quality,
         ..Default::default()
-    }
+    })
 }
 
 #[cfg(test)]

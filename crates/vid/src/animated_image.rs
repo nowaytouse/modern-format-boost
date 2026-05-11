@@ -22,11 +22,13 @@ fn cleanup_temp_output(temp_output: &Path, input: &Path) {
     if let Err(e) = fs::remove_file(temp_output)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        tracing::warn!(
-            input = %input.display(),
-            temp_output = %temp_output.display(),
-            error = %e,
-            "Failed to remove temporary output"
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_CLEANUP,
+            &format!(
+                "Failed to remove temporary output: {} (path: {}, error: {e})",
+                input.display(),
+                temp_output.display()
+            )
         );
     }
 }
@@ -54,56 +56,55 @@ impl AnimatedQualityFailureDecision {
                 .failure_reason()
                 .or(explore_result.enhanced_verify_fail_reason.as_deref())
                 .unwrap_or("quality/size check failed");
-            tracing::warn!(input = %input.display(), reason, "Quality validation failed");
-            eprintln!("   ⚠️  Quality validation FAILED: {reason}");
+            shared_utils::log_anomaly!(
+                &format!("Quality validation FAILED: {}", input.display()),
+                reason
+            );
             return Self {
-                label: "QUALITY/SIZE VALIDATION FAILED",
-                protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
-                delete_msg: "Output discarded (quality/size check failed)".to_string(),
+                label: shared_utils::static_logs::messages::LABEL_QUALITY_SIZE_FAIL,
+                protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
                 skip_message: format!("Skipped: {reason}"),
                 skip_code: "quality_failed",
             };
         }
 
         if actual_ssim.is_none() {
-            tracing::warn!(
-                input = %input.display(),
-                "SSIM calculation failed — cannot validate quality"
-            );
-            eprintln!(
-                "   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues"
+            shared_utils::log_anomaly!(
+                &format!(
+                    "{}: {}",
+                    shared_utils::static_logs::messages::SSIM_CALC_FAILED,
+                    input.display()
+                ),
+                "cannot validate quality │ may indicate codec compatibility issues"
             );
             return Self {
-                label: "SSIM CALCULATION FAILED",
-                protect_msg: "Original file PROTECTED (SSIM not available)".to_string(),
-                delete_msg: "Output discarded (SSIM calculation failed)".to_string(),
-                skip_message: "Skipped: SSIM calculation failed".to_string(),
+                label: shared_utils::static_logs::messages::LABEL_SSIM_CALC_FAILED,
+                protect_msg: shared_utils::static_logs::messages::PROTECT_SSIM_NA.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_SSIM_FAIL.to_string(),
+                skip_message: format!(
+                    "Skipped: {}",
+                    shared_utils::static_logs::messages::SSIM_CALC_FAILED
+                ),
                 skip_code: "quality_failed",
             };
         }
 
-        if actual_ssim.is_some_and(|ssim| ssim < threshold) {
-            let actual_ssim = actual_ssim.unwrap_or_default();
+        if let Some(ssim) = actual_ssim
+            && ssim < threshold
+        {
             let score_str = explore_result
                 .ms_ssim_score
                 .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
-            tracing::warn!(
-                input = %input.display(),
-                ssim = actual_ssim,
-                threshold,
-                score = score_str,
-                "Quality validation failed"
-            );
-            eprintln!(
-                "   ⚠️  Quality validation FAILED: SSIM {actual_ssim:.4} < {threshold:.4} (Score: {score_str})"
+            shared_utils::log_anomaly!(
+                &format!("Quality validation FAILED: {}", input.display()),
+                &format!("SSIM {ssim:.4} < {threshold:.4} (Score: {score_str})")
             );
             return Self {
-                label: "QUALITY VALIDATION FAILED",
-                protect_msg: "Original file PROTECTED (quality below threshold)".to_string(),
-                delete_msg: "Output discarded (quality below threshold)".to_string(),
-                skip_message: format!(
-                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
-                ),
+                label: shared_utils::static_logs::messages::LABEL_QUALITY_FAIL,
+                protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_LOW.to_string(),
+                delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_LOW.to_string(),
+                skip_message: format!("Skipped: SSIM {ssim:.4} below threshold {threshold:.4}"),
                 skip_code: "quality_failed",
             };
         }
@@ -113,21 +114,23 @@ impl AnimatedQualityFailureDecision {
             .failure_reason()
             .or(explore_result.enhanced_verify_fail_reason.as_deref())
             .unwrap_or("quality/size check failed");
-        tracing::warn!(input = %input.display(), reason, "Quality validation failed");
-        eprintln!("   ⚠️  Quality validation FAILED: {reason}");
+        shared_utils::log_anomaly!(
+            &format!("Quality validation FAILED: {}", input.display()),
+            reason
+        );
         Self {
-            label: "QUALITY VALIDATION FAILED",
-            protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
-            delete_msg: "Output discarded (quality/size check failed)".to_string(),
+            label: shared_utils::static_logs::messages::LABEL_QUALITY_FAIL,
+            protect_msg: shared_utils::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
+            delete_msg: shared_utils::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
             skip_message: format!("Skipped: {reason}"),
             skip_code: "quality_failed",
         }
     }
 
     fn emit_summary(&self) {
-        eprintln!(
-            "   ⚠️  {} │ 🛡️  {} │ 🗑️  {}",
-            self.label, self.protect_msg, self.delete_msg
+        shared_utils::log_anomaly!(
+            &format!("{} │ 🛡️  {}", self.label, self.protect_msg),
+            &format!("🗑️  {}", self.delete_msg)
         );
     }
 }
@@ -153,16 +156,20 @@ impl AnimatedFinalGateFailureDecision {
                 .ms_ssim_score
                 .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"))
         };
-        tracing::warn!(
-            input = %input.display(),
-            summary = %quality_summary,
-            "Final quality gate failed"
+
+        shared_utils::log_anomaly!(
+            &format!(
+                "{}: {}",
+                shared_utils::static_logs::messages::QUALITY_GATE_FAILED,
+                input.display()
+            ),
+            &format!("summary: {quality_summary}")
         );
 
         let label = if ultimate_mode {
-            "3D QUALITY GATE FAILED"
+            shared_utils::static_logs::messages::LABEL_3D_QUALITY_GATE_FAILED
         } else {
-            "QUALITY TARGET FAILED"
+            shared_utils::static_logs::messages::LABEL_QUALITY_TARGET_FAILED
         };
 
         Self {
@@ -180,9 +187,13 @@ impl AnimatedFinalGateFailureDecision {
     }
 
     fn emit_summary(&self) {
-        eprintln!(
-            "   ⚠️  {} │ 🛡️  Original file PROTECTED │ 🗑️  Output discarded",
-            self.label
+        shared_utils::log_anomaly!(
+            &format!(
+                "{} │ {}",
+                self.label,
+                shared_utils::static_logs::messages::PROTECTING_ORIGINAL
+            ),
+            shared_utils::static_logs::messages::DISCARDING_OUTPUT
         );
     }
 }
@@ -304,7 +315,13 @@ fn extract_frames_for_gifski(
         .output(&frame_pattern);
 
     let output = builder.build().output().map_err(|e| {
-        tracing::warn!(?input, error = %e, "FFmpeg frame extraction failed");
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_FFMPEG,
+            &format!(
+                "FFmpeg frame extraction failed: {} (error: {e})",
+                input.display()
+            )
+        );
         VidQualityError::ConversionError(format!("FFmpeg frame extraction failed: {e}"))
     })?;
 
@@ -379,10 +396,12 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         if line.contains("Number of frames:") {
             if let Some(count_str) = line.split(':').nth(1) {
                 frame_count = count_str.trim().parse::<u32>().unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "☢️ [ANOMALY] Failed to parse WebP frame count '{}': {}",
-                        count_str,
-                        e
+                    shared_utils::log_anomaly!(
+                        shared_utils::static_logs::messages::LABEL_WEBP,
+                        &format!(
+                            "Failed to parse WebP frame count: {} (value: {count_str}, error: {e})",
+                            input.display()
+                        )
                     );
                     0
                 });
@@ -410,10 +429,13 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // the animation keeps local continuity near the tail, rather than copying
     // the first frame's delay across every unparsed frame.
     if u32::try_from(frame_durations_ms.len()).unwrap_or(u32::MAX) != frame_count {
-        tracing::warn!(
-            "☢️ [ANOMALY] WebP frame count mismatch: webpmux says {}, but we parsed {} durations! Adjusting buffer.",
-            frame_count,
-            frame_durations_ms.len()
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_WEBP,
+            &format!(
+                "WebP frame count mismatch: {} (webpmux says {frame_count}, but we parsed {} durations! Adjusting buffer.)",
+                input.display(),
+                frame_durations_ms.len()
+            )
         );
         let pad = *frame_durations_ms
             .last()
@@ -439,7 +461,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     if verbose {
         let avg_dur = f64::from(frame_durations_ms.iter().sum::<u32>())
             / shared_utils::numeric_cast::usize_to_f64(frame_durations_ms.len());
-        eprintln!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
+        log_detail!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
 
     let concat_list_path = temp_dir_path.join("concat.txt");
@@ -729,9 +751,9 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
 
     if is_static_animated_image(input) {
         if options.verbose() {
-            eprintln!(
+            log_detail!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
-                input.display()
+                input.display(),
             );
         }
         return Ok(skipped_static_animated(input, options));
@@ -759,12 +781,11 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
     let ext = if options.apple_compat() { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
 
-    tracing::debug!(
-        input = ?input.file_name().unwrap_or_default(),
+    log_detail!(
+        "Starting animated image to video conversion: {} (Ext: {}, Apple Compat: {})",
+        input.file_name().unwrap_or_default().to_string_lossy(),
         input_ext,
-        apple_compat = options.apple_compat(),
-        target_ext = %ext,
-        "Starting animated image to video conversion"
+        options.apple_compat()
     );
 
     if output.exists() && !options.force() {
@@ -782,14 +803,17 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!(
-                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                log_detail!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)",
                 );
             }
 
             // Check if djxl is available
             if which::which("djxl").is_err() {
-                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                shared_utils::log_anomaly!(
+                    &format!("djxl not found: {}", input.display()),
+                    "cannot process animated JXL"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -822,7 +846,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     (temp_apng_path, Some(temp_apng))
                 }
                 _ => {
-                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    shared_utils::log_anomaly!(
+                        &format!("djxl conversion failed: {}", input.display()),
+                        "JXL → APNG conversion failed"
+                    );
                     return Ok(failed_with_fallback(
                         input,
                         options,
@@ -833,12 +860,15 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
             if options.verbose() {
-                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
+                log_detail!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
             // Check if webpmux is available
             if which::which(shared_utils::constants::TOOL_WEBPMUX).is_err() {
-                tracing::warn!(input = %input.display(), "webpmux not found");
+                shared_utils::log_anomaly!(
+                    &format!("webpmux not found: {}", input.display()),
+                    "cannot process animated WebP"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -860,7 +890,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
-                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
+                    shared_utils::log_anomaly!(
+                        &format!("WebP extraction failed: {}", input.display()),
+                        &format!("error: {e}")
+                    );
                     return Ok(failed_with_fallback_owned(
                         input,
                         options,
@@ -873,7 +906,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
             && has_probable_avif_alpha_stream(input)
         {
             if options.verbose() {
-                eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
+                log_detail!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -911,10 +944,8 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
 
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
     let targeted_info =
-        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
-    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
-        &targeted_info,
-    ));
+        shared_utils::hdr::infer_bt709_if_modern(color_info, width, height, &input_ext);
+    vf_args.extend(shared_utils::hdr::color_info_to_ffmpeg_args(&targeted_info));
 
     let max_threads = get_max_threads(options);
 
@@ -1010,7 +1041,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
             if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
                 cleanup_temp_output(&temp_output, input);
                 let codec_name = options.codec.as_str().to_uppercase();
-                tracing::warn!(input = %input.display(), "{} output invalid (empty or unreadable); copying original", codec_name);
+                shared_utils::log_anomaly!(
+                    &format!("{codec_name} output invalid: {}", input.display()),
+                    "empty or unreadable; copying original"
+                );
                 return Ok(failed_with_fallback_owned(
                     input,
                     options,
@@ -1038,7 +1072,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 )
             {
-                tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC conversion");
+                shared_utils::log_anomaly!(
+                    &format!("Failed to delete original: {}", input.display()),
+                    &format!("output: {}, error: {e}", output.display())
+                );
             }
 
             let codec_name = options.codec.as_str().to_uppercase();
@@ -1056,7 +1093,13 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             cleanup_temp_output(&temp_output, input);
             let codec_name = options.codec.as_str().to_uppercase();
-            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg {} encode failed; copying original", codec_name);
+            shared_utils::log_anomaly!(
+                &format!("ffmpeg {codec_name} encode failed: {}", input.display()),
+                &format!(
+                    "stderr: {}",
+                    shared_utils::io_utils::tail_error_lines(&stderr, 5)
+                )
+            );
             Ok(failed_with_fallback_owned(
                 input,
                 options,
@@ -1070,7 +1113,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found; copying original");
+            shared_utils::log_anomaly!(
+                &format!("ffmpeg not found: {}", input.display()),
+                &format!("error: {e}")
+            );
             Ok(failed_with_fallback_owned(
                 input,
                 options,
@@ -1105,9 +1151,9 @@ pub fn convert_to_mp4_matched(
 
     if is_static_animated_image(input) {
         if options.verbose() {
-            eprintln!(
+            log_detail!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
-                input.display()
+                input.display(),
             );
         }
         return Ok(skipped_static_animated(input, options));
@@ -1147,12 +1193,15 @@ pub fn convert_to_mp4_matched(
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!(
-                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                log_detail!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)",
                 );
             }
             if which::which("djxl").is_err() {
-                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                shared_utils::log_anomaly!(
+                    &format!("djxl not found: {}", input.display()),
+                    "cannot process animated JXL"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -1180,7 +1229,10 @@ pub fn convert_to_mp4_matched(
                     (temp_apng_path, Some(temp_apng))
                 }
                 _ => {
-                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    shared_utils::log_anomaly!(
+                        &format!("djxl conversion failed: {}", input.display()),
+                        "JXL → APNG conversion failed"
+                    );
                     return Ok(failed_with_fallback(
                         input,
                         options,
@@ -1191,12 +1243,15 @@ pub fn convert_to_mp4_matched(
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
             if options.verbose() {
-                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
+                log_detail!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
             // Check if webpmux is available
             if which::which(shared_utils::constants::TOOL_WEBPMUX).is_err() {
-                tracing::warn!(input = %input.display(), "webpmux not found");
+                shared_utils::log_anomaly!(
+                    &format!("webpmux not found: {}", input.display()),
+                    "cannot process animated WebP"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -1218,7 +1273,10 @@ pub fn convert_to_mp4_matched(
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
-                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
+                    shared_utils::log_anomaly!(
+                        &format!("WebP extraction failed: {}", input.display()),
+                        &format!("error: {e}")
+                    );
                     return Ok(failed_with_fallback_owned(
                         input,
                         options,
@@ -1239,8 +1297,8 @@ pub fn convert_to_mp4_matched(
             out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
         } {
             if options.verbose() {
-                eprintln!(
-                    "   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly"
+                log_detail!(
+                    "   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly",
                 );
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
@@ -1289,13 +1347,13 @@ pub fn convert_to_mp4_matched(
 
                 if has_multiple_streams && probe.stream_index > 0 {
                     if options.verbose() {
-                        eprintln!(
+                        log_detail!(
                             "   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)",
                             input_ext.to_uppercase(),
                             probe.stream_index,
                             probe
                                 .frame_count
-                                .map_or_else(|| "unknown".to_string(), |count| count.to_string())
+                                .map_or_else(|| "unknown".to_string(), |count| count.to_string()),
                         );
                     }
 
@@ -1336,7 +1394,7 @@ pub fn convert_to_mp4_matched(
                         }
                         _ => {
                             if options.verbose() {
-                                eprintln!("   ⚠️  Stream conversion failed, using original file");
+                                log_detail!("   ⚠️  Stream conversion failed, using original file");
                             }
                             (actual_input, None)
                         }
@@ -1356,10 +1414,8 @@ pub fn convert_to_mp4_matched(
 
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
     let targeted_info =
-        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
-    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
-        &targeted_info,
-    ));
+        shared_utils::hdr::infer_bt709_if_modern(color_info, width, height, &input_ext);
+    vf_args.extend(shared_utils::hdr::color_info_to_ffmpeg_args(&targeted_info));
 
     let flag_mode = options
         .flag_mode()
@@ -1367,9 +1423,9 @@ pub fn convert_to_mp4_matched(
 
     let use_gpu = options.use_gpu();
     if !use_gpu && options.verbose() {
-        eprintln!(
+        log_detail!(
             "   🖥️  CPU Mode: Using libx265 for higher SSIM (≥{:.2})",
-            shared_utils::constants::HIGH_QUALITY_MIN_SSIM
+            shared_utils::constants::HIGH_QUALITY_MIN_SSIM,
         );
     }
 
@@ -1400,16 +1456,16 @@ pub fn convert_to_mp4_matched(
         actual_initial_crf = 0.0;
     } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
         if options.verbose() {
-            eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
+            log_detail!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
         actual_initial_crf = shared_utils::numeric_cast::f64_to_f32_lossy(hint);
     }
 
     if options.verbose() {
-        eprintln!(
+        log_detail!(
             "   {} Mode: CRF {:.1} (based on input analysis/cache)",
             flag_mode.description_en(),
-            actual_initial_crf
+            actual_initial_crf,
         );
     }
 
@@ -1531,7 +1587,7 @@ pub fn convert_to_mp4_matched(
     drop(temp_stream_file);
 
     for log in &explore_result.log {
-        eprintln!("{log}");
+        log_detail!("{log}");
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
@@ -1561,21 +1617,27 @@ pub fn convert_to_mp4_matched(
         };
         let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
+            log_detail!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
         }
         if options.allow_size_tolerance() {
-            eprintln!(
-                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (tolerance: {:.1}%)",
+            log_detail!(
+                "   ⏭️  Skipping: {} output larger than input by {:.1}% (tolerance: {:.1}%)",
+                codec_name,
+                size_increase_pct,
                 shared_utils::constants::DEFAULT_SIZE_TOLERANCE_RATIO * 100.0
             );
         } else {
-            eprintln!(
-                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
+            log_detail!(
+                "   ⏭️  Skipping: {} output larger than input by {:.1}% (strict mode: no tolerance)",
+                codec_name,
+                size_increase_pct
             );
         }
-        eprintln!(
+        log_detail!(
             "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-            input_size, explore_result.output_size, size_increase_pct
+            input_size,
+            explore_result.output_size,
+            size_increase_pct
         );
         return Ok(skipped_with_fallback_owned(
             input,
@@ -1668,7 +1730,15 @@ pub fn convert_to_mp4_matched(
         )
     {
         let codec_name = options.codec.as_str().to_uppercase();
-        tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after {} animated conversion", codec_name);
+        log_anomaly!(
+            &format!("Failed to delete original after {codec_name} animated conversion"),
+            &format!(
+                "Input: {}, Output: {}, Error: {}",
+                input.display(),
+                output.display(),
+                e
+            )
+        );
     }
 
     Ok(TaskResult::success_video_explored(
@@ -1701,8 +1771,8 @@ pub fn convert_to_mp4_matched(
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
-    eprintln!(
-        "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"
+    log_detail!(
+        "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!",
     );
 
     if !options.force() && is_already_processed(input) {
@@ -1777,7 +1847,15 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                     shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 )
             {
-                tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
+                log_anomaly!(
+                    "Lossless HEVC",
+                    &format!(
+                        "Failed to delete original for {}: {} (Output: {})",
+                        input.display(),
+                        e,
+                        output.display()
+                    ),
+                );
             }
 
             Ok(TaskResult::success(
@@ -1793,7 +1871,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg lossless failed; copying original");
+            log_anomaly!(
+                "Lossless HEVC",
+                &format!(
+                    "ffmpeg lossless failed for {}: {} (Copying original)",
+                    input.display(),
+                    stderr
+                ),
+            );
             Ok(failed_with_fallback_owned(
                 input,
                 options,
@@ -1806,7 +1891,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found for lossless; copying original");
+            log_anomaly!(
+                "Lossless HEVC",
+                &format!(
+                    "ffmpeg not found for lossless conversion of {}: {} (Copying original)",
+                    input.display(),
+                    e
+                ),
+            );
             Ok(failed_with_fallback_owned(
                 input,
                 options,
@@ -1835,9 +1927,9 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
 
     if is_static_animated_image(input) {
         if options.verbose() {
-            eprintln!(
+            log_detail!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
-                input.display()
+                input.display(),
             );
         }
         return Ok(skipped_static_animated(input, options));
@@ -1852,7 +1944,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         .unwrap_or_default();
 
     if input_ext == "gif" {
-        eprintln!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
+        log_detail!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
         return Ok(skipped_with_fallback(
             input,
             options,
@@ -1882,14 +1974,17 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose() {
-                eprintln!(
-                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)"
+                log_detail!(
+                    "   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)",
                 );
             }
 
             // Check if djxl is available
             if which::which("djxl").is_err() {
-                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                shared_utils::log_anomaly!(
+                    &format!("djxl not found: {}", input.display()),
+                    "cannot process animated JXL"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -1924,7 +2019,10 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                     (temp_apng_path, Some(temp_apng))
                 }
                 _ => {
-                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    shared_utils::log_anomaly!(
+                        &format!("djxl conversion failed: {}", input.display()),
+                        "JXL → APNG conversion failed"
+                    );
                     return Ok(failed_with_fallback(
                         input,
                         options,
@@ -1935,12 +2033,15 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
             if options.verbose() {
-                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
+                log_detail!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
             // Check if webpmux is available
             if which::which(shared_utils::constants::TOOL_WEBPMUX).is_err() {
-                tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
+                shared_utils::log_anomaly!(
+                    &format!("webpmux not found: {}", input.display()),
+                    "cannot process animated WebP"
+                );
                 return Ok(failed_with_fallback(
                     input,
                     options,
@@ -1962,7 +2063,10 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
-                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
+                    shared_utils::log_anomaly!(
+                        &format!("WebP extraction failed: {}", input.display()),
+                        &format!("error: {e}")
+                    );
                     return Ok(failed_with_fallback_owned(
                         input,
                         options,
@@ -1973,7 +2077,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             }
         } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
             if options.verbose() {
-                eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
+                log_detail!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -2035,10 +2139,11 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose()) {
                 Ok(value) => value,
                 Err(e) => {
-                    tracing::error!(
-                        input = %input.display(),
-                        error = %e,
-                        "Failed to extract frames for GIF conversion"
+                    log_anomaly!(
+                        "gifski",
+                        "{} → {} │ Failed to extract frames: {e}",
+                        input.display(),
+                        output.display()
                     );
                     return Ok(failed_with_fallback_owned(
                         input,
@@ -2079,8 +2184,8 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         };
 
         if options.verbose() {
-            eprintln!(
-                "   🔧 GIF Encoding: Native speed ({extracted_count} frames / {duration_val:.2}s duration) -> target speed: {fps:.3} FPS"
+            log_detail!(
+                "   🔧 GIF Encoding: Native speed ({extracted_count} frames / {duration_val:.2}s duration) -> target speed: {fps:.3} FPS",
             );
         }
         let mut gifski_builder = shared_utils::GifskiBuilder::new();
@@ -2106,7 +2211,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         frames.sort();
 
         for frame in frames {
-            gifski_builder.add_input(frame);
+            gifski_builder.input(frame);
         }
 
         let res = gifski_builder.build().output();
@@ -2115,17 +2220,24 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         match res {
             Ok(o) if o.status.success() && temp_output.exists() => true,
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                tracing::error!(
-                    input = %input.display(),
-                    stderr = %stderr.trim(),
-                    "gifski conversion failed with status: {:?}",
-                    o.status.code()
+                log_failure!(
+                    "Gifski",
+                    "{} → {} - gifski failed with status {}: {}",
+                    input.display(),
+                    output.display(),
+                    o.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&o.stderr)
                 );
                 false
             }
             Err(e) => {
-                tracing::error!(input = %input.display(), error = %e, "gifski command failed to start");
+                log_failure!(
+                    "Gifski",
+                    "{} → {} - gifski command failed to start: {}",
+                    input.display(),
+                    output.display(),
+                    e
+                );
                 false
             }
         }
@@ -2137,7 +2249,13 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
     if !gifski_ok {
         // gifski conversion failed — copy original so data is not lost
         cleanup_temp_output(&temp_output, input);
-        tracing::warn!(input = %input.display(), "GIF conversion failed (gifski unavailable or failed); copying original");
+        log_anomaly!(
+            "GIF",
+            &format!(
+                "GIF conversion failed for {} (gifski unavailable or failed); copying original",
+                input.display()
+            ),
+        );
         return Ok(failed_with_fallback(
             input,
             options,
@@ -2150,7 +2268,13 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
     let output_size = fs::metadata(&temp_output).map_or(0, |m| m.len());
     if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
         cleanup_temp_output(&temp_output, input);
-        tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
+        log_anomaly!(
+            "GIF",
+            &format!(
+                "GIF output invalid for {} (empty or unreadable); copying original",
+                input.display()
+            ),
+        );
         return Ok(failed_with_fallback(
             input,
             options,
@@ -2183,19 +2307,19 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             (ratio.to_f64() - 1.0_f64) * 100.0_f64
         };
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
+            log_detail!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
         }
         if options.allow_size_tolerance() {
-            eprintln!(
-                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
+            log_detail!(
+                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)",
             );
         } else {
-            eprintln!(
-                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
+            log_detail!(
+                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)",
             );
         }
-        eprintln!(
-            "   📊 Size comparison: {input_size} → {output_size} bytes (+{size_increase_pct:.1}%)"
+        log_detail!(
+            "   📊 Size comparison: {input_size} → {output_size} bytes (+{size_increase_pct:.1}%)",
         );
         return Ok(skipped_with_fallback_owned(
             input,
@@ -2226,7 +2350,15 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         )
     {
-        tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
+        log_anomaly!(
+            "GIF Apple Compat",
+            &format!(
+                "Failed to delete original after GIF apple-compat HEVC conversion for {}: {} (Output: {})",
+                input.display(),
+                e,
+                output.display()
+            ),
+        );
     }
 
     Ok(TaskResult::success(
@@ -2363,7 +2495,10 @@ mod tests {
             decision.skip_message,
             "Skipped: Total file not smaller than input"
         );
-        assert_eq!(decision.label, "QUALITY VALIDATION FAILED");
+        assert_eq!(
+            decision.label,
+            shared_utils::static_logs::messages::LABEL_QUALITY_FAIL
+        );
         assert!(!decision.skip_message.contains("video stream"));
     }
 

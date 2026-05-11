@@ -2,9 +2,14 @@
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
 )]
+#![allow(
+    unexpected_cfgs,
+    reason = "macos_ui is an optional feature that may not be defined in all builds"
+)]
+
 use clap::{Parser, Subcommand};
+use shared_utils::log_detail;
 use std::path::PathBuf;
-use tracing::info;
 
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::SelectedCodec;
@@ -99,12 +104,18 @@ enum Commands {
 )]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
-        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_GHOST_MODE,
+            &e.to_string()
+        );
     }
 
     if let Err(e) = shared_utils::logging::init("vid", &shared_utils::logging::LogConfig::default())
     {
-        eprintln!("⚠️ Failed to initialize logging: {e}");
+        shared_utils::log_anomaly!(
+            shared_utils::static_logs::messages::LABEL_LOGGING,
+            &e.to_string()
+        );
     }
 
     shared_utils::ctrlc_guard::init();
@@ -129,7 +140,10 @@ fn main() -> anyhow::Result<()> {
             match shared_utils::acquire_dir_lock(&input_abs) {
                 Ok(guard) => Some(guard),
                 Err(e) => {
-                    shared_utils::log_eprintln!("❌ {e}");
+                    shared_utils::log_fatal!(
+                        shared_utils::static_logs::messages::LABEL_LOCK,
+                        &e.to_string()
+                    );
                     std::process::exit(shared_utils::constants::EXIT_CODE_LOCK_FAILURE);
                 }
             }
@@ -164,7 +178,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             // Fail-fast if critical sub-tools are missing
             if let Err(e) = shared_utils::tools::require(&["ffmpeg", "ffprobe", "exiftool"]) {
-                shared_utils::log_eprintln!("{e}");
+                shared_utils::log_fatal!(shared_utils::static_logs::messages::LABEL_TOOLS, &e);
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
@@ -178,8 +192,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             if selected_codec == SelectedCodec::Av1 && apple_compat {
-                shared_utils::log_eprintln!(
-                    "❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively."
+                shared_utils::log_fatal!(
+                    shared_utils::static_logs::messages::LABEL_CONFIG,
+                    shared_utils::static_logs::messages::APPLE_COMPAT_HEVC,
                 );
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
@@ -194,7 +209,7 @@ fn main() -> anyhow::Result<()> {
                     tier: shared_utils::FlagTier { ultimate },
                 })
             {
-                shared_utils::log_eprintln!("{e}");
+                shared_utils::log_fatal!(shared_utils::static_logs::messages::LABEL_CONFIG, &e);
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
 
@@ -267,66 +282,69 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Automatically created and written to ./logs/vid_run_<timestamp>.log during run, no flags needed.
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid") {
-                shared_utils::log_eprintln!(
-                    "⚠️  {}: {}",
-                    "\x1b[33mCould not open run log file\x1b[0m",
-                    e
+                shared_utils::log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_RUN_LOG,
+                    shared_utils::static_logs::messages::RUN_LOG_OPEN_FAIL
+                );
+                shared_utils::log_info!(
+                    shared_utils::static_logs::messages::LABEL_RUN_LOG,
+                    &format!("Detailed run log failure: {e}")
                 );
             }
-            info!(
+            log_detail!(&format!(
                 "🎬 Run Mode Conversion ({})",
                 selected_codec.as_str().to_uppercase()
-            );
+            ));
             if selected_codec == SelectedCodec::Hevc {
-                info!("   Lossless sources → HEVC Lossless MKV");
+                log_detail!("Lossless sources → HEVC Lossless MKV");
                 if match_quality {
-                    info!("   Lossy sources → HEVC MP4 (CRF auto-matched to input quality)");
+                    log_detail!("Lossy sources → HEVC MP4 (CRF auto-matched to input quality)");
                 } else {
-                    info!("   Lossy sources → HEVC MP4 (CRF 18-20)");
+                    log_detail!("Lossy sources → HEVC MP4 (CRF 18-20)");
                 }
             } else {
-                info!("   Lossless sources → AV1 Lossless MKV");
+                log_detail!("Lossless sources → AV1 Lossless MKV");
                 if match_quality {
-                    info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
+                    log_detail!("Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
                 } else {
-                    info!("   Lossy sources → AV1 MP4 (CRF 30-32)");
+                    log_detail!("Lossy sources → AV1 MP4 (CRF 30-32)");
                 }
             }
             if explore {
-                info!("   📊 Size exploration: ENABLED");
+                log_detail!("📊 Size exploration: ENABLED");
             }
             if match_quality {
-                info!("   🎯 Match Quality: ENABLED");
+                log_detail!("🎯 Match Quality: ENABLED");
             }
             if apple_compat {
-                info!("   🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
+                log_detail!("🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
                 unsafe { std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1") };
             }
             if recursive {
-                info!("   📂 Recursive: ENABLED");
+                log_detail!("📂 Recursive: ENABLED");
             }
             if ultimate {
-                info!("   🔍 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                log_detail!("🔍 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if force_ms_ssim_long {
-                info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
+                log_detail!("⚠️  Force MS-SSIM for long videos: ENABLED");
             }
             let cache = match AnalysisCache::default_local() {
                 Ok(cache) => Some(cache),
                 Err(e) => {
-                    shared_utils::log_eprintln!(
-                        "⚠️ [Cache] Failed to initialize persistent cache: {}",
-                        e
+                    shared_utils::log_anomaly!(
+                        shared_utils::static_logs::messages::LABEL_CACHE,
+                        &format!("Failed to initialize persistent cache: {e}")
                     );
                     None
                 }
             };
             if cache.is_some() {
-                info!("   💽 Persistent Cache: ENABLED");
+                log_detail!("💽 Persistent Cache: ENABLED");
             }
             shared_utils::database::report_db_status();
 
-            info!("");
+            log_detail!("");
 
             shared_utils::cli_runner::run_auto_command(
                 &shared_utils::cli_runner::Config {
@@ -368,92 +386,133 @@ fn main() -> anyhow::Result<()> {
                 selected_codec,
             );
 
-            println!("\n🎯 Recommended Strategy (Auto Mode)");
-            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            println!("📁 File: {}", input.display());
-            println!(
+            log_detail!("\n🎯 Recommended Strategy (Auto Mode)");
+            log_detail!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log_detail!("📁 File: {}", input.display());
+            log_detail!(
                 "🎬 Codec: {} ({})",
                 detection.codec.as_str(),
-                detection.compression.as_str()
+                detection.compression.as_str(),
             );
-            println!();
-            println!("💡 Target: {}", strategy.target.as_str());
-            println!("📝 Reason: {}", strategy.reason);
-            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log_detail!();
+            log_detail!("💡 Target: {}", strategy.target.as_str());
+            log_detail!("📝 Reason: {}", strategy.reason);
+            log_detail!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
 
         Commands::IngestSamples { input, label } => {
             if !input.is_dir() {
-                shared_utils::log_eprintln!("❌ Input path must be a directory");
+                shared_utils::log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_ANOMALY,
+                    "Input path must be a directory"
+                );
                 std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
             }
             if let Some(lbl) = &label {
-                println!(
+                log_detail!(
                     "📥 Ingesting GIF samples with label '{}' from: {}",
                     lbl,
-                    input.display()
+                    input.display(),
                 );
             } else {
-                println!("📥 Ingesting GIF samples from: {}", input.display());
+                log_detail!("📥 Ingesting GIF samples from: {}", input.display());
             }
             match shared_utils::database::batch_ingest_samples(&input, label.as_deref()) {
                 Ok(count) => {
-                    println!("✅ Successfully ingested {count} samples into PostgreSQL database");
+                    log_detail!(
+                        "✅ Successfully ingested {count} samples into PostgreSQL database"
+                    );
                 }
                 Err(e) => {
-                    shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");
+                    shared_utils::log_anomaly!(
+                        shared_utils::static_logs::messages::LABEL_ANOMALY,
+                        &format!("Failed to ingest samples: {e}")
+                    );
                     std::process::exit(shared_utils::constants::EXIT_CODE_ERROR);
                 }
             }
         }
         Commands::DbHealth => {
-            use shared_utils::progress_mode::emit_stderr;
-            emit_stderr("🔍 Starting Deep Database Health Scan...");
+            shared_utils::log_info!(
+                shared_utils::static_logs::messages::LABEL_REPORT,
+                "Starting Deep Database Health Scan..."
+            );
             match shared_utils::database::check_database_health() {
                 Ok(report) => {
-                    emit_stderr("\n🐘 [DATABASE HEALTH REPORT]");
-                    emit_stderr(&format!(
-                        "   - Connection: {}",
-                        if report.connected {
-                            "✅ Connected"
-                        } else {
-                            "❌ Failed"
-                        }
-                    ));
-                    emit_stderr(&format!("   - PG Version: {}", report.pg_version));
-                    emit_stderr(&format!(
-                        "   - pgvector Status: {}",
-                        if report.has_vector_extension {
-                            format!(
-                                "✅ Installed ({})",
-                                report.vector_extension_version.unwrap_or_default()
-                            )
-                        } else {
-                            "❌ Missing".to_string()
-                        }
-                    ));
-                    emit_stderr(&format!("   - Maturity: {}", report.maturity_status));
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        "[DATABASE HEALTH REPORT]"
+                    );
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        &format!(
+                            "   - Connection: {}",
+                            if report.connected {
+                                "✅ Connected"
+                            } else {
+                                "❌ Failed"
+                            }
+                        )
+                    );
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        &format!("   - PG Version: {}", report.pg_version)
+                    );
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        &format!(
+                            "   - pgvector Status: {}",
+                            if report.has_vector_extension {
+                                format!(
+                                    "✅ Installed ({})",
+                                    report.vector_extension_version.unwrap_or_default()
+                                )
+                            } else {
+                                "❌ Missing".to_string()
+                            }
+                        )
+                    );
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        &format!("   - Maturity: {}", report.maturity_status)
+                    );
 
-                    emit_stderr("\n📊 [Table Statistics]");
+                    shared_utils::log_info!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        "[Table Statistics]"
+                    );
                     let mut tables: Vec<_> = report.table_counts.iter().collect();
                     tables.sort_by_key(|(name, _)| *name);
                     for (name, count) in tables {
-                        emit_stderr(&format!("   - {name:<20}: {count:>8} records"));
+                        shared_utils::log_info!(
+                            shared_utils::static_logs::messages::LABEL_REPORT,
+                            &format!("   - {name:<20}: {count:>8} records")
+                        );
                     }
 
                     if report.corruption_found {
-                        emit_stderr("\n⚠️  [INTEGRITY WARNINGS]");
+                        shared_utils::log_anomaly!(
+                            shared_utils::static_logs::messages::LABEL_REPORT,
+                            "[INTEGRITY WARNINGS]"
+                        );
                         for detail in report.corruption_details {
-                            emit_stderr(&format!("   {detail}"));
+                            shared_utils::log_anomaly!(
+                                shared_utils::static_logs::messages::LABEL_REPORT,
+                                &format!("   {detail}")
+                            );
                         }
                     } else {
-                        emit_stderr(
-                            "\n✅ [Integrity]: No NaN/Inf corruption found in feature vectors.",
+                        shared_utils::log_info!(
+                            shared_utils::static_logs::messages::LABEL_REPORT,
+                            "[Integrity]: No NaN/Inf corruption found in feature vectors."
                         );
                     }
                 }
                 Err(e) => {
-                    emit_stderr(&format!("❌ Health Check Failed: {e}"));
+                    shared_utils::log_anomaly!(
+                        shared_utils::static_logs::messages::LABEL_REPORT,
+                        &format!("Health Check Failed: {e}")
+                    );
                 }
             }
         }
@@ -462,7 +521,18 @@ fn main() -> anyhow::Result<()> {
     {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
-            shared_utils::macos_ui::wait_for_exit_confirmation();
+            #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[allow(
+            unexpected_cfgs,
+            reason = "macos_ui is an optional feature that may not be defined in all builds"
+        )]
+        #[cfg(all(target_os = "macos", feature = "macos_ui"))]
+            {
+                shared_utils::macos_ui::wait_for_exit_confirmation();
+            }
         }
     }
 

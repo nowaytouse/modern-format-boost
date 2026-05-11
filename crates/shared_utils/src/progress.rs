@@ -244,7 +244,7 @@ fn build_coarse_progress_line(
             }
         }
 
-        let line = assemble_coarse_line(AssembleContext {
+        let line_res = assemble_coarse_line(AssembleContext {
             prefix,
             variant,
             percent,
@@ -258,7 +258,7 @@ fn build_coarse_progress_line(
             terminal_width,
         });
 
-        if let Some(l) = line {
+        if let Ok(Some(l)) = line_res {
             return l;
         }
     }
@@ -266,7 +266,7 @@ fn build_coarse_progress_line(
     fallback_coarse_line(color, prefix, percent, &percent_str, &counts_str, stats)
 }
 
-fn assemble_coarse_line(ctx: AssembleContext<'_>) -> Option<String> {
+fn assemble_coarse_line(ctx: AssembleContext<'_>) -> crate::unified_error::Result<Option<String>> {
     let color = "\x1b[32m";
     let mut line = String::with_capacity(ctx.terminal_width + 32);
     line.push_str(color);
@@ -274,9 +274,15 @@ fn assemble_coarse_line(ctx: AssembleContext<'_>) -> Option<String> {
     line.push(' ');
 
     if ctx.variant.show_bar() {
-        let filled = crate::numeric_cast::f64_to_usize_sat(
+        let filled = crate::numeric_cast::f64_to_usize_strict(
             ((ctx.percent / 100.0) * crate::numeric_cast::usize_to_f64(ctx.bar_width)).round(),
-        );
+            "progress_bar_filled",
+        )
+        .ok_or_else(|| {
+            crate::unified_error::ImgQualityError::NumericError(
+                "Invalid progress_bar_filled: NaN/Inf/overflow".into(),
+            )
+        })?;
         let empty = ctx.bar_width.saturating_sub(filled);
         line.push_str(progress_style::BAR_LEFT);
         for _ in 0..filled {
@@ -312,9 +318,9 @@ fn assemble_coarse_line(ctx: AssembleContext<'_>) -> Option<String> {
     line.push_str(ctx.stats);
 
     if measure_text_width(&line) <= ctx.terminal_width.saturating_sub(1).max(32) {
-        Some(line)
+        Ok(Some(line))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -435,21 +441,7 @@ impl CoarseProgressBar {
     }
 
     pub fn println(&self, msg: &str) {
-        if self.is_finished.load(Ordering::Relaxed) {
-            eprintln!("{msg}");
-            return;
-        }
-
-        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
-            eprint!("\r\x1b[K");
-            let _ = io::stderr().flush();
-
-            eprintln!("{msg}");
-        }
-
-        if self.enabled {
-            self.render();
-        }
+        crate::progress_mode::emit_stderr(msg);
     }
 
     fn render(&self) {
@@ -467,16 +459,20 @@ impl CoarseProgressBar {
         let message = self
             .message
             .lock()
-            .map(|msg| msg.clone())
-            .unwrap_or_default();
+            .map_or_else(|_| "LOCKED".to_string(), |msg| msg.clone());
         let stats = crate::progress_mode::get_current_stats_string();
 
         let eta_str = if current > 0 && current < total {
-            let avg_time = elapsed.as_secs_f64() / crate::numeric_cast::u64_to_f64(current);
-            let remaining_secs = crate::numeric_cast::f64_to_u64_sat(
-                crate::numeric_cast::u64_to_f64(total - current) * avg_time,
-            );
-            format_eta_simple(remaining_secs)
+            let remaining_secs = crate::numeric_cast::f64_to_u64_strict(
+                (elapsed.as_secs_f64() / percent) * (100.0 - percent),
+                "eta_remaining_secs",
+            )
+            .unwrap_or(u64::MAX); // Saturate to MAX if invalid, format_eta_simple handles >1d
+            if remaining_secs == u64::MAX {
+                "???".to_string()
+            } else {
+                format_eta_simple(remaining_secs)
+            }
         } else {
             "---".to_string()
         };
@@ -690,33 +686,7 @@ impl DetailedCoarseProgressBar {
     /// # Panics
     /// Panics if the internal clock is invalid (e.g. `ImageMagick`'s internal property interpretation).
     pub fn println(&self, msg: &str) {
-        if self.is_finished.load(Ordering::Relaxed) {
-            eprintln!("{msg}");
-            return;
-        }
-
-        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
-            set_active_progress_line(None);
-            eprint!("\r\x1b[K");
-            let _ = io::stderr().flush();
-        }
-
-        eprintln!("{msg}");
-
-        let iter = self.current_iteration.load(Ordering::Relaxed);
-        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed));
-        let size = self.current_size.load(Ordering::Relaxed);
-        let ssim = if self.has_ssim.load(Ordering::Relaxed) {
-            Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))
-        } else {
-            None
-        };
-
-        if let Ok(mut last) = self.last_render.lock() {
-            let now = Instant::now();
-            *last = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
-        }
-        self.render(iter, crf, size, ssim);
+        crate::progress_mode::emit_stderr(msg);
     }
 
     pub fn finish(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
@@ -768,6 +738,11 @@ impl DetailedCoarseProgressBar {
         if self.is_finished.swap(true, Ordering::Relaxed) {
             return;
         }
+
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!("{prefix} FAILED: {error}", prefix = self.prefix)
+        );
 
         eprint!("\r\x1b[K❌ {} {}\n", self.prefix, error);
         eprint!("\x1b[?25h");
@@ -932,13 +907,20 @@ impl FixedBottom {
         let stats = self.stats();
         let saved = stats.input_bytes.saturating_sub(stats.output_bytes);
 
-        self.bar.finish_with_message(format!(
-            "✅ {} succeeded, {} failed, {} skipped | Saved: {}",
+        let msg = format!(
+            "{} succeeded, {} failed, {} skipped | Saved: {}",
             stats.succeeded,
             stats.failed,
             stats.skipped,
             format_bytes(saved)
-        ));
+        );
+
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_SYSTEM,
+            &format!("Batch Complete: {msg}")
+        );
+
+        self.bar.finish_with_message(format!("✅ {msg}"));
     }
 
     pub const fn bar(&self) -> &ProgressBar {
@@ -1072,17 +1054,17 @@ impl Explore {
         let elapsed = self.start_time.elapsed();
         let iter = self.iterations.load(Ordering::Relaxed);
 
+        let log_msg = format!(
+            "Explore Done: CRF {result_crf:.1} • SSIM {result_ssim:.4} • Size {size_change:+.1}% • {iter} iter in {elapsed:.1}s",
+            elapsed = elapsed.as_secs_f64()
+        );
+
+        crate::log_info!(crate::static_logs::messages::LABEL_SYSTEM, &log_msg);
+
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
             set_active_progress_line(None);
-            eprint!("\r\x1b[K");
-            eprintln!(
-                "✅ Explore Done: CRF {:.1} • SSIM {:.4} • Size {:+.1}% • {} iter in {:.1}s",
-                result_crf,
-                result_ssim,
-                size_change,
-                iter,
-                elapsed.as_secs_f64()
-            );
+            let _ = write!(io::stderr(), "\r\x1b[K");
+            crate::progress_mode::emit_stderr(&format!("✅ {log_msg}"));
             let _ = io::stderr().flush();
         }
     }
@@ -1114,7 +1096,7 @@ impl ExploreLogger {
 
     pub fn stage(&mut self, name: &str) {
         if self.show_progress_bar {
-            eprintln!("\n   📍 {name}");
+            crate::progress_mode::emit_stderr(&format!("\n   📍 {name}"));
         }
     }
 
@@ -1126,7 +1108,10 @@ impl ExploreLogger {
         if self.show_progress_bar {
             let ssim_str = ssim.map(|s| format!("SSIM {s:.4}")).unwrap_or_default();
             let icon = if compress_ok { "✅" } else { "❌" };
-            eprint!("\r\x1b[K   🔄 CRF {crf:.1}: {size_change:+.1}% {icon} {ssim_str}");
+            let _ = write!(
+                io::stderr(),
+                "\r\x1b[K   🔄 CRF {crf:.1}: {size_change:+.1}% {icon} {ssim_str}"
+            );
             let _ = io::stderr().flush();
         }
     }
@@ -1137,19 +1122,19 @@ impl ExploreLogger {
         self.best_ssim = ssim;
 
         if self.show_progress_bar {
-            eprintln!(" ← 🎯 New best!");
+            crate::progress_mode::emit_stderr(" ← 🎯 New best!");
         }
     }
 
     pub fn direction(&self, msg: &str) {
         if self.show_progress_bar {
-            eprintln!("\r\x1b[K      {msg}");
+            crate::progress_mode::emit_stderr(&format!("\r\x1b[K      {msg}"));
         }
     }
 
     pub fn early_stop(&self, reason: &str) {
         if self.show_progress_bar {
-            eprintln!("\r\x1b[K   ⚡ Early stop: {reason}");
+            crate::progress_mode::emit_stderr(&format!("\r\x1b[K   ⚡ Early stop: {reason}"));
         }
     }
 
@@ -1165,32 +1150,43 @@ impl ExploreLogger {
     }
 
     pub fn finish(&self) {
-        if !self.show_progress_bar {
-            return;
-        }
-
         let elapsed = self.start_time.elapsed();
         let size_change = self.calc_change(self.best_size);
         let saved = self.input_size.saturating_sub(self.best_size);
 
-        eprintln!("\r\x1b[K");
-        eprintln!("   ═══════════════════════════════════════════════════");
-        eprintln!(
+        let log_msg = format!(
+            "Explore Summary: CRF {crf:.1} | SSIM {ssim:.4} | {change:+.1}% | Saved: {saved_str} | Iter: {iter}",
+            crf = self.best_crf,
+            ssim = self.best_ssim,
+            change = size_change,
+            saved_str = format_bytes(saved),
+            iter = self.iterations
+        );
+
+        crate::log_info!(crate::static_logs::messages::LABEL_SYSTEM, &log_msg);
+
+        if !self.show_progress_bar {
+            return;
+        }
+
+        crate::progress_mode::emit_stderr("\r\x1b[K");
+        crate::progress_mode::emit_stderr("   ═══════════════════════════════════════════════════");
+        crate::progress_mode::emit_stderr(&format!(
             "   📊 Result: CRF {:.1} | SSIM {:.4} | {:+.1}%",
             self.best_crf, self.best_ssim, size_change
-        );
+        ));
         if saved > 0 {
-            eprintln!(
+            crate::progress_mode::emit_stderr(&format!(
                 "   💾 Saved: {} ({:.2} MB)",
                 format_bytes(saved),
                 crate::numeric_cast::u64_to_f64(saved) / 1_024.0_f64 / 1_024.0_f64
-            );
+            ));
         }
-        eprintln!(
+        crate::progress_mode::emit_stderr(&format!(
             "   📈 Iterations: {} | Time: {:.1}s",
             self.iterations,
             elapsed.as_secs_f64()
-        );
+        ));
     }
 }
 
@@ -1384,7 +1380,8 @@ fn format_eta(seconds: f64) -> String {
         return "unknown".to_string();
     }
 
-    let secs = crate::numeric_cast::f64_to_u64_sat(seconds);
+    let secs = crate::numeric_cast::f64_to_u64_strict(seconds, "format_duration_secs")
+        .expect("format_duration_secs invalid (NaN/Inf/overflow)");
 
     if secs > 86400 {
         return ">24h".to_string();
@@ -1472,10 +1469,12 @@ impl Batch {
     }
 
     pub fn finish(&self) {
-        self.bar.finish_with_message(format!(
+        let msg = format!(
             "Complete: {} succeeded, {} failed, {} skipped",
             self.succeeded, self.failed, self.skipped
-        ));
+        );
+        crate::log_info!(crate::static_logs::messages::LABEL_SYSTEM, &msg);
+        self.bar.finish_with_message(msg);
     }
 
     #[must_use]

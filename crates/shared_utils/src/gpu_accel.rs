@@ -17,9 +17,9 @@
 //! ```rust
 //! use shared_utils::gpu_accel::{GpuAccel, GpuEncoder};
 //!
-//! let gpu = GpuAccel::detect();
+//! let gpu = shared_utils::gpu_accel::GpuAccel::detect();
 //! if let Some(encoder) = gpu.get_hevc_encoder() {
-//!     println!("Using GPU encoder: {}", encoder.ffmpeg_name());
+//!     // log_detail!("Using GPU encoder: {}", encoder.name);
 //! }
 //! ```
 
@@ -515,35 +515,47 @@ impl GpuAccel {
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
                 // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
-                info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
+                info!(target: "gpu_detection", "  GPU: {gpu_type}", gpu_type = self.gpu_type);
             } else {
                 // Surface why detection failed so the user has context without needing --verbose.
                 let reason = diagnostics
                     .first()
                     .map_or("no supported encoder found", String::as_str);
-                crate::log_eprintln!("⚠️ GPU probe failed ({}), using CPU encoding", reason);
+                let pattern = format!("{re}ason", re = "{");
+                let msg = crate::static_logs::messages::GPU_PROBE_FAILED.replace(&pattern, reason);
+                crate::log_anomaly!(crate::static_logs::messages::LABEL_GPU, &msg);
             }
             return;
         }
-        crate::log_eprintln!("Detecting GPU acceleration...");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_GPU,
+            crate::static_logs::messages::GPU_PROBE_START
+        );
         if self.enabled {
-            crate::log_eprintln!("   ✅ GPU: {} detected", self.gpu_type);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_GPU,
+                &crate::static_logs::messages::GPU_DETECTED
+                    .replace("{gpu_type}", &self.gpu_type.to_string())
+            );
             if let Some(enc) = &self.hevc_encoder {
-                crate::log_eprintln!("      • HEVC: {}", enc.name);
+                crate::log_detail!(&format!("      • HEVC: {}", enc.name));
             }
             if let Some(enc) = &self.av1_encoder {
-                crate::log_eprintln!("      • AV1: {}", enc.name);
+                crate::log_detail!(&format!("      • AV1: {}", enc.name));
             }
             if let Some(enc) = &self.h264_encoder {
-                crate::log_eprintln!("      • H.264: {}", enc.name);
+                crate::log_detail!(&format!("      • H.264: {}", enc.name));
             }
             for diagnostic in diagnostics.iter().take(3) {
-                crate::log_eprintln!("      • Probe note: {}", diagnostic);
+                crate::log_detail!(&format!("      • Probe note: {diagnostic}"));
             }
         } else {
-            crate::log_eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_GPU,
+                crate::static_logs::messages::GPU_NOT_AVAILABLE
+            );
             for diagnostic in diagnostics.iter().take(3) {
-                crate::log_eprintln!("      • {}", diagnostic);
+                crate::log_detail!(&format!("      • {diagnostic}"));
             }
         }
     }
@@ -1538,25 +1550,25 @@ impl CrfMapping {
 
     /// Prints the CRF mapping information to stderr.
     pub fn print_mapping_info(&self) {
-        crate::log_eprintln!(
+        crate::log_detail!(
             "   📊 GPU/CPU CRF Mapping ({} - {}):",
             self.gpu_type,
             self.codec.to_uppercase()
         );
         if self.gpu_type == GpuType::Apple {
-            crate::log_eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
-            crate::log_eprintln!(
+            crate::log_detail!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
+            crate::log_detail!(
                 "      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)"
             );
-            crate::log_eprintln!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
+            crate::log_detail!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
         } else {
-            crate::log_eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
+            crate::log_detail!("      • GPU 60s sampling + step=2 → accurate boundary");
         }
-        crate::log_eprintln!(
+        crate::log_detail!(
             "      • CPU offset: +{:.1} (CPU needs higher CRF for same compression)",
             self.offset
         );
-        crate::log_eprintln!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
+        crate::log_detail!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
     }
 }
 
@@ -1803,26 +1815,26 @@ impl PsnrSsimMapper {
 
     fn print_report(&self) {
         if !self.calibrated {
-            crate::log_eprintln!("   ⚠️ PSNR-SSIM mapping not calibrated");
+            crate::log_detail!("   ⚠️ PSNR-SSIM mapping not calibrated");
             return;
         }
 
-        crate::log_eprintln!("   📊 PSNR-SSIM Mapping Report:");
-        crate::log_eprintln!(
+        crate::log_detail!("   📊 PSNR-SSIM Mapping Report:");
+        crate::log_detail!(
             "      Calibration points: {}",
             self.calibration_points.len()
         );
-        crate::log_eprintln!(
+        crate::log_detail!(
             "      Mapping quality: {:.1}%",
             self.get_mapping_quality() * 100.0_f64
         );
 
         if self.calibration_points.len() >= 2 {
             let test_psnrs = vec![35.0_f64, 38.0_f64, 40.0_f64, 42.0_f64, 45.0_f64];
-            crate::log_eprintln!("      Example mappings:");
+            crate::log_detail!("      Example mappings:");
             for psnr in test_psnrs {
                 if let Some(ssim) = self.predict_ssim_from_psnr(psnr) {
-                    crate::log_eprintln!("         PSNR {:.1}dB → SSIM {:.4}", psnr, ssim);
+                    crate::log_detail!("         PSNR {:.1}dB → SSIM {:.4}", psnr, ssim);
                 }
             }
         }
@@ -1833,7 +1845,6 @@ impl PsnrSsimMapper {
 ///
 /// # Errors
 /// Returns an `anyhow::Result` if search fails.
-#[must_use]
 pub fn gpu_coarse_search(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -1842,7 +1853,7 @@ pub fn gpu_coarse_search(
     config: &GpuCoarseConfig,
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
-) -> GpuCoarseResult {
+) -> anyhow::Result<GpuCoarseResult> {
     gpu_coarse_search_with_log(
         input,
         output,
@@ -1859,7 +1870,6 @@ pub fn gpu_coarse_search(
 ///
 /// # Errors
 /// Returns an `anyhow::Result` if search fails.
-#[must_use]
 pub fn gpu_coarse_search_with_log(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -1869,7 +1879,7 @@ pub fn gpu_coarse_search_with_log(
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
-) -> GpuCoarseResult {
+) -> anyhow::Result<GpuCoarseResult> {
     let result = gpu_coarse_search_with_log_impl(
         input,
         output,
@@ -1879,7 +1889,7 @@ pub fn gpu_coarse_search_with_log(
         vf_args,
         progress_cb,
         log_cb,
-    );
+    )?;
     // Ensure temp output is always deleted, regardless of success/failure
     if let Err(err) = std::fs::remove_file(output)
         && err.kind() != std::io::ErrorKind::NotFound
@@ -1890,7 +1900,7 @@ pub fn gpu_coarse_search_with_log(
             err
         ));
     }
-    result
+    Ok(result)
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
@@ -1927,7 +1937,7 @@ fn gpu_coarse_search_with_log_impl(
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
-) -> GpuCoarseResult {
+) -> anyhow::Result<GpuCoarseResult> {
     use anyhow::{Context, bail};
 
     const LARGE_FILE_THRESHOLD: u64 = crate::constants::GPU_LARGE_FILE_THRESHOLD_BYTES;
@@ -1949,7 +1959,7 @@ fn gpu_coarse_search_with_log_impl(
                 if let Some(cb) = &log_cb {
                     cb(&msg);
                 } else {
-                    crate::log_eprintln!("{}", msg);
+                    crate::log_detail!("{}", msg);
                 }
             }
             log.push(msg);
@@ -1964,7 +1974,7 @@ fn gpu_coarse_search_with_log_impl(
         log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
         log_msg!("   ║  This may take longer but results will be accurate        ║");
         log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
-        return GpuCoarseResult {
+        return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -1977,7 +1987,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        };
+        });
     }
 
     let gpu_encoder = match encoder {
@@ -1996,7 +2006,7 @@ fn gpu_coarse_search_with_log_impl(
         log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
         log_msg!("   ║  This may take longer but results will be accurate        ║");
         log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
-        return GpuCoarseResult {
+        return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -2009,7 +2019,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        };
+        });
     };
 
     let skip_gpu_size_threshold: u64 = if config.ultimate_mode {
@@ -2049,7 +2059,7 @@ fn gpu_coarse_search_with_log_impl(
             format!("duration too short ({quick_duration:.1}s < {skip_gpu_duration_threshold:.1}s)")
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
-        return GpuCoarseResult {
+        return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -2062,7 +2072,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        };
+        });
     }
 
     let is_large_file = input_size >= LARGE_FILE_THRESHOLD;
@@ -2205,7 +2215,7 @@ fn gpu_coarse_search_with_log_impl(
             "   ⚡ Warmup: max_crf={:.0} cannot compress → skip GPU search",
             config.max_crf
         );
-        return GpuCoarseResult {
+        return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.max_crf,
             gpu_best_size: warmup_result.ok(),
             gpu_best_ssim: None,
@@ -2218,7 +2228,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        };
+        });
     }
     log_msg!(
         "   🔥 Warmup: max_crf={:.0} can compress → continue search",
@@ -2294,7 +2304,7 @@ fn gpu_coarse_search_with_log_impl(
             .take()
             .map(|stderr| stderr_capture.spawn_capture_thread(stderr));
 
-        crate::verbose_eprintln!("GPU encoding started - Beijing: {}", beijing_time_now());
+        crate::log_detail!("GPU encoding started - Beijing: {}", beijing_time_now());
 
         let mut last_progress_time = Instant::now();
         let mut fallback_logged = false;
@@ -2348,7 +2358,7 @@ fn gpu_coarse_search_with_log_impl(
                                 )
                             } else {
                                 if !fallback_logged {
-                                    crate::log_eprintln!(
+                                    crate::log_detail!(
                                         "Using linear estimation (metadata unavailable)"
                                     );
                                     fallback_logged = true;
@@ -2360,7 +2370,7 @@ fn gpu_coarse_search_with_log_impl(
                                 )
                             };
 
-                            crate::log_eprintln!(
+                            crate::log_detail!(
                                 "⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
                                 pct,
                                 current_secs,
@@ -2376,7 +2386,7 @@ fn gpu_coarse_search_with_log_impl(
                         }
                     }
                     Err(err) => {
-                        crate::log_eprintln!(
+                        crate::log_detail!(
                             "⚠️  Failed to read GPU encoder stdout progress stream: {}",
                             err
                         );
@@ -2391,7 +2401,7 @@ fn gpu_coarse_search_with_log_impl(
         if let Some(handle) = stderr_handle
             && let Err(payload) = handle.join()
         {
-            crate::log_eprintln!(
+            crate::log_detail!(
                 "⚠️  GPU stderr capture thread panicked: {}",
                 describe_thread_panic(payload)
             );
@@ -2411,7 +2421,7 @@ fn gpu_coarse_search_with_log_impl(
             );
         }
 
-        crate::verbose_eprintln!("Encoding completed - Beijing: {}", beijing_time_now());
+        crate::log_detail!("Encoding completed - Beijing: {}", beijing_time_now());
 
         Ok(std::fs::metadata(output)?.len())
     };
@@ -2686,14 +2696,27 @@ fn gpu_coarse_search_with_log_impl(
             let mut stagnation_count = 0u32;
             let mut last_size =
                 crate::numeric_cast::option_u64_strict(best_size, "stage1a_best_size")
-                    .expect("best_size is guaranteed Some when found_compress_point is true");
+                    .unwrap_or_else(|| {
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_GPU,
+                            "Logic error: best_size is missing in Phase 1a"
+                        );
+                        0
+                    });
+
             let mut current_step = initial_step;
             let mut wall_hits: u32 = 0;
             let mut test_crf = boundary_low + current_step;
             let mut last_compressible_crf = boundary_low;
             let mut last_compressible_size =
                 crate::numeric_cast::option_u64_strict(best_size, "stage1a_last_compressible_size")
-                    .expect("best_size is guaranteed Some when found_compress_point is true");
+                    .unwrap_or_else(|| {
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_GPU,
+                            "Logic error: best_size is missing in Phase 1a (last_compressible)"
+                        );
+                        0
+                    });
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
@@ -2904,7 +2927,8 @@ fn gpu_coarse_search_with_log_impl(
     });
 
     if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
-        let mut lo = crate::numeric_cast::f32_to_i32_sat(boundary_low.ceil());
+        let mut lo = crate::numeric_cast::f32_to_i32_strict(boundary_low.ceil(), "lo")
+            .ok_or_else(|| anyhow::anyhow!("Failed to convert boundary_low to i32"))?;
         let mut hi = crate::numeric_cast::f32_to_i32_sat(boundary_high.floor());
 
         let max_binary_iter = 5_i32;
@@ -3256,7 +3280,7 @@ fn gpu_coarse_search_with_log_impl(
         ));
     }
 
-    GpuCoarseResult {
+    Ok(GpuCoarseResult {
         gpu_boundary_crf,
         gpu_best_size: best_size,
         gpu_best_ssim: gpu_ssim,
@@ -3269,7 +3293,7 @@ fn gpu_coarse_search_with_log_impl(
         sample_input_size,
         quality_ceiling_crf,
         quality_ceiling_ssim: gpu_ssim,
-    }
+    })
 }
 
 /// Derives the CPU search range from a GPU coarse search result.

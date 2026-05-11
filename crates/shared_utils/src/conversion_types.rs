@@ -179,7 +179,7 @@ impl Default for ConversionConfig {
             output_dir: None,
             base_dir: None,
             flags: ConfigFlags::USE_GPU | ConfigFlags::ALLOW_SIZE_TOLERANCE,
-            min_ssim: 0.95,
+            min_ssim: crate::constants::MIN_SSIM_DEFAULT,
             child_threads: 0,
             codec: SelectedCodec::Hevc,
         }

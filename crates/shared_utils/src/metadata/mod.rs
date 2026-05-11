@@ -28,15 +28,19 @@ pub use macos::append_mfb_branding;
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 pub fn apply_file_timestamps(src: &Path, dst: &Path) {
-    use tracing::debug;
-
-    debug!(
-        "apply_file_timestamps: {} → {}",
-        src.display(),
-        dst.display()
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_METADATA,
+        &format!(
+            "apply_file_timestamps: {} → {}",
+            src.display(),
+            dst.display()
+        )
     );
     let Ok(m) = std::fs::metadata(src) else {
-        debug!("Failed to read source metadata");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "Failed to read source metadata"
+        );
         return;
     };
 
@@ -45,21 +49,38 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     #[cfg(target_os = "macos")]
     {
         if let Ok(created) = m.created() {
-            debug!("Original creation time: {:?}", created);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Original creation time: {created:?}")
+            );
             if let Err(e) = macos::set_creation_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to set creation time: {e}");
-                debug!("Creation time error details: {:?}", e);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to set creation time: {e}")
+                );
             } else {
-                debug!("Set creation time successfully");
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    "Set creation time successfully"
+                );
             }
         } else {
-            debug!("Failed to read original creation time");
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "Failed to read original creation time"
+            );
         }
         if let Ok(added) = macos::get_added_time(src) {
             if let Err(e) = macos::set_added_time(dst, added) {
-                debug!("Failed to set added time: {}", e);
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to set added time: {e}")
+                );
             } else {
-                debug!("Set added time successfully");
+                crate::log_info!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    "Set added time successfully"
+                );
             }
         }
     }
@@ -72,7 +93,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             let atime = filetime::FileTime::from_last_access_time(&m);
             // On Windows, filetime::set_file_times also sets creation time
             if let Err(e) = filetime::set_file_times(dst, atime, ctime) {
-                eprintln!("⚠️ [metadata] Failed to set Windows creation time: {}", e);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to set Windows creation time: {e}")
+                );
             }
         }
     }
@@ -85,7 +109,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             // Linux typically doesn't allow setting birth time, but we try anyway
             // This often fails on Linux filesystems, but when it does we should still make it visible.
             if let Err(e) = linux::try_set_birth_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to preserve Linux birth time: {}", e);
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to preserve Linux birth time: {e}")
+                );
             }
         }
     }
@@ -94,9 +121,15 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
     if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
-        eprintln!("⚠️ [metadata] Failed to set file times: {e}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("Failed to set file times: {e}")
+        );
     } else {
-        debug!("Set atime/mtime successfully");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "Set atime/mtime successfully"
+        );
     }
 
     // RE-APPLY creation time on macOS after setting atime/mtime
@@ -104,9 +137,15 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     #[cfg(target_os = "macos")]
     {
         if let Ok(created) = m.created() {
-            debug!("Re-applying creation time after atime/mtime: {:?}", created);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Re-applying creation time after atime/mtime: {created:?}")
+            );
             if let Err(e) = macos::set_creation_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to re-set creation time: {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to re-set creation time: {e}")
+                );
             }
         }
     }
@@ -117,7 +156,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         if let (Ok(expected_created), Ok(dst_meta)) = (m.created(), std::fs::metadata(dst))
             && let Ok(actual_created) = dst_meta.created()
         {
-            debug!("Verified creation time: {:?}", actual_created);
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Verified creation time: {actual_created:?}")
+            );
             // Check if it matches (allow 1 second tolerance for filesystem precision)
             let diff = if actual_created > expected_created {
                 actual_created
@@ -129,10 +171,12 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
                     .unwrap_or_default()
             };
             if diff.as_secs() > 1 {
-                eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
-                eprintln!("   Expected: {expected_created:?}");
-                eprintln!("   Got:      {actual_created:?}");
-                eprintln!("   Diff:     {diff:?}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Creation time mismatch! Expected: {expected_created:?}, Got: {actual_created:?}, Diff: {diff:?}"
+                    )
+                );
             }
         }
     }
@@ -147,13 +191,19 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     {
         // copyfile: copies ACL + STAT + xattr in one syscall
         if let Err(e) = macos::copy_native_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] macOS native copy failed: {e}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("macOS native copy failed: {e}")
+            );
             // Fallback: manual xattr copy if copyfile failed
             copy_xattrs_manual(src, dst);
         }
         // ExifTool: EXIF/IPTC/XMP internal tags
         if let Err(e) = exif::preserve_internal(src, dst) {
-            eprintln!("⚠️ [metadata] Internal metadata failed: {e}");
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Internal metadata failed: {e}")
+            );
         }
         // Network xattrs — copy + verify
         network::preserve_network_metadata(src, dst);
@@ -163,7 +213,10 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-                eprintln!("⚠️ [metadata] Failed to preserve macOS permission bits: {e}");
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to preserve macOS permission bits: {e}")
+                );
             }
         }
         // Timestamps last (ExifTool rewrites file, so must come after)
@@ -175,18 +228,27 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     {
         // ExifTool: EXIF/IPTC/XMP internal tags
         if let Err(e) = exif::preserve_internal(src, dst) {
-            eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Internal metadata failed: {e}")
+            );
         }
         // Network xattrs — copy + verify
         network::preserve_network_metadata(src, dst);
         // Platform-specific attributes
         #[cfg(target_os = "linux")]
         if let Err(e) = linux::preserve_linux_attributes(src, dst) {
-            eprintln!("⚠️ [metadata] Linux attribute preservation failed: {}", e);
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Linux attribute preservation failed: {e}")
+            );
         }
         #[cfg(target_os = "windows")]
         if let Err(e) = windows::preserve_windows_attributes(src, dst) {
-            eprintln!("⚠️ [metadata] Windows attribute preservation failed: {}", e);
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("Windows attribute preservation failed: {e}")
+            );
         }
         // Generic xattr copy (covers any remaining xattrs not handled above)
         copy_xattrs_manual(src, dst);
@@ -196,9 +258,9 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-                eprintln!(
-                    "⚠️ [metadata] Failed to preserve Unix permission bits: {}",
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!("Failed to preserve Unix permission bits: {e}")
                 );
             }
         }
@@ -223,7 +285,10 @@ pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) {
 
 pub fn copy(src: &Path, dst: &Path) {
     if let Err(e) = preserve(src, dst) {
-        eprintln!("⚠️ Failed to preserve metadata: {e}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("Failed to preserve metadata: {e}")
+        );
     }
     merge_xmp_sidecar(src, dst);
     apply_file_timestamps(src, dst);
@@ -253,10 +318,12 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
         if !dst_path.exists()
             && let Err(e) = std::fs::create_dir_all(&dst_path)
         {
-            eprintln!(
-                "⚠️ Failed to create directory {}: {}",
-                dst_path.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to create directory {path}: {e}",
+                    path = dst_path.display()
+                )
             );
             continue;
         }
@@ -268,10 +335,12 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
             if let Err(e) =
                 std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(mode))
             {
-                eprintln!(
-                    "⚠️ Failed to set permissions for {}: {}",
-                    dst_path.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to set permissions for {path}: {e}",
+                        path = dst_path.display()
+                    )
                 );
             }
         }
@@ -282,10 +351,12 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
             if let Ok(created) = metadata.created()
                 && let Err(e) = macos::set_creation_time(&dst_path, created)
             {
-                eprintln!(
-                    "⚠️ Failed to set creation time for {}: {}",
-                    dst_path.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to set creation time for {path}: {e}",
+                        path = dst_path.display()
+                    )
                 );
             }
         }
@@ -293,10 +364,12 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
         let atime = filetime::FileTime::from_last_access_time(metadata);
         let mtime = filetime::FileTime::from_last_modification_time(metadata);
         if let Err(e) = filetime::set_file_times(&dst_path, atime, mtime) {
-            eprintln!(
-                "⚠️ Failed to set timestamps for {}: {}",
-                dst_path.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to set timestamps for {path}: {e}",
+                    path = dst_path.display()
+                )
             );
         }
 
@@ -306,20 +379,24 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
             if let Ok(created) = metadata.created()
                 && let Err(e) = macos::set_creation_time(&dst_path, created)
             {
-                eprintln!(
-                    "⚠️ Failed to set creation time for {}: {}",
-                    dst_path.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to set creation time for {path}: {e}",
+                        path = dst_path.display()
+                    )
                 );
             }
             // Also preserve added time for directories
             if let Ok(added) = macos::get_added_time(src_path)
                 && let Err(e) = macos::set_added_time(&dst_path, added)
             {
-                eprintln!(
-                    "⚠️ Failed to set added time for {}: {}",
-                    dst_path.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to set added time for {path}: {e}",
+                        path = dst_path.display()
+                    )
                 );
             }
         }
@@ -331,11 +408,20 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
 }
 
 pub fn preserve_directory_with_log(base_dir: &Path, output_dir: &Path) {
-    println!("\n📁 Preserving directory metadata...");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_METADATA,
+        "📁 Preserving directory metadata..."
+    );
     if let Err(e) = preserve_directory(base_dir, output_dir) {
-        eprintln!("⚠️ Failed to preserve directory metadata: {e}");
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!("Failed to preserve directory metadata: {e}")
+        );
     } else {
-        println!("✅ Directory metadata preserved");
+        crate::log_info!(
+            crate::static_logs::messages::LABEL_METADATA,
+            "✅ Directory metadata preserved"
+        );
     }
 }
 
@@ -378,18 +464,23 @@ pub fn restore_directory_timestamps<S>(
             total_count += 1_i32;
             if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
                 failed_count += 1_i32;
-                eprintln!(
-                    "⚠️  Failed to restore directory timestamp for {}: {}",
-                    path.display(),
-                    e
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to restore directory timestamp for {path}: {e}",
+                        path = path.display()
+                    )
                 );
             }
         }
     }
 
     if failed_count > 0_i32 {
-        eprintln!(
-            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} directories failed (possible filesystem protection or network mount)"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "TIMESTAMP VERIFICATION: {failed_count}/{total_count} directories failed (possible filesystem protection or network mount)"
+            )
         );
     }
 }
@@ -415,10 +506,12 @@ pub fn apply_saved_timestamps_to_dst<S>(
                 total_count += 1_i32;
                 if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
                     failed_count += 1_i32;
-                    eprintln!(
-                        "⚠️  Failed to apply directory timestamp to {}: {}",
-                        dst_path.display(),
-                        e
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        &format!(
+                            "Failed to apply directory timestamp to {path}: {e}",
+                            path = dst_path.display()
+                        )
                     );
                 }
             }
@@ -426,8 +519,11 @@ pub fn apply_saved_timestamps_to_dst<S>(
     }
 
     if failed_count > 0_i32 {
-        eprintln!(
-            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} destination directories failed (possible filesystem protection or network mount)"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "TIMESTAMP VERIFICATION: {failed_count}/{total_count} destination directories failed (possible filesystem protection or network mount)"
+            )
         );
     }
 }
@@ -444,10 +540,13 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                tracing::warn!(
-                    dir = %dst_root.display(),
-                    error = %err,
-                    "Failed to inspect destination file while restoring timestamps from source tree"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to inspect destination file while restoring timestamps from source tree (dir={}): {}",
+                        dst_root.display(),
+                        err
+                    )
                 );
                 continue;
             }
@@ -543,31 +642,35 @@ fn copy_dir_xattrs(src: &Path, dst: &Path) {
                 match xattr::get(src, name_str) {
                     Ok(Some(value)) => {
                         if let Err(e) = xattr::set(dst, name_str, &value) {
-                            eprintln!(
-                                "⚠️ [metadata] Failed to copy directory xattr '{}' to {}: {}",
-                                name_str,
-                                dst.display(),
-                                e
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_METADATA,
+                                &format!(
+                                    "Failed to copy directory xattr '{name_str}' to {path}: {e}",
+                                    path = dst.display()
+                                )
                             );
                         }
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        eprintln!(
-                            "⚠️ [metadata] Failed to read directory xattr '{}' from {}: {}",
-                            name_str,
-                            src.display(),
-                            e
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "Failed to read directory xattr '{name_str}' from {path}: {e}",
+                                path = src.display()
+                            )
                         );
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!(
-                "⚠️ [metadata] Failed to list directory xattrs for {}: {}",
-                src.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to list directory xattrs for {path}: {e}",
+                    path = src.display()
+                )
             );
         }
     }
@@ -588,11 +691,14 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
         return false;
     }
     if let Err(e) = std::fs::copy(xmp_path, &sidecar_for_exiv2) {
-        tracing::warn!(
-            xmp = %xmp_path.display(),
-            dst = %dst.display(),
-            error = %e,
-            "Failed to prepare temporary XMP sidecar for exiv2 fallback"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Failed to prepare temporary XMP sidecar for exiv2 fallback (xmp={}, dst={}): {}",
+                xmp_path.display(),
+                dst.display(),
+                e
+            )
         );
         return false;
     }
@@ -604,24 +710,32 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let ok = out.as_ref().is_ok_and(|o| o.status.success());
     if let Ok(out) = &out {
         if !out.status.success() {
-            tracing::warn!(
-                dst = %dst.display(),
-                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
-                "exiv2 XMP fallback returned non-zero status"
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "exiv2 XMP fallback returned non-zero status (dst={}, stderr={})",
+                    dst.display(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )
             );
         }
     } else if let Err(err) = &out {
-        tracing::warn!(
-            dst = %dst.display(),
-            error = %err,
-            "Failed to launch exiv2 for XMP fallback"
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Failed to launch exiv2 for XMP fallback (dst={}): {}",
+                dst.display(),
+                err
+            )
         );
     }
     if let Err(e) = std::fs::remove_file(&sidecar_for_exiv2) {
-        eprintln!(
-            "⚠️ [metadata] Failed to remove temporary exiv2 sidecar {}: {}",
-            sidecar_for_exiv2.display(),
-            e
+        crate::log_anomaly!(
+            crate::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Failed to remove temporary exiv2 sidecar {path}: {e}",
+                path = sidecar_for_exiv2.display()
+            )
         );
     }
     ok
@@ -632,7 +746,10 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
 
     if let Some(xmp) = xmp_path {
         if crate::progress_mode::is_verbose_mode() {
-            eprintln!("📋 Found XMP sidecar: {}", xmp.display());
+            crate::log_info!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!("📋 Found XMP sidecar: {path}", path = xmp.display())
+            );
         }
 
         let config = crate::xmp_merger::Config {
@@ -663,16 +780,14 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
                 let fallback_ok = try_merge_xmp_exiv2(&xmp, dst);
                 if fallback_ok {
                     crate::progress_mode::xmp_merge_success();
-                    if crate::progress_mode::has_log_file() {
-                        crate::progress_mode::write_to_log_at_level(
-                            tracing::Level::INFO,
-                            "   → Fallback: exiv2 merge succeeded (ExifTool had failed).",
-                        );
-                    }
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        "Fallback: exiv2 merge succeeded (ExifTool had failed)."
+                    );
                 } else if crate::progress_mode::has_log_file() && !format_unsupported {
-                    crate::progress_mode::write_to_log_at_level(
-                        tracing::Level::INFO,
-                        "   → Fallback: exiv2 merge failed or exiv2 not available; no fake success.",
+                    crate::log_info!(
+                        crate::static_logs::messages::LABEL_METADATA,
+                        "Fallback: exiv2 merge failed or exiv2 not available; no fake success."
                     );
                 }
             }
@@ -713,10 +828,13 @@ pub(crate) fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
                     let entry = match entry {
                         Ok(entry) => entry,
                         Err(err) => {
-                            tracing::warn!(
-                                dir = %parent.display(),
-                                error = %err,
-                                "Failed to inspect sibling file while searching for XMP sidecar"
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_METADATA,
+                                &format!(
+                                    "Failed to inspect sibling file while searching for XMP sidecar (dir={}): {}",
+                                    parent.display(),
+                                    err
+                                )
                             );
                             continue;
                         }
@@ -744,10 +862,13 @@ pub(crate) fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
                 }
             }
             Err(err) => {
-                tracing::warn!(
-                    dir = %parent.display(),
-                    error = %err,
-                    "Failed to read parent directory while searching for XMP sidecar"
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_METADATA,
+                    &format!(
+                        "Failed to read parent directory while searching for XMP sidecar (dir={}): {}",
+                        parent.display(),
+                        err
+                    )
                 );
             }
         }
@@ -766,31 +887,35 @@ fn copy_xattrs_manual(src: &Path, dst: &Path) {
                 match xattr::get(src, name_str) {
                     Ok(Some(value)) => {
                         if let Err(e) = xattr::set(dst, name_str, &value) {
-                            eprintln!(
-                                "⚠️ [metadata] Failed to copy xattr '{}' to {}: {}",
-                                name_str,
-                                dst.display(),
-                                e
+                            crate::log_anomaly!(
+                                crate::static_logs::messages::LABEL_METADATA,
+                                &format!(
+                                    "Failed to copy xattr '{name_str}' to {path}: {e}",
+                                    path = dst.display()
+                                )
                             );
                         }
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        eprintln!(
-                            "⚠️ [metadata] Failed to read xattr '{}' from {}: {}",
-                            name_str,
-                            src.display(),
-                            e
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_METADATA,
+                            &format!(
+                                "Failed to read xattr '{name_str}' from {path}: {e}",
+                                path = src.display()
+                            )
                         );
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!(
-                "⚠️ [metadata] Failed to list xattrs for {}: {}",
-                src.display(),
-                e
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                &format!(
+                    "Failed to list xattrs for {path}: {e}",
+                    path = src.display()
+                )
             );
         }
     }

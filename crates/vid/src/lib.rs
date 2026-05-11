@@ -1,13 +1,16 @@
 //! vid - Video Quality Analysis and HEVC/H.265/AV1 Conversion API
+//!
+//! Provides precise video analysis with intelligent format conversion:
+//! - HEVC Lossless MKV for archival (lossless sources)
+//! - HEVC MP4 or MOV for delivery, depending on compatibility mode
+
 #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
 )]
-//!
-//! Provides precise video analysis with intelligent format conversion:
-//! - HEVC Lossless MKV for archival (lossless sources)
-//! - HEVC MP4 or MOV for delivery, depending on compatibility mode
+#[macro_use]
+extern crate shared_utils;
 
 #[cfg(feature = "high-precision")]
 pub use rug::Rational;

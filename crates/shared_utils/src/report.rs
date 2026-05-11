@@ -23,6 +23,21 @@ pub fn print_summary(
         0.0_f64
     };
 
+    let reduction_str = format!("{reduction:.1}%");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        &format!(
+            "SUMMARY: {operation_name} | Files: {total} (Succ:{succ}, Fail:{fail}, Skip:{skip}) | Size: {in_b} -> {out_b} ({reduction_str} reduction) | Time: {dur}",
+            total = result.total,
+            succ = result.succeeded,
+            fail = result.failed,
+            skip = result.skipped,
+            in_b = format_bytes(input_bytes),
+            out_b = format_bytes(output_bytes),
+            dur = format_duration(duration)
+        )
+    );
+
     print_report_header(operation_name);
     print_file_stats(result);
     print_size_info(input_bytes, output_bytes, reduction);
@@ -33,11 +48,11 @@ pub fn print_summary(
 
 fn print_report_header(operation_name: &str) {
     use crate::modern_ui::colors::{BOLD, MFB_BLUE, RESET};
-    println!();
-    println!(
+    crate::progress_mode::emit_stderr("");
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}╭────────────────────────────────────────────────────────────────────────────╮{RESET}"
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  {}📊 {} Summary Report{}{}                                        {}│{}",
         MFB_BLUE,
         RESET,
@@ -47,37 +62,37 @@ fn print_report_header(operation_name: &str) {
         " ".repeat(46 - operation_name.len()),
         MFB_BLUE,
         RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
-    );
+    ));
 }
 
 fn print_file_stats(result: &Summary) {
     use crate::modern_ui::colors::{
         BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, MFB_BLUE, RESET,
     };
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  📁 Files Processed:    {:>10}                                         {}│{}",
         MFB_BLUE, RESET, result.total, MFB_BLUE, RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  {}✅ Succeeded:           {:>10}{}                                         {}│{}",
         MFB_BLUE, RESET, BRIGHT_GREEN, result.succeeded, RESET, MFB_BLUE, RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  {}❌ Failed:              {:>10}{}                                         {}│{}",
         MFB_BLUE, RESET, BRIGHT_RED, result.failed, RESET, MFB_BLUE, RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  {}⏭️  Skipped:             {:>10}{}                                         {}│{}",
         MFB_BLUE, RESET, BRIGHT_YELLOW, result.skipped, RESET, MFB_BLUE, RESET
-    );
+    ));
     if result.paused {
-        println!(
+        crate::progress_mode::emit_stderr(&format!(
             "{}│{}  {}⏸️  Paused:              {:>10}{}                                         {}│{}",
             MFB_BLUE, RESET, BRIGHT_YELLOW, "YES", RESET, MFB_BLUE, RESET
-        );
+        ));
     }
 
     let rate_color = if result.success_rate() > 90.0_f64 {
@@ -85,7 +100,7 @@ fn print_file_stats(result: &Summary) {
     } else {
         BRIGHT_YELLOW
     };
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  {}📈 Success Rate:{}        {}{:>9.1}%{}                                         {}│{}",
         MFB_BLUE,
         RESET,
@@ -96,15 +111,15 @@ fn print_file_stats(result: &Summary) {
         RESET,
         MFB_BLUE,
         RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
-    );
+    ));
 }
 
 fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
     use crate::modern_ui::colors::{BRIGHT_GREEN, BRIGHT_YELLOW, DIM, MFB_BLUE, RESET};
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  💾 Input Size:         {}{:>10}{}                                         {}│{}",
         MFB_BLUE,
         RESET,
@@ -113,14 +128,14 @@ fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
         RESET,
         MFB_BLUE,
         RESET
-    );
+    ));
 
     let out_color = if reduction > 0.0_f64 {
         BRIGHT_GREEN
     } else {
         BRIGHT_YELLOW
     };
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  💾 Output Size:        {}{:>10}{}                                         {}│{}",
         MFB_BLUE,
         RESET,
@@ -129,18 +144,18 @@ fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
         RESET,
         MFB_BLUE,
         RESET
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}│{RESET}  📉 Size Reduction:     {out_color}{reduction:>9.1}%{RESET}                                         {MFB_BLUE}│{RESET}"
-    );
-    println!(
+    ));
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
-    );
+    ));
 }
 
 fn print_time_info(result: &Summary, duration: Duration) {
     use crate::modern_ui::colors::{BRIGHT_CYAN, DIM, MFB_BLUE, RESET};
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{}│{}  ⏱️  Total Time:         {}{:>10}{}                                         {}│{}",
         MFB_BLUE,
         RESET,
@@ -149,32 +164,38 @@ fn print_time_info(result: &Summary, duration: Duration) {
         RESET,
         MFB_BLUE,
         RESET
-    );
+    ));
     if result.total > 0 {
         let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(result.total);
-        println!(
+        crate::progress_mode::emit_stderr(&format!(
             "{MFB_BLUE}│{RESET}  ⏱️  Avg Time/File:      {DIM}{avg_time:>9.2}s{RESET}                                         {MFB_BLUE}│{RESET}"
-        );
+        ));
     } else {
-        println!(
+        crate::progress_mode::emit_stderr(&format!(
             "{MFB_BLUE}│{RESET}                                                                            {MFB_BLUE}│{RESET}"
-        );
+        ));
     }
-    println!(
+    crate::progress_mode::emit_stderr(&format!(
         "{MFB_BLUE}╰────────────────────────────────────────────────────────────────────────────╯{RESET}"
-    );
+    ));
 }
 
 fn print_error_summary(result: &Summary) {
     use crate::modern_ui::colors::{BRIGHT_RED, DIM, RESET};
     if !result.errors.is_empty() {
-        println!();
-        println!("{BRIGHT_RED}❌ Errors encountered:{RESET}");
-        println!(
+        crate::progress_mode::emit_stderr("");
+        crate::progress_mode::emit_stderr(&format!("{BRIGHT_RED}❌ Errors encountered:{RESET}"));
+        crate::progress_mode::emit_stderr(&format!(
             "{BRIGHT_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}"
-        );
+        ));
         for (path, error) in &result.errors {
-            println!("   {}{} → {}{}", DIM, path.display(), RESET, error);
+            crate::progress_mode::emit_stderr(&format!(
+                "   {}{} → {}{}",
+                DIM,
+                path.display(),
+                RESET,
+                error
+            ));
         }
     }
 }
@@ -182,22 +203,37 @@ fn print_error_summary(result: &Summary) {
 fn print_pause_info(result: &Summary) {
     use crate::modern_ui::colors::{BRIGHT_YELLOW, DIM, RESET};
     if let Some(pause) = &result.pause_info {
-        println!();
-        println!("{BRIGHT_YELLOW}⏸️ Batch Paused:{RESET}");
-        println!("   {}File:{} {}", DIM, RESET, pause.path.display());
-        println!("   {}Reason:{} {}", DIM, RESET, pause.reason);
-        println!(
+        crate::progress_mode::emit_stderr("");
+        crate::progress_mode::emit_stderr(&format!("{BRIGHT_YELLOW}⏸️ Batch Paused:{RESET}"));
+        crate::progress_mode::emit_stderr(&format!(
+            "   {}File:{} {}",
+            DIM,
+            RESET,
+            pause.path.display()
+        ));
+        crate::progress_mode::emit_stderr(&format!("   {}Reason:{} {}", DIM, RESET, pause.reason));
+        crate::progress_mode::emit_stderr(&format!(
             "   {}Pending:{} {} files remain for retry. Free space and rerun with `--resume`.",
             DIM, RESET, result.paused_remaining
-        );
+        ));
     }
 }
 
 pub fn print_simple_summary(result: &Summary) {
-    println!(
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        &format!(
+            "Complete: {succ} succeeded, {fail} failed, {skip} skipped (total: {total})",
+            succ = result.succeeded,
+            fail = result.failed,
+            skip = result.skipped,
+            total = result.total
+        )
+    );
+    crate::progress_mode::emit_stderr(&format!(
         "\n✅ Complete: {} succeeded, {} failed, {} skipped (total: {})",
         result.succeeded, result.failed, result.skipped, result.total
-    );
+    ));
 }
 
 pub fn print_health(passed: usize, failed: usize, warnings: usize) {
@@ -209,15 +245,29 @@ pub fn print_health(passed: usize, failed: usize, warnings: usize) {
         100.0_f64
     };
 
-    println!();
-    println!("╔══════════════════════════════════════════════╗");
-    println!("║        🏥 Media Health Report                ║");
-    println!("╠══════════════════════════════════════════════╣");
-    println!("║  ✅ Passed:                        {passed:>6}  ║");
-    println!("║  ❌ Failed:                        {failed:>6}  ║");
-    println!("║  ⚠️  Warnings:                     {warnings:>6}  ║");
-    println!("║  📊 Health Rate:                  {health_rate:>5.1}%  ║");
-    println!("╚══════════════════════════════════════════════╝");
+    crate::log_info!(
+        crate::static_logs::messages::LABEL_REPORT,
+        &format!(
+            "Health: {health_rate:.1}% (Passed:{passed}, Failed:{failed}, Warnings:{warnings})"
+        )
+    );
+    crate::progress_mode::emit_stderr("");
+    crate::progress_mode::emit_stderr("╔══════════════════════════════════════════════╗");
+    crate::progress_mode::emit_stderr("║        🏥 Media Health Report                ║");
+    crate::progress_mode::emit_stderr("╠══════════════════════════════════════════════╣");
+    crate::progress_mode::emit_stderr(&format!(
+        "║  ✅ Passed:                        {passed:>6}  ║"
+    ));
+    crate::progress_mode::emit_stderr(&format!(
+        "║  ❌ Failed:                        {failed:>6}  ║"
+    ));
+    crate::progress_mode::emit_stderr(&format!(
+        "║  ⚠️  Warnings:                     {warnings:>6}  ║"
+    ));
+    crate::progress_mode::emit_stderr(&format!(
+        "║  📊 Health Rate:                  {health_rate:>5.1}%  ║"
+    ));
+    crate::progress_mode::emit_stderr("╚══════════════════════════════════════════════╝");
 }
 
 #[cfg(test)]

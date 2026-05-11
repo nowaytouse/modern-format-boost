@@ -455,9 +455,6 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
             suggestion = ?error.suggestion,
             "FFmpeg command failed"
         );
-
-        eprintln!("{error}");
-
         return Err(anyhow::anyhow!(error));
     }
 
