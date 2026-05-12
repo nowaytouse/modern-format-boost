@@ -6,6 +6,94 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.3] - 2026-05-12
 
+### Recent pushes (last 5 commits)
+- 640edb2f 2026-05-12 nowaytouse repo: remove generated Clippy outputs and update changelog/.gitignore — files changed:        5
+  - .gitignore
+  - clippy_repetitions_after.txt
+  - clippy_repetitions_all.txt
+  - crates/shared_utils/clippy_repetitions.txt
+  - docs/CHANGELOG.md
+- 3b2a7a58 2026-05-12 nowaytouse Audit unwrap_or & Clippy fixes — files changed:       68
+  - .github/workflows/release.yml
+  - clippy_repetitions_after.txt
+  - clippy_repetitions_all.txt
+  - crates/dev/fuzz/fuzz_targets/hdr_synthesis.rs
+  - crates/dev/tests/test_real_silent_fallbacks.rs
+  - crates/dev/tests/test_ultrahdr_hardening.rs
+  - crates/img/src/conversion_api.rs
+  - crates/img/src/lossless_converter.rs
+  - crates/img/src/main.rs
+  - crates/shared_utils/clippy_repetitions.txt
+  - crates/shared_utils/src/analysis_cache.rs
+  - crates/shared_utils/src/batch.rs
+  - crates/shared_utils/src/builder_base.rs
+  - crates/shared_utils/src/common_utils.rs
+  - crates/shared_utils/src/constants.rs
+  - crates/shared_utils/src/conversion.rs
+  - crates/shared_utils/src/conversion_types.rs
+  - crates/shared_utils/src/crf_constants.rs
+  - crates/shared_utils/src/database.rs
+  - crates/shared_utils/src/explore_strategy.rs
+  - crates/shared_utils/src/ffmpeg_builder.rs
+  - crates/shared_utils/src/ffprobe.rs
+  - crates/shared_utils/src/file_sorter.rs
+  - crates/shared_utils/src/gpu_accel.rs
+  - crates/shared_utils/src/hdr.rs
+  - crates/shared_utils/src/image_analyzer.rs
+  - crates/shared_utils/src/image_builders.rs
+  - crates/shared_utils/src/image_detection.rs
+  - crates/shared_utils/src/image_heic_analysis.rs
+  - crates/shared_utils/src/image_jpeg_analysis.rs
+  - crates/shared_utils/src/image_metrics.rs
+  - crates/shared_utils/src/image_quality_db.rs
+  - crates/shared_utils/src/image_quality_detector.rs
+  - crates/shared_utils/src/io_utils.rs
+  - crates/shared_utils/src/jxl_builder.rs
+  - crates/shared_utils/src/jxl_explorer.rs
+  - crates/shared_utils/src/jxl_utils.rs
+  - crates/shared_utils/src/lib.rs
+  - crates/shared_utils/src/loop_intent.rs
+  - crates/shared_utils/src/lru_cache.rs
+  - crates/shared_utils/src/media_index_types.rs
+  - crates/shared_utils/src/media_meta_utils.rs
+  - crates/shared_utils/src/metadata/exif.rs
+  - crates/shared_utils/src/msssim_progress.rs
+  - crates/shared_utils/src/numeric_cast.rs
+  - crates/shared_utils/src/path_safety.rs
+  - crates/shared_utils/src/process_lock.rs
+  - crates/shared_utils/src/process_runner.rs
+  - crates/shared_utils/src/progress.rs
+  - crates/shared_utils/src/smart_file_copier.rs
+  - crates/shared_utils/src/static_logs.rs
+  - crates/shared_utils/src/stream_size.rs
+  - crates/shared_utils/src/types/perception.rs
+  - crates/shared_utils/src/video_detection.rs
+  - crates/shared_utils/src/video_explorer.rs
+  - crates/shared_utils/src/video_explorer/calibration.rs
+  - crates/shared_utils/src/video_explorer/dynamic_mapping.rs
+  - crates/shared_utils/src/video_explorer/gpu_coarse_search.rs
+  - crates/shared_utils/src/video_quality_detector.rs
+  - crates/shared_utils/src/vmaf_standalone.rs
+  - crates/shared_utils/tests/jxl_detection.rs
+  - crates/vid/src/animated_image.rs
+  - crates/vid/src/conversion_api.rs
+  - crates/vid/src/main.rs
+  - crates/vid/tests/ignored_semantics.rs
+  - crates/vid/tests/ignored_static.rs
+  - crates/vid/tests/numeric_cast_safety.rs
+  - crates/vid/tests/vmaf_baseline_missing.rs
+- 2c60a21f 2026-05-12 nowaytouse Add regression tests for VMAF panic, ignored semantics, and numeric_cast safety — files changed:        4
+  - crates/shared_utils/src/image_quality_detector.rs
+  - crates/vid/tests/ignored_semantics.rs
+  - crates/vid/tests/numeric_cast_safety.rs
+  - crates/vid/tests/vmaf_baseline_missing.rs
+- 9c740ba6 2026-05-12 nowaytouse Test: ensure vid ignores static images and sets TargetVideoFormat::Ignored\n\nAdd integration test that writes a minimal PNG and verifies vid returns ignored=true and uses TargetVideoFormat::Ignored.\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com> — files changed:        1
+  - crates/vid/tests/ignored_static.rs
+- c2964834 2026-05-12 nowaytouse Refactor: introduce TargetVideoFormat::Ignored and use it for vid static-image ignore\n\n- Add explicit Ignored variant to avoid conflating 'skip' and 'ignore' semantics\n- Use Ignored in vid static-image early-return; handle unexpected Ignored in strategy match gracefully\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com> — files changed:        2
+  - crates/shared_utils/src/conversion_types.rs
+  - crates/vid/src/conversion_api.rs
+
+
 ### Follow-up: cleanup commit (2026-05-12)
 
 - Removed generated Clippy output files accidentally committed in the previous cleanup:

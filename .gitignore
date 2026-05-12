@@ -169,3 +169,7 @@ training_tmp
 .ruff_cache/
 clippy_repetitions*.txt
 **/clippy_repetitions.txt
+check_errors.log
+*.tmp
+training_tmp/
+*.app
