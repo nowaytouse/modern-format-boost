@@ -14,6 +14,8 @@ pub enum TargetVideoFormat {
     HevcLosslessMkv,
     HevcMov,
     HevcMp4,
+    /// Explicit semantic for assets that should be ignored by vid (handled by img)
+    Ignored,
     Skip,
 }
 
@@ -80,6 +82,7 @@ impl TargetVideoFormat {
             Self::HevcMov => "MOV",
             Self::Av1Mp4 | Self::Av2Mp4 | Self::VvcMp4 | Self::HevcMp4 => "MP4",
             Self::Gif => "GIF",
+            Self::Ignored => "",
             Self::Skip => "",
         }
     }
@@ -95,6 +98,7 @@ impl TargetVideoFormat {
             Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
             Self::HevcMov => "HEVC MOV (Apple Compatible)",
             Self::HevcMp4 => "HEVC MP4 (High Quality)",
+            Self::Ignored => "Ignored",
             Self::Skip => "Skip",
         }
     }

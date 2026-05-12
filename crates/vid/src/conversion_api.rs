@@ -958,7 +958,7 @@ pub fn auto_convert_with_cache(
             input_path: input.display().to_string(),
             output_path: String::new(),
             strategy: ConversionStrategy {
-                target: TargetVideoFormat::Skip,
+                target: TargetVideoFormat::Ignored,
                 reason: reason.to_string(),
                 command: String::new(),
                 preserve_audio: false,
@@ -1125,6 +1125,9 @@ pub fn auto_convert_with_cache(
     shared_utils::log_detail!(&format!("Reason: {}", strategy.reason));
 
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
+        TargetVideoFormat::Ignored => {
+            return Err(VidQualityError::GeneralError("Unexpected Ignored target reached in conversion flow".to_string()));
+        }
         TargetVideoFormat::HevcLosslessMkv => {
             shared_utils::static_logs::log_stage(
                 "🚀",
