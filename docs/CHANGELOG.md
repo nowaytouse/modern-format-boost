@@ -6,6 +6,90 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.3] - 2026-05-12
 
+### Follow-up: cleanup commit (2026-05-12)
+
+- Removed generated Clippy output files accidentally committed in the previous cleanup:
+  - clippy_repetitions_after.txt
+  - clippy_repetitions_all.txt
+  - crates/shared_utils/clippy_repetitions.txt
+
+- Added .gitignore entries to prevent re-uploading these generated diagnostics:
+  - clippy_repetitions*.txt
+  - **/clippy_repetitions.txt
+
+- This commit includes fixes in ${COUNT} files (listed below) addressing Clippy pedantic/nursery lints and removing silent numeric fallbacks (e.g., unwrap_or(0/0.0) replacements).
+
+Affected files:
+  - .github/workflows/release.yml
+  - clippy_repetitions_after.txt
+  - clippy_repetitions_all.txt
+  - crates/dev/fuzz/fuzz_targets/hdr_synthesis.rs
+  - crates/dev/tests/test_real_silent_fallbacks.rs
+  - crates/dev/tests/test_ultrahdr_hardening.rs
+  - crates/img/src/conversion_api.rs
+  - crates/img/src/lossless_converter.rs
+  - crates/img/src/main.rs
+  - crates/shared_utils/clippy_repetitions.txt
+  - crates/shared_utils/src/analysis_cache.rs
+  - crates/shared_utils/src/batch.rs
+  - crates/shared_utils/src/builder_base.rs
+  - crates/shared_utils/src/common_utils.rs
+  - crates/shared_utils/src/constants.rs
+  - crates/shared_utils/src/conversion.rs
+  - crates/shared_utils/src/conversion_types.rs
+  - crates/shared_utils/src/crf_constants.rs
+  - crates/shared_utils/src/database.rs
+  - crates/shared_utils/src/explore_strategy.rs
+  - crates/shared_utils/src/ffmpeg_builder.rs
+  - crates/shared_utils/src/ffprobe.rs
+  - crates/shared_utils/src/file_sorter.rs
+  - crates/shared_utils/src/gpu_accel.rs
+  - crates/shared_utils/src/hdr.rs
+  - crates/shared_utils/src/image_analyzer.rs
+  - crates/shared_utils/src/image_builders.rs
+  - crates/shared_utils/src/image_detection.rs
+  - crates/shared_utils/src/image_heic_analysis.rs
+  - crates/shared_utils/src/image_jpeg_analysis.rs
+  - crates/shared_utils/src/image_metrics.rs
+  - crates/shared_utils/src/image_quality_db.rs
+  - crates/shared_utils/src/image_quality_detector.rs
+  - crates/shared_utils/src/io_utils.rs
+  - crates/shared_utils/src/jxl_builder.rs
+  - crates/shared_utils/src/jxl_explorer.rs
+  - crates/shared_utils/src/jxl_utils.rs
+  - crates/shared_utils/src/lib.rs
+  - crates/shared_utils/src/loop_intent.rs
+  - crates/shared_utils/src/lru_cache.rs
+  - crates/shared_utils/src/media_index_types.rs
+  - crates/shared_utils/src/media_meta_utils.rs
+  - crates/shared_utils/src/metadata/exif.rs
+  - crates/shared_utils/src/msssim_progress.rs
+  - crates/shared_utils/src/numeric_cast.rs
+  - crates/shared_utils/src/path_safety.rs
+  - crates/shared_utils/src/process_lock.rs
+  - crates/shared_utils/src/process_runner.rs
+  - crates/shared_utils/src/progress.rs
+  - crates/shared_utils/src/smart_file_copier.rs
+  - crates/shared_utils/src/static_logs.rs
+  - crates/shared_utils/src/stream_size.rs
+  - crates/shared_utils/src/types/perception.rs
+  - crates/shared_utils/src/video_detection.rs
+  - crates/shared_utils/src/video_explorer.rs
+  - crates/shared_utils/src/video_explorer/calibration.rs
+  - crates/shared_utils/src/video_explorer/dynamic_mapping.rs
+  - crates/shared_utils/src/video_explorer/gpu_coarse_search.rs
+  - crates/shared_utils/src/video_quality_detector.rs
+  - crates/shared_utils/src/vmaf_standalone.rs
+  - crates/shared_utils/tests/jxl_detection.rs
+  - crates/vid/src/animated_image.rs
+  - crates/vid/src/conversion_api.rs
+  - crates/vid/src/main.rs
+  - crates/vid/tests/ignored_semantics.rs
+  - crates/vid/tests/ignored_static.rs
+  - crates/vid/tests/numeric_cast_safety.rs
+  - crates/vid/tests/vmaf_baseline_missing.rs
+
+
 - **Systemic Numeric Forgery Eradication (Phase 2)**:
   - Eliminated all remaining silent defaults (`.unwrap_or(0)`, `.unwrap_or_default()`) in data-critical paths across 130+ files, enforcing explicit error propagation or documented technical `expect()` justifications.
   - Refactored and consolidated fragmented HDR processing and logging architectures into centralized, high-integrity modules (`shared_utils/src/hdr.rs`, `shared_utils/src/static_logs.rs`).

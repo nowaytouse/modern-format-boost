@@ -167,3 +167,5 @@ img_clippy.txt
 training_tmp/*.txt
 training_tmp
 .ruff_cache/
+clippy_repetitions*.txt
+**/clippy_repetitions.txt
