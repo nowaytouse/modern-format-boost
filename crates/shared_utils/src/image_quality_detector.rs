@@ -335,11 +335,13 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut sample_count = 0usize;
 
     let w = crate::numeric_cast::u32_to_usize_strict(width, "width")?;
-    let h_bound = crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height_bound")?;
-    let w_bound = crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width_bound")?;
 
-    for y in (1..h_bound).step_by(step) {
-        for x in (1..w_bound).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (1..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
                 let r = i32::from(rgba[idx]);
@@ -465,12 +467,12 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
     let mut variance_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
-    let h_bound = crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height_bound")?;
-    let w_bound = crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width_bound")?;
-    let width_usize = crate::numeric_cast::u32_to_usize_strict(width, "width")?;
-
-    for y in (1..h_bound).step_by(step) {
-        for x in (1..w_bound).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (1..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
             let mut sum = 0i32;
             let mut sq_sum = 0i64;
 
@@ -484,7 +486,8 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> Option<f6
                         crate::numeric_cast::usize_to_i32_strict(y, "y")? + dy,
                         "py",
                     )?;
-                    let idx = (py * width_usize + px) * 4;
+                    let idx =
+                        (py * crate::numeric_cast::u32_to_usize_strict(width, "width")? + px) * 4;
 
                     let gray = (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
                         + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
@@ -550,15 +553,15 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     let mut diff_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
-    let h_bound = crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height_bound")?;
-    let w_bound = crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width_bound")?;
-    let width_usize = crate::numeric_cast::u32_to_usize_strict(width, "width")?;
-
-    for y in (0..h_bound).step_by(step) {
-        for x in (0..w_bound).step_by(step) {
-            let idx = (y * width_usize + x) * 4;
+    for y in (0..crate::numeric_cast::u32_to_usize_strict(height.saturating_sub(1), "height")?)
+        .step_by(step)
+    {
+        for x in (0..crate::numeric_cast::u32_to_usize_strict(width.saturating_sub(1), "width")?)
+            .step_by(step)
+        {
+            let idx = (y * crate::numeric_cast::u32_to_usize_strict(width, "width")? + x) * 4;
             let idx_right = idx + 4;
-            let idx_down = idx + (width_usize * 4);
+            let idx_down = idx + (crate::numeric_cast::u32_to_usize_strict(width, "width")? * 4);
 
             if idx_down + 2 < rgba.len() {
                 let curr =
@@ -702,27 +705,25 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
     for i in (0..p).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let luma_coeff_r = crate::numeric_cast::i32_to_u64_strict(
-                crate::constants::LUMA_COEFF_R,
-                "luma_coeff_r",
-            )?;
-            let luma_coeff_g = crate::numeric_cast::i32_to_u64_strict(
-                crate::constants::LUMA_COEFF_G,
-                "luma_coeff_g",
-            )?;
-            let luma_coeff_b = crate::numeric_cast::i32_to_u64_strict(
-                crate::constants::LUMA_COEFF_B,
-                "luma_coeff_b",
-            )?;
-            let luma_divisor = crate::numeric_cast::i32_to_u64_strict(
-                crate::constants::LUMA_DIVISOR,
-                "luma_divisor",
-            )?;
-
-            let gray = (u64::from(rgba[idx]) * luma_coeff_r
-                + u64::from(rgba[idx + 1]) * luma_coeff_g
-                + u64::from(rgba[idx + 2]) * luma_coeff_b)
-                / luma_divisor;
+            let gray = (u64::from(rgba[idx])
+                * crate::numeric_cast::i32_to_u64_strict(
+                    crate::constants::LUMA_COEFF_R,
+                    "luma_coeff_r",
+                )?
+                + u64::from(rgba[idx + 1])
+                    * crate::numeric_cast::i32_to_u64_strict(
+                        crate::constants::LUMA_COEFF_G,
+                        "luma_coeff_g",
+                    )?
+                + u64::from(rgba[idx + 2])
+                    * crate::numeric_cast::i32_to_u64_strict(
+                        crate::constants::LUMA_COEFF_B,
+                        "luma_coeff_b",
+                    )?)
+                / crate::numeric_cast::i32_to_u64_strict(
+                    crate::constants::LUMA_DIVISOR,
+                    "luma_divisor",
+                )?;
             sum += gray;
             sq_sum += gray * gray;
             sample_count += 1;
