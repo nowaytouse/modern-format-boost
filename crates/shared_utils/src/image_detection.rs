@@ -2047,21 +2047,21 @@ fn analyze_color_distribution(
 
     let (width, height) = rgba.dimensions();
     let total_pixels_u64 = u64::from(width) * u64::from(height);
-    let total_pixels =
-        crate::numeric_cast::u64_to_usize_strict(u64::from(width * height), "width * height")
-            .ok_or_else(|| {
-                anyhow::anyhow!("Image dimensions overflow usize in color distribution analysis")
-            })?;
+    let total_pixels = if total_pixels_u64 > usize::MAX as u64 {
+        return Err(anyhow::anyhow!("Image dimensions overflow usize in color distribution analysis"));
+    } else {
+        total_pixels_u64 as usize
+    };
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
     let grid_size: u32 = 16; // 16x16 = 256 blocks
     let block_w = (width / grid_size).max(1);
     let block_h = (height / grid_size).max(1);
-    let samples_per_block = (target_samples
-        / crate::numeric_cast::u32_to_usize_strict(grid_size * grid_size, "grid_size_sq")
-            .expect("u32 should always fit in usize"))
-        .max(1);
+    let grid_cells = (grid_size as usize)
+        .checked_mul(grid_size as usize)
+        .ok_or_else(|| anyhow::anyhow!("grid_size squared overflow"))?;
+    let samples_per_block = (target_samples / grid_cells.max(1)).max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
