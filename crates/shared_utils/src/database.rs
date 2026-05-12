@@ -2016,11 +2016,17 @@ fn imbalance_ratio(keep_count: i64, weak_count: i64) -> f64 {
 
 fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, Option<f64>, f64)]) -> f64 {
     let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
+    if distances.is_empty() {
+        return 0.0;
+    }
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let q1 = *distances.get(distances.len() / 4).unwrap_or(&0.0_f64);
-    let q3 = *distances.get((distances.len() * 3) / 4).unwrap_or(&0.0_f64);
+    // Use existing values from the vector when possible instead of injecting numeric literals
+    let q1 = *distances.get(distances.len() / 4).unwrap_or(&distances[0]);
+    let q3 = *distances
+        .get((distances.len() * 3) / 4)
+        .unwrap_or(&distances[distances.len() - 1]);
     let iqr = (q3 - q1).max(0.06);
-    let d0 = *distances.first().unwrap_or(&0.0_f64);
+    let d0 = distances[0];
     (d0 + iqr * 1.5).max(d0 + 0.08)
 }
 
@@ -2838,7 +2844,7 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
     };
 
     json!({
-        "duration_secs": meta.duration_secs.map_or_else(|| json!(null), |v| if v.is_finite() { json!(v) } else { json!(0.0) }),
+        "duration_secs": meta.duration_secs.map_or_else(|| json!(null), |v| if v.is_finite() { json!(v) } else { json!(null) }),
         "width": meta.width,
         "height": meta.height,
         "fps": opt_f64_safe(meta.fps),

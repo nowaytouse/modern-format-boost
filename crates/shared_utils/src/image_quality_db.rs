@@ -663,3 +663,73 @@ pub fn ingest_quality_sample(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image_analyzer::{ImageAnalysis, ImageFeatures};
+
+    #[test]
+    fn test_bpp_heuristic_score() {
+        let analysis = ImageAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 500_000,
+            format: "PNG".to_string(),
+            is_animated: false,
+            is_lossless: true,
+            features: ImageFeatures {
+                entropy: 4.0,
+                compression_ratio: 2.0,
+            },
+            ..ImageAnalysis::default()
+        };
+
+        let score = bpp_heuristic_score(&analysis);
+        assert!((0.0..=1.0).contains(&score));
+    }
+
+    #[test]
+    fn test_get_quality_features() {
+        let analysis = ImageAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 500_000,
+            format: "PNG".to_string(),
+            is_animated: false,
+            is_lossless: true,
+            features: ImageFeatures {
+                entropy: 7.5,
+                compression_ratio: 1.5,
+            },
+            ..ImageAnalysis::default()
+        };
+
+        let features = get_quality_features(&analysis);
+        let vec = features.as_slice();
+        assert_eq!(vec.len(), 6);
+        assert!(vec[0] > 0.9); // Entropy 7.5/8.0
+        assert!((vec[5] - 2.0).abs() < f32::EPSILON); // Lossless bonus
+    }
+
+    #[test]
+    fn test_bpp_heuristic_quality() {
+        let analysis = ImageAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 500_000,
+            format: "PNG".to_string(),
+            is_animated: false,
+            is_lossless: false,
+            features: ImageFeatures {
+                entropy: 4.0,
+                compression_ratio: 2.0,
+            },
+            ..ImageAnalysis::default()
+        };
+
+        let quality = bpp_heuristic_quality(&analysis, "test reason");
+        assert!(quality.confidence.abs() < f64::EPSILON);
+        assert_eq!(quality.fallback_reason, Some("test reason".to_string()));
+    }
+}

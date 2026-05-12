@@ -1252,4 +1252,88 @@ mod property_tests {
         // Base affinity (approx): 0.3*0.4 + 0.5*0.3 + 0.4*0.2 + 0.8*0.1 = 0.12 + 0.15 + 0.08 + 0.08 = 0.43
         assert!(score_photo < 0.6);
     }
+
+    #[test]
+    fn test_calculate_edge_density_minimal() {
+        // 4x4 black image - no edges
+        let rgba = vec![0u8; 4 * 4 * 4];
+        let density = calculate_edge_density(&rgba, 4, 4).unwrap();
+        assert!(density.abs() < f64::EPSILON);
+
+        // 4x4 image with a sharp edge
+        let mut rgba_edge = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..2 {
+                let idx = (y * 4 + x) * 4;
+                rgba_edge[idx] = 255;
+                rgba_edge[idx + 1] = 255;
+                rgba_edge[idx + 2] = 255;
+            }
+        }
+        let density_edge = calculate_edge_density(&rgba_edge, 4, 4).unwrap();
+        assert!(density_edge > 0.0);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn test_calculate_color_diversity_minimal() {
+        // Single color
+        let rgba = vec![128u8; 10 * 10 * 4];
+        let div = calculate_color_diversity(&rgba, 10, 10).unwrap();
+        assert!(div < 0.1);
+
+        // Multiple colors
+        let mut rgba_multi = vec![0u8; 10 * 10 * 4];
+        for i in 0..100 {
+            rgba_multi[i * 4] = (i % 255) as u8;
+            rgba_multi[i * 4 + 1] = ((i * 2) % 255) as u8;
+            rgba_multi[i * 4 + 2] = ((i * 3) % 255) as u8;
+        }
+        let div_multi = calculate_color_diversity(&rgba_multi, 10, 10).unwrap();
+        assert!(div_multi > div);
+    }
+
+    #[test]
+    fn test_detect_alpha_usage() {
+        let mut rgba = vec![255u8; 10 * 10 * 4];
+        assert!(!detect_alpha_usage(&rgba));
+
+        rgba[3] = 128; // First pixel alpha
+        assert!(detect_alpha_usage(&rgba));
+    }
+
+    #[test]
+    fn test_classify_content_type_basic() {
+        let screenshot_input = ClassifierInput {
+            complexity: Some(0.1),
+            edge_density: Some(0.25), // Increased to match SCREENSHOT rule
+            color_diversity: Some(0.1),
+            texture_variance: Some(0.05),
+            noise_level: Some(0.01),
+            sharpness: Some(0.9),
+            contrast: Some(0.8),
+            has_alpha: false,
+            is_animated: false,
+            width: 1920,
+            height: 1080,
+        };
+        let content_type = classify_content_type(&screenshot_input);
+        assert_eq!(content_type.name, "SCREENSHOT");
+
+        let photo_input = ClassifierInput {
+            complexity: Some(0.7),
+            edge_density: Some(0.5),
+            color_diversity: Some(0.8),
+            texture_variance: Some(0.6),
+            noise_level: Some(0.4),
+            sharpness: Some(0.5),
+            contrast: Some(0.5),
+            has_alpha: false,
+            is_animated: false,
+            width: 1920,
+            height: 1080,
+        };
+        let photo_type = classify_content_type(&photo_input);
+        assert_eq!(photo_type.name, "GAME_CAPTURE");
+    }
 }

@@ -313,3 +313,63 @@ fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_scan_gif_headers_invalid_too_small() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("small.gif");
+        fs::write(&path, b"GIF89a").unwrap();
+
+        let result = scan_gif_headers(&path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too small"));
+    }
+
+    #[test]
+    fn test_scan_gif_headers_invalid_magic() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("bad_magic.gif");
+        let mut data = vec![0u8; 20];
+        data[0..6].copy_from_slice(b"NOTGIF");
+        fs::write(&path, &data).unwrap();
+
+        let result = scan_gif_headers(&path);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid GIF magic")
+        );
+    }
+
+    #[test]
+    fn test_scan_gif_headers_valid_static() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("static.gif");
+
+        // A minimal valid static 1x1 GIF
+        let gif_data: [u8; 35] = [
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+            0x01, 0x00, 0x01, 0x00, // Width 1, Height 1
+            0x80, 0x00, 0x00, // GCT flags (1 color, 2 bytes)
+            0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, // Colors
+            0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // Image Descriptor
+            0x02, 0x02, 0x44, 0x01, 0x00, // Image Data
+            0x3B, // Trailer
+        ];
+
+        fs::write(&path, gif_data).unwrap();
+
+        let scan = scan_gif_headers(&path).unwrap();
+        assert_eq!(scan.frame_count, 1);
+        assert!(!scan.has_transparency);
+        assert_eq!(scan.palette_size, Some(2));
+    }
+}

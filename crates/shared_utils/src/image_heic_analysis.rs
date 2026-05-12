@@ -806,4 +806,50 @@ mod tests {
         assert!(!is_heic_file(jpg.path()));
         assert!(!is_heic_file(Path::new("test.heic")));
     }
+
+    #[test]
+    fn test_extract_xmp_from_heic_data() {
+        let mut data = vec![0u8; 100];
+        let xmp_content = "<x:xmpmeta>test</x:xmpmeta>";
+        let start_pos = 20;
+        data[start_pos..start_pos + xmp_content.len()].copy_from_slice(xmp_content.as_bytes());
+
+        let extracted = extract_xmp_from_heic_data(&data).unwrap();
+        assert!(extracted.contains(xmp_content));
+    }
+
+    #[test]
+    fn test_find_box_payload_by_magic() {
+        let mut data = vec![0u8; 50];
+        let box_type = *b"test";
+        let payload = b"hello world";
+        let box_size = u32::try_from(payload.len() + 8).expect("box size fits in u32");
+
+        let start = 10;
+        data[start..start + 4].copy_from_slice(&box_size.to_be_bytes());
+        data[start + 4..start + 8].copy_from_slice(&box_type);
+        data[start + 8..start + 8 + payload.len()].copy_from_slice(payload);
+
+        let result = find_box_payload_by_magic(&data, box_type).unwrap();
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_detect_heic_is_lossless_simple_lossy() {
+        // Mock hvcC box for Main profile (lossy)
+        let mut data = vec![0u8; 100];
+        let box_type = *b"hvcC";
+        let mut hvcc_payload = vec![0u8; 30];
+        hvcc_payload[1] = 1; // profile_idc = 1 (Main)
+        hvcc_payload[16] = 1; // chroma_format_idc = 1 (4:2:0)
+
+        let box_size = u32::try_from(hvcc_payload.len() + 8).expect("box size fits in u32");
+        let start = 10;
+        data[start..start + 4].copy_from_slice(&box_size.to_be_bytes());
+        data[start + 4..start + 8].copy_from_slice(&box_type);
+        data[start + 8..start + 8 + hvcc_payload.len()].copy_from_slice(&hvcc_payload);
+
+        let result = detect_heic_is_lossless(&data, Path::new("test.heic")).unwrap();
+        assert!(!result, "Main profile should be detected as lossy");
+    }
 }

@@ -306,7 +306,7 @@ pub fn quick_calibrate(
                 .arg(crate::constants::FFMPEG_ARG_TAG_VIDEO)
                 .arg(crate::constants::FFMPEG_TAG_HVC1);
         }
-        for arg in gpu_encoder.get_crf_args(*anchor_crf) {
+        for arg in gpu_encoder.get_crf_args(*anchor_crf)? {
             gpu_builder.arg(arg);
         }
         for arg in gpu_encoder.extra_args() {
@@ -728,5 +728,29 @@ mod tests {
             build_calibration_filter_chain(&vf_args, Some(10.0_f64), false, &[]),
             "scale=1280:720"
         );
+    }
+
+    #[test]
+    fn test_dynamic_crf_mapper_gpu_to_cpu() {
+        use crate::video_explorer::dynamic_mapping::DynamicCrfMapper;
+        let mut mapper = DynamicCrfMapper::new(1000);
+
+        // No anchors: should use base_offset
+        let (cpu, conf) = mapper.gpu_to_cpu(20.0, 4.0, 51.0);
+        assert!((cpu - 24.0).abs() < 1e-6, "cpu mismatch: got {cpu}");
+        assert!(conf < 0.6);
+
+        // One anchor: ratio 0.8 (TIER_3) -> offset 3.0
+        mapper.add_anchor(20.0, 100, 80);
+        let (cpu, _conf) = mapper.gpu_to_cpu(22.0, 4.0, 51.0);
+        assert!((cpu - 25.0).abs() < 1e-6, "cpu mismatch: got {cpu}");
+
+        // Two anchors: interpolation
+        // Anchor 1: CRF 20, ratio 0.8 -> offset 3.0
+        // Anchor 2: CRF 30, ratio 0.5 (< 0.7) -> offset 4.0 (TIER_1)
+        // At CRF 25, t=0.5, interpolated offset = 3.5
+        mapper.add_anchor(30.0, 100, 50);
+        let (cpu, _conf) = mapper.gpu_to_cpu(25.0, 4.0, 51.0);
+        assert!((cpu - 28.5).abs() < 1e-6, "cpu mismatch: got {cpu}");
     }
 }

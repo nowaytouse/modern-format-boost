@@ -85,6 +85,30 @@ use tracing::warn;
 /// # Errors
 /// Returns an error if the image exceeds limits or is corrupted.
 pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
+    let (img, format) = decode_image_with_limits(path)?;
+
+    // PNG Heuristic Detection: Enable 4-layer analysis for PNG files.
+    // Keep this out of the core decoder to avoid recursive analysis when PNG
+    // heuristics need decoded pixels themselves.
+    if format == Some(image::ImageFormat::Png)
+        && let Ok(analysis) = analyze_png_quantization(path)
+    {
+        tracing::debug!(
+            is_quantized = analysis.is_quantized,
+            confidence = ?analysis.confidence,
+            detected_tool = ?analysis.detected_tool,
+            "PNG heuristic analysis completed"
+        );
+    }
+
+    Ok(img)
+}
+
+fn open_image_with_limits_without_png_heuristic(path: &Path) -> Result<DynamicImage> {
+    decode_image_with_limits(path).map(|(img, _)| img)
+}
+
+fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::ImageFormat>)> {
     use image::Limits;
     let _file = File::open(path)?;
     let mut limits = Limits::default();
@@ -113,29 +137,18 @@ pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
     let mut reader = ImageReader::open(path)?;
 
     // If we detected format via magic bytes, use it; otherwise guess from extension
-    if let Some(fmt) = format {
+    let format = if let Some(fmt) = format {
         reader.set_format(fmt);
+        Some(fmt)
     } else {
         reader = reader.with_guessed_format()?;
-    }
+        reader.format()
+    };
 
     reader.limits(limits);
     let img = reader.decode().map_err(ImgQualityError::from)?;
 
-    // PNG Heuristic Detection: Enable 4-layer analysis for PNG files
-    // This supplements simple magic-bytes detection with structural/metadata/statistical analysis
-    if format == Some(image::ImageFormat::Png)
-        && let Ok(analysis) = analyze_png_quantization(path)
-    {
-        tracing::debug!(
-            is_quantized = analysis.is_quantized,
-            confidence = ?analysis.confidence,
-            detected_tool = ?analysis.detected_tool,
-            "PNG heuristic analysis completed"
-        );
-    }
-
-    Ok(img)
+    Ok((img, format))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,7 +290,7 @@ pub struct DetectionResult {
 
     pub estimated_quality: Option<u8>,
 
-    pub entropy: f64,
+    pub entropy: Option<f64>,
 
     pub precision: PrecisionMetadata,
 }
@@ -436,7 +449,11 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         );
         return DetectedFormat::Unknown("ISOBMFF file open failure".to_string());
     };
-    let mut data = vec![0u8; crate::numeric_cast::u64_to_usize_sat(crate::constants::MB)];
+    let mut data = vec![
+        0u8;
+        crate::numeric_cast::u64_to_usize_strict(crate::constants::MB, "mb_buffer")
+            .expect("MB constant must fit in memory")
+    ];
     let read_len = match std::io::Read::read(&mut file, &mut data) {
         Ok(n) => n,
         Err(e) => {
@@ -1186,7 +1203,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
     if png_info.color_type == 3
         && let Some(p) = path
-        && let Ok(img) = open_image_with_limits(p)
+        && let Ok(img) = open_image_with_limits_without_png_heuristic(p)
     {
         let dithering_score = detect_dithering_pattern(&img)?;
         factors.dithering_detected = dithering_score;
@@ -1438,7 +1455,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     if (png_info.color_type == 2 || png_info.color_type == 6) && detected_tool.is_none() {
         // Analyze truecolor for quantization signals (conservative: need 2+ strong signals)
         if let Some(p) = path
-            && let Ok(img) = open_image_with_limits(p)
+            && let Ok(img) = open_image_with_limits_without_png_heuristic(p)
         {
             let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
 
@@ -2047,10 +2064,10 @@ fn analyze_color_distribution(
 
     let (width, height) = rgba.dimensions();
     let total_pixels_u64 = u64::from(width) * u64::from(height);
-    let total_pixels = if total_pixels_u64 > usize::MAX as u64 {
-        return Err(anyhow::anyhow!("Image dimensions overflow usize in color distribution analysis"));
-    } else {
-        total_pixels_u64 as usize
+    let Ok(total_pixels) = usize::try_from(total_pixels_u64) else {
+        return Err(anyhow::anyhow!(
+            "Image dimensions overflow usize in color distribution analysis"
+        ));
     };
 
     // Target ~50k samples, distributed across a grid of blocks
@@ -2576,7 +2593,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             _ => 8,
         };
         let ent = calculate_entropy(&img)?;
-        (w, h, alpha, depth, ent)
+        (w, h, alpha, depth, Some(ent))
     } else {
         // Honest recovery: Extract REAL data from bitstream using identify.
         let (w, h, channel_type, depth) = crate::conversion::media_info_without_ffprobe(path).ok_or_else(|| {
@@ -2590,7 +2607,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         // channel_type string comes directly from ImageMagick (e.g. 'srgba', 'graya').
         // If it contains 'a', Alpha is physically present in the bitstream.
         let alpha = channel_type.contains('a');
-        (w, h, alpha, depth, 0.0)
+        // Decode failed → entropy was not measured. Pass None instead of forging 0.0.
+        (w, h, alpha, depth, None)
     };
 
     let mut precision = PrecisionMetadata {
@@ -2808,7 +2826,7 @@ fn estimate_lossy_quality_fallback(
     height: u32,
     file_size: u64,
     frame_count: u32,
-    entropy: f64,
+    entropy: Option<f64>,
 ) -> Result<u8> {
     let pixels = u64::from(width) * u64::from(height);
     if pixels == 0 || file_size == 0 {
@@ -2823,6 +2841,21 @@ fn estimate_lossy_quality_fallback(
             format.as_str()
         )));
     }
+
+    // Entropy is required: without it, the BPP-only heuristic collapses to a
+    // format-efficiency-only formula that saturates to Q=100 on modern codecs
+    // (AVIF/HEIC at 3.0x efficiency). Refuse rather than forge a verdict.
+    let Some(entropy) = entropy.filter(|e| e.is_finite() && *e > 0.0) else {
+        crate::progress_mode::emit_stderr(&format!(
+            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed; entropy is unmeasurable so heuristic refuses to invent a value.\x1b[0m\n\
+               \x1b[31m      File: {}\x1b[0m",
+            path.display()
+        ));
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Cannot estimate quality for lossy {}: entropy unavailable (decode failed)",
+            format.as_str()
+        )));
+    };
 
     // Heuristic v2: Multi-factor quality estimation
     let raw_bpp = crate::numeric_cast::u64_to_f64(file_size) * crate::constants::BITS_PER_BYTE
@@ -3067,10 +3100,16 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                     // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't provide it easily,
                     // we read the PNG part into memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
                     // This is infinitely safer than loading the whole 64MB ICO.
-                    let mut png_data = Vec::with_capacity(
-                        crate::numeric_cast::u64_to_usize_strict(img_size, "tga_img_size")
-                            .expect("ICO image size fits in usize"),
-                    );
+                    let Some(png_capacity) =
+                        crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
+                    else {
+                        warn!(
+                            "☢️ [ANOMALY] ICO image size {} overflows usize; skipping entry",
+                            img_size
+                        );
+                        continue;
+                    };
+                    let mut png_data = Vec::with_capacity(png_capacity);
                     if img_reader.read_to_end(&mut png_data).is_ok()
                         && let Ok(analysis) = analyze_png_quantization_from_bytes(&png_data)
                         && analysis.is_quantized
@@ -3171,7 +3210,11 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                     })?,
                 "EXR value_size",
             )
-            .expect("u32 always fits in usize");
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "EXR attribute value size overflows usize".to_string(),
+                )
+            })?;
             pos += 4;
 
             if name == b"compression" && value_size >= 1 {
@@ -3645,7 +3688,7 @@ mod tests {
             1080,
             12345,
             1,
-            5.0,
+            Some(5.0),
         )
         .err()
         .unwrap_or_else(|| {
@@ -3656,6 +3699,54 @@ mod tests {
             ImgQualityError::AnalysisError(message) => {
                 assert!(message.contains("Cannot estimate quality"));
                 assert!(message.contains("invalid dimensions"));
+            }
+            other => panic!("expected AnalysisError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_estimate_lossy_quality_fallback_rejects_missing_entropy() {
+        let err = estimate_lossy_quality_fallback(
+            std::path::Path::new("/tmp/fake-undecodable.avif"),
+            &DetectedFormat::AVIF,
+            1920,
+            1080,
+            500_000,
+            1,
+            None,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("missing entropy must not produce a synthetic quality verdict"));
+
+        match err {
+            ImgQualityError::AnalysisError(message) => {
+                assert!(message.contains("entropy unavailable"));
+            }
+            other => panic!("expected AnalysisError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_estimate_lossy_quality_fallback_rejects_zero_entropy() {
+        // Zero entropy is the prior forgery sentinel — must be rejected the same
+        // way as a missing measurement.
+        let err = estimate_lossy_quality_fallback(
+            std::path::Path::new("/tmp/fake-undecodable-zero.avif"),
+            &DetectedFormat::AVIF,
+            1920,
+            1080,
+            500_000,
+            1,
+            Some(0.0),
+        )
+        .err()
+        .unwrap_or_else(|| {
+            panic!("zero entropy must be treated as unmeasured, not as a real reading")
+        });
+
+        match err {
+            ImgQualityError::AnalysisError(message) => {
+                assert!(message.contains("entropy unavailable"));
             }
             other => panic!("expected AnalysisError, got {other:?}"),
         }
@@ -3828,5 +3919,50 @@ mod tests {
             count > 50,
             "Diverse image should have many unique colors, got {count}"
         );
+    }
+
+    #[test]
+    fn test_detect_format_from_bytes_standard() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let test_cases = [
+            (
+                vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+                DetectedFormat::PNG,
+            ),
+            (vec![0xFF, 0xD8, 0xFF, 0xE0], DetectedFormat::JPEG),
+            (b"GIF89a".to_vec(), DetectedFormat::GIF),
+            (
+                {
+                    let mut v = vec![0u8; 12];
+                    v[0..4].copy_from_slice(b"RIFF");
+                    v[8..12].copy_from_slice(b"WEBP");
+                    v
+                },
+                DetectedFormat::WebP,
+            ),
+            (
+                {
+                    let mut v = vec![0u8; 12];
+                    v[4..8].copy_from_slice(b"ftyp");
+                    v[8..12].copy_from_slice(b"avif");
+                    v
+                },
+                DetectedFormat::AVIF,
+            ),
+        ];
+
+        for (magic, expected) in test_cases {
+            let mut temp = NamedTempFile::new().unwrap();
+            temp.write_all(&magic).unwrap();
+            // Pad to 32 bytes as the function reads 32
+            if magic.len() < 32 {
+                temp.write_all(&vec![0u8; 32 - magic.len()]).unwrap();
+            }
+
+            let result = detect_format_from_bytes(temp.path()).unwrap();
+            assert_eq!(result, expected, "Failed for magic {magic:?}");
+        }
     }
 }

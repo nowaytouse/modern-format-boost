@@ -3,7 +3,6 @@
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
 )]
 
-
 use clap::{Parser, Subcommand};
 use shared_utils::log_detail;
 use std::path::PathBuf;
@@ -518,10 +517,8 @@ fn main() -> anyhow::Result<()> {
     {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
-            #[cfg(all(target_os = "macos", feature = "macos_ui"))]
-            {
-                shared_utils::macos_ui::wait_for_exit_confirmation();
-            }
+            // Historically waited for macOS UI confirmation via shared_utils::macos_ui.
+            // The shared_utils crate no longer exposes that module; keep this as a no-op.
         }
     }
 

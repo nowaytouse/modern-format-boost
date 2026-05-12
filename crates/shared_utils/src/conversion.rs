@@ -33,6 +33,7 @@ use crate::metadata::preserve;
 use crate::modern_ui::{colors, symbols};
 use crate::quality_matcher::is_apple_native_format;
 use crate::smart_file_copier::copy_on_skip_or_fail;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -390,7 +391,7 @@ impl TaskResult {
         input: &Path,
         options: &ConvertOptions,
         _phase: &str,
-    ) -> Option<PathBuf> {
+    ) -> anyhow::Result<Option<PathBuf>> {
         if options.should_copy_original_on_skip(input) {
             crate::smart_file_copier::copy_on_skip_or_fail(
                 input,
@@ -398,8 +399,7 @@ impl TaskResult {
                 options.base_dir.as_deref(),
                 options.verbose(),
             )
-            .ok()
-            .flatten()
+            .with_context(|| format!("Failed to copy original fallback for {}", input.display()))
         } else {
             crate::log_anomaly!(
                 crate::static_logs::messages::LABEL_CONVERSION,
@@ -415,7 +415,7 @@ impl TaskResult {
                     crate::static_logs::messages::APPLE_COMPAT_NOT_COPYING_DETAILED
                 );
             }
-            None
+            Ok(None)
         }
     }
 
@@ -447,14 +447,18 @@ impl TaskResult {
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 
-    #[must_use]
-    /// # Panics
-    /// Panics if file metadata cannot be accessed.
-    pub fn skipped_duplicate(input: &Path) -> Self {
+    /// # Errors
+    /// Returns an error if input metadata cannot be read.
+    pub fn skipped_duplicate(input: &Path) -> anyhow::Result<Self> {
         let input_size = fs::metadata(input)
-            .expect("FATAL: Metadata unreachable during duplicate check")
+            .with_context(|| {
+                format!(
+                    "Failed to read metadata for duplicate skip: {}",
+                    input.display()
+                )
+            })?
             .len();
-        Self {
+        Ok(Self {
             success: true,
             input_path: input.display().to_string(),
             output_path: None,
@@ -466,29 +470,41 @@ impl TaskResult {
             ignored: false,
             skip_reason: Some("duplicate".to_string()),
             blake3: None,
-        }
+        })
     }
 
-    #[must_use]
-    /// # Panics
-    /// Panics if file metadata cannot be accessed.
-    pub fn skipped_exists(input: &Path, output: &Path) -> Self {
+    /// # Errors
+    /// Returns an error if input metadata cannot be read.
+    pub fn skipped_exists(input: &Path, output: &Path) -> anyhow::Result<Self> {
         let input_size = fs::metadata(input)
-            .expect("FATAL: Metadata unreachable during exist check")
+            .with_context(|| {
+                format!(
+                    "Failed to read metadata for existing-output skip: {}",
+                    input.display()
+                )
+            })?
             .len();
-        Self {
+        let output_size = fs::metadata(output)
+            .with_context(|| {
+                format!(
+                    "Failed to read metadata for existing output skip: {}",
+                    output.display()
+                )
+            })?
+            .len();
+        Ok(Self {
             success: true,
             input_path: input.display().to_string(),
             output_path: Some(output.display().to_string()),
             input_size,
-            output_size: fs::metadata(output).map(|m| m.len()).ok(),
+            output_size: Some(output_size),
             size_reduction: None,
             message: "Skipped: Output file exists".to_string(),
             skipped: true,
             ignored: false,
             skip_reason: Some("exists".to_string()),
             blake3: None,
-        }
+        })
     }
 
     #[must_use]
@@ -551,13 +567,14 @@ impl TaskResult {
         }
     }
 
-    #[must_use]
+    /// # Errors
+    /// Returns an error if input metadata cannot be read or the original cannot be copied.
     pub fn skipped_with_fallback(
         input: &Path,
         options: &ConvertOptions,
         reason: &str,
         skip_reason_id: &str,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::skipped_with_fallback_owned(
             input,
             options,
@@ -566,30 +583,31 @@ impl TaskResult {
         )
     }
 
-    #[must_use]
+    /// # Errors
+    /// Returns an error if input metadata cannot be read or the original cannot be copied.
     pub fn skipped_with_fallback_owned(
         input: &Path,
         options: &ConvertOptions,
         reason: String,
         skip_reason_id: String,
-    ) -> Self {
-        let input_size = fs::metadata(input).map_or_else(
-            |e| {
-                crate::log_anomaly!(
-                    crate::static_logs::messages::LABEL_CONVERSION,
-                    &format!(
-                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                        input.display()
-                    )
-                );
-                0
-            },
-            |m| m.len(),
-        );
-        let copied_dest = Self::copy_original_for_fallback(input, options, "skip");
+    ) -> anyhow::Result<Self> {
+        let input_size = fs::metadata(input)
+            .with_context(|| format!("Failed to read fallback skip metadata: {}", input.display()))?
+            .len();
+        let copied_dest = Self::copy_original_for_fallback(input, options, "skip")?;
+        let copied_size = copied_dest
+            .as_ref()
+            .map(|p| {
+                fs::metadata(p)
+                    .with_context(|| {
+                        format!("Failed to read copied fallback metadata: {}", p.display())
+                    })
+                    .map(|m| m.len())
+            })
+            .transpose()?;
         crate::conversion::mark_as_processed(input);
 
-        Self {
+        Ok(Self {
             success: true,
             input_path: input.display().to_string(),
             output_path: copied_dest
@@ -597,26 +615,24 @@ impl TaskResult {
                 .map(|p| p.display().to_string())
                 .or_else(|| Some(input.display().to_string())),
             input_size,
-            output_size: copied_dest
-                .as_ref()
-                .and_then(|p| fs::metadata(p).ok())
-                .map(|m| m.len()),
+            output_size: copied_size,
             size_reduction: None,
             message: reason,
             skipped: true,
             ignored: false,
             skip_reason: Some(skip_reason_id),
             blake3: None,
-        }
+        })
     }
 
-    #[must_use]
+    /// # Errors
+    /// Returns an error if input metadata cannot be read or the original cannot be copied.
     pub fn failed_with_fallback(
         input: &Path,
         options: &ConvertOptions,
         reason: &str,
         skip_reason_id: &str,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::failed_with_fallback_owned(
             input,
             options,
@@ -625,30 +641,36 @@ impl TaskResult {
         )
     }
 
-    #[must_use]
+    /// # Errors
+    /// Returns an error if input metadata cannot be read or the original cannot be copied.
     pub fn failed_with_fallback_owned(
         input: &Path,
         options: &ConvertOptions,
         reason: String,
         skip_reason_id: String,
-    ) -> Self {
-        let input_size = fs::metadata(input).map_or_else(
-            |e| {
-                crate::log_anomaly!(
-                    crate::static_logs::messages::LABEL_CONVERSION,
-                    &format!(
-                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                        input.display()
-                    )
-                );
-                0
-            },
-            |m| m.len(),
-        );
-        let copied_dest = Self::copy_original_for_fallback(input, options, "failure");
+    ) -> anyhow::Result<Self> {
+        let input_size = fs::metadata(input)
+            .with_context(|| {
+                format!(
+                    "Failed to read fallback failure metadata: {}",
+                    input.display()
+                )
+            })?
+            .len();
+        let copied_dest = Self::copy_original_for_fallback(input, options, "failure")?;
+        let copied_size = copied_dest
+            .as_ref()
+            .map(|p| {
+                fs::metadata(p)
+                    .with_context(|| {
+                        format!("Failed to read copied fallback metadata: {}", p.display())
+                    })
+                    .map(|m| m.len())
+            })
+            .transpose()?;
         crate::conversion::mark_as_processed(input);
 
-        Self {
+        Ok(Self {
             success: false,
             input_path: input.display().to_string(),
             output_path: copied_dest
@@ -656,17 +678,14 @@ impl TaskResult {
                 .map(|p| p.display().to_string())
                 .or_else(|| Some(input.display().to_string())),
             input_size,
-            output_size: copied_dest
-                .as_ref()
-                .and_then(|p| fs::metadata(p).ok())
-                .map(|m| m.len()),
+            output_size: copied_size,
             size_reduction: None,
             message: reason,
             skipped: true,
             ignored: false,
             skip_reason: Some(skip_reason_id),
             blake3: None,
-        }
+        })
     }
 
     #[must_use]
@@ -742,9 +761,20 @@ impl TaskResult {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = i128::from(output_size) - i128::from(input_size);
-            let diff_bytes_i64 = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff")
-                .unwrap_or(i64::MAX);
-            let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
+            let size_diff = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff")
+                .map_or_else(
+                    || {
+                        crate::log_anomaly!(
+                            crate::static_logs::messages::LABEL_REPORT,
+                            &format!(
+                                "Size diff overflow while reporting conversion result for {}",
+                                input.display()
+                            )
+                        );
+                        "size delta unavailable".to_string()
+                    },
+                    crate::modern_ui::format_size_diff,
+                );
             format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
 
@@ -1104,13 +1134,13 @@ pub fn format_size_change(
     if reduction >= 0.0 {
         Ok(format!("size reduced {reduction_pct:.1}%"))
     } else {
-        let diff_bytes = crate::numeric_cast::u64_to_i64_strict(output_size, "output_size")
+        let diff_bytes_i128 = i128::from(output_size) - i128::from(input_size);
+        let diff_bytes = crate::numeric_cast::i128_to_i64_strict(diff_bytes_i128, "size_diff")
             .ok_or_else(|| {
                 crate::unified_error::ImgQualityError::NumericError(
-                    "output_size cast to i64 failed".into(),
+                    "size difference cast to i64 failed".into(),
                 )
-            })?
-            .saturating_sub(crate::numeric_cast::u64_to_i64_sat(input_size));
+            })?;
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
         Ok(format!(
             "size increased {:.1}% ({})",
@@ -1134,21 +1164,23 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
 /// **TOCTOU note**: The `output.exists()` check here is advisory only.
 /// Callers MUST use `temp_path_for_output()` + `commit_temp_to_output()`
 /// to write atomically; do NOT rely on this check as a write guard.
-#[must_use]
+#[must_use = "Result must be checked"]
+/// # Errors
+/// Returns an error if auxiliary metadata or filesystem operations fail during checks.
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
     options: &ConvertOptions,
-) -> Option<TaskResult> {
+) -> anyhow::Result<Option<TaskResult>> {
     if !options.force() && is_already_processed(input) {
-        return Some(TaskResult::skipped_duplicate(input));
+        return Ok(Some(TaskResult::skipped_duplicate(input)?));
     }
 
     if output.exists() && !options.force() {
-        return Some(TaskResult::skipped_exists(input, output));
+        return Ok(Some(TaskResult::skipped_exists(input, output)?));
     }
 
-    None
+    Ok(None)
 }
 
 /// Finalize the conversion process.
@@ -1594,7 +1626,10 @@ fn scan_isobmff_ispe(buf: &[u8]) -> Option<(u32, u32)> {
                     data[i + 14],
                     data[i + 15],
                 ]);
-                (16_usize, usize::try_from(ext).unwrap_or(usize::MAX))
+                let Ok(ext_len) = usize::try_from(ext) else {
+                    return None;
+                };
+                (16_usize, ext_len)
             } else if size == 0 {
                 // Extends to end of stream.
                 (8usize, data.len() - i)
@@ -2617,14 +2652,17 @@ mod tests {
 
     #[test]
     fn test_conversion_result_outcome_fallback_preserved() {
-        let input = Path::new("input.webp");
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let input = temp.path().join("input.webp");
+        fs::write(&input, b"input bytes").expect("write input");
         let options = ConvertOptions::default();
         let result = TaskResult::failed_with_fallback(
-            input,
+            &input,
             &options,
             "fallback preserved",
             "encode_failed",
-        );
+        )
+        .expect("fallback result");
 
         assert_eq!(result.outcome(), Outcome::FallbackPreserved);
     }

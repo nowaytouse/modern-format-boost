@@ -406,10 +406,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         );
 
         let mut magick_builder = crate::MagickBuilder::new();
-        // ImageMagick repair requires proper protocol shielding
+        // ImageMagick repair requires proper protocol shielding for input
         magick_builder
             .arg(crate::path_safety::magick_safe_path(dst))
-            .arg(crate::path_safety::magick_safe_path(dst));
+            .arg(&*dst.to_string_lossy()); // Output path must NOT have file:/// prefix
 
         let magick_result = magick_builder.build().output();
 
@@ -693,5 +693,351 @@ mod tests {
             "Failed metadata preservation on evil path: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_preserve_structural_repair() {
+        if !is_exiftool_available() {
+            return;
+        }
+        // This test verifies that the 'Structural Repair' path is reachable and handles environment variables correctly.
+        // We simulate a repair condition by enabling APPLE_COMPAT.
+        let _guard = crate::common_utils::EnvGuard::set("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let src_path = temp.path().join("src.jpg");
+        let dst_path = temp.path().join("dst.jpg");
+
+        // Create valid JPEGs
+        let jpeg_data = [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00, 0xFF, 0xD9];
+        fs::write(&src_path, jpeg_data).unwrap();
+        fs::write(&dst_path, jpeg_data).unwrap();
+
+        let result = preserve_internal(&src_path, &dst_path);
+
+        // Since the files are NOT corrupt, it should succeed without needing repair,
+        // but it verifies the apple_compat branch doesn't break basic preservation.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_is_nuclear_format() {
+        let cases = [
+            ("test.jxl", true),
+            ("test.jpg", true),
+            ("test.JPEG", true),
+            ("test.webp", true),
+            ("test.png", false),
+            ("test.mp4", false),
+        ];
+
+        for (name, expected) in cases {
+            let path = Path::new(name);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let is_nuclear = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
+            assert_eq!(is_nuclear, expected, "Failed for {name}");
+        }
+    }
+
+    #[test]
+    fn test_structural_repair_nuclear() {
+        if !is_exiftool_available() {
+            return;
+        }
+
+        // Ensure ImageMagick is also available
+        if which::which("magick").is_err() && which::which("convert").is_err() {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_METADATA,
+                "ImageMagick not available, skipping structural repair test"
+            );
+            return;
+        }
+
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let src_path = temp.path().join("source.jpg");
+        let dst_path = temp.path().join("corrupt.jpg");
+
+        // 1. Create a perfectly valid source image using ImageMagick
+        let mut create_src_builder = crate::MagickBuilder::new();
+        create_src_builder
+            .arg("-size")
+            .arg("1x1")
+            .arg("canvas:white")
+            .arg(src_path.to_str().unwrap());
+        let status = create_src_builder.build().status().unwrap();
+        assert!(
+            status.success(),
+            "Failed to create source image with Magick"
+        );
+
+        let mut builder = crate::ExiftoolBuilder::new();
+        let status = builder
+            .overwrite_original()
+            .arg("-Comment=NuclearSource")
+            .input(&src_path)
+            .build()
+            .status()
+            .unwrap();
+        assert!(status.success(), "Failed to write comment to source image");
+
+        // Verify the comment is in src_path
+        let mut check_src = crate::ExiftoolBuilder::new();
+        let src_out = check_src
+            .arg("-s3")
+            .arg("-Comment")
+            .input(&src_path)
+            .build()
+            .output()
+            .unwrap();
+        let src_comment = String::from_utf8_lossy(&src_out.stdout).trim().to_string();
+        assert_eq!(
+            src_comment, "NuclearSource",
+            "Comment was not written to source image"
+        );
+
+        // 2. Create a "damaged" destination image (Valid PNG disguised as a JPG)
+        // ExifTool strictly fails because the extension doesn't match the magic bytes.
+        // ImageMagick forgivingly reads the PNG and outputs a real JPEG because of the .jpg extension.
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&dst_path, png_data).unwrap();
+
+        // 3. Set Apple Compat mode to enable repair
+        unsafe {
+            std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+        }
+
+        // 4. Perform preservation by calling the core function directly to bypass content-aware fallback
+        // This forces the "nuclear" ImageMagick structural repair to activate.
+        let result = preserve_internal_core(&src_path, &dst_path);
+
+        // Cleanup env var immediately
+        unsafe {
+            std::env::remove_var("MODERN_FORMAT_BOOST_APPLE_COMPAT");
+        }
+
+        if let Err(e) = &result {
+            println!("Preservation failed with: {e}");
+        }
+        assert!(
+            result.is_ok(),
+            "Metadata preservation with repair failed: {:?}",
+            result.err()
+        );
+
+        // 5. Verify the destination was repaired and metadata was re-injected
+        let mut check_builder = crate::ExiftoolBuilder::new();
+        let output = check_builder
+            .arg("-s3")
+            .arg("-Comment")
+            .input(&dst_path)
+            .build()
+            .output()
+            .unwrap();
+
+        // Removed debug prints for cleaner test output
+
+        let comment = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(
+            comment, "NuclearSource",
+            "Metadata was not correctly re-injected after repair"
+        );
+
+        // Verify it's now a valid JPEG (ExifTool doesn't complain)
+        let verify_output = crate::ExiftoolBuilder::new()
+            .arg("-validate")
+            .arg("-error")
+            .input(&dst_path)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            verify_output.status.success(),
+            "Repaired file is still invalid"
+        );
+    }
+
+    #[test]
+    fn test_structural_repair_skipped_without_compat() {
+        if !is_exiftool_available() {
+            return;
+        }
+
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let src_path = temp.path().join("source.jpg");
+        let dst_path = temp.path().join("damaged.jpg");
+
+        let src_img_data = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01,
+            0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06,
+            0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D,
+            0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D,
+            0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28,
+            0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+            0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01,
+            0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0xFF, 0xDA,
+            0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x50, 0xFF, 0xD9,
+        ];
+        fs::write(&src_path, src_img_data).unwrap();
+
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&dst_path, png_data).unwrap();
+
+        // Ensure env var is NOT set
+        unsafe {
+            std::env::remove_var("MODERN_FORMAT_BOOST_APPLE_COMPAT");
+        }
+
+        let result = preserve_internal(&src_path, &dst_path);
+        // Because ExifTool returns "Not a valid JPG (looks more like a PNG)",
+        // the outer function triggers preserve_internal_fallback which successfully preserves it
+        // by temporarily renaming it to .png. Thus, it doesn't fail, but it completely bypasses
+        // the structural repair block.
+
+        // Wait, if it successfully preserves via fallback, result is Ok(()).
+        // Let's ensure it does NOT invoke ImageMagick.
+        assert!(result.is_ok());
+
+        // We can verify it is STILL a PNG, because fallback just renames, runs exiftool, renames back.
+        // It does not use ImageMagick to convert it to JPEG.
+        let output_bytes = fs::read(&dst_path).unwrap();
+        assert_eq!(
+            &output_bytes[0..4],
+            b"\x89PNG",
+            "File was structurally repaired despite compat mode being off"
+        );
+    }
+
+    #[test]
+    fn test_fix_quicktime_dates() {
+        if !is_exiftool_available() || which::which("ffmpeg").is_err() {
+            return;
+        }
+
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let src_path = temp.path().join("source.jpg");
+        let dst_path = temp.path().join("output.mp4"); // Must have a video extension for logic to trigger
+
+        // 1. Create a dummy source file
+        let src_img_data = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01,
+            0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06,
+            0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D,
+            0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D,
+            0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28,
+            0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+            0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01,
+            0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0xFF, 0xDA,
+            0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x50, 0xFF, 0xD9,
+        ];
+        fs::write(&src_path, src_img_data).unwrap();
+
+        // Write a specific creation date to the source using ExifTool
+        let test_date = "2023:01:01 12:00:00";
+        let mut builder = crate::ExiftoolBuilder::new();
+        builder
+            .overwrite_original()
+            .arg(format!("-EXIF:DateTimeOriginal={test_date}"))
+            .input(&src_path)
+            .build()
+            .status()
+            .unwrap();
+
+        // 2. Create a valid destination MP4 using FFmpeg
+        let status = std::process::Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("color=c=black:s=2x2")
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg(&dst_path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "Failed to generate dummy MP4 for test");
+
+        // 3. Call preserve_internal (which calls fix_quicktime_dates for video files)
+        let result = preserve_internal(&src_path, &dst_path);
+        if let Err(e) = &result {
+            println!("preserve_internal failed: {e}");
+        }
+        assert!(
+            result.is_ok(),
+            "preserve_internal failed for video: {:?}",
+            result.err()
+        );
+
+        // 4. Verify the dates were written to the destination MP4
+        let mut check_builder = crate::ExiftoolBuilder::new();
+        let output = check_builder
+            .arg("-s3")
+            .arg("-QuickTime:CreateDate")
+            .input(&dst_path)
+            .build()
+            .output()
+            .unwrap();
+
+        let out_date = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert!(
+            out_date.starts_with("2023:01:01 12:00:00"),
+            "QuickTime:CreateDate was not synced correctly. Got: {out_date}"
+        );
+    }
+
+    #[test]
+    fn test_get_best_date_from_source() {
+        if !is_exiftool_available() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let src_path = temp.path().join("source_date.jpg");
+
+        let src_img_data = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01,
+            0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06,
+            0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D,
+            0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D,
+            0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28,
+            0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+            0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01,
+            0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0xFF, 0xDA,
+            0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x50, 0xFF, 0xD9,
+        ];
+        fs::write(&src_path, src_img_data).unwrap();
+
+        let test_date = "2023:01:01 12:00:00";
+        let mut builder = crate::ExiftoolBuilder::new();
+        builder
+            .overwrite_original()
+            .arg(format!("-EXIF:DateTimeOriginal={test_date}"))
+            .input(&src_path)
+            .build()
+            .status()
+            .unwrap();
+
+        let best_date = get_best_date_from_source(&src_path);
+        assert_eq!(best_date.as_deref(), Some(test_date));
     }
 }

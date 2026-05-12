@@ -775,3 +775,138 @@ impl ToolBuilder for DwebpBuilder {
         cmd
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_magick_builder() {
+        let mut builder = MagickBuilder::new();
+        builder
+            .input(Path::new("in.png"))
+            .output(Path::new("out.jpg"))
+            .strip(true)
+            .depth(8)
+            .colorspace("sRGB")
+            .define("jpeg:extent", "500kb")
+            .set("comment", "test");
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert!(args.contains(&"--"));
+        assert!(args.contains(&"-strip"));
+        assert!(args.contains(&"-depth"));
+        assert!(args.contains(&"8"));
+        assert!(args.contains(&"colorspace"));
+        assert!(args.contains(&"sRGB"));
+        assert!(args.contains(&"-define"));
+        assert!(args.contains(&"jpeg:extent=500kb"));
+        assert!(args.contains(&"-set"));
+        assert!(args.contains(&"comment"));
+        assert!(args.contains(&"test"));
+    }
+
+    #[test]
+    fn test_webpmux_builder() {
+        let mut builder = WebpmuxBuilder::new();
+        builder
+            .input(Path::new("in.webp"))
+            .output(Path::new("out.webp"))
+            .add_frame(Path::new("f1.webp"), 100, 0, 0, true)
+            .loop_count(0)
+            .bgcolor("white")
+            .info(true);
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert!(args.contains(&"-info"));
+        assert!(args.contains(&"-frame"));
+        assert!(args.contains(&"f1.webp") || args.iter().any(|a| a.contains("f1.webp")));
+        assert!(args.contains(&"-loop"));
+        assert!(args.contains(&"0"));
+        assert!(args.contains(&"-bgcolor"));
+        assert!(args.contains(&"white"));
+        assert!(args.contains(&"-o"));
+    }
+
+    #[test]
+    fn test_gifski_builder() {
+        let mut builder = GifskiBuilder::new();
+        builder
+            .input(Path::new("frame*.png"))
+            .output(Path::new("out.gif"))
+            .fps(24.0)
+            .quality(90)
+            .dimensions(1280, 720)
+            .repeat(0)
+            .fast(true);
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert!(args.contains(&"--fps"));
+        assert!(args.contains(&"24.000"));
+        assert!(args.contains(&"--quality"));
+        assert!(args.contains(&"90"));
+        assert!(args.contains(&"--width"));
+        assert!(args.contains(&"1280"));
+        assert!(args.contains(&"--height"));
+        assert!(args.contains(&"720"));
+        assert!(args.contains(&"--repeat"));
+        assert!(args.contains(&"0"));
+        assert!(args.contains(&"--fast"));
+        assert!(args.contains(&"--output"));
+    }
+
+    #[test]
+    fn test_avifenc_builder() {
+        let mut builder = AvifencBuilder::new();
+        builder
+            .input(Path::new("in.png"))
+            .output(Path::new("out.avif"))
+            .lossless(true)
+            .speed(6)
+            .jobs("all")
+            .quality(60, 80)
+            .depth(10);
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert!(args.contains(&"--lossless"));
+        assert!(args.contains(&"--speed"));
+        assert!(args.contains(&"6"));
+        assert!(args.contains(&"-j"));
+        assert!(args.contains(&"all"));
+        assert!(args.contains(&"--min"));
+        assert!(args.contains(&"60"));
+        assert!(args.contains(&"--max"));
+        assert!(args.contains(&"80"));
+        assert!(args.contains(&"--depth"));
+        assert!(args.contains(&"10"));
+    }
+
+    #[test]
+    fn test_exiftool_builder() {
+        let mut builder = ExiftoolBuilder::new();
+        builder
+            .input(Path::new("img.jpg"))
+            .tags_from_file(Path::new("src.jpg"))
+            .overwrite_original()
+            .ignore_minor()
+            .quiet()
+            .preserve_date();
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert!(args.contains(&"-tagsfromfile"));
+        assert!(args.contains(&"-overwrite_original"));
+        assert!(args.contains(&"-m"));
+        assert!(args.contains(&"-q"));
+        assert!(args.contains(&"-P"));
+    }
+}

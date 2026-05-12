@@ -234,6 +234,21 @@ pub fn usize_to_u32_strict(val: usize, name: &str) -> Option<u32> {
         }, Some)
 }
 
+/// Convert `usize` to `u16` with loud warning on overflow.
+#[must_use]
+pub fn usize_to_u16_strict(val: usize, name: &str) -> Option<u16> {
+    u16::try_from(val).map_or_else(
+        |_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u16! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        },
+        Some,
+    )
+}
+
 /// Convert `usize` to `u64` with loud warning on overflow.
 #[must_use]
 pub fn usize_to_u64_strict(val: usize, name: &str) -> Option<u64> {
@@ -1121,7 +1136,13 @@ pub fn u8_to_usize_sat(v: u8) -> usize {
 /// # Panics
 /// Panics if the input `i32` value (once clamped to 0) cannot fit into `usize`.
 pub fn i32_to_usize_sat(v: i32) -> usize {
-    usize::try_from(v.max(0)).unwrap_or(usize::MAX)
+    usize::try_from(v.max(0)).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to usize::MAX",
+            v
+        );
+        usize::MAX
+    })
 }
 
 /// Saturating cast: `i64` → `usize`.
@@ -1130,7 +1151,13 @@ pub fn i32_to_usize_sat(v: i32) -> usize {
 #[inline]
 #[must_use]
 pub fn i64_to_usize_sat(v: i64) -> usize {
-    usize::try_from(v.max(0)).unwrap_or(usize::MAX)
+    usize::try_from(v.max(0)).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to usize::MAX",
+            v
+        );
+        usize::MAX
+    })
 }
 
 /// Saturating cast: `usize` → `i32`.
@@ -1154,7 +1181,13 @@ pub fn usize_to_i32_sat(v: usize) -> i32 {
 #[inline]
 #[must_use]
 pub fn i64_to_u32_sat(v: i64) -> u32 {
-    u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX)
+    u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u32::MAX",
+            v
+        );
+        u32::MAX
+    })
 }
 
 /// Saturating cast: `i64` → `u64`.
@@ -1163,7 +1196,13 @@ pub fn i64_to_u32_sat(v: i64) -> u32 {
 #[inline]
 #[must_use]
 pub fn i64_to_u64_sat(v: i64) -> u64 {
-    u64::try_from(v.max(0)).unwrap_or(u64::MAX)
+    u64::try_from(v.max(0)).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u64::MAX",
+            v
+        );
+        u64::MAX
+    })
 }
 
 /// Saturating cast: `u64` → `i64`.
@@ -1301,7 +1340,13 @@ pub fn u32_to_i32_sat(v: u32) -> i32 {
 #[inline]
 #[must_use]
 pub fn i32_to_u32_sat(v: i32) -> u32 {
-    u32::try_from(v.max(0)).unwrap_or(u32::MAX)
+    u32::try_from(v.max(0)).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u32::MAX",
+            v
+        );
+        u32::MAX
+    })
 }
 
 /// Saturating cast: `i32` → `u64`.
@@ -1310,7 +1355,13 @@ pub fn i32_to_u32_sat(v: i32) -> u32 {
 #[inline]
 #[must_use]
 pub fn i32_to_u64_sat(v: i32) -> u64 {
-    u64::try_from(i64::from(v).max(0)).unwrap_or(u64::MAX)
+    u64::try_from(i64::from(v).max(0)).unwrap_or_else(|_| {
+        tracing::warn!(
+            "☢️ [ANOMALY] Saturating cast squashed out-of-bounds integer {} to u64::MAX",
+            v
+        );
+        u64::MAX
+    })
 }
 
 /// Lossless promotion: `usize` → `u64`.
@@ -1658,9 +1709,52 @@ mod tests {
         let u_casted: usize = u_val.cast_sat();
         assert_eq!(u_casted, 1234);
 
-        // Test f64 -> u32 (specialized)
         let u32_val: f64 = 5_000_000_000.0;
         let u32_casted: u32 = u32_val.cast_sat();
         assert_eq!(u32_casted, u32::MAX);
+    }
+
+    #[test]
+    fn test_strict_conversions() {
+        // f64_to_u64_strict
+        assert_eq!(f64_to_u64_strict(123.0, "test"), Some(123));
+        assert_eq!(f64_to_u64_strict(f64::NAN, "test"), None);
+        assert_eq!(f64_to_u64_strict(-1.0, "test"), None);
+        assert_eq!(f64_to_u64_strict(2e19, "test"), None);
+
+        // f64_to_u32_strict
+        assert_eq!(f64_to_u32_strict(123.0, "test"), Some(123));
+        assert_eq!(f64_to_u32_strict(5e9, "test"), None);
+
+        // u64_to_u32_strict
+        assert_eq!(u64_to_u32_strict(123, "test"), Some(123));
+        assert_eq!(u64_to_u32_strict(u64::from(u32::MAX) + 1, "test"), None);
+
+        // parse_strict
+        assert_eq!(parse_strict::<u32>("123", "test"), Some(123));
+        assert_eq!(parse_strict::<u32>("abc", "test"), None);
+
+        // i64_to_u64_strict
+        assert_eq!(i64_to_u64_strict(123, "test"), Some(123));
+        assert_eq!(i64_to_u64_strict(-1, "test"), None);
+    }
+
+    #[test]
+    fn test_f64_to_i32_strict_precision() {
+        assert_eq!(f64_to_i32_strict(0.0, "zero"), Some(0));
+        assert_eq!(f64_to_i32_strict(2_147_483_647.0, "max"), Some(2_147_483_647));
+        assert_eq!(f64_to_i32_strict(-2_147_483_648.0, "min"), Some(-2_147_483_648));
+        assert_eq!(f64_to_i32_strict(2_147_483_648.0, "overflow"), None);
+    }
+
+    #[test]
+    fn test_f64_to_f32_strict_range() {
+        assert_eq!(f64_to_f32_strict(0.0, "zero"), Some(0.0));
+        assert_eq!(
+            f64_to_f32_strict(f64::from(f32::MAX), "max"),
+            Some(f32::MAX)
+        );
+        assert_eq!(f64_to_f32_strict(1e40, "overflow"), None);
+        assert_eq!(f64_to_f32_strict(f64::NAN, "nan"), None);
     }
 }

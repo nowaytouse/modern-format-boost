@@ -319,4 +319,28 @@ mod tests {
     fn tail_error_lines_caps_at_available() {
         assert_eq!(tail_error_lines("only line", 5), "only line");
     }
+
+    #[test]
+    fn test_byte_slice_ext_be() {
+        let data: &[u8] = &[0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x56];
+        assert_eq!(data.get_u16_be_strict(0, "test"), Some(0x1234));
+        assert_eq!(data.get_u32_be_strict(0, "test"), Some(0x1234_5678));
+        assert_eq!(
+            data.get_u64_be_strict(0, "test"),
+            Some(0x1234_5678_9012_3456)
+        );
+        assert_eq!(data.get_byte_strict(0, "test"), Some(0x12));
+
+        // Out of bounds
+        assert_eq!(data.get_u16_be_strict(7, "test"), None);
+        assert_eq!(data.get_u32_be_strict(5, "test"), None);
+        assert_eq!(data.get_byte_strict(8, "test"), None);
+    }
+
+    #[test]
+    fn test_byte_slice_ext_le() {
+        let data: &[u8] = &[0x12, 0x34, 0x56, 0x78];
+        assert_eq!(data.get_u16_le_strict(0, "test"), Some(0x3412));
+        assert_eq!(data.get_u32_le_strict(0, "test"), Some(0x7856_3412));
+    }
 }

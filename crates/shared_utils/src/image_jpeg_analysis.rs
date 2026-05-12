@@ -27,6 +27,7 @@ pub struct JpegQualityAnalysis {
 
 const IJG_LUMINANCE_BASE: [[u16; 8]; 8] = crate::constants::JPEG_IJG_LUMINANCE_BASE;
 const IJG_CHROMINANCE_BASE: [[u16; 8]; 8] = crate::constants::JPEG_IJG_CHROMINANCE_BASE;
+const JPEG_MISSING_BYTE: u8 = 0xFF;
 
 fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8] {
     use crate::constants::{
@@ -814,12 +815,12 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
 
     // Validate JPEG signature
     if data.len() < 4 || data.get(0..2) != Some(&[0xFF, 0xD8]) {
+        let b0 = data.first().copied().unwrap_or(JPEG_MISSING_BYTE);
+        let b1 = data.get(1).copied().unwrap_or(JPEG_MISSING_BYTE);
         return Err(format!(
-            "Invalid JPEG signature: expected FFD8, got {:02X}{:02X}. \
-             File size: {} bytes. This is not a valid JPEG file.",
-            data.first().copied().unwrap_or(0xFF),
-            data.get(1).copied().unwrap_or(0xFF),
-            data.len()
+            "Invalid JPEG signature: expected FFD8, got {b0:02X}{b1:02X}. \
+             File size: {len} bytes. This is not a valid JPEG file.",
+            len = data.len()
         ));
     }
 
@@ -1324,10 +1325,9 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
         }
 
         if pos + 1 >= data.len() || data.get(pos) != Some(&0xFF) {
+            let found = data.get(pos).copied().unwrap_or(JPEG_MISSING_BYTE);
             return Err(format!(
-                "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
-                pos,
-                data.get(pos).copied().unwrap_or(0xFF)
+                "Invalid JPEG structure: expected marker 0xFF at position {pos}, found {found:02X}",
             ));
         }
 
@@ -1430,12 +1430,12 @@ fn extract_gainmap_from_mpf(
             crate::static_logs::messages::LABEL_IMAGE,
             "Invalid MPF endianness marker"
         );
+        let b0 = mpf_data.first().copied().unwrap_or(JPEG_MISSING_BYTE);
+        let b1 = mpf_data.get(1).copied().unwrap_or(JPEG_MISSING_BYTE);
+        let b2 = mpf_data.get(2).copied().unwrap_or(JPEG_MISSING_BYTE);
+        let b3 = mpf_data.get(3).copied().unwrap_or(JPEG_MISSING_BYTE);
         return Err(format!(
-            "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {:02X} {:02X} {:02X} {:02X}",
-            mpf_data.first().copied().unwrap_or(0xFF),
-            mpf_data.get(1).copied().unwrap_or(0xFF),
-            mpf_data.get(2).copied().unwrap_or(0xFF),
-            mpf_data.get(3).copied().unwrap_or(0xFF)
+            "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {b0:02X} {b1:02X} {b2:02X} {b3:02X}",
         ));
     };
 
@@ -2088,16 +2088,16 @@ mod tests {
 
     #[test]
     fn test_hdr_intermediate_format_default() {
-        use crate::hdr::HdrIntermediateFormat;
-        let format = HdrIntermediateFormat::default();
-        assert_eq!(format, HdrIntermediateFormat::OpenExr32);
+        use crate::hdr::IntermediateFormat;
+        let format = IntermediateFormat::default();
+        assert_eq!(format, IntermediateFormat::OpenExr32);
     }
 
     #[test]
     fn test_hdr_intermediate_format_debug() {
-        use crate::hdr::HdrIntermediateFormat;
-        let exr = HdrIntermediateFormat::OpenExr32;
-        let png = HdrIntermediateFormat::Png16;
+        use crate::hdr::IntermediateFormat;
+        let exr = IntermediateFormat::OpenExr32;
+        let png = IntermediateFormat::Png16;
 
         // Test Debug trait
         let exr_debug = format!("{exr:?}");
@@ -2109,16 +2109,37 @@ mod tests {
 
     #[test]
     fn test_hdr_intermediate_format_equality() {
-        use crate::hdr::HdrIntermediateFormat;
-        assert_eq!(
-            HdrIntermediateFormat::OpenExr32,
-            HdrIntermediateFormat::OpenExr32
-        );
-        assert_eq!(HdrIntermediateFormat::Png16, HdrIntermediateFormat::Png16);
-        assert_ne!(
-            HdrIntermediateFormat::OpenExr32,
-            HdrIntermediateFormat::Png16
-        );
+        use crate::hdr::IntermediateFormat;
+        assert_eq!(IntermediateFormat::OpenExr32, IntermediateFormat::OpenExr32);
+        assert_eq!(IntermediateFormat::Png16, IntermediateFormat::Png16);
+        assert_ne!(IntermediateFormat::OpenExr32, IntermediateFormat::Png16);
+    }
+
+    #[test]
+    fn test_extract_quantization_tables_malformed() {
+        // Too short
+        assert!(extract_quantization_tables(&[0xFF, 0xD8]).is_err());
+        // Invalid SOI
+        assert!(extract_quantization_tables(&[0xFF, 0xD9, 0x00, 0x00]).is_err());
+        // Truncated segment
+        let data = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x05, 0x00, 0x01, 0x02];
+        assert!(extract_quantization_tables(&data).is_err());
+    }
+
+    #[test]
+    fn test_is_jpeg_complete_variants() {
+        // Minimal valid
+        assert!(is_jpeg_complete(&[0xFF, 0xD8, 0xFF, 0xD9]));
+        // With trailing junk
+        assert!(is_jpeg_complete(&[
+            0xFF, 0xD8, 0xFF, 0xD9, 0x00, 0x11, 0x22
+        ]));
+        // Missing SOI
+        assert!(!is_jpeg_complete(&[0x00, 0x00, 0xFF, 0xD9]));
+        // Missing EOI
+        assert!(!is_jpeg_complete(&[0xFF, 0xD8, 0x00, 0x11]));
+        // EOI inside data (should still be true if found)
+        assert!(is_jpeg_complete(&[0xFF, 0xD8, 0xAA, 0xFF, 0xD9, 0xBB]));
     }
 
     #[test]
@@ -2170,7 +2191,11 @@ mod tests {
         let xmp_hdr = b"http://ns.adobe.com/xap/1.0/\0";
         data.push(0xFF);
         data.push(0xE1); // APP1
-        let xmp_len = crate::numeric_cast::usize_to_u16_sat(xmp_hdr.len() + xmp_content.len() + 2);
+        let xmp_len = crate::numeric_cast::usize_to_u16_strict(
+            xmp_hdr.len() + xmp_content.len() + 2,
+            "xmp_len",
+        )
+        .expect("marker length overflow in test");
         data.extend_from_slice(&xmp_len.to_be_bytes());
         data.extend_from_slice(xmp_hdr);
         data.extend_from_slice(xmp_content);
@@ -2192,7 +2217,11 @@ mod tests {
         mpf_payload.extend_from_slice(&2u32.to_be_bytes()); // 2 images
 
         // Entry 2: MPEntry (tag 0xB002)
-        let mp_entry_val_offset = crate::numeric_cast::usize_to_u32_sat(mpf_payload.len() + 12 + 4);
+        let mp_entry_val_offset = crate::numeric_cast::usize_to_u32_strict(
+            mpf_payload.len() + 12 + 4,
+            "mp_entry_val_offset",
+        )
+        .expect("offset overflow in test");
         mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
         mpf_payload.extend_from_slice(&7u16.to_be_bytes()); // UNDEFINED
         mpf_payload.extend_from_slice(&32u32.to_be_bytes()); // 2 entries
@@ -2206,9 +2235,11 @@ mod tests {
         // 3. MP Entry 1 (Gainmap) - ABSOLUTE OFFSET
         // Calculate where the APP2 segment WILL end
         let app2_segment_overhead = 2 + 2 + mpf_id.len();
-        let absolute_offset = crate::numeric_cast::usize_to_u32_sat(
+        let absolute_offset = crate::numeric_cast::usize_to_u32_strict(
             data.len() + app2_segment_overhead + mpf_payload.len() + 16,
-        );
+            "absolute_offset",
+        )
+        .expect("offset overflow in test");
 
         let gainmap_size = 4u32;
         mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Attributes
@@ -2217,7 +2248,11 @@ mod tests {
         mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Deps
 
         // Assemble APP2 segment
-        let app2_len = crate::numeric_cast::usize_to_u16_sat(mpf_id.len() + mpf_payload.len() + 2);
+        let app2_len = crate::numeric_cast::usize_to_u16_strict(
+            mpf_id.len() + mpf_payload.len() + 2,
+            "app2_len",
+        )
+        .expect("marker length overflow in test");
         data.push(0xFF);
         data.push(0xE2); // APP2 marker
         data.extend_from_slice(&app2_len.to_be_bytes());
@@ -2257,7 +2292,11 @@ mod tests {
         mpf_payload.extend_from_slice(&4u16.to_be_bytes());
         mpf_payload.extend_from_slice(&1u32.to_be_bytes());
         mpf_payload.extend_from_slice(&2u32.to_be_bytes());
-        let mp_entry_val_offset = crate::numeric_cast::usize_to_u32_sat(mpf_payload.len() + 12 + 4);
+        let mp_entry_val_offset = crate::numeric_cast::usize_to_u32_strict(
+            mpf_payload.len() + 12 + 4,
+            "mp_entry_val_offset",
+        )
+        .expect("offset overflow in test");
         mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
         mpf_payload.extend_from_slice(&7u16.to_be_bytes());
         mpf_payload.extend_from_slice(&32u32.to_be_bytes());
@@ -2266,16 +2305,22 @@ mod tests {
         mpf_payload.extend_from_slice(&[0u8; 16]);
 
         let app2_segment_overhead = 2 + 2 + mpf_id.len();
-        let absolute_offset = crate::numeric_cast::usize_to_u32_sat(
+        let absolute_offset = crate::numeric_cast::usize_to_u32_strict(
             data.len() + app2_segment_overhead + mpf_payload.len() + 16,
-        );
+            "absolute_offset",
+        )
+        .expect("offset overflow in test");
 
         mpf_payload.extend_from_slice(&0u32.to_be_bytes());
         mpf_payload.extend_from_slice(&100u32.to_be_bytes());
         mpf_payload.extend_from_slice(&absolute_offset.to_be_bytes());
         mpf_payload.extend_from_slice(&0u32.to_be_bytes());
 
-        let app2_len = crate::numeric_cast::usize_to_u16_sat(mpf_id.len() + mpf_payload.len() + 2);
+        let app2_len = crate::numeric_cast::usize_to_u16_strict(
+            mpf_id.len() + mpf_payload.len() + 2,
+            "app2_len",
+        )
+        .expect("marker length overflow in test");
         data.extend_from_slice(&[0xFF, 0xE2]);
         data.extend_from_slice(&app2_len.to_be_bytes());
         data.extend_from_slice(mpf_id);

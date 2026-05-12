@@ -93,3 +93,78 @@ fn parse_vmaf_json(path: &Path) -> Result<f64> {
 
     Ok(ms_ssim.clamp(0.0, 1.0))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_parse_vmaf_json_valid() {
+        let temp = TempDir::new().unwrap();
+        let json_path = temp.path().join("vmaf_output.json");
+
+        let valid_json = r#"{
+            "version": "2.3.1",
+            "pooled_metrics": {
+                "float_ms_ssim": {
+                    "min": 0.98,
+                    "max": 0.999,
+                    "mean": 0.995,
+                    "harmonic_mean": 0.994
+                }
+            }
+        }"#;
+
+        fs::write(&json_path, valid_json).unwrap();
+
+        let result = parse_vmaf_json(&json_path).unwrap();
+        assert!((result - 0.995).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_vmaf_json_missing_metrics() {
+        let temp = TempDir::new().unwrap();
+        let json_path = temp.path().join("vmaf_output_invalid.json");
+
+        let invalid_json = r#"{
+            "version": "2.3.1",
+            "pooled_metrics": {
+                "psnr": {
+                    "mean": 45.0
+                }
+            }
+        }"#;
+
+        fs::write(&json_path, invalid_json).unwrap();
+
+        let result = parse_vmaf_json(&json_path);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("MS-SSIM not found")
+        );
+    }
+
+    #[test]
+    fn test_parse_vmaf_json_clamp() {
+        let temp = TempDir::new().unwrap();
+        let json_path = temp.path().join("vmaf_output_clamp.json");
+
+        let clamp_json = r#"{
+            "pooled_metrics": {
+                "float_ms_ssim": {
+                    "mean": 1.05
+                }
+            }
+        }"#;
+
+        fs::write(&json_path, clamp_json).unwrap();
+
+        let result = parse_vmaf_json(&json_path).unwrap();
+        assert!((result - 1.0).abs() < f64::EPSILON);
+    }
+}

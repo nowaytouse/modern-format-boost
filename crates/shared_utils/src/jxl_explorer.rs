@@ -339,7 +339,11 @@ fn candidate_region_key(distance: f32) -> i32 {
     let span = (ceiling_log - floor_log).max(f64::EPSILON);
     let normalized = ((distance_log - floor_log) / span).clamp(0.0, 0.999_999);
 
-    crate::numeric_cast::f64_to_i32_sat((normalized * JXL_REGION_BUCKET_COUNT).floor())
+    crate::numeric_cast::f64_to_i32_strict(
+        (normalized * JXL_REGION_BUCKET_COUNT).floor(),
+        "region_bucket",
+    )
+    .expect("region bucket is clamped to a finite i32 range")
 }
 
 fn canonicalize_generated_distance(distance: f64) -> Result<f32, String> {
@@ -582,8 +586,14 @@ fn build_exploration_plan(
             crate::constants::JXL_PROBE_COUNT_MAX_CEILING,
         ),
     };
-    let probe_count = crate::numeric_cast::f64_to_usize_sat(distance_span.ceil())
-        .saturating_add(crate::constants::JXL_PROBE_COUNT_BONUS)
+    let probe_count_base =
+        crate::numeric_cast::f64_to_usize_strict(distance_span.ceil(), "jxl_probe_count")
+            .ok_or_else(|| {
+                "adaptive JXL exploration generated an invalid probe count".to_string()
+            })?;
+    let probe_count = probe_count_base
+        .checked_add(crate::constants::JXL_PROBE_COUNT_BONUS)
+        .ok_or_else(|| "adaptive JXL exploration probe count overflowed".to_string())?
         .clamp(min_probes, max_probes);
     let ladder = build_adaptive_ladder(profile, target_distance, probe_count)?;
 
@@ -615,9 +625,11 @@ fn near_best_margin(input_size: u64) -> u64 {
     }
     #[cfg(not(feature = "high-precision"))]
     {
-        crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::f64_to_u64_strict(
             crate::numeric_cast::u64_to_f64(input_size) * JXL_NEAR_BEST_MARGIN_RATIO,
+            "jxl_margin",
         )
+        .expect("JXL near-best margin should fit u64")
         .max(1)
     }
 }

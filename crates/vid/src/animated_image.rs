@@ -395,16 +395,12 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     for line in info_str.lines() {
         if line.contains("Number of frames:") {
             if let Some(count_str) = line.split(':').nth(1) {
-                frame_count = count_str.trim().parse::<u32>().unwrap_or_else(|e| {
-                    shared_utils::log_anomaly!(
-                        shared_utils::static_logs::messages::LABEL_WEBP,
-                        &format!(
-                            "Failed to parse WebP frame count: {} (value: {count_str}, error: {e})",
-                            input.display()
-                        )
-                    );
-                    0
-                });
+                frame_count = count_str.trim().parse::<u32>().map_err(|e| {
+                    VidQualityError::ConversionError(format!(
+                        "Failed to parse WebP frame count for {} (value: {count_str}, error: {e})",
+                        input.display()
+                    ))
+                })?;
             }
         } else if line.contains("No.: width height") {
             parsing_frames = true;
@@ -428,7 +424,17 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // Fallback if mismatch: pad missing frames with the last parsed delay so
     // the animation keeps local continuity near the tail, rather than copying
     // the first frame's delay across every unparsed frame.
-    if u32::try_from(frame_durations_ms.len()).unwrap_or(u32::MAX) != frame_count {
+    let parsed_duration_count = shared_utils::numeric_cast::usize_to_u32_strict(
+        frame_durations_ms.len(),
+        "webp_frame_duration_count",
+    )
+    .ok_or_else(|| {
+        VidQualityError::ConversionError(format!(
+            "Parsed too many WebP frame durations for {}",
+            input.display()
+        ))
+    })?;
+    if parsed_duration_count != frame_count {
         shared_utils::log_anomaly!(
             shared_utils::static_logs::messages::LABEL_WEBP,
             &format!(
@@ -437,15 +443,20 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
                 frame_durations_ms.len()
             )
         );
-        let pad = *frame_durations_ms
-            .last()
-            .unwrap_or(&crate::constants::DEFAULT_ANIMATION_DELAY_MS);
+        let pad = frame_durations_ms.last().copied().ok_or_else(|| {
+            VidQualityError::ConversionError(format!(
+                "Cannot pad WebP frame durations for {} because no durations were parsed",
+                input.display()
+            ))
+        })?;
         frame_durations_ms.resize(
-            shared_utils::numeric_cast::u64_to_usize_strict(
-                u64::from(frame_count),
-                "webp_frame_count",
-            )
-            .expect("webp frame count fits in usize"),
+            shared_utils::numeric_cast::u32_to_usize_strict(frame_count, "webp_frame_count")
+                .ok_or_else(|| {
+                    VidQualityError::ConversionError(format!(
+                        "WebP frame count does not fit usize for {}",
+                        input.display()
+                    ))
+                })?,
             pad,
         );
     }
@@ -603,8 +614,9 @@ fn skipped_with_fallback(
     options: &ConvertOptions,
     message: &str,
     reason_id: &str,
-) -> TaskResult {
+) -> Result<TaskResult> {
     TaskResult::skipped_with_fallback(input, options, message, reason_id)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 fn skipped_with_fallback_owned(
@@ -612,8 +624,9 @@ fn skipped_with_fallback_owned(
     options: &ConvertOptions,
     message: String,
     reason_id: String,
-) -> TaskResult {
+) -> Result<TaskResult> {
     TaskResult::skipped_with_fallback_owned(input, options, message, reason_id)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 fn failed_with_fallback(
@@ -621,8 +634,9 @@ fn failed_with_fallback(
     options: &ConvertOptions,
     message: &str,
     reason_id: &str,
-) -> TaskResult {
+) -> Result<TaskResult> {
     TaskResult::failed_with_fallback(input, options, message, reason_id)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 fn failed_with_fallback_owned(
@@ -630,8 +644,9 @@ fn failed_with_fallback_owned(
     options: &ConvertOptions,
     message: String,
     reason_id: String,
-) -> TaskResult {
+) -> Result<TaskResult> {
     TaskResult::failed_with_fallback_owned(input, options, message, reason_id)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 /// Get the dimensions of an input video file.
@@ -661,17 +676,19 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
         || total_pixels >= shared_utils::constants::HQ_PIX_COUNT_HD
 }
 
-fn skipped_already_processed(input: &Path, options: &ConvertOptions) -> TaskResult {
+fn skipped_already_processed(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     shared_utils::TaskResult::skipped_with_fallback(
         input,
         options,
         "Skipped: Already processed",
         "duplicate",
     )
+    .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
-fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> TaskResult {
+fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> Result<TaskResult> {
     TaskResult::skipped_exists(input, output)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 /// Return true when the input is either a native GIF or a GIF-like silent loop
@@ -720,13 +737,14 @@ fn is_static_animated_image(path: &Path) -> bool {
     false
 }
 
-fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> TaskResult {
+fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     shared_utils::TaskResult::skipped_with_fallback(
         input,
         options,
         "Skipped: Static image (1 frame), use image conversion path instead",
         "static_animated",
     )
+    .map_err(|e| VidQualityError::ConversionError(e.to_string()))
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
@@ -746,7 +764,7 @@ fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> TaskResult
 pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     use shared_utils::conversion_types::SelectedCodec;
     if !options.force() && is_already_processed(input) {
-        return Ok(skipped_already_processed(input, options));
+        return skipped_already_processed(input, options);
     }
 
     if is_static_animated_image(input) {
@@ -756,18 +774,18 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                 input.display(),
             );
         }
-        return Ok(skipped_static_animated(input, options));
+        return skipped_static_animated(input, options);
     }
 
     // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
     // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
-        return Ok(skipped_with_fallback(
+        return skipped_with_fallback(
             input,
             options,
             "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)",
             "gif_meme",
-        ));
+        );
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -789,7 +807,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
     );
 
     if output.exists() && !options.force() {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -814,12 +832,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     &format!("djxl not found: {}", input.display()),
                     "cannot process animated JXL"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: djxl not found (required for animated JXL)",
                     "djxl_not_found",
-                ));
+                );
             }
 
             // Create temporary APNG file
@@ -850,12 +868,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                         &format!("djxl conversion failed: {}", input.display()),
                         "JXL → APNG conversion failed"
                     );
-                    return Ok(failed_with_fallback(
+                    return failed_with_fallback(
                         input,
                         options,
                         "JXL → APNG conversion failed (djxl error)",
                         "djxl_failed",
-                    ));
+                    );
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -869,12 +887,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     &format!("webpmux not found: {}", input.display()),
                     "cannot process animated WebP"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: webpmux not found (required for animated WebP)",
                     "webpmux_not_found",
-                ));
+                );
             }
 
             // Create temporary APNG file
@@ -894,12 +912,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                         &format!("WebP extraction failed: {}", input.display()),
                         &format!("error: {e}")
                     );
-                    return Ok(failed_with_fallback_owned(
+                    return failed_with_fallback_owned(
                         input,
                         options,
                         format!("WebP extraction failed: {e}"),
                         "webp_extraction_failed".to_string(),
-                    ));
+                    );
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF
@@ -1037,7 +1055,15 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&temp_output).map_or(0, |m| m.len());
+            let output_size = fs::metadata(&temp_output)
+                .map_err(|e| {
+                    cleanup_temp_output(&temp_output, input);
+                    VidQualityError::ConversionError(format!(
+                        "Failed to read encoded output metadata for {}: {e}",
+                        temp_output.display()
+                    ))
+                })?
+                .len();
             if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
                 cleanup_temp_output(&temp_output, input);
                 let codec_name = options.codec.as_str().to_uppercase();
@@ -1045,12 +1071,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     &format!("{codec_name} output invalid: {}", input.display()),
                     "empty or unreadable; copying original"
                 );
-                return Ok(failed_with_fallback_owned(
+                return failed_with_fallback_owned(
                     input,
                     options,
                     format!("{codec_name} output invalid; original copied"),
                     format!("{}_invalid_output", options.codec.as_str()),
-                ));
+                );
             }
 
             if !shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -1059,7 +1085,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                 options.force(),
                 Some(input),
             )? {
-                return Ok(skipped_output_exists(input, &output, input_size));
+                return skipped_output_exists(input, &output, input_size);
             }
 
             shared_utils::copy(input, &output);
@@ -1100,7 +1126,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     shared_utils::io_utils::tail_error_lines(&stderr, 5)
                 )
             );
-            Ok(failed_with_fallback_owned(
+            failed_with_fallback_owned(
                 input,
                 options,
                 format!(
@@ -1109,7 +1135,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                     shared_utils::io_utils::tail_error_lines(&stderr, 5)
                 ),
                 format!("{}_encode_failed", options.codec.as_str()),
-            ))
+            )
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
@@ -1117,12 +1143,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
                 &format!("ffmpeg not found: {}", input.display()),
                 &format!("error: {e}")
             );
-            Ok(failed_with_fallback_owned(
+            failed_with_fallback_owned(
                 input,
                 options,
                 format!("HEVC encode failed (ffmpeg not found: {e}); original copied"),
                 "hevc_encode_failed".to_string(),
-            ))
+            )
         }
     }
 }
@@ -1146,7 +1172,7 @@ pub fn convert_to_mp4_matched(
 ) -> Result<TaskResult> {
     use shared_utils::conversion_types::SelectedCodec;
     if !options.force() && is_already_processed(input) {
-        return Ok(skipped_already_processed(input, options));
+        return skipped_already_processed(input, options);
     }
 
     if is_static_animated_image(input) {
@@ -1156,18 +1182,18 @@ pub fn convert_to_mp4_matched(
                 input.display(),
             );
         }
-        return Ok(skipped_static_animated(input, options));
+        return skipped_static_animated(input, options);
     }
 
     // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
     // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
-        return Ok(skipped_with_fallback(
+        return skipped_with_fallback(
             input,
             options,
             "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)",
             "gif_meme",
-        ));
+        );
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -1182,7 +1208,7 @@ pub fn convert_to_mp4_matched(
     let output = get_output_path(input, ext, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1202,12 +1228,12 @@ pub fn convert_to_mp4_matched(
                     &format!("djxl not found: {}", input.display()),
                     "cannot process animated JXL"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: djxl not found (required for animated JXL)",
                     "djxl_not_found",
-                ));
+                );
             }
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
@@ -1233,12 +1259,12 @@ pub fn convert_to_mp4_matched(
                         &format!("djxl conversion failed: {}", input.display()),
                         "JXL → APNG conversion failed"
                     );
-                    return Ok(failed_with_fallback(
+                    return failed_with_fallback(
                         input,
                         options,
                         "JXL → APNG conversion failed (djxl error)",
                         "djxl_failed",
-                    ));
+                    );
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -1252,12 +1278,12 @@ pub fn convert_to_mp4_matched(
                     &format!("webpmux not found: {}", input.display()),
                     "cannot process animated WebP"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: webpmux not found (required for animated WebP)",
                     "webpmux_not_found",
-                ));
+                );
             }
 
             // Create temporary APNG file
@@ -1277,12 +1303,12 @@ pub fn convert_to_mp4_matched(
                         &format!("WebP extraction failed: {}", input.display()),
                         &format!("error: {e}")
                     );
-                    return Ok(failed_with_fallback_owned(
+                    return failed_with_fallback_owned(
                         input,
                         options,
                         format!("WebP extraction failed: {e}"),
                         "webp_extraction_failed".to_string(),
-                    ));
+                    );
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF && {
@@ -1600,7 +1626,15 @@ pub fn convert_to_mp4_matched(
         let tol_rat = Rational::from_f64(tolerance_ratio)
             .expect("tolerance_ratio is 1.0 or 1.0 + DEFAULT_SIZE_TOLERANCE_RATIO; always finite");
         let res: Rational = input_rat * tol_rat;
-        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+        shared_utils::numeric_cast::f64_to_u64_strict(
+            res.to_f64().round(),
+            "animated_video_max_allowed_size",
+        )
+        .ok_or_else(|| {
+            VidQualityError::ConversionError(
+                "Failed to calculate animated video size guard".to_string(),
+            )
+        })?
     };
 
     // apple_compat mode: compatibility takes priority over file size.
@@ -1639,14 +1673,14 @@ pub fn convert_to_mp4_matched(
             explore_result.output_size,
             size_increase_pct
         );
-        return Ok(skipped_with_fallback_owned(
+        return skipped_with_fallback_owned(
             input,
             options,
             format!(
                 "Skipped: {codec_name} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
             ),
             "size_increase_beyond_tolerance".to_string(),
-        ));
+        );
     }
 
     // apple_compat: if quality_passed=false only because the file couldn't be compressed
@@ -1667,12 +1701,12 @@ pub fn convert_to_mp4_matched(
         );
         decision.emit_summary();
 
-        return Ok(failed_with_fallback_owned(
+        return failed_with_fallback_owned(
             input,
             options,
             decision.skip_message,
             decision.skip_code.to_string(),
-        ));
+        );
     }
 
     if explore_result.ms_ssim_passed.is_failed() {
@@ -1683,12 +1717,12 @@ pub fn convert_to_mp4_matched(
         );
         decision.emit_summary();
 
-        return Ok(failed_with_fallback_owned(
+        return failed_with_fallback_owned(
             input,
             options,
             decision.skip_message,
             decision.skip_code.to_string(),
-        ));
+        );
     }
 
     if explore_result.quality_passed.is_passed() && explore_result.optimal_crf > 0.0 {
@@ -1716,7 +1750,7 @@ pub fn convert_to_mp4_matched(
         options.force(),
         Some(input),
     )? {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     shared_utils::copy(input, &output);
@@ -1776,14 +1810,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
     );
 
     if !options.force() && is_already_processed(input) {
-        return Ok(skipped_already_processed(input, options));
+        return skipped_already_processed(input, options);
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mkv", options)?;
 
     if output.exists() && !options.force() {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1834,7 +1868,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 options.force(),
                 Some(input),
             )? {
-                return Ok(skipped_output_exists(input, &output, input_size));
+                return skipped_output_exists(input, &output, input_size);
             }
 
             shared_utils::copy(input, &output);
@@ -1879,7 +1913,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                     stderr
                 ),
             );
-            Ok(failed_with_fallback_owned(
+            failed_with_fallback_owned(
                 input,
                 options,
                 format!(
@@ -1887,7 +1921,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                     shared_utils::io_utils::tail_error_lines(&stderr, 5)
                 ),
                 "lossless_failed".to_string(),
-            ))
+            )
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
@@ -1899,12 +1933,12 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                     e
                 ),
             );
-            Ok(failed_with_fallback_owned(
+            failed_with_fallback_owned(
                 input,
                 options,
                 format!("Lossless failed (ffmpeg not found: {e}); original copied"),
                 "lossless_failed".to_string(),
-            ))
+            )
         }
     }
 }
@@ -1922,7 +1956,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
 )]
 pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if !options.force() && is_already_processed(input) {
-        return Ok(skipped_already_processed(input, options));
+        return skipped_already_processed(input, options);
     }
 
     if is_static_animated_image(input) {
@@ -1932,7 +1966,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                 input.display(),
             );
         }
-        return Ok(skipped_static_animated(input, options));
+        return skipped_static_animated(input, options);
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -1945,12 +1979,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
 
     if input_ext == "gif" {
         log_detail!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
-        return Ok(skipped_with_fallback(
+        return skipped_with_fallback(
             input,
             options,
             "Skipped: Already GIF (re-encoding would increase size)",
             "already_gif",
-        ));
+        );
     }
 
     let output = get_output_path(input, "GIF", options)?;
@@ -1960,7 +1994,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
     }
 
     if output.exists() && !options.force() {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1985,12 +2019,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                     &format!("djxl not found: {}", input.display()),
                     "cannot process animated JXL"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: djxl not found (required for animated JXL)",
                     "djxl_not_found",
-                ));
+                );
             }
 
             // Create temporary APNG file
@@ -2023,12 +2057,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                         &format!("djxl conversion failed: {}", input.display()),
                         "JXL → APNG conversion failed"
                     );
-                    return Ok(failed_with_fallback(
+                    return failed_with_fallback(
                         input,
                         options,
                         "JXL → APNG conversion failed (djxl error)",
                         "djxl_failed",
-                    ));
+                    );
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -2042,12 +2076,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                     &format!("webpmux not found: {}", input.display()),
                     "cannot process animated WebP"
                 );
-                return Ok(failed_with_fallback(
+                return failed_with_fallback(
                     input,
                     options,
                     "Skipped: webpmux not found (required for animated WebP)",
                     "webpmux_not_found",
-                ));
+                );
             }
 
             // Create temporary APNG file
@@ -2067,12 +2101,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                         &format!("WebP extraction failed: {}", input.display()),
                         &format!("error: {e}")
                     );
-                    return Ok(failed_with_fallback_owned(
+                    return failed_with_fallback_owned(
                         input,
                         options,
                         format!("WebP extraction failed: {e}"),
                         "webp_extraction_failed".to_string(),
-                    ));
+                    );
                 }
             }
         } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
@@ -2145,12 +2179,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                         input.display(),
                         output.display()
                     );
-                    return Ok(failed_with_fallback_owned(
+                    return failed_with_fallback_owned(
                         input,
                         options,
                         format!("GIF frame extraction failed: {e}"),
                         "gif_frame_extraction_failed".to_string(),
-                    ));
+                    );
                 }
             };
 
@@ -2256,16 +2290,24 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                 input.display()
             ),
         );
-        return Ok(failed_with_fallback(
+        return failed_with_fallback(
             input,
             options,
             "GIF conversion failed (gifski unavailable or failed); original copied",
             "gif_encode_failed",
-        ));
+        );
     }
 
     // Validate output
-    let output_size = fs::metadata(&temp_output).map_or(0, |m| m.len());
+    let output_size = fs::metadata(&temp_output)
+        .map_err(|e| {
+            cleanup_temp_output(&temp_output, input);
+            VidQualityError::ConversionError(format!(
+                "Failed to read GIF output metadata for {}: {e}",
+                temp_output.display()
+            ))
+        })?
+        .len();
     if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
         cleanup_temp_output(&temp_output, input);
         log_anomaly!(
@@ -2275,12 +2317,12 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
                 input.display()
             ),
         );
-        return Ok(failed_with_fallback(
+        return failed_with_fallback(
             input,
             options,
             "GIF output invalid; original copied",
             "gif_invalid_output",
-        ));
+        );
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
@@ -2293,7 +2335,15 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         let tol_rat = Rational::from_f64(tolerance_ratio)
             .expect("tolerance_ratio is 1.0 or 1.0 + DEFAULT_SIZE_TOLERANCE_RATIO; always finite");
         let res: Rational = input_rat * tol_rat;
-        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+        shared_utils::numeric_cast::f64_to_u64_strict(
+            res.to_f64().round(),
+            "animated_gif_max_allowed_size",
+        )
+        .ok_or_else(|| {
+            VidQualityError::ConversionError(
+                "Failed to calculate animated GIF size guard".to_string(),
+            )
+        })?
     };
 
     // apple_compat: compatibility takes priority — a playable GIF is always
@@ -2321,14 +2371,14 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         log_detail!(
             "   📊 Size comparison: {input_size} → {output_size} bytes (+{size_increase_pct:.1}%)",
         );
-        return Ok(skipped_with_fallback_owned(
+        return skipped_with_fallback_owned(
             input,
             options,
             format!(
                 "Skipped: GIF output larger than input by {size_increase_pct:.1}% (tolerance exceeded)"
             ),
             "size_increase_beyond_tolerance".to_string(),
-        ));
+        );
     }
 
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -2337,7 +2387,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         options.force(),
         Some(input),
     )? {
-        return Ok(skipped_output_exists(input, &output, input_size));
+        return skipped_output_exists(input, &output, input_size);
     }
 
     shared_utils::copy(input, &output);

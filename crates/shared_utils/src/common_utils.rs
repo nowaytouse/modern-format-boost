@@ -691,6 +691,49 @@ pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }
 
+/// A RAII guard that sets an environment variable and restores its original value when dropped.
+/// Useful for thread-safe (serial) unit tests that modify global environment state.
+#[derive(Debug)]
+pub struct EnvGuard {
+    key: String,
+    old_value: Option<String>,
+}
+
+impl EnvGuard {
+    /// Sets an environment variable and returns a guard.
+    ///
+    /// # Panics
+    /// Panics if the key contains an equal sign or NUL character.
+    #[must_use]
+    pub fn set(key: &str, value: &str) -> Self {
+        let old_value = std::env::var(key).ok();
+        // SAFETY: EnvGuard is intended for single-threaded test context.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self {
+            key: key.to_string(),
+            old_value,
+        }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        if let Some(ref old) = self.old_value {
+            // SAFETY: Restoration happens when the guard is dropped.
+            unsafe {
+                std::env::set_var(&self.key, old);
+            }
+        } else {
+            // SAFETY: Restoration happens when the guard is dropped.
+            unsafe {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

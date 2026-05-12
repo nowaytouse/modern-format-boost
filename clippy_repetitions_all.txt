@@ -1,0 +1,368 @@
+[1m[92m   Compiling[0m shared_utils v0.11.3 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+[1m[92m   Compiling[0m vid v0.11.3 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/vid)
+[1m[92m   Compiling[0m img v0.11.3 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/img)
+[1m[92m   Compiling[0m dev v0.11.3 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/dev)
+[1m[91merror[0m[1m: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`[0m
+    [1m[94m--> [0mcrates/shared_utils/src/batch.rs:1073:9
+     [1m[94m|[0m
+[1m[94m1073[0m [1m[94m|[0m [1m[91m/[0m         match pixels.checked_mul(frames.max(1)) {
+[1m[94m1074[0m [1m[94m|[0m [1m[91m|[0m             Some(work) => Some(work),
+[1m[94m1075[0m [1m[94m|[0m [1m[91m|[0m             None => {
+[1m[94m1076[0m [1m[94m|[0m [1m[91m|[0m                 warn!(
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m1084[0m [1m[94m|[0m [1m[91m|[0m         }
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#single_match_else
+[1m[92mnote[0m: the lint level is defined here
+    [1m[94m--> [0mcrates/shared_utils/src/lib.rs:4:22
+     [1m[94m|[0m
+[1m[94m   4[0m [1m[94m|[0m #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+     [1m[94m|[0m                      [1m[92m^^^^^^^^^^^^^^^^[0m
+     [1m[94m= [0m[1mnote[0m: `#[deny(clippy::single_match_else)]` implied by `#[deny(clippy::pedantic)]`
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1073[0m [92m~ [0m        [92mif let Some(work) = pixels.checked_mul(frames.max(1)) { Some(work) } else {[0m
+[1m[94m1074[0m [92m+             warn!([0m
+[1m[94m1075[0m [92m+                 path = %path.display(),[0m
+[1m[94m1076[0m [92m+                 pixels,[0m
+[1m[94m1077[0m [92m+                 frames,[0m
+[1m[94m1078[0m [92m+                 "Estimated video sort work overflowed; treating work estimate as missing"[0m
+[1m[94m1079[0m [92m+             );[0m
+[1m[94m1080[0m [92m+             None[0m
+[1m[94m1081[0m [92m+         }[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: use Option::map_or_else instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/batch.rs:1073:9
+     [1m[94m|[0m
+[1m[94m1073[0m [1m[94m|[0m [1m[91m/[0m         match pixels.checked_mul(frames.max(1)) {
+[1m[94m1074[0m [1m[94m|[0m [1m[91m|[0m             Some(work) => Some(work),
+[1m[94m1075[0m [1m[94m|[0m [1m[91m|[0m             None => {
+[1m[94m1076[0m [1m[94m|[0m [1m[91m|[0m                 warn!(
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m1084[0m [1m[94m|[0m [1m[91m|[0m         }
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+[1m[92mnote[0m: the lint level is defined here
+    [1m[94m--> [0mcrates/shared_utils/src/lib.rs:4:40
+     [1m[94m|[0m
+[1m[94m   4[0m [1m[94m|[0m #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+     [1m[94m|[0m                                        [1m[92m^^^^^^^^^^^^^^^[0m
+     [1m[94m= [0m[1mnote[0m: `#[deny(clippy::option_if_let_else)]` implied by `#[deny(clippy::nursery)]`
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m1073[0m [92m~ [0m        [92mpixels.checked_mul(frames.max(1)).map_or_else(|| {[0m
+[1m[94m1074[0m [92m+                 warn!([0m
+[1m[94m1075[0m [92m+                     path = %path.display(),[0m
+[1m[94m1076[0m [92m+                     pixels,[0m
+[1m[94m1077[0m [92m+                     frames,[0m
+[1m[94m1078[0m [92m+                     "Estimated video sort work overflowed; treating work estimate as missing"[0m
+[1m[94m1079[0m [92m+                 );[0m
+[1m[94m1080[0m [92m+                 None[0m
+[1m[94m1081[0m [92m+             }, |work| Some(work))[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: docs for function returning `Result` missing `# Errors` section[0m
+   [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:570:5
+    [1m[94m|[0m
+[1m[94m570[0m [1m[94m|[0m [1m[91m/[0m     pub fn skipped_with_fallback(
+[1m[94m571[0m [1m[94m|[0m [1m[91m|[0m         input: &Path,
+[1m[94m572[0m [1m[94m|[0m [1m[91m|[0m         options: &ConvertOptions,
+[1m[94m573[0m [1m[94m|[0m [1m[91m|[0m         reason: &str,
+[1m[94m574[0m [1m[94m|[0m [1m[91m|[0m         skip_reason_id: &str,
+[1m[94m575[0m [1m[94m|[0m [1m[91m|[0m     ) -> anyhow::Result<Self> {
+    [1m[94m|[0m [1m[91m|_____________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_errors_doc
+    [1m[94m= [0m[1mnote[0m: `#[deny(clippy::missing_errors_doc)]` implied by `#[deny(clippy::pedantic)]`
+
+[1m[91merror[0m[1m: docs for function returning `Result` missing `# Errors` section[0m
+   [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:626:5
+    [1m[94m|[0m
+[1m[94m626[0m [1m[94m|[0m [1m[91m/[0m     pub fn failed_with_fallback(
+[1m[94m627[0m [1m[94m|[0m [1m[91m|[0m         input: &Path,
+[1m[94m628[0m [1m[94m|[0m [1m[91m|[0m         options: &ConvertOptions,
+[1m[94m629[0m [1m[94m|[0m [1m[91m|[0m         reason: &str,
+[1m[94m630[0m [1m[94m|[0m [1m[91m|[0m         skip_reason_id: &str,
+[1m[94m631[0m [1m[94m|[0m [1m[91m|[0m     ) -> anyhow::Result<Self> {
+    [1m[94m|[0m [1m[91m|_____________________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_errors_doc
+
+[1m[91merror[0m[1m: docs for function returning `Result` missing `# Errors` section[0m
+    [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:1164:1
+     [1m[94m|[0m
+[1m[94m1164[0m [1m[94m|[0m [1m[91m/[0m pub fn pre_conversion_check(
+[1m[94m1165[0m [1m[94m|[0m [1m[91m|[0m     input: &Path,
+[1m[94m1166[0m [1m[94m|[0m [1m[91m|[0m     output: &Path,
+[1m[94m1167[0m [1m[94m|[0m [1m[91m|[0m     options: &ConvertOptions,
+[1m[94m1168[0m [1m[94m|[0m [1m[91m|[0m ) -> anyhow::Result<Option<TaskResult>> {
+     [1m[94m|[0m [1m[91m|_______________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_errors_doc
+
+[1m[91merror[0m[1m: this function has a `#[must_use]` attribute with no message, but returns a type already marked as `#[must_use]`[0m
+    [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:1164:1
+     [1m[94m|[0m
+[1m[94m1164[0m [1m[94m|[0m [1m[91m/[0m pub fn pre_conversion_check(
+[1m[94m1165[0m [1m[94m|[0m [1m[91m|[0m     input: &Path,
+[1m[94m1166[0m [1m[94m|[0m [1m[91m|[0m     output: &Path,
+[1m[94m1167[0m [1m[94m|[0m [1m[91m|[0m     options: &ConvertOptions,
+[1m[94m1168[0m [1m[94m|[0m [1m[91m|[0m ) -> anyhow::Result<Option<TaskResult>> {
+     [1m[94m|[0m [1m[91m|_______________________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: either add some descriptive message or remove the attribute
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#double_must_use
+[1m[92mnote[0m: the lint level is defined here
+    [1m[94m--> [0mcrates/shared_utils/src/lib.rs:4:9
+     [1m[94m|[0m
+[1m[94m   4[0m [1m[94m|[0m #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+     [1m[94m|[0m         [1m[92m^^^^^^^^^^^[0m
+     [1m[94m= [0m[1mnote[0m: `#[deny(clippy::double_must_use)]` implied by `#[deny(clippy::all)]`
+
+[1m[91merror[0m[1m: docs for function returning `Result` missing `# Errors` section[0m
+   [1m[94m--> [0mcrates/shared_utils/src/gpu_accel.rs:418:5
+    [1m[94m|[0m
+[1m[94m418[0m [1m[94m|[0m     pub fn get_crf_args(&self, crf: f32) -> anyhow::Result<Vec<String>> {
+    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_errors_doc
+
+[1m[91merror[0m[1m: this function has a `#[must_use]` attribute with no message, but returns a type already marked as `#[must_use]`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/gpu_accel.rs:418:5
+    [1m[94m|[0m
+[1m[94m418[0m [1m[94m|[0m     pub fn get_crf_args(&self, crf: f32) -> anyhow::Result<Vec<String>> {
+    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: either add some descriptive message or remove the attribute
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#double_must_use
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/gpu_accel.rs:3106:43
+     [1m[94m|[0m
+[1m[94m3106[0m [1m[94m|[0m                           let improvement = if let Some(b) = best_size {
+     [1m[94m|[0m [1m[91m ___________________________________________^[0m
+[1m[94m3107[0m [1m[94m|[0m [1m[91m|[0m                             (crate::numeric_cast::u64_to_f64(b)
+[1m[94m3108[0m [1m[94m|[0m [1m[91m|[0m                                 - crate::numeric_cast::u64_to_f64(size))
+[1m[94m3109[0m [1m[94m|[0m [1m[91m|[0m                                 / crate::numeric_cast::u64_to_f64(b.max(1))
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m3112[0m [1m[94m|[0m [1m[91m|[0m                             100.0 // First success is 100% improvement over nothing
+[1m[94m3113[0m [1m[94m|[0m [1m[91m|[0m                         };
+     [1m[94m|[0m [1m[91m|_________________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m3106[0m [92m~ [0m                        let improvement = [92mbest_size.map_or(100.0, |b| (crate::numeric_cast::u64_to_f64(b)[0m
+[1m[94m3107[0m [92m+                                 - crate::numeric_cast::u64_to_f64(size))[0m
+[1m[94m3108[0m [92m~                                 / crate::numeric_cast::u64_to_f64(b.max(1)) * 100.0_f64)[0m;
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: use Option::map_or instead of an if let/else[0m
+    [1m[94m--> [0mcrates/shared_utils/src/gpu_accel.rs:3213:32
+     [1m[94m|[0m
+[1m[94m3213[0m [1m[94m|[0m       let (gpu_ssim, gpu_psnr) = if let Some(last_tested_crf) = best_crf {
+     [1m[94m|[0m [1m[91m ________________________________^[0m
+[1m[94m3214[0m [1m[94m|[0m [1m[91m|[0m         log_msg!(
+[1m[94m3215[0m [1m[94m|[0m [1m[91m|[0m             "   📍 Final quality validation at CRF {:.1}",
+[1m[94m3216[0m [1m[94m|[0m [1m[91m|[0m             last_tested_crf
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m3293[0m [1m[94m|[0m [1m[91m|[0m         (None, None)
+[1m[94m3294[0m [1m[94m|[0m [1m[91m|[0m     };
+     [1m[94m|[0m [1m[91m|_____^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#option_if_let_else
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m3213[0m [92m~ [0m    let (gpu_ssim, gpu_psnr) = [92mbest_crf.map_or((None, None), |last_tested_crf| {[0m
+[1m[94m3214[0m [92m+         log_msg!([0m
+[1m[94m3215[0m [92m~             "   📍 Final quality validation at CRF {:.1}",[0m
+[1m[94m3216[0m [92m+             last_tested_crf[0m
+[1m[94m3217[0m [92m+         );[0m
+[1m[94m3218[0m [92m+         match encode_gpu(last_tested_crf) {[0m
+[1m[94m3219[0m [92m+             Ok(_) => {[0m
+[1m[94m3220[0m [92m+                 let ssim_output = FfmpegBuilder::new()[0m
+[1m[94m3221[0m [92m+                     .input(input)[0m
+[1m[94m3222[0m [92m+                     .input(output)[0m
+[1m[94m3223[0m [92m+                     .filter_complex("ssim")[0m
+[1m[94m3224[0m [92m+                     .format("null")[0m
+[1m[94m3225[0m [92m+                     .output_pipe()[0m
+[1m[94m3226[0m [92m+                     .build()[0m
+[1m[94m3227[0m [92m+                     .output();[0m
+[1m[94m3228[0m [92m+ [0m
+[1m[94m3229[0m [92m+                 let psnr_result =[0m
+[1m[94m3230[0m [92m+                     calculate_psnr_fast(&input.to_string_lossy(), &output.to_string_lossy());[0m
+[1m[94m3231[0m [92m+ [0m
+[1m[94m3232[0m [92m+                 let ssim = match ssim_output {[0m
+[1m[94m3233[0m [92m+                     Ok(out) if out.status.success() => {[0m
+[1m[94m3234[0m [92m+                         let stderr = String::from_utf8_lossy(&out.stderr);[0m
+[1m[94m3235[0m [92m+                         let parsed = stderr[0m
+[1m[94m3236[0m [92m+                             .lines()[0m
+[1m[94m3237[0m [92m+                             .find(|l| l.contains("SSIM") && l.contains("All:"))[0m
+[1m[94m3238[0m [92m+                             .and_then(|line| line.find("All:").map(|pos| &line[pos + 4..]))[0m
+[1m[94m3239[0m [92m+                             .and_then(|after_all| {[0m
+[1m[94m3240[0m [92m+                                 let val_str = after_all[0m
+[1m[94m3241[0m [92m+                                     .find(' ')[0m
+[1m[94m3242[0m [92m+                                     .map_or(after_all, |pos| &after_all[..pos]);[0m
+[1m[94m3243[0m [92m+                                 val_str.trim().parse::<f64>().ok()[0m
+[1m[94m3244[0m [92m+                             });[0m
+[1m[94m3245[0m [92m+                         if parsed.is_none() {[0m
+[1m[94m3246[0m [92m+                             log_msg!([0m
+[1m[94m3247[0m [92m~                                 "      ⚠️ Final GPU SSIM unavailable: unable to parse ffmpeg SSIM output"[0m
+[1m[94m3248[0m [92m+                             );[0m
+[1m[94m3249[0m [92m+                         }[0m
+[1m[94m3250[0m [92m+                         parsed.inspect(|&ssim| {[0m
+[1m[94m3251[0m [92m~                             log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);[0m
+[1m[94m3252[0m [92m+                         })[0m
+[1m[94m3253[0m [92m+                     }[0m
+[1m[94m3254[0m [92m+                     Ok(out) => {[0m
+[1m[94m3255[0m [92m+                         let stderr = String::from_utf8_lossy(&out.stderr);[0m
+[1m[94m3256[0m [92m+                         log_msg!([0m
+[1m[94m3257[0m [92m~                             "      ⚠️ Final GPU SSIM command failed: {}",[0m
+[1m[94m3258[0m [92m+                             crate::io_utils::tail_error_lines(&stderr, 5)[0m
+[1m[94m3259[0m [92m+                         );[0m
+[1m[94m3260[0m [92m+                         None[0m
+[1m[94m3261[0m [92m+                     }[0m
+[1m[94m3262[0m [92m+                     Err(err) => {[0m
+[1m[94m3263[0m [92m~                         log_msg!("      ⚠️ Failed to run final GPU SSIM command: {err}");[0m
+[1m[94m3264[0m [92m+                         None[0m
+[1m[94m3265[0m [92m+                     }[0m
+[1m[94m3266[0m [92m+                 };[0m
+[1m[94m3267[0m [92m+ [0m
+[1m[94m3268[0m [92m+                 let psnr = match psnr_result {[0m
+[1m[94m3269[0m [92m+                     Ok(psnr) => {[0m
+[1m[94m3270[0m [92m~                         log_msg!("      📊 Final GPU PSNR: {:.2}dB", psnr);[0m
+[1m[94m3271[0m [92m+                         Some(psnr)[0m
+[1m[94m3272[0m [92m+                     }[0m
+[1m[94m3273[0m [92m+                     Err(err) => {[0m
+[1m[94m3274[0m [92m~                         log_msg!("      ⚠️ Final GPU PSNR unavailable: {err}");[0m
+[1m[94m3275[0m [92m+                         None[0m
+[1m[94m3276[0m [92m+                     }[0m
+[1m[94m3277[0m [92m+                 };[0m
+[1m[94m3278[0m [92m+ [0m
+[1m[94m3279[0m [92m+                 if let (Some(p), Some(s)) = (psnr, ssim) {[0m
+[1m[94m3280[0m [92m+                     psnr_ssim_mapper.add_calibration_point(p, s);[0m
+[1m[94m3281[0m [92m+                     log_msg!([0m
+[1m[94m3282[0m [92m~                         "      ✅ Added PSNR-SSIM calibration point: {:.2}dB → {:.6}",[0m
+[1m[94m3283[0m [92m+                         p,[0m
+[1m[94m3284[0m [92m+                         s[0m
+[1m[94m3285[0m [92m+                     );[0m
+[1m[94m3286[0m [92m+                 }[0m
+[1m[94m3287[0m [92m+ [0m
+[1m[94m3288[0m [92m+                 (ssim, psnr)[0m
+[1m[94m3289[0m [92m+             }[0m
+[1m[94m3290[0m [92m+             Err(_) => (None, None),[0m
+[1m[94m3291[0m [92m+         }[0m
+[1m[94m3292[0m [92m~     })[0m;
+     [1m[94m|[0m
+
+[1m[33mwarning[0m[1m: item name starts with its containing module's name[0m
+  [1m[94m--> [0mcrates/shared_utils/src/hdr.rs:30:10
+   [1m[94m|[0m
+[1m[94m30[0m [1m[94m|[0m pub enum HdrIntermediateFormat {
+   [1m[94m|[0m          [1m[33m^^^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#module_name_repetitions
+   [1m[94m= [0m[1mnote[0m: requested on the command line with `-W clippy::module-name-repetitions`
+
+[1m[33mwarning[0m[1m: item name ends with its containing module's name[0m
+  [1m[94m--> [0mcrates/shared_utils/src/hdr.rs:73:8
+   [1m[94m|[0m
+[1m[94m73[0m [1m[94m|[0m pub fn convert_heic_with_gainmap_to_jxl_hdr(
+   [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#module_name_repetitions
+
+[1m[33mwarning[0m[1m: item name ends with its containing module's name[0m
+   [1m[94m--> [0mcrates/shared_utils/src/hdr.rs:258:8
+    [1m[94m|[0m
+[1m[94m258[0m [1m[94m|[0m pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#module_name_repetitions
+
+[1m[33mwarning[0m[1m: item name ends with its containing module's name[0m
+   [1m[94m--> [0mcrates/shared_utils/src/hdr.rs:648:8
+    [1m[94m|[0m
+[1m[94m648[0m [1m[94m|[0m pub fn synthesize_hdr(
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#module_name_repetitions
+
+[1m[91merror[0m[1m: these match arms have identical bodies[0m
+  [1m[94m--> [0mcrates/shared_utils/src/conversion_types.rs:85:13
+   [1m[94m|[0m
+[1m[94m85[0m [1m[94m|[0m             Self::Ignored => "",
+   [1m[94m|[0m             [1m[91m^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m86[0m [1m[94m|[0m             Self::Skip => "",
+   [1m[94m|[0m             [1m[91m^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mhelp[0m: if this is unintentional make the arms return different values
+   [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#match_same_arms
+   [1m[94m= [0m[1mnote[0m: `#[deny(clippy::match_same_arms)]` implied by `#[deny(clippy::pedantic)]`
+[1m[96mhelp[0m: otherwise merge the patterns into a single arm
+   [1m[94m|[0m
+[1m[94m85[0m [92m~ [0m            Self::Ignored[92m | Self::Skip[0m => "",
+[1m[94m86[0m [92m~ [0m            }
+   [1m[94m|[0m
+
+[1m[33mwarning[0m[1m: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers[0m
+    [1m[94m--> [0mcrates/shared_utils/src/image_detection.rs:2072:9
+     [1m[94m|[0m
+[1m[94m2072[0m [1m[94m|[0m         total_pixels_u64 as usize
+     [1m[94m|[0m         [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#cast_possible_truncation
+[1m[92mnote[0m: the lint level is defined here
+    [1m[94m--> [0mcrates/shared_utils/src/lib.rs:29:5
+     [1m[94m|[0m
+[1m[94m  29[0m [1m[94m|[0m     clippy::cast_possible_truncation,
+     [1m[94m|[0m     [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[96mhelp[0m: ... or use `try_from` and handle the error accordingly
+     [1m[94m|[0m
+[1m[94m2072[0m [91m- [0m        [91mtotal_pixels_u64 as usize[0m
+[1m[94m2072[0m [92m+ [0m        [92musize::try_from(total_pixels_u64)[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/image_metrics.rs:346:18
+    [1m[94m|[0m
+[1m[94m346[0m [1m[94m|[0m                   &format!(
+    [1m[94m|[0m [1m[91m __________________^[0m
+[1m[94m347[0m [1m[94m|[0m [1m[91m|[0m                     "MS-SSIM scale {i} calculation failed (dim: {w}x{h}); metric invalidated",
+[1m[94m348[0m [1m[94m|[0m [1m[91m|[0m                     i = i,
+[1m[94m349[0m [1m[94m|[0m [1m[91m|[0m                     w = w,
+[1m[94m350[0m [1m[94m|[0m [1m[91m|[0m                     h = h
+[1m[94m351[0m [1m[94m|[0m [1m[91m|[0m                 )
+    [1m[94m|[0m [1m[91m|_________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
+    [1m[94m= [0m[1mnote[0m: `#[deny(clippy::uninlined_format_args)]` implied by `#[deny(clippy::pedantic)]`
+
+[1m[91merror[0m[1m: docs for function which may panic missing `# Panics` section[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2642:1
+     [1m[94m|[0m
+[1m[94m2642[0m [1m[94m|[0m [1m[91m/[0m pub fn apply_apple_compat_modern_animation_policy(
+[1m[94m2643[0m [1m[94m|[0m [1m[91m|[0m     verdict: Verdict,
+[1m[94m2644[0m [1m[94m|[0m [1m[91m|[0m     meta: &LoopMeta,
+[1m[94m2645[0m [1m[94m|[0m [1m[91m|[0m     apple_compat: bool,
+[1m[94m2646[0m [1m[94m|[0m [1m[91m|[0m     force: bool,
+[1m[94m2647[0m [1m[94m|[0m [1m[91m|[0m ) -> Verdict {
+     [1m[94m|[0m [1m[91m|____________^[0m
+     [1m[94m|[0m
+[1m[92mnote[0m: first possible panic found here
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2671:23
+     [1m[94m|[0m
+[1m[94m2671[0m [1m[94m|[0m       let frame_count = meta
+     [1m[94m|[0m [1m[92m _______________________^[0m
+[1m[94m2672[0m [1m[94m|[0m [1m[92m|[0m         .frame_count
+[1m[94m2673[0m [1m[94m|[0m [1m[92m|[0m         .expect("frame_count is present after single-frame guard");
+     [1m[94m|[0m [1m[92m|__________________________________________________________________^[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#missing_panics_doc
+     [1m[94m= [0m[1mnote[0m: `#[deny(clippy::missing_panics_doc)]` implied by `#[deny(clippy::pedantic)]`
+
+[1m[33mwarning[0m: `shared_utils` (lib) generated 5 warnings
+[1m[91merror[0m: could not compile `shared_utils` (lib) due to 13 previous errors; 5 warnings emitted

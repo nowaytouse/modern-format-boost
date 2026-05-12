@@ -191,3 +191,33 @@ impl ProcessOutput {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_managed_process_success() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hello world");
+
+        let process = ManagedProcess::spawn(&mut cmd).unwrap();
+        let output = process.wait().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.trim(), "hello world");
+    }
+
+    #[test]
+    fn test_managed_process_failure() {
+        // Use a command that is likely to fail
+        let mut cmd = Command::new("ls");
+        cmd.arg("/non_existent_directory_gemini_test");
+
+        let process = ManagedProcess::spawn(&mut cmd).unwrap();
+        let output = process.wait().unwrap();
+
+        assert!(!output.status.success());
+        assert!(!output.stderr.is_empty());
+    }
+}

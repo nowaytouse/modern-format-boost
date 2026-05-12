@@ -832,4 +832,34 @@ mod tests {
             .input(Path::new("input.mov"))
             .build();
     }
+
+    #[test]
+    fn test_ffprobe_builder_generation() {
+        use super::FfprobeBuilder;
+        let mut builder = FfprobeBuilder::new();
+        builder
+            .input("test.mp4")
+            .show_streams()
+            .show_format()
+            .print_format("json");
+
+        let args: Vec<String> = builder
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(args.contains(&"-show_streams".to_string()));
+        assert!(args.contains(&"-show_format".to_string()));
+        assert!(args.contains(&"json".to_string()));
+        assert!(args.contains(&"test.mp4".to_string()));
+    }
+
+    #[test]
+    fn test_video_codec_names() {
+        use super::VideoCodec;
+        assert_eq!(VideoCodec::Hevc.ffmpeg_name(false), "libx265");
+        assert_eq!(VideoCodec::Hevc.ffmpeg_name(true), "hevc_videotoolbox");
+        assert_eq!(VideoCodec::Av1.ffmpeg_name(false), "libsvtav1");
+    }
 }

@@ -9,20 +9,29 @@
 
 use std::fs;
 use std::path::PathBuf;
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
     pub path: PathBuf,
-    pub size: u64,
+    pub size: Option<u64>,
 }
 
 impl FileInfo {
     #[must_use]
-    pub fn new(path: PathBuf) -> Option<Self> {
-        fs::metadata(&path).ok().map(|meta| Self {
-            path,
-            size: meta.len(),
-        })
+    pub fn new(path: PathBuf) -> Self {
+        let size = match fs::metadata(&path) {
+            Ok(meta) => Some(meta.len()),
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to read file metadata for size sorting; preserving file with missing size"
+                );
+                None
+            }
+        };
+        Self { path, size }
     }
 }
 
@@ -55,16 +64,26 @@ impl FileSorter {
     }
 
     fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
+        let mut file_infos: Vec<FileInfo> = files.into_iter().map(FileInfo::new).collect();
 
-        file_infos.sort_by_key(|f| f.size);
+        file_infos.sort_by(|left, right| match (left.size, right.size) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left.path.cmp(&right.path),
+        });
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
     fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
+        let mut file_infos: Vec<FileInfo> = files.into_iter().map(FileInfo::new).collect();
 
-        file_infos.sort_by_key(|f| std::cmp::Reverse(f.size));
+        file_infos.sort_by(|left, right| match (left.size, right.size) {
+            (Some(left), Some(right)) => right.cmp(&left),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left.path.cmp(&right.path),
+        });
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
@@ -110,16 +129,16 @@ mod tests {
         let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e:?}"));
         let file_path = create_test_file(temp_dir.path(), "test.txt", 100);
 
-        let info = FileInfo::new(file_path.clone()).unwrap_or_else(|| panic!("FileInfo failed"));
+        let info = FileInfo::new(file_path.clone());
         assert_eq!(info.path, file_path);
-        assert_eq!(info.size, 100);
+        assert_eq!(info.size, Some(100));
     }
 
     #[test]
     fn test_file_info_nonexistent() {
         let path = PathBuf::from("/nonexistent/file.txt");
         let info = FileInfo::new(path);
-        assert!(info.is_none());
+        assert_eq!(info.size, None);
     }
 
     #[test]

@@ -257,4 +257,23 @@ mod tests {
         assert!(fixed.exists());
         assert!(!wrong_ext.exists());
     }
+
+    #[test]
+    fn test_check_extension_mismatch_readonly() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let wrong_ext = temp.path().join("video_readonly.jpg");
+        let mut header = [0u8; 32];
+        header[4..8].copy_from_slice(b"ftyp");
+        header[8..12].copy_from_slice(b"isom");
+        fs::write(&wrong_ext, header).unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let checked = check_extension_mismatch_readonly(&wrong_ext)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        // It should return the original path
+        assert_eq!(checked, wrong_ext);
+        // It should NOT rename the file
+        assert!(wrong_ext.exists());
+        assert!(!temp.path().join("video_readonly.mp4").exists());
+    }
 }

@@ -582,9 +582,11 @@ pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError>
             && dur > 0.0
         {
             let bits = probe.size.saturating_mul(8);
-            let derived =
-                crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(bits) / dur);
-            if derived > 0 {
+            if let Some(derived) = crate::numeric_cast::f64_to_u64_strict(
+                crate::numeric_cast::u64_to_f64(bits) / dur,
+                "derived_bitrate",
+            ) && derived > 0
+            {
                 crate::log_info!(
                     crate::static_logs::messages::LABEL_DETECTION,
                     &format!(
@@ -712,15 +714,29 @@ pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError>
 
     if let Ok(format) = crate::image_detection::detect_format_from_bytes(path)
         && matches!(format, crate::image_detection::DetectedFormat::JXL)
-        && let Ok((is_animated, native_frames, _)) = crate::image_detection::detect_animation(path, &format)
-        && (!is_animated || native_frames.unwrap_or(1) <= 1)
+        && let Ok((is_animated, native_frames, _)) =
+            crate::image_detection::detect_animation(path, &format)
     {
-        crate::progress_mode::emit_stderr(&format!(
-            "⚙️ [Detection] Forcing single-frame for static JXL to avoid vid routing: {}",
-            path.display()
-        ));
-        result.frame_count = Some(1);
-        result.duration_secs = None;
+        match (is_animated, native_frames) {
+            (false, _) | (true, Some(0 | 1)) => {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚙️ [Detection] Forcing single-frame for static JXL to avoid vid routing: {}",
+                    path.display()
+                ));
+                result.frame_count = Some(1);
+                result.duration_secs = None;
+            }
+            (true, Some(_)) => {}
+            (true, None) => {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_DETECTION,
+                    &format!(
+                        "JXL animation probe reported animated content with unknown frame count; keeping ffprobe metadata instead of forging single-frame data (file={})",
+                        path.display()
+                    )
+                );
+            }
+        }
     }
 
     // ── Penetrating Content Verification ──
@@ -882,8 +898,8 @@ pub fn generate_video_recommendation(features: &Detection) -> VideoRecommendatio
         command_hint = format!(
             "ffmpeg -i '{}' -c:v libsvtav1 -preset {} -crf {} output.mp4",
             features.file_path,
-            crate::constants::FFMPEG_SVTAV1_DEFAULT_PRESET,
-            crate::constants::AV1_CRF_DEFAULT_F64
+            crate::constants::VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT,
+            crate::constants::VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT
         );
     }
 
@@ -893,5 +909,119 @@ pub fn generate_video_recommendation(features: &Detection) -> VideoRecommendatio
         reason,
         is_archival_upgrade,
         command_hint,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detected_codec_from_ffprobe() {
+        assert_eq!(DetectedCodec::from_ffprobe("h264"), DetectedCodec::H264);
+        assert_eq!(DetectedCodec::from_ffprobe("hevc"), DetectedCodec::H265);
+        assert_eq!(DetectedCodec::from_ffprobe("vp9"), DetectedCodec::VP9);
+        assert_eq!(DetectedCodec::from_ffprobe("av1"), DetectedCodec::AV1);
+        assert_eq!(DetectedCodec::from_ffprobe("ffv1"), DetectedCodec::FFV1);
+        assert!(matches!(
+            DetectedCodec::from_ffprobe("unknown"),
+            DetectedCodec::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn test_detected_codec_is_lossless() {
+        assert!(DetectedCodec::FFV1.is_lossless());
+        assert!(DetectedCodec::Uncompressed.is_lossless());
+        assert!(!DetectedCodec::H264.is_lossless());
+        assert!(!DetectedCodec::AV1.is_lossless());
+    }
+
+    #[test]
+    fn test_color_space_parse() {
+        assert_eq!(ColorSpace::parse("bt709"), ColorSpace::BT709);
+        assert_eq!(ColorSpace::parse("bt2020"), ColorSpace::BT2020);
+        assert_eq!(ColorSpace::parse("sRGB"), ColorSpace::SRGB);
+        assert!(matches!(
+            ColorSpace::parse("mystic"),
+            ColorSpace::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn test_detection_is_hdr() {
+        let mut det = Detection::default();
+        assert!(!det.is_hdr());
+
+        det.flags.hdr.is_dolby_vision = true;
+        assert!(det.is_hdr());
+
+        let det2 = Detection {
+            color_transfer: Some("smpte2084".to_string()),
+            ..Default::default()
+        };
+        assert!(det2.is_hdr());
+    }
+
+    #[test]
+    fn test_determine_compression_type() {
+        let precision = VideoPrecisionMetadata::default();
+        let comp = determine_compression_type(
+            &DetectedCodec::H264,
+            Some(100_000_000), // Very high bitrate
+            1920,
+            1080,
+            Some(60.0),
+            &precision,
+        );
+        assert_eq!(comp, CompressionType::VisuallyLossless);
+
+        let precision_lossless = VideoPrecisionMetadata {
+            is_lossless_deterministic: true,
+            ..Default::default()
+        };
+        let comp_lossless = determine_compression_type(
+            &DetectedCodec::H264,
+            None,
+            1920,
+            1080,
+            None,
+            &precision_lossless,
+        );
+        assert_eq!(comp_lossless, CompressionType::Lossless);
+    }
+
+    #[test]
+    fn test_calculate_quality_score() {
+        let score = calculate_quality_score(&CompressionType::Lossless, Some(10), None, 3840, 2160);
+        assert_eq!(score, 100);
+
+        let score_low =
+            calculate_quality_score(&CompressionType::LowQuality, Some(8), None, 640, 480);
+        assert!(score_low < 50);
+    }
+
+    #[test]
+    fn test_extract_video_precision() {
+        let mut tags = HashMap::new();
+        tags.insert("comment".to_string(), "crf=18.5 preset=slower".to_string());
+
+        let precision = extract_video_precision(&tags, None, Some(4));
+        assert_eq!(precision.original_crf, Some(18.5));
+        assert_eq!(precision.original_preset, Some("slower".to_string()));
+        assert_eq!(precision.original_max_b_frames, Some(4));
+    }
+
+    #[test]
+    fn test_generate_video_recommendation() {
+        let features = Detection {
+            codec: DetectedCodec::ProRes,
+            file_path: "test.mov".to_string(),
+            ..Default::default()
+        };
+
+        let rec = generate_video_recommendation(&features);
+        assert!(rec.is_archival_upgrade);
+        assert!(rec.recommended_codec.contains("AV1"));
     }
 }

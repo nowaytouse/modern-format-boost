@@ -878,19 +878,14 @@ fn auto_convert_single_file(
         let reason =
             "Live Photo detected in Apple compat mode - skipping to preserve pair (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
-        let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or_else(
-            |e| {
-                log_anomaly!(
-                    "Metadata",
-                    &format!(
-                        "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                        input.display()
-                    ),
-                );
-                0
-            },
-            |m| m.len(),
-        );
+        let file_size = shared_utils::io_utils::metadata_with_retry(input)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to read metadata for Live Photo skip {}: {e}",
+                    input.display()
+                )
+            })?
+            .len();
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),

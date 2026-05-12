@@ -222,4 +222,20 @@ mod tests {
         // But it should have prefixing
         assert_eq!(exiftool_path_arg(Path::new("-dash%f.png")), "./-dash%f.png");
     }
+
+    #[test]
+    fn test_isolated_temp_path_for_search() {
+        let output_path = Path::new("my_image.png");
+        let temp_path = isolated_temp_path_for_search(output_path).unwrap();
+
+        let file_name = temp_path.file_name().unwrap().to_str().unwrap();
+        assert!(file_name.starts_with("my_image.search."));
+        assert!(temp_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png")));
+
+        // Ensure it ends up in the central MFB tmp directory, not the current dir
+        let expected_tmp_dir = crate::process_lock::get_mfb_tmp_dir().unwrap();
+        assert_eq!(temp_path.parent().unwrap(), expected_tmp_dir.as_path());
+    }
 }

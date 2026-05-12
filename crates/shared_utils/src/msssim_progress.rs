@@ -109,17 +109,18 @@ impl Monitor {
         scores.get(channel).copied()
     }
 
-    pub fn current_progress(&self) -> u32 {
+    pub fn current_progress(&self) -> Option<u32> {
         let current_secs =
             crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed))
                 / crate::constants::MICROSECONDS_PER_SECOND;
         if self.duration_secs > 0.0 {
-            crate::numeric_cast::f64_to_u32_sat(
+            crate::numeric_cast::f64_to_u32_strict(
                 (current_secs / self.duration_secs * crate::constants::PERCENTAGE_FACTOR)
                     .min(crate::constants::PERCENTAGE_FACTOR),
+                "current_progress",
             )
         } else {
-            0
+            None
         }
     }
 
@@ -193,7 +194,7 @@ mod tests {
             monitor.duration_secs,
             crate::constants::PROGRESS_DEFAULT_DURATION
         ));
-        assert_eq!(monitor.current_progress(), 0);
+        assert_eq!(monitor.current_progress(), Some(0));
     }
 
     #[test]
@@ -215,19 +216,19 @@ mod tests {
         let monitor = Monitor::new(crate::constants::PERCENTAGE_FACTOR, 2500);
 
         monitor.update_from_line("out_time_us=0");
-        assert_eq!(monitor.current_progress(), 0);
+        assert_eq!(monitor.current_progress(), Some(0));
 
         monitor.update_from_line("out_time_us=25000000");
-        assert_eq!(monitor.current_progress(), 25);
+        assert_eq!(monitor.current_progress(), Some(25));
 
         monitor.update_from_line("out_time_us=50000000");
-        assert_eq!(monitor.current_progress(), 50);
+        assert_eq!(monitor.current_progress(), Some(50));
 
         monitor.update_from_line("out_time_us=100000000");
-        assert_eq!(monitor.current_progress(), 100);
+        assert_eq!(monitor.current_progress(), Some(100));
 
         monitor.update_from_line("out_time_us=150000000");
-        assert_eq!(monitor.current_progress(), 100);
+        assert_eq!(monitor.current_progress(), Some(100));
     }
 
     #[test]
@@ -252,7 +253,7 @@ mod tests {
         let monitor = Monitor::new(0.0, 0);
 
         monitor.update_from_line("out_time_us=1000000");
-        assert_eq!(monitor.current_progress(), 0);
+        assert_eq!(monitor.current_progress(), None);
     }
 
     #[test]

@@ -146,3 +146,61 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
 
     Ok(file)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_get_mfb_root() {
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("MFB_HOME_ROOT", temp.path());
+        }
+        let root = get_mfb_root().unwrap();
+        assert_eq!(root, temp.path());
+        unsafe {
+            std::env::remove_var("MFB_HOME_ROOT");
+        }
+    }
+
+    #[test]
+    fn test_hash_path_to_hex() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path();
+        let hash = hash_path_to_hex(path).unwrap();
+        assert_eq!(hash.len(), 64); // BLAKE3 hex hash length
+
+        let hash2 = hash_path_to_hex(path).unwrap();
+        assert_eq!(hash, hash2);
+    }
+
+    #[test]
+    fn test_acquire_dir_lock() {
+        let temp = TempDir::new().unwrap();
+        let dir_to_lock = temp.path();
+
+        // Mock MFB_HOME_ROOT to avoid polluting actual user home
+        let mfb_home = temp.path().join("mfb_home");
+        unsafe {
+            std::env::set_var("MFB_HOME_ROOT", &mfb_home);
+        }
+
+        let _lock = acquire_dir_lock(dir_to_lock).expect("Failed to acquire first lock");
+
+        // Attempting to lock the same directory again should fail
+        let second_lock = acquire_dir_lock(dir_to_lock);
+        assert!(second_lock.is_err());
+        assert!(
+            second_lock
+                .unwrap_err()
+                .to_string()
+                .contains("already being processed")
+        );
+
+        unsafe {
+            std::env::remove_var("MFB_HOME_ROOT");
+        }
+    }
+}

@@ -347,9 +347,16 @@ pub fn execute_conversion(
         });
     }
 
-    let output_size = shared_utils::io_utils::metadata_with_retry(&output_path)
-        .ok()
-        .map(|m| m.len());
+    let output_size = Some(
+        shared_utils::io_utils::metadata_with_retry(&output_path)
+            .map_err(|e| {
+                ImgQualityError::ConversionError(format!(
+                    "Failed to read committed output metadata for {}: {e}",
+                    output_path.display()
+                ))
+            })?
+            .len(),
+    );
     let size_reduction = output_size.map(|s| {
         if detection.file_size == 0 {
             0.0
@@ -423,32 +430,34 @@ pub fn execute_conversion(
 
     let reduction =
         shared_utils::numeric_cast::option_f32_strict(size_reduction, "size_reduction_report")
-            .unwrap_or_else(|| {
-                log_anomaly!(
-                    shared_utils::static_logs::messages::LABEL_REPORT,
-                    "Missing size reduction report; defaulting to 0.0"
-                );
-                0.0
-            });
+            .ok_or_else(|| {
+                ImgQualityError::ConversionError("Missing size reduction report".to_string())
+            })?;
 
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
         let out_val = i128::from(
             shared_utils::numeric_cast::option_u64_strict(output_size, "output_size_report")
-                .unwrap_or_else(|| {
-                    log_anomaly!(
-                        shared_utils::static_logs::messages::LABEL_REPORT,
-                        "Missing output size report; defaulting to 0"
-                    );
-                    0
-                }),
+                .ok_or_else(|| {
+                    ImgQualityError::ConversionError("Missing output size report".to_string())
+                })?,
         );
         let src_val = i128::from(detection.file_size);
         let diff_bytes = out_val - src_val;
 
-        let size_diff = shared_utils::modern_ui::format_size_diff(
-            i64::try_from(diff_bytes).unwrap_or(i64::MAX),
+        let size_diff = i64::try_from(diff_bytes).map_or_else(
+            |_| {
+                log_anomaly!(
+                    shared_utils::static_logs::messages::LABEL_REPORT,
+                    &format!(
+                        "Size diff overflow while reporting {}",
+                        output_path.display()
+                    )
+                );
+                "size delta unavailable".to_string()
+            },
+            shared_utils::modern_ui::format_size_diff,
         );
         format!("✅ JXL {action}: {size_diff}")
     };
@@ -675,7 +684,7 @@ mod tests {
             fps: None,
             duration: None,
             estimated_quality: Some(85),
-            entropy: 7.0,
+            entropy: Some(7.0),
             precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
@@ -701,12 +710,90 @@ mod tests {
             fps: Some(10.0),
             duration: Some(3.0),
             estimated_quality: None,
-            entropy: 5.0,
+            entropy: Some(5.0),
             precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
         let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::NoConversion);
+        Ok(())
+    }
+
+    #[test]
+    fn test_modern_format_no_conversion() -> Result<()> {
+        let detection = DetectionResult {
+            file_path: "/test/image.jxl".to_string(),
+            format: DetectedFormat::JXL,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossless,
+            width: 1920,
+            height: 1080,
+            bit_depth: 10,
+            has_alpha: true,
+            file_size: 100_000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: None,
+            entropy: None,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
+        };
+
+        let strategy = determine_strategy(&detection)?;
+        assert_eq!(strategy.target, TargetFormat::NoConversion);
+        assert!(strategy.reason.contains("already optimized"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_png_strategy() -> Result<()> {
+        let detection = DetectionResult {
+            file_path: "/test/image.png".to_string(),
+            format: DetectedFormat::PNG,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossless,
+            width: 100,
+            height: 100,
+            bit_depth: 8,
+            has_alpha: false,
+            file_size: 1000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: None,
+            entropy: None,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
+        };
+
+        let strategy = determine_strategy(&detection)?;
+        assert_eq!(strategy.target, TargetFormat::JXL);
+        assert!(strategy.command.contains("-d 0.0"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_lossy_tiff_to_avif_strategy() -> Result<()> {
+        let detection = DetectionResult {
+            file_path: "/test/image.tiff".to_string(),
+            format: DetectedFormat::TIFF,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossy,
+            width: 100,
+            height: 100,
+            bit_depth: 8,
+            has_alpha: false,
+            file_size: 1000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: Some(90),
+            entropy: None,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
+        };
+
+        let strategy = determine_strategy(&detection)?;
+        assert_eq!(strategy.target, TargetFormat::AVIF);
+        assert!(strategy.command.contains("-q 90"));
         Ok(())
     }
 }

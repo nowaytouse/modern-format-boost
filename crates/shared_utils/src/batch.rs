@@ -568,7 +568,15 @@ fn format_priority_for_image(path: &Path) -> u8 {
 /// chain so modern formats (HEIC/HEIF/AVIF/JXL) are handled uniformly.
 fn image_pixel_count(path: &Path) -> Option<u64> {
     match crate::conversion::get_input_dimensions(path) {
-        Ok((width, height)) => Some(u64::from(width).saturating_mul(u64::from(height))),
+        Ok((width, height)) => u64::from(width).checked_mul(u64::from(height)).or_else(|| {
+            warn!(
+                path = %path.display(),
+                width,
+                height,
+                "Image pixel-count multiplication overflowed"
+            );
+            None
+        }),
         Err(e) => {
             warn!(path = %path.display(), error = %e, "Failed to read image dimensions for pixel count sorting");
             None
@@ -576,21 +584,38 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
     }
 }
 
+/// Compares optional numeric sort keys without forging sentinel values.
+///
+/// Missing metadata is an explicit worst-case sort key, not a synthetic
+/// `u64::MAX` payload.
+fn cmp_optional_u64_missing_last(left: Option<u64>, right: Option<u64>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn cmp_optional_f64_missing_last(left: Option<f64>, right: Option<f64>) -> std::cmp::Ordering {
+    cmp_optional_u64_missing_last(left.and_then(float_ord_key), right.and_then(float_ord_key))
+}
+
 /// Converts a floating-point value to a sortable ordinal key.
 ///
 /// Multiplies by 1000 and rounds to preserve 3 decimal places of precision.
-/// Non-finite or negative values are mapped to the maximum value.
+/// Non-finite, negative, or overflowing values remain absent.
 ///
 /// # Arguments
 /// * `value` - The floating-point value to convert
 ///
 /// # Returns
 /// Sortable ordinal key for comparison
-fn float_ord_key(value: f64) -> u64 {
+fn float_ord_key(value: f64) -> Option<u64> {
     if value.is_finite() && value >= 0.0 {
-        crate::numeric_cast::f64_to_u64_sat((value * 1000.0).round())
+        crate::numeric_cast::f64_to_u64_strict((value * 1000.0).round(), "float_ord_key")
     } else {
-        u64::MAX
+        None
     }
 }
 
@@ -614,11 +639,7 @@ fn compare_image_sort_entries(
         .cmp(&left.relative_depth)
         .then_with(|| left.format_priority.cmp(&right.format_priority))
         .then_with(|| left.size.cmp(&right.size))
-        .then_with(|| {
-            left.pixel_count
-                .unwrap_or(u64::MAX)
-                .cmp(&right.pixel_count.unwrap_or(u64::MAX))
-        })
+        .then_with(|| cmp_optional_u64_missing_last(left.pixel_count, right.pixel_count))
         .then_with(|| left.path.cmp(&right.path))
 }
 
@@ -1015,7 +1036,17 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
     };
 
     let pixel_count = if probe.width > 0 && probe.height > 0 {
-        Some(u64::from(probe.width).saturating_mul(u64::from(probe.height)))
+        u64::from(probe.width)
+            .checked_mul(u64::from(probe.height))
+            .or_else(|| {
+                warn!(
+                    path = %path.display(),
+                    width = probe.width,
+                    height = probe.height,
+                    "Video pixel-count multiplication overflowed"
+                );
+                None
+            })
     } else {
         None
     };
@@ -1038,9 +1069,20 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         |fc| if fc > 0 { Some(fc) } else { None },
     );
 
-    let estimated_work = pixel_count
-        .zip(frame_count)
-        .map(|(pixels, frames)| pixels.saturating_mul(frames.max(1)));
+    let estimated_work = pixel_count.zip(frame_count).and_then(|(pixels, frames)| {
+        pixels.checked_mul(frames.max(1)).map_or_else(
+            || {
+                warn!(
+                    path = %path.display(),
+                    pixels,
+                    frames,
+                    "Estimated video sort work overflowed; treating work estimate as missing"
+                );
+                None
+            },
+            Some,
+        )
+    });
 
     (pixel_count, duration_secs, frame_rate, estimated_work)
 }
@@ -1063,27 +1105,11 @@ fn compare_video_sort_entries(
     right
         .relative_depth
         .cmp(&left.relative_depth)
-        .then_with(|| {
-            left.estimated_work
-                .unwrap_or(u64::MAX)
-                .cmp(&right.estimated_work.unwrap_or(u64::MAX))
-        })
-        .then_with(|| {
-            left.duration_secs
-                .map_or(u64::MAX, float_ord_key)
-                .cmp(&right.duration_secs.map_or(u64::MAX, float_ord_key))
-        })
+        .then_with(|| cmp_optional_u64_missing_last(left.estimated_work, right.estimated_work))
+        .then_with(|| cmp_optional_f64_missing_last(left.duration_secs, right.duration_secs))
         .then_with(|| left.size.cmp(&right.size))
-        .then_with(|| {
-            left.pixel_count
-                .unwrap_or(u64::MAX)
-                .cmp(&right.pixel_count.unwrap_or(u64::MAX))
-        })
-        .then_with(|| {
-            left.frame_rate
-                .map_or(u64::MAX, float_ord_key)
-                .cmp(&right.frame_rate.map_or(u64::MAX, float_ord_key))
-        })
+        .then_with(|| cmp_optional_u64_missing_last(left.pixel_count, right.pixel_count))
+        .then_with(|| cmp_optional_f64_missing_last(left.frame_rate, right.frame_rate))
         .then_with(|| left.path.cmp(&right.path))
 }
 

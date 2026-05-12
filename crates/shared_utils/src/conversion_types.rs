@@ -82,8 +82,7 @@ impl TargetVideoFormat {
             Self::HevcMov => "MOV",
             Self::Av1Mp4 | Self::Av2Mp4 | Self::VvcMp4 | Self::HevcMp4 => "MP4",
             Self::Gif => "GIF",
-            Self::Ignored => "",
-            Self::Skip => "",
+            Self::Ignored | Self::Skip => "",
         }
     }
 
@@ -287,3 +286,100 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
         self.blake3.as_deref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selected_codec_properties() {
+        assert_eq!(SelectedCodec::Hevc.as_str(), "hevc");
+        assert_eq!(SelectedCodec::Av1.as_str(), "av1");
+        assert_eq!(SelectedCodec::Av2.as_str(), "av2");
+        assert_eq!(SelectedCodec::Vvc.as_str(), "vvc");
+
+        assert!(!SelectedCodec::Hevc.is_experimental());
+        assert!(!SelectedCodec::Av1.is_experimental());
+        assert!(SelectedCodec::Av2.is_experimental());
+        assert!(SelectedCodec::Vvc.is_experimental());
+
+        assert_eq!(
+            SelectedCodec::Av2.min_encoder_version(),
+            Some("libaom 4.0.0")
+        );
+        assert_eq!(SelectedCodec::Hevc.min_encoder_version(), None);
+    }
+
+    #[test]
+    fn test_target_video_format_properties() {
+        assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "MKV");
+        assert_eq!(TargetVideoFormat::Av1Mp4.extension(), "MP4");
+        assert_eq!(TargetVideoFormat::Gif.extension(), "GIF");
+        assert_eq!(TargetVideoFormat::Skip.extension(), "");
+
+        assert!(!TargetVideoFormat::Av1Mp4.is_experimental());
+        assert!(TargetVideoFormat::Av2Mp4.is_experimental());
+        assert!(TargetVideoFormat::VvcMp4.is_experimental());
+
+        assert!(TargetVideoFormat::HevcMov.as_str().contains("Apple"));
+    }
+
+    #[test]
+    fn test_conversion_config_flags() {
+        let mut config = ConversionConfig { flags: ConfigFlags::FORCE | ConfigFlags::USE_GPU, ..Default::default() };
+
+        assert!(config.force());
+        assert!(config.use_gpu());
+        assert!(!config.delete_original());
+        assert!(!config.should_delete_original());
+
+        config.flags |= ConfigFlags::IN_PLACE;
+        assert!(config.in_place());
+        assert!(config.should_delete_original());
+    }
+
+    #[test]
+    fn test_conversion_output_outcome() {
+        let strategy = ConversionStrategy {
+            target: TargetVideoFormat::Av1Mp4,
+            reason: String::new(),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 20.0,
+            lossless: false,
+        };
+
+        let mut output = ConversionOutput {
+            input_path: "in.mp4".to_string(),
+            output_path: "out.mp4".to_string(),
+            strategy,
+            input_size: 100,
+            output_size: 50,
+            size_ratio: 0.5,
+            success: true,
+            message: String::new(),
+            final_crf: 20.0,
+            exploration_attempts: 1,
+            blake3: None,
+            ignored: false,
+        };
+
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Converted);
+
+        output.success = false;
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Failed);
+
+        output.success = true;
+        output.ignored = true;
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Ignored);
+
+        output.ignored = false;
+        output.output_size = 0;
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Skipped);
+
+        output.output_size = 50;
+        output.strategy.target = TargetVideoFormat::Skip;
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Skipped);
+    }
+}
+

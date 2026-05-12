@@ -1024,3 +1024,52 @@ impl ExploreStrategy for CompressWithQualityStrategy {
         "Maximize compression with quality check"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ssim_result_helpers() {
+        let actual = SsimResult::actual(0.95, Some(40.0));
+        assert!(actual.is_actual());
+        assert!(!actual.is_predicted());
+        assert_eq!(actual.psnr, Some(40.0));
+        assert!(actual.meets_threshold(0.94));
+
+        let predicted = SsimResult::predicted(0.92, 38.0);
+        assert!(!predicted.is_actual());
+        assert!(predicted.is_predicted());
+        assert_eq!(predicted.psnr, Some(38.0));
+    }
+
+    #[test]
+    fn test_crf_cache() {
+        let mut cache = CrfCache::new();
+        assert!(!cache.contains_key(20.0));
+
+        cache.insert(20.0, 1000u64);
+        assert!(cache.contains_key(20.0));
+        assert_eq!(cache.get(20.0), Some(&1000u64));
+
+        // Float precision test
+        assert!(cache.contains_key(20.00001));
+        assert!(!cache.contains_key(20.1));
+    }
+
+    #[test]
+    fn test_crf_cache_invalid() {
+        assert!(CrfCache::<u64>::key(-1.0).is_none());
+        assert!(CrfCache::<u64>::key(f32::NAN).is_none());
+        assert!(CrfCache::<u64>::key(200.0).is_none()); // Above CRF_CACHE_MAX_VALID
+    }
+
+    #[test]
+    fn test_parse_ssim() {
+        let stderr = "SSIM Y:0.998471 (28.156173) U:0.998533 (28.336496) V:0.999124 (30.575023) All:0.998634 (28.646541)";
+        assert_eq!(ExploreContext::parse_ssim(stderr), Some(0.998_634));
+
+        let invalid = "Some random text";
+        assert_eq!(ExploreContext::parse_ssim(invalid), None);
+    }
+}

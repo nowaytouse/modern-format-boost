@@ -888,3 +888,93 @@ pub fn strip_jpeg_tail_to_temp(
     let temp_path = temp.path().to_path_buf();
     Ok(Some((temp_path, temp)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_is_icc_rounding_error() {
+        assert!(is_icc_rounding_error("Invalid ICC profile: ..."));
+        assert!(is_icc_rounding_error("bad connection space in ICC"));
+        assert!(is_icc_rounding_error("ICC_Profile rejected"));
+        assert!(is_icc_rounding_error("ICC_Profile is invalid"));
+        assert!(!is_icc_rounding_error("Some other error"));
+    }
+
+    #[test]
+    fn test_is_grayscale_icc_cjxl_error() {
+        assert!(is_grayscale_icc_cjxl_error(
+            "RGB color space not permitted on grayscale PNG"
+        ));
+        assert!(is_grayscale_icc_cjxl_error(
+            "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"
+        ));
+        assert!(is_grayscale_icc_cjxl_error("iccp: grayscale issue"));
+        assert!(!is_grayscale_icc_cjxl_error("Normal cjxl error"));
+    }
+
+    #[test]
+    fn test_is_decode_or_pixel_cjxl_error() {
+        assert!(is_decode_or_pixel_cjxl_error("Getting pixel data failed"));
+        assert!(is_decode_or_pixel_cjxl_error("failed to decode image"));
+        assert!(!is_decode_or_pixel_cjxl_error("ICC error"));
+    }
+
+    #[test]
+    fn test_is_cjxl_signal_killed() {
+        let stderr = "JPEG XL encoder v0.10.2\nEncoding [0.00%]";
+        assert!(is_cjxl_signal_killed(stderr));
+
+        let stderr_with_error = "JPEG XL encoder v0.10.2\nError: something failed";
+        assert!(!is_cjxl_signal_killed(stderr_with_error));
+
+        let stderr_not_started = "Some unrelated output";
+        assert!(!is_cjxl_signal_killed(stderr_not_started));
+    }
+
+    #[test]
+    fn test_get_png_bit_depth() {
+        let mut temp = NamedTempFile::new().unwrap();
+        let mut data = vec![0u8; 25];
+        data[0..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        data[24] = 16;
+        temp.write_all(&data).unwrap();
+
+        assert_eq!(get_png_bit_depth(temp.path()), Some(16));
+
+        let mut invalid_temp = NamedTempFile::new().unwrap();
+        invalid_temp.write_all(b"NOT_A_PNG").unwrap();
+        assert_eq!(get_png_bit_depth(invalid_temp.path()), None);
+    }
+
+    #[test]
+    fn test_strip_jpeg_tail_to_temp() {
+        let mut data = vec![0xFF, 0xD8, 0x00, 0x11, 0xFF, 0xD9];
+        let tail = vec![0x01, 0x02, 0x03];
+        data.extend_from_slice(&tail);
+
+        let mut temp_in = NamedTempFile::new().unwrap();
+        temp_in.write_all(&data).unwrap();
+
+        let result = strip_jpeg_tail_to_temp(temp_in.path()).unwrap();
+        assert!(result.is_some());
+        let (temp_path, _guard) = result.unwrap();
+
+        let stripped_data = std::fs::read(temp_path).unwrap();
+        assert_eq!(stripped_data, vec![0xFF, 0xD8, 0x00, 0x11, 0xFF, 0xD9]);
+    }
+
+    #[test]
+    fn test_verify_jxl_health_basic() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0xFF, 0x0A]).unwrap();
+        assert!(verify_jxl_health(temp.path()).is_ok());
+
+        let mut invalid_temp = NamedTempFile::new().unwrap();
+        invalid_temp.write_all(&[0x00, 0x01]).unwrap();
+        assert!(verify_jxl_health(invalid_temp.path()).is_err());
+    }
+}

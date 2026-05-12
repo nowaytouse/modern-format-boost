@@ -189,8 +189,8 @@ jobs:
             cp "target/${{ matrix.target }}/release/${bin}${EXT}" dist/
           done
           cp -r crates/dev/scripts dist/
-          cp README.md dist/ 2>/dev/null || true
-          cp LICENSE   dist/ 2>/dev/null || true
+          cp README.md dist/
+          cp LICENSE dist/
 
           cd dist
           if [[ "${{ matrix.os }}" == windows-* ]]; then

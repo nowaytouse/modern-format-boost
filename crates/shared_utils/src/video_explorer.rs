@@ -2191,12 +2191,13 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    let permille = crate::numeric_cast::u64_to_u32_sat(
-                        u64::try_from(
-                            (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
-                        )
-                        .unwrap_or(u64::MAX),
-                    );
+                    let permille_raw = u64::try_from(
+                        (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
+                    )
+                    .context("progress permille calculation overflowed u64")?;
+                    let permille =
+                        crate::numeric_cast::u64_to_u32_strict(permille_raw, "progress_permille")
+                            .context("progress permille calculation overflowed u32")?;
                     (f64::from(permille) / 100.0_f64) - 100.0_f64
                 } else {
                     0.0_f64

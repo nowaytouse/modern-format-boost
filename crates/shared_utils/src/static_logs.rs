@@ -688,3 +688,31 @@ macro_rules! log_static {
         tracing::trace!("{}", $msg_const);
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_severity_labels() {
+        assert_eq!(ErrorSeverity::Critical.label(), "[CRITICAL]");
+        assert!(ErrorSeverity::Critical.label_colored().contains("CRITICAL"));
+        assert!(ErrorSeverity::Rare.label_colored().contains("RARE ERROR"));
+    }
+
+    #[test]
+    fn test_classify_error() {
+        assert_eq!(classify_error("File is corrupt"), ErrorSeverity::Critical);
+        assert_eq!(
+            classify_error("metadata is missing"),
+            ErrorSeverity::MetadataLoss
+        );
+        assert_eq!(classify_error("broken pipe"), ErrorSeverity::PipelineBroken);
+        assert_eq!(classify_error("assertion failed"), ErrorSeverity::Rare);
+        assert_eq!(
+            classify_error("ffmpeg failed with exit code 1"),
+            ErrorSeverity::UpstreamError
+        );
+        assert_eq!(classify_error("some random error"), ErrorSeverity::Standard);
+    }
+}

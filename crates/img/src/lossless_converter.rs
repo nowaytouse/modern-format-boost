@@ -79,7 +79,7 @@ fn finalize_with_size_check(
         options.force(),
         Some(input),
     )? {
-        return Ok(TaskResult::skipped_exists(input, output));
+        return Ok(TaskResult::skipped_exists(input, output)?);
     }
 
     // Check size tolerance (compress mode, oversized check)
@@ -140,24 +140,24 @@ pub fn convert_heic_gainmap_to_jxl(input: &Path, options: &ConvertOptions) -> Re
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, EXT_JXL, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     // Use 16-bit PNG for PQ HDR encoding with cjxl
-    let intermediate_format = shared_utils::HdrIntermediateFormat::Png16;
+    let intermediate_format = shared_utils::hdr::IntermediateFormat::Png16;
 
     // Call the synthesis logic from shared_utils
-    shared_utils::hdr::convert_heic_with_gainmap_to_jxl_hdr(
+    shared_utils::hdr::convert_heic_with_gainmap_to_jxl(
         input,
         &temp_output,
         options.apple_compat(),
@@ -211,25 +211,25 @@ pub fn convert_ultrahdr_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> R
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, EXT_JXL, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     // Synthesize into an isolated temp path so final commit/metadata handling stays atomic.
-    shared_utils::hdr::convert_ultrahdr_jpeg_to_jxl_hdr(
+    shared_utils::hdr::convert_ultrahdr_jpeg_to_jxl(
         input,
         &temp_output,
         options.apple_compat(),
-        shared_utils::hdr::HdrIntermediateFormat::Png16,
+        shared_utils::hdr::IntermediateFormat::Png16,
         options.ultimate(),
     )
     .map_err(|e| {
@@ -324,7 +324,7 @@ pub fn convert_to_jxl(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -355,7 +355,7 @@ pub fn convert_to_jxl(
     }
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -512,7 +512,7 @@ pub fn convert_to_jxl(
                             options.force(),
                             Some(input),
                         )? {
-                            return Ok(TaskResult::skipped_exists(input, &output));
+                            return Ok(TaskResult::skipped_exists(input, &output)?);
                         }
                         return finalize_task(
                             input,
@@ -964,19 +964,14 @@ fn commit_jpeg_to_jxl_success(
         cleanup_temp_output(temp_output, input);
         return Err(e);
     }
-    let output_size = fs::metadata(temp_output).map_or_else(
-        |e| {
-            log_anomaly!(
-                shared_utils::static_logs::messages::LABEL_CONVERSION,
-                &format!(
-                    "Failed to read metadata for {}; defaulting to size 0. Error: {e}",
-                    temp_output.display()
-                ),
-            );
-            0
-        },
-        |m| m.len(),
-    );
+    let output_size = fs::metadata(temp_output)
+        .map_err(|e| {
+            ImgQualityError::ConversionError(format!(
+                "Failed to read metadata for JXL output {}: {e}",
+                temp_output.display()
+            ))
+        })?
+        .len();
     finalize_with_size_check(
         input,
         temp_output,
@@ -1031,7 +1026,7 @@ pub fn convert_jpeg_to_jxl(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     // Check for corruption early
@@ -1069,7 +1064,7 @@ pub fn convert_jpeg_to_jxl(
     let output = get_output_path(input, EXT_JXL, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1258,14 +1253,14 @@ pub fn convert_to_avif(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, EXT_AVIF, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1342,14 +1337,14 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, EXT_AVIF, options)?;
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1458,7 +1453,7 @@ pub fn convert_to_jxl_matched(
     }
 
     if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input));
+        return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -1469,7 +1464,7 @@ pub fn convert_to_jxl_matched(
     }
 
     if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output));
+        return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)

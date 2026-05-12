@@ -505,11 +505,11 @@ pub use loop_intent::{
 };
 
 pub use hdr::{
-    GainMapParams, HdrIntermediateFormat, color_info_to_cicp, color_info_to_ffmpeg_args,
-    color_info_to_x265_hdr_params, convert_heic_with_gainmap_to_jxl_hdr,
-    convert_ultrahdr_jpeg_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_migration,
-    decode_hdr_image_to_png16, dv_x265_profile_string, extract_dv_rpu, extract_hevc_bitstream,
-    get_hdr_pix_fmt, is_dovi_tool_available, should_use_hdr_decode,
+    GainMapParams, IntermediateFormat, color_info_to_cicp, color_info_to_ffmpeg_args,
+    color_info_to_x265_hdr_params, convert_heic_with_gainmap_to_jxl, convert_ultrahdr_jpeg_to_jxl,
+    convert_ultrahdr_jpeg_to_jxl_migration, decode_hdr_image_to_png16, dv_x265_profile_string,
+    extract_dv_rpu, extract_hevc_bitstream, get_hdr_pix_fmt, is_dovi_tool_available,
+    should_use_hdr_decode,
 };
 
 pub use batch::*;

@@ -204,3 +204,73 @@ impl ToolBuilder for DjxlBuilder {
         cmd
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cjxl_builder() {
+        let mut builder = CjxlBuilder::new();
+        builder
+            .input(Path::new("in.png"))
+            .output(Path::new("out.jxl"))
+            .distance(1.5)
+            .effort(7)
+            .threads(4)
+            .lossless_jpeg(true)
+            .allow_jpeg_reconstruction(false)
+            .cicp("1")
+            .apple_compat(true)
+            .intensity_target(250.0);
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        // lossless_jpeg overrides distance to 0.0
+        assert!(args.contains(&"-d"));
+        assert!(args.contains(&"0"));
+
+        assert!(args.contains(&"-e"));
+        assert!(args.contains(&"7"));
+
+        assert!(args.contains(&"-j"));
+        assert!(args.contains(&"4"));
+
+        assert!(args.contains(&"--lossless_jpeg=1"));
+        assert!(args.contains(&"--allow_jpeg_reconstruction=0"));
+
+        assert!(args.contains(&"-x"));
+        assert!(args.contains(&"color_space=1"));
+
+        assert!(args.contains(&"--compress_boxes=0"));
+        assert!(args.contains(&"--intensity_target"));
+        assert!(args.contains(&"250.00"));
+    }
+
+    #[test]
+    fn test_cjxl_builder_stdin() {
+        let mut builder = CjxlBuilder::new();
+        builder.use_stdin(true).output(Path::new("out.jxl"));
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert_eq!(args[0], "-");
+        assert_eq!(args[1], "out.jxl");
+    }
+
+    #[test]
+    fn test_djxl_builder() {
+        let mut builder = DjxlBuilder::new();
+        builder
+            .input(Path::new("in.jxl"))
+            .output(Path::new("out.png"));
+
+        let cmd = builder.build();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+
+        assert_eq!(args[0], "in.jxl");
+        assert_eq!(args[1], "out.png");
+    }
+}

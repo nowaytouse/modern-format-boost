@@ -310,7 +310,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
             } else {
                 // Calculate from file size: (file_size * 8) / duration
                 let bits = crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64;
-                Some(crate::numeric_cast::f64_to_u64_sat(bits / dur))
+                crate::numeric_cast::f64_to_u64_strict(bits / dur, "derived_bitrate")
             }
         })
         .ok_or_else(|| {
@@ -324,17 +324,16 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
             fps_r
         };
         if pixels_per_second > 0 {
-            // effective_bitrate is u64; Rational::from requires i64 or smaller.
-            // Saturate to i64::MAX for astronomically large bitrates (>9 Pbps).
-            let bits_per_second = Rational::from(
-                i64::try_from(effective_bitrate).unwrap_or_else(|_| {
-                    tracing::warn!(
-                        effective_bitrate,
-                        "analyze_video_quality: effective_bitrate exceeds i64::MAX; saturating for BPP calc"
-                    );
-                    i64::MAX
-                }),
-            );
+            let bits_per_second = Rational::from_f64(crate::numeric_cast::u64_to_f64(
+                effective_bitrate,
+            ))
+            .ok_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    &format!("Bitrate overflow in BPP calculation: {effective_bitrate}")
+                );
+                "❌ Bitrate overflow: cannot convert to Rational".to_string()
+            })?;
             (bits_per_second / pixels_per_second).to_f64()
         } else {
             0.0_f64
@@ -354,7 +353,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 
     let compression_type = CompressionLevel::from_bpp(bpp, codec_type);
 
-    let quality_score = calculate_quality_score(bpp, codec_type, bit_depth, compression_type);
+    let quality_score = calculate_quality_score(bpp, codec_type, bit_depth, compression_type)?;
 
     // Prioritize precise CRF/QP from encoder tags over BPP heuristic
     let estimated_crf = encoder_params.map_or_else(
@@ -668,7 +667,7 @@ fn calculate_quality_score(
     codec_type: VideoCodecType,
     bit_depth: Option<u8>,
     compression: CompressionLevel,
-) -> u8 {
+) -> Result<u8, String> {
     let base = match compression {
         CompressionLevel::Lossless => crate::constants::QUALITY_SCORE_LOSSLESS,
         CompressionLevel::VisuallyLossless => crate::constants::QUALITY_SCORE_VISUALLY_LOSSLESS,
@@ -707,13 +706,15 @@ fn calculate_quality_score(
                 / crate::constants::QUALITY_TWEAK_BPP_RANGE
                 * f64::from(crate::constants::QUALITY_TWEAK_MAX_BONUS))
             .round();
-            let t = crate::numeric_cast::f64_to_u32_checked(val).unwrap_or_else(|| {
-                crate::log_anomaly!(
-                    crate::static_logs::messages::LABEL_ANOMALY,
-                    &format!("Quality calculation anomaly: bpp_tweak NaN/Inf for bpp={bpp}")
-                );
-                0
-            });
+            let t = crate::numeric_cast::f64_to_u32_strict(val, "bpp_quality_tweak").ok_or_else(
+                || {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_ANOMALY,
+                        &format!("Quality calculation anomaly: bpp_tweak NaN/Inf for bpp={bpp}")
+                    );
+                    "❌ Numerical anomaly in BPP quality tweak calculation".to_string()
+                },
+            )?;
             // t is clamped to 0..=5, always fits u8.
             u8::try_from(t.clamp(0, crate::constants::QUALITY_TWEAK_STANDARD_MAX_TICK))
                 .expect("Clamped value strictly bounded")
@@ -725,15 +726,15 @@ fn calculate_quality_score(
                     / crate::constants::QUALITY_TWEAK_BPP_RANGE
                     * crate::constants::QUALITY_TWEAK_HIGH_SCALE)
                     .round(),
-                "bpp_tweak",
+                "bpp_tweak_high",
             )
-            .unwrap_or_else(|| {
+            .ok_or_else(|| {
                 crate::log_anomaly!(
                     crate::static_logs::messages::LABEL_ANOMALY,
-                    &format!("Invalid BPP value {bpp} for tweak calculation")
+                    &format!("Invalid BPP value {bpp} for high-quality tweak calculation")
                 );
-                1 // Default middle value
-            });
+                "❌ Numerical anomaly in high-quality BPP tweak calculation".to_string()
+            })?;
             // t is clamped to 0..=3, always fits u8.
             u8::try_from(t.clamp(0, crate::constants::QUALITY_TWEAK_HIGH_MAX_TICK))
                 .expect("Clamped value strictly bounded")
@@ -741,7 +742,7 @@ fn calculate_quality_score(
         _ => 0,
     };
 
-    (base + depth_bonus + codec_bonus + bpp_tweak).min(100)
+    Ok((base + depth_bonus + codec_bonus + bpp_tweak).min(100))
 }
 
 fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {

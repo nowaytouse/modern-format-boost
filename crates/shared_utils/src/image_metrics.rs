@@ -79,7 +79,10 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
             use rug::Integer;
             // mse_sum is a sum of squared differences (f64).
             // Convert to Integer only after summing to avoid heap allocs in loop.
-            let mse_sum_int = Integer::from(crate::numeric_cast::f64_to_u64_sat(mse_sum.round()));
+            let mse_sum_int = Integer::from(
+                crate::numeric_cast::f64_to_u64_strict(mse_sum.round(), "mse_sum")
+                    .expect("MSE sum overflow/NaN"),
+            );
             let pixel_count_int = Integer::from(orig_pixels.len());
             let three_int = Integer::from(3);
             let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
@@ -328,7 +331,8 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
         // WINDOW_SIZE = 11, always fits u32; saturating cast is equivalent.
-        let window_u32 = crate::numeric_cast::usize_to_u32_sat(WINDOW_SIZE);
+        let window_u32 = crate::numeric_cast::usize_to_u32_strict(WINDOW_SIZE, "window_size")
+            .expect("WINDOW_SIZE constant overflow");
         if w < window_u32 || h < window_u32 {
             break;
         }
@@ -336,6 +340,13 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
         if let Some(ssim) = calculate_ssim(&orig, &conv) {
             used_weight_sum += weight;
             ms_ssim *= ssim.powf(weight);
+        } else {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_MS_SSIM,
+                &format!(
+                    "MS-SSIM scale {i} calculation failed (dim: {w}x{h}); metric invalidated",
+                )
+            );            return None; // Honestly invalidate the entire MS-SSIM if a scale fails numerically
         }
 
         if i < scales - 1 {
@@ -415,8 +426,10 @@ mod tests {
     fn test_identical_images() {
         let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |x, y| {
             image::Rgb([
-                crate::numeric_cast::u32_to_u8_sat(x % 256),
-                crate::numeric_cast::u32_to_u8_sat(y % 256),
+                crate::numeric_cast::u32_to_u8_strict(x % 256, "pixel_x")
+                    .expect("x % 256 must fit u8"),
+                crate::numeric_cast::u32_to_u8_strict(y % 256, "pixel_y")
+                    .expect("y % 256 must fit u8"),
                 128,
             ])
         }));
@@ -497,7 +510,8 @@ mod tests {
     fn test_ms_ssim_identical() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 64, |x, y| {
             image::Rgb([
-                crate::numeric_cast::u32_to_u8_sat(x.wrapping_add(y) % 256),
+                crate::numeric_cast::u32_to_u8_strict(x.wrapping_add(y) % 256, "pixel_sum")
+                    .expect("sum % 256 must fit u8"),
                 128,
                 200,
             ])

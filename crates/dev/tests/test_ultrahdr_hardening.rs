@@ -3,6 +3,134 @@ use shared_utils::image_jpeg_analysis::{extract_gainmap_from_jpeg, is_ultra_hdr_
 #[test]
 fn ultrahdr_hardening_suite() -> Result<(), Box<dyn std::error::Error>> {
     test_ultrahdr_absolute_offset_fallback()?;
+    test_real_ultrahdr_samples_from_github()?;
+    test_ultrahdr_to_jxl_conversion()?;
+    Ok(())
+}
+
+fn test_ultrahdr_to_jxl_conversion() -> Result<(), Box<dyn std::error::Error>> {
+    use shared_utils::hdr::{IntermediateFormat, convert_ultrahdr_jpeg_to_jxl};
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    // Check if cjxl is available
+    if Command::new("cjxl").arg("--version").output().is_err() {
+        println!("⚠️ Warning: cjxl is not available, skipping JXL conversion test.");
+        return Ok(());
+    }
+
+    let temp = TempDir::new()?;
+    let sample_url = "https://raw.githubusercontent.com/MishaalRahmanGH/Ultra_HDR_Samples/main/Originals/Ultra_HDR_Samples_Originals_01.jpg";
+    let sample_path = temp.path().join("ultrahdr_sample_convert.jpg");
+
+    println!("Downloading Ultra HDR sample for conversion test...");
+    let status = Command::new("curl")
+        .arg("-sSL")
+        .arg(sample_url)
+        .arg("-o")
+        .arg(&sample_path)
+        .status()?;
+
+    if !status.success() || std::fs::metadata(&sample_path)?.len() < 1000 {
+        println!("⚠️ Warning: Failed to download sample, skipping test.");
+        return Ok(());
+    }
+
+    let output_jxl = temp.path().join("output.jxl");
+
+    println!("Running Ultra HDR to JXL conversion (Apple Compat: false)...");
+    let result = convert_ultrahdr_jpeg_to_jxl(
+        &sample_path,
+        &output_jxl,
+        false,                     // apple_compat
+        IntermediateFormat::Png16, // Use PNG16 as it's typically faster/more compatible without OpenEXR lib setup
+        false,                     // ultimate
+    );
+
+    match result {
+        Ok(()) => {
+            println!("✅ Conversion successful!");
+            assert!(output_jxl.exists(), "Output JXL file should exist");
+            assert!(
+                std::fs::metadata(&output_jxl)?.len() > 1000,
+                "Output JXL should be a substantial file"
+            );
+        }
+        Err(e) => {
+            panic!("❌ Conversion failed: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+fn test_real_ultrahdr_samples_from_github() -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new()?;
+    let sample_url = "https://raw.githubusercontent.com/MishaalRahmanGH/Ultra_HDR_Samples/main/Originals/Ultra_HDR_Samples_Originals_01.jpg";
+    let sample_path = temp.path().join("ultrahdr_sample_01.jpg");
+
+    println!("Downloading Ultra HDR sample from GitHub...");
+    let status = Command::new("curl")
+        .arg("-sSL")
+        .arg(sample_url)
+        .arg("-o")
+        .arg(&sample_path)
+        .status()?;
+
+    if !status.success() {
+        println!(
+            "⚠️ Warning: Failed to download sample, skipping test to prevent CI failure on network issues."
+        );
+        return Ok(());
+    }
+
+    let data = std::fs::read(&sample_path)?;
+    if data.len() < 1000 {
+        println!(
+            "⚠️ Warning: Downloaded file too small, skipping test (might be 404 or network issue)."
+        );
+        return Ok(());
+    }
+
+    println!(
+        "✅ Downloaded sample successfully. File size: {} bytes",
+        data.len()
+    );
+
+    assert!(
+        is_ultra_hdr_jpeg(&data),
+        "Real sample should be identified as Ultra HDR"
+    );
+
+    let result = extract_gainmap_from_jpeg(&data);
+    match result {
+        Ok((base_img, gainmap_img)) => {
+            println!("✅ Successfully extracted gainmap from real Ultra HDR sample.");
+            println!(
+                "   Base image width: {}, height: {}",
+                base_img.width(),
+                base_img.height()
+            );
+            println!(
+                "   Gainmap image width: {}, height: {}",
+                gainmap_img.width(),
+                gainmap_img.height()
+            );
+
+            // Verify it has significant visual data
+            assert!(
+                base_img.width() > 0 && gainmap_img.width() > 0,
+                "Images should have positive dimensions"
+            );
+        }
+        Err(e) => {
+            panic!("❌ Failed to extract gainmap from real Ultra HDR sample: {e}");
+        }
+    }
+
     Ok(())
 }
 

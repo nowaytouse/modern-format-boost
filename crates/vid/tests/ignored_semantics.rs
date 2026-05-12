@@ -1,32 +1,32 @@
-/// Test TargetVideoFormat::Ignored variant and ignored semantics
-/// Regression test for: semantic confusion between "skip" vs "ignore"
+/// Test `TargetVideoFormat::Ignored` variant and ignored semantics
+/// Regression test for: semantic confusion between `skip` vs `ignore`
 /// Previously code conflated them via strategy.target=Skip + ignored=true
 #[cfg(test)]
 mod ignored_semantics_tests {
-    use vid::{TargetVideoFormat, ConversionStrategy, ConversionOutput};
+    use vid::{ConversionOutput, ConversionStrategy, TargetVideoFormat};
 
     /// Test that Ignored variant exists and can be constructed
     #[test]
     fn test_target_video_format_ignored_variant() {
         let ignored = TargetVideoFormat::Ignored;
         let as_str = ignored.as_str();
-        
+
         // Verify Ignored has a distinct string representation
         assert_eq!(as_str, "Ignored");
         assert_ne!(as_str, "Skip");
     }
 
-    /// Test that Ignored variant works in extension()
+    /// Test that `Ignored` variant works in `extension()`
     #[test]
     fn test_ignored_extension() {
         let ignored = TargetVideoFormat::Ignored;
         // Ignored should not map to a real file extension
         // (static images are handled by img, not video output)
         let ext = ignored.extension();
-        assert!(ext.is_empty() || ext == "");
+        assert!(ext.is_empty());
     }
 
-    /// Test ConversionOutput with Ignored strategy
+    /// Test `ConversionOutput` with `Ignored` strategy
     #[test]
     fn test_conversion_output_ignored_semantic() {
         let output = ConversionOutput {
@@ -56,10 +56,10 @@ mod ignored_semantics_tests {
         assert_eq!(output.strategy.target.as_str(), "Ignored");
         assert!(output.output_path.is_empty());
         assert_eq!(output.output_size, 0);
-        assert_eq!(output.final_crf, 0.0);
+        assert!((output.final_crf - 0.0).abs() < 1e-6);
     }
 
-    /// Test that outcome() correctly interprets Ignored
+    /// Test that `outcome()` correctly interprets `Ignored`
     #[test]
     fn test_conversion_output_outcome_ignored() {
         let output = ConversionOutput {
@@ -86,8 +86,8 @@ mod ignored_semantics_tests {
 
         let outcome = output.outcome();
         // outcome should be Ignored variant
-        assert_eq!(format!("{:?}", outcome), "Ignored");
-        
+        assert_eq!(format!("{outcome:?}"), "Ignored");
+
         // Verify conversion was not attempted
         assert!(output.output_path.is_empty());
         assert_eq!(output.output_size, 0);
@@ -99,7 +99,7 @@ mod ignored_semantics_tests {
         // This test verifies the semantic fix:
         // Previously: ignored=true with target=Skip (confusing)
         // Now: ignored=true MUST pair with target=Ignored
-        
+
         let correct = ConversionOutput {
             input_path: "/test/static.png".to_string(),
             output_path: String::new(),
@@ -125,7 +125,7 @@ mod ignored_semantics_tests {
         // Verify: when ignored=true, target must be Ignored
         assert!(correct.ignored);
         assert_eq!(correct.strategy.target.as_str(), "Ignored");
-        
+
         // This is the corrected pattern that prevents semantic confusion
         assert!(correct.output_path.is_empty());
     }

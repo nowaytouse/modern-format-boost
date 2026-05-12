@@ -1030,8 +1030,13 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
             )
         } else {
             // raw integer-style already in 50k units
-            let val = crate::numeric_cast::f64_to_u64_sat(v);
-            Some(val)
+            crate::numeric_cast::f64_to_u64_strict(v, "hdr_coord_raw").or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_PROBE,
+                    &format!("Numerical anomaly in raw HDR coord: {v}")
+                );
+                None
+            })
         }
     }
 }
@@ -1057,8 +1062,13 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
                 "hdr_luma",
             )
         } else {
-            let val = crate::numeric_cast::f64_to_u64_sat(v);
-            Some(val)
+            crate::numeric_cast::f64_to_u64_strict(v, "hdr_luma_raw").or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_PROBE,
+                    &format!("Numerical anomaly in raw HDR luma: {v}")
+                );
+                None
+            })
         }
     }
 }
@@ -1071,9 +1081,10 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_rational_to_50k)
             .or_else(|| {
-                sd[field].as_f64().map(|v| {
-                    crate::numeric_cast::f64_to_u64_sat(
+                sd[field].as_f64().and_then(|v| {
+                    crate::numeric_cast::f64_to_u64_strict(
                         v * crate::constants::HDR_COORD_SCALING_FACTOR,
+                        "hdr_coord_f64",
                     )
                 })
             })
@@ -1083,9 +1094,10 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_luminance_to_10k)
             .or_else(|| {
-                sd[field].as_f64().map(|v| {
-                    crate::numeric_cast::f64_to_u64_sat(
+                sd[field].as_f64().and_then(|v| {
+                    crate::numeric_cast::f64_to_u64_strict(
                         v * crate::constants::HDR_LUMA_SCALING_FACTOR,
+                        "hdr_luma_f64",
                     )
                 })
             })

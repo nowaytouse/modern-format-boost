@@ -731,10 +731,16 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         ssim: None,
         metadata,
         hdr_info,
-        precision: if let Ok(d) = detect_image(path) {
-            d.precision
-        } else {
-            PrecisionMetadata::default()
+        precision: match detect_image(path) {
+            Ok(d) => d.precision,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "image_analyzer: precision detection failed; emitting default (unknown) metadata"
+                );
+                PrecisionMetadata::default()
+            }
         },
         history: crate::common_utils::get_current_history(),
         perception: Visual::default(),
@@ -1185,9 +1191,15 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
     // Stage 2: Feature Scan (Signal B)
     // Look for GCE markers [0x21, 0xF9, 0x04] globally
     let gce_marker = &[0x21, 0xF9, 0x04];
-    let gce_hints = crate::numeric_cast::usize_to_u32_sat(
+    let gce_hints = crate::numeric_cast::usize_to_u32_strict(
         bytes.windows(3).filter(|w| *w == gce_marker).count(),
-    );
+        "gce_hints",
+    )
+    .ok_or_else(|| {
+        ImgQualityError::AnalysisError(
+            "Numerical anomaly in GCE hint count; information invalidated".to_string(),
+        )
+    })?;
 
     if gce_hints > structural_count {
         // [Disagreement] Internal Deep Research
@@ -1253,16 +1265,20 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     if (has_anim || has_anmf) && structural_count <= 1 {
         // [Disagreement] Internal Deep Research
         // Count consistent animation frame chunks (ANMF for WebP Extended)
-        let mut confirmed_frames = 0_i32;
+        let mut confirmed_frames = 0_usize;
         let mut p = 0;
         while p + 8 < bytes.len() {
             if bytes.get(p..p + 4) == Some(b"ANMF") {
-                confirmed_frames += 1_i32;
+                confirmed_frames = confirmed_frames.checked_add(1).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "Numerical overflow while counting WebP ANMF chunks".to_string(),
+                    )
+                })?;
             }
             p += 1;
         }
 
-        if confirmed_frames > 1_i32 {
+        if confirmed_frames > 1 {
             crate::log_detail!(
                 "🎞️  [Deep Research: WebP] Structural scan missed frames, but internal byte-research confirmed {} ANMF chunks: {}",
                 confirmed_frames,
@@ -2027,10 +2043,16 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
         ssim: None,
         metadata,
         hdr_info,
-        precision: if let Ok(d) = detect_image(path) {
-            d.precision
-        } else {
-            PrecisionMetadata::default()
+        precision: match detect_image(path) {
+            Ok(d) => d.precision,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "image_analyzer: precision detection failed; emitting default (unknown) metadata"
+                );
+                PrecisionMetadata::default()
+            }
         },
         history: crate::common_utils::get_current_history(),
         perception: Visual::default(),
@@ -2367,6 +2389,9 @@ fn jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> Jx
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image_detection::{
+        CompressionType, DetectedFormat, DetectionResult, ImageType, PrecisionMetadata,
+    };
 
     #[test]
     fn test_psnr_estimation() {
@@ -2442,5 +2467,80 @@ mod tests {
         let rec = get_recommendation(&analysis);
         assert_eq!(rec.recommended_format, "JXL");
         assert_eq!(rec.quality_preservation, "Mathematically Lossless");
+    }
+
+    #[test]
+    fn test_jpeg_recommendation() {
+        let features = DetectionResult {
+            file_path: "test.jpg".to_string(),
+            format: DetectedFormat::JPEG,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossy,
+            width: 1920,
+            height: 1080,
+            bit_depth: 8,
+            has_alpha: false,
+            file_size: 500_000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: Some(85),
+            entropy: Some(7.2),
+            precision: PrecisionMetadata::default(),
+        };
+
+        let indicator = jxl_indicator_from_features(&features, "test.jpg");
+        assert!(indicator.should_convert);
+        assert!(indicator.reason.contains("losslessly transcoded"));
+        assert!(indicator.command.contains("--lossless_jpeg=1"));
+    }
+
+    #[test]
+    fn test_jxl_recommendation_negative() {
+        let features = DetectionResult {
+            file_path: "test.jxl".to_string(),
+            format: DetectedFormat::JXL,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossless,
+            width: 1920,
+            height: 1080,
+            bit_depth: 8,
+            has_alpha: false,
+            file_size: 400_000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: None,
+            entropy: None,
+            precision: PrecisionMetadata::default(),
+        };
+
+        let indicator = jxl_indicator_from_features(&features, "test.jxl");
+        assert!(!indicator.should_convert);
+        assert!(indicator.reason.contains("Already efficient"));
+    }
+
+    #[test]
+    fn test_webp_lossy_recommendation_negative() {
+        let features = DetectionResult {
+            file_path: "test.webp".to_string(),
+            format: DetectedFormat::WebP,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossy,
+            width: 1920,
+            height: 1080,
+            bit_depth: 8,
+            has_alpha: false,
+            file_size: 300_000,
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: Some(80),
+            entropy: Some(7.0),
+            precision: PrecisionMetadata::default(),
+        };
+
+        let indicator = jxl_indicator_from_features(&features, "test.webp");
+        assert!(!indicator.should_convert);
     }
 }

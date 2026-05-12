@@ -848,6 +848,8 @@ pub fn auto_convert_with_cache(
 
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
+    let mut static_image_forced = false;
+
     // Safety override: If the file is an image format and image_detection proves it's static,
     // force single-frame so vid absolutely ignores static images (always routed to img).
     if let Ok(format) = shared_utils::image_detection::detect_format_from_bytes(input) {
@@ -866,17 +868,15 @@ pub fn auto_convert_with_cache(
             | shared_utils::image_detection::DetectedFormat::JP2
             | shared_utils::image_detection::DetectedFormat::HEIC
             | shared_utils::image_detection::DetectedFormat::HEIF => {
-                if let Ok((is_animated, native_frames, _)) =
-                    shared_utils::image_detection::detect_animation(input, &format)
-                {
-                    if !is_animated || native_frames.unwrap_or(1) <= 1 {
+                if let Ok((is_animated, native_frames, _)) = shared_utils::image_detection::detect_animation(input, &format)
+                    && (!is_animated || native_frames.is_none_or(|n| n <= 1)) {
                         shared_utils::progress_mode::emit_stderr(&format!(
-                            "⚙️ [VID-SAFEGUARD] Forcing single-frame (static image) for {} → vid will ignore",
-                            input.display()
+                            "⚙️ [VID-SAFEGUARD] Forcing single-frame (static image) for {input_display} → vid will ignore",
+                            input_display = input.display()
                         ));
                         detection.frame_count = Some(1);
                         detection.duration_secs = None;
-                    }
+                        static_image_forced = true;
                 }
             }
             _ => {}
@@ -886,61 +886,77 @@ pub fn auto_convert_with_cache(
     // Internal judgment reconciliation:
     // If vid sees single-frame on a format that can be animated, re-check with image_detection
     // (which includes structural + penetration animation verification) before static isolation.
-    if detection.frame_count.is_none_or(|fc| fc <= 1)
+    if !static_image_forced
+        && detection.frame_count.is_none_or(|fc| fc <= 1)
         && shared_utils::quality_matcher::SourceCodec::identify_by_content(input)
             .is_some_and(|codec| codec.can_be_animated())
-        && let Ok(image_det) = shared_utils::image_detection::detect_image(input)
-    {
-        let image_is_animated = matches!(
-            image_det.image_type,
-            shared_utils::image_detection::ImageType::Animated
-        );
-        let decoded_frame_count = if image_is_animated
-            && image_det.frame_count.is_none_or(|count| count <= 1)
-        {
-            match shared_utils::media_penetration::detect_real_frame_count(
-                input,
-                u64::from(image_det.frame_count.unwrap_or(1)),
+        && let Ok(format) = shared_utils::image_detection::detect_format_from_bytes(input) {
+            if matches!(
+                format,
+                shared_utils::image_detection::DetectedFormat::PNG
+                    | shared_utils::image_detection::DetectedFormat::JPEG
+                    | shared_utils::image_detection::DetectedFormat::GIF
+                    | shared_utils::image_detection::DetectedFormat::WebP
             ) {
-                shared_utils::media_penetration::PenetrationResult::Verified(count) => Some(count),
-                shared_utils::media_penetration::PenetrationResult::Failed
-                | shared_utils::media_penetration::PenetrationResult::Skipped => None,
-            }
-        } else {
-            image_det.frame_count.map(u64::from)
-        };
+                if let Ok(image_det) = shared_utils::image_detection::detect_image(input) {
+                    let image_is_animated = matches!(
+                        image_det.image_type,
+                        shared_utils::image_detection::ImageType::Animated
+                    );
+                    let decoded_frame_count = if image_is_animated
+                        && image_det.frame_count.is_none_or(|count| count <= 1)
+                    {
+                        let claimed = image_det.frame_count.map_or(0, u64::from);
+                        match shared_utils::media_penetration::detect_real_frame_count(input, claimed) {
+                            shared_utils::media_penetration::PenetrationResult::Verified(count) => {
+                                Some(count)
+                            }
+                            shared_utils::media_penetration::PenetrationResult::Failed
+                            | shared_utils::media_penetration::PenetrationResult::Skipped => None,
+                        }
+                    } else {
+                        image_det.frame_count.map(u64::from)
+                    };
 
-        if let Some(corrected) = decoded_frame_count.filter(|count| *count > 1) {
-            log_anomaly!(
-                "Animated-image reconciliation",
-                &format!(
-                    "Corrected frame_count for {}: vid saw {}, image saw {} (corrected before static isolation)",
-                    input.display(),
-                    detection
-                        .frame_count
-                        .map_or_else(|| "unknown".to_string(), |count| count.to_string()),
-                    corrected
-                ),
-            );
-            detection.frame_count = Some(corrected);
-            if detection.duration_secs.is_none_or(|d| d <= 0.0_f64)
-                && let Some(dur) = image_det.duration
-                && dur > 0.0
-            {
-                detection.duration_secs = Some(f64::from(dur));
+                    if let Some(corrected) = decoded_frame_count.filter(|count| *count > 1) {
+                        log_anomaly!(
+                            "Animated-image reconciliation",
+                            &format!(
+                                "Corrected frame_count for {}: vid saw {}, image saw {} (corrected before static isolation)",
+                                input.display(),
+                                detection.frame_count.map_or_else(
+                                    || "unknown".to_string(),
+                                    |count| count.to_string()
+                                ),
+                                corrected
+                            ),
+                        );
+                        detection.frame_count = Some(corrected);
+                        if detection.duration_secs.is_none_or(|d| d <= 0.0_f64)
+                            && let Some(dur) = image_det.duration
+                            && dur > 0.0
+                        {
+                            detection.duration_secs = Some(f64::from(dur));
+                        }
+                    } else if image_is_animated {
+                        log_anomaly!(
+                            "Animated-image reconciliation",
+                            &format!(
+                                "Saw animated image evidence for {} but could not verify a real frame count; leaving vid metadata unchanged (vid saw {})",
+                                input.display(),
+                                detection.frame_count.map_or_else(
+                                    || "unknown".to_string(),
+                                    |count| count.to_string()
+                                )
+                            ),
+                        );
+                    }
+                }
+            } else {
+                shared_utils::log_detail!(&format!(
+                    "⚙️ [VID-RECONCILIATION] Bypassing deep pixel decode for modern format {format:?} (not natively supported by standard image decoder)",
+                ));
             }
-        } else if image_is_animated {
-            log_anomaly!(
-                "Animated-image reconciliation",
-                &format!(
-                    "Saw animated image evidence for {} but could not verify a real frame count; leaving vid metadata unchanged (vid saw {})",
-                    input.display(),
-                    detection
-                        .frame_count
-                        .map_or_else(|| "unknown".to_string(), |count| count.to_string())
-                ),
-            );
-        }
     }
 
     // --- Strict Animated Isolation: Ignore static images in vid ---
@@ -952,7 +968,9 @@ pub fn auto_convert_with_cache(
         };
 
         let file_size = std::fs::metadata(input)
-            .map_err(|e| VidQualityError::ConversionError(format!("Failed to read metadata for size: {e}")))?
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!("Failed to read metadata for size: {e}"))
+            })?
             .len();
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -1126,7 +1144,9 @@ pub fn auto_convert_with_cache(
 
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::Ignored => {
-            return Err(VidQualityError::GeneralError("Unexpected Ignored target reached in conversion flow".to_string()));
+            return Err(VidQualityError::GeneralError(
+                "Unexpected Ignored target reached in conversion flow".to_string(),
+            ));
         }
         TargetVideoFormat::HevcLosslessMkv => {
             shared_utils::static_logs::log_stage(
@@ -3209,5 +3229,58 @@ mod tests {
                 .contains("Total file not smaller than input")
         );
         assert!(!decision.fail_message.contains("video stream"));
+    }
+
+    #[test]
+    fn test_vid_ignores_unsupported_static_image_cleanly() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let heic_path = temp.path().join("test.heic");
+
+        // We need to write a valid minimal MP4 header disguised as HEIC so ffprobe doesn't crash
+        // immediately with "Invalid data" but instead returns 0 frames and no duration.
+        // Even simpler: create a 1-frame MP4 using ffmpeg, name it .heic
+        let status = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("color=c=black:s=2x2:d=0.01") // Very short
+            .arg("-frames:v")
+            .arg("1") // Exactly 1 frame
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-f")
+            .arg("mp4") // Force MP4 container so it ignores the .heic extension
+            .arg(&heic_path)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "Failed to generate dummy single-frame file"
+        );
+
+        let config = ConversionConfig { codec: SelectedCodec::Hevc, ..Default::default() };
+
+        // Pass a mock analysis cache so it doesn't fail on cache lookup.
+        let cache = shared_utils::analysis_cache::AnalysisCache::new().unwrap();
+
+        // Call the main conversion function
+        let result =
+            crate::conversion_api::auto_convert_with_cache(&heic_path, &config, Some(&cache))
+                .unwrap();
+
+        // It MUST return Ignored, meaning it deferred to the `img` module,
+        // without crashing due to full image decode attempts.
+        assert!(result.ignored, "Should be cleanly ignored by vid module");
+        assert_eq!(result.strategy.target, TargetVideoFormat::Ignored);
+        assert!(
+            result
+                .message
+                .contains("vid ignores potentially non-animated media")
+                || result.message.contains("vid ignores static media")
+        );
     }
 }

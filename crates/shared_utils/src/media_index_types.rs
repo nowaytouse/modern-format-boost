@@ -32,3 +32,40 @@ pub struct MediaIndexRow {
     /// Unix timestamp of extraction.
     pub last_extracted_at: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_media_index_row_serde() {
+        let row = MediaIndexRow {
+            blake3: "hash123".to_string(),
+            rel_path: "path/to/file.jpg".to_string(),
+            media_type: "image".to_string(),
+            width: 1920,
+            height: 1080,
+            format: "JPEG".to_string(),
+            file_size: 1024,
+            has_hdr: false,
+            has_alpha: false,
+            duration: 0.0,
+            raw_features_json: "{}".to_string(),
+            decided_format: Some("JXL".to_string()),
+            decided_params_json: None,
+            decision_reason: None,
+            flagged_issue: None,
+            last_extracted_at: 1_600_000_000,
+        };
+
+        let json = serde_json::to_string(&row).expect("Failed to serialize");
+        assert!(json.contains("hash123"));
+
+        let deserialized: MediaIndexRow =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+        assert_eq!(deserialized.blake3, "hash123");
+        assert_eq!(deserialized.width, 1920);
+        assert_eq!(deserialized.decided_format, Some("JXL".to_string()));
+        assert_eq!(deserialized.decided_params_json, None);
+    }
+}

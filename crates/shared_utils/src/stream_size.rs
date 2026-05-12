@@ -485,7 +485,10 @@ mod prop_tests {
             overhead_percent in 0.0f64..0.5f64,
         ) {
             let pure_media = video_size + audio_size;
-            let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(pure_media) * overhead_percent);
+            let overhead_f64 = crate::numeric_cast::u64_to_f64(pure_media) * overhead_percent;
+            let overhead = crate::numeric_cast::f64_to_u64_strict(overhead_f64, "pure_media_overhead");
+            prop_assert!(overhead.is_some(), "Numerical anomaly in pure media overhead calculation");
+            let overhead = overhead.expect("strict conversion asserted by proptest");
             let total = pure_media + overhead;
 
             let info = Info {
@@ -535,7 +538,10 @@ mod prop_tests {
             total_size in 1000u64..1_000_000_000u64,
             overhead_percent in 0.0f64..0.5f64,
         ) {
-            let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
+            let overhead_f64 = crate::numeric_cast::u64_to_f64(total_size) * overhead_percent;
+            let overhead = crate::numeric_cast::f64_to_u64_strict(overhead_f64, "total_size_overhead");
+            prop_assert!(overhead.is_some(), "Numerical anomaly in total size overhead calculation");
+            let overhead = overhead.expect("strict conversion asserted by proptest");
             let video_size = total_size.saturating_sub(overhead);
 
             let info = Info {
@@ -563,7 +569,10 @@ mod prop_tests {
             total_size in 10000u64..1_000_000_000u64,
         ) {
             let overhead_percent = DEFAULT_OVERHEAD_PERCENT;
-            let estimated_overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
+            let est_overhead_f64 = crate::numeric_cast::u64_to_f64(total_size) * overhead_percent;
+            let estimated_overhead = crate::numeric_cast::f64_to_u64_strict(est_overhead_f64, "estimated_overhead");
+            prop_assert!(estimated_overhead.is_some(), "Numerical anomaly in estimated overhead calculation");
+            let estimated_overhead = estimated_overhead.expect("strict conversion asserted by proptest");
             let estimated_video_size = total_size.saturating_sub(estimated_overhead);
 
             let info = Info {
@@ -593,7 +602,10 @@ mod prop_tests {
             total_size in 10000u64..1_000_000_000u64,
             overhead_percent in 0.0f64..0.3f64,
         ) {
-            let overhead = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(total_size) * overhead_percent);
+            let overhead_f64 = crate::numeric_cast::u64_to_f64(total_size) * overhead_percent;
+            let overhead = crate::numeric_cast::f64_to_u64_strict(overhead_f64, "total_size_overhead_v2");
+            prop_assert!(overhead.is_some(), "Numerical anomaly in total size overhead calculation");
+            let overhead = overhead.expect("strict conversion asserted by proptest");
             let video_size = total_size.saturating_sub(overhead);
 
             let info = Info {

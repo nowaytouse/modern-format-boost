@@ -214,3 +214,39 @@ macro_rules! impl_base_builder_accessors_full {
         }
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base_builder_args() {
+        let mut builder = BaseBuilder::new();
+        builder.arg("-v").args(["-i", "input.mp4"]);
+        assert_eq!(builder.extra_args, vec!["-v", "-i", "input.mp4"]);
+    }
+
+    #[test]
+    fn test_base_builder_apply_to_command() {
+        let mut builder = BaseBuilder::new();
+        builder.arg("-v").arg("-y");
+        let mut cmd = Command::new("ls");
+        builder.apply_to_command(&mut cmd);
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+        assert_eq!(args, vec!["-v", "-y"]);
+    }
+
+    #[test]
+    fn test_base_builder_inputs_outputs() {
+        let mut builder = BaseBuilder::new();
+        builder.input("in1.mp4").input("in2.mp4").output("out.mp4");
+        assert_eq!(builder.inputs.len(), 2);
+        assert_eq!(builder.output, Some(PathBuf::from("out.mp4")));
+
+        let mut cmd = Command::new("ffmpeg");
+        builder.apply_first_input(&mut cmd, Some("-i"));
+        builder.apply_output(&mut cmd, None);
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+        assert_eq!(args, vec!["-i", "in1.mp4", "out.mp4"]);
+    }
+}

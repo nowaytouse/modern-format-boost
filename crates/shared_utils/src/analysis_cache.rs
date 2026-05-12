@@ -88,33 +88,46 @@ impl FileSignature {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         let metadata = std::fs::metadata(path)?;
-        let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+        let size = i64::try_from(metadata.len())
+            .with_context(|| format!("file size exceeds i64 for {}", path.display()))?;
 
         let mtime = metadata
             .modified()?
             .duration_since(UNIX_EPOCH)?
             .as_nanos()
             .try_into()
-            .unwrap_or(i64::MAX);
+            .with_context(|| format!("mtime exceeds i64 nanoseconds for {}", path.display()))?;
 
         #[cfg(unix)]
         let ctime = metadata.ctime_nsec();
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
-        let ctime = crate::numeric_cast::u64_to_i64_sat(metadata.last_write_time());
+        let ctime =
+            crate::numeric_cast::u64_to_i64_strict(metadata.last_write_time(), "last_write_time")
+                .with_context(|| format!("ctime exceeds i64 for {}", path.display()))?;
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
-        let btime = metadata.created().map_or(ctime, |t| {
-            t.duration_since(UNIX_EPOCH)
-                .map_or(ctime, |d| d.as_nanos().try_into().unwrap_or(ctime))
-        });
+        let btime = match metadata.created() {
+            Ok(t) => match t.duration_since(UNIX_EPOCH) {
+                Ok(d) => i64::try_from(d.as_nanos()).with_context(|| {
+                    format!("birth time exceeds i64 nanoseconds for {}", path.display())
+                })?,
+                Err(_) => ctime,
+            },
+            Err(_) => ctime,
+        };
 
-        let atime = metadata.accessed().map_or(mtime, |t| {
-            t.duration_since(UNIX_EPOCH)
-                .map_or(mtime, |d| d.as_nanos().try_into().unwrap_or(mtime))
-        });
+        let atime = match metadata.accessed() {
+            Ok(t) => match t.duration_since(UNIX_EPOCH) {
+                Ok(d) => i64::try_from(d.as_nanos()).with_context(|| {
+                    format!("access time exceeds i64 nanoseconds for {}", path.display())
+                })?,
+                Err(_) => mtime,
+            },
+            Err(_) => mtime,
+        };
 
         Ok(Self {
             mtime,
@@ -824,4 +837,36 @@ fn calculate_checksum(data: &[u8]) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(data);
     hasher.finalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_calculate_checksum() {
+        let data = b"hello world";
+        let c1 = calculate_checksum(data);
+        let c2 = calculate_checksum(data);
+        assert_eq!(c1, c2);
+        assert_ne!(c1, calculate_checksum(b"hello world!"));
+    }
+
+    #[test]
+    fn test_file_fingerprint_and_blake3() -> Result<()> {
+        let mut temp = tempfile::NamedTempFile::new()?;
+        temp.write_all(b"test data for cache fingerprint")?;
+        let path = temp.path();
+
+        let h1 = calculate_blake3(path)?;
+        let f1 = calculate_content_fingerprint(path)?;
+
+        assert_ne!(h1.as_bytes(), &[0u8; 32]);
+        assert_ne!(f1, [0u8; 32]);
+
+        let sig = FileSignature::from_path(path)?;
+        assert_eq!(sig.size, i64::try_from(temp.as_file().metadata()?.len())?);
+        Ok(())
+    }
 }

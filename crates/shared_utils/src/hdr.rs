@@ -27,7 +27,7 @@ fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
 
 /// HDR intermediate format selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HdrIntermediateFormat {
+pub enum IntermediateFormat {
     /// 32-bit float `OpenEXR` - maximum precision
     #[default]
     OpenExr32,
@@ -70,11 +70,11 @@ impl Default for GainMapParams {
     clippy::too_many_lines,
     reason = "Complex HDR conversion logic requiring multiple steps and error handling"
 )]
-pub fn convert_heic_with_gainmap_to_jxl_hdr(
+pub fn convert_heic_with_gainmap_to_jxl(
     input: &Path,
     output: &Path,
     apple_compat: bool,
-    intermediate_format: HdrIntermediateFormat,
+    intermediate_format: IntermediateFormat,
     ultimate: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
@@ -155,11 +155,11 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         "Performing HDR GainMap synthesis for {file_label} (P3={needs_p3_conversion})"
     ));
 
-    let hdr_pixels = synthesize_hdr(&sdr, &gain, &params, needs_p3_conversion)
+    let hdr_pixels = synthesize(&sdr, &gain, &params, needs_p3_conversion)
         .context("☢️ HDR synthesis math failure")?;
 
     let (tmp_file, intensity_target) = match intermediate_format {
-        HdrIntermediateFormat::OpenExr32 => {
+        IntermediateFormat::OpenExr32 => {
             let tmp_exr = output.with_extension("tmp_hdr.exr");
             write_exr(&hdr_pixels, sdr.width(), sdr.height(), &tmp_exr)
                 .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
@@ -169,7 +169,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
                     * f64::from(params.gain_map_max.exp2()),
             )
         }
-        HdrIntermediateFormat::Png16 => {
+        IntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
             write_png16(&hdr_pixels, sdr.width(), sdr.height(), &tmp_png)
                 .context("Failed to write intermediate 16-bit PNG buffer")?;
@@ -255,11 +255,11 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     clippy::too_many_lines,
     reason = "Complex HDR conversion logic requiring multiple steps and error handling"
 )]
-pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
+pub fn convert_ultrahdr_jpeg_to_jxl(
     input: &Path,
     output: &Path,
     apple_compat: bool,
-    intermediate_format: HdrIntermediateFormat,
+    intermediate_format: IntermediateFormat,
     ultimate: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
@@ -293,11 +293,11 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 
     log_detail!(&format!("Gainmap parameters: {params:?}"));
 
-    let hdr_pixels = synthesize_hdr(&base_image, &gainmap_image, &params, needs_p3_conversion)
+    let hdr_pixels = synthesize(&base_image, &gainmap_image, &params, needs_p3_conversion)
         .context("☢️ HDR synthesis math failure")?;
 
     let (tmp_file, intensity_target) = match intermediate_format {
-        HdrIntermediateFormat::OpenExr32 => {
+        IntermediateFormat::OpenExr32 => {
             let tmp_exr = output.with_extension("tmp_hdr.exr");
             write_exr(
                 &hdr_pixels,
@@ -312,7 +312,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
                     * f64::from(params.gain_map_max.exp2()),
             )
         }
-        HdrIntermediateFormat::Png16 => {
+        IntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
             write_png16(
                 &hdr_pixels,
@@ -645,7 +645,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
 
 /// # Errors
 /// Returns an error if the HDR synthesis fails due to invalid parameters or processing errors.
-pub fn synthesize_hdr(
+pub fn synthesize(
     sdr: &DynamicImage,
     gain: &DynamicImage,
     params: &GainMapParams,
@@ -1203,5 +1203,40 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(get_hdr_pix_fmt(&sdr_info), "rgb24");
+    }
+
+    #[test]
+    fn test_hdr_synthesis_math() {
+        use image::{ImageBuffer, Luma, Rgb};
+
+        // 1. Setup simple 2x2 SDR image (all mid-gray)
+        let sdr_buf: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(2, 2, Rgb([128, 128, 128]));
+        let sdr = DynamicImage::ImageRgb8(sdr_buf);
+
+        // 2. Setup 2x2 Gainmap image (all mid-gray = log2(gain_max)/2 gain)
+        let gain_buf: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_pixel(2, 2, Luma([128]));
+        let gain = DynamicImage::ImageLuma8(gain_buf);
+
+        // 3. Setup params (2.0 gain max = 4x linear gain)
+        let params = GainMapParams {
+            gain_map_max: 2.0,
+            gain_map_min: 0.0,
+            gamma: 1.0,
+            ..Default::default()
+        };
+
+        // 4. Run synthesis
+        let result = synthesize(&sdr, &gain, &params, false).expect("Synthesis failed");
+
+        assert_eq!(result.len(), 2 * 2 * 3);
+        // Mid-gray (128/255) sRGB -> Linear is ~0.215
+        // Gainmap 128/255 -> 0.5 * (2.0 - 0.0) + 0.0 = 1.0 (log2) -> 2.0x gain
+        // Result should be approximately (0.215 + 0.01) * 2.0 - 0.01 = 0.44
+        assert!(
+            result[0] > 0.4 && result[0] < 0.5,
+            "Expected ~0.44, got {}",
+            result[0]
+        );
     }
 }

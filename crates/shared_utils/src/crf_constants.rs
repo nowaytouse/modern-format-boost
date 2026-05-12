@@ -51,10 +51,13 @@ pub static GLOBAL_LAST_HIT_CRF_HEVC: AtomicU32 = AtomicU32::new(0);
 
 pub fn update_global_last_hit_crf_av1(crf: f64) {
     if crf > 0.0 {
-        GLOBAL_LAST_HIT_CRF_AV1.store(
-            crate::numeric_cast::f64_to_u32_sat((crf * 100.0).round()),
-            Ordering::Relaxed,
-        );
+        match crate::numeric_cast::f64_to_u32_strict((crf * 100.0).round(), "last_hit_av1") {
+            Some(val) => GLOBAL_LAST_HIT_CRF_AV1.store(val, Ordering::Relaxed),
+            None => crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("Invalid AV1 last-hit CRF update rejected: {crf}")
+            ),
+        }
     }
 }
 
@@ -69,10 +72,13 @@ pub fn get_global_last_hit_crf_av1() -> Option<f64> {
 
 pub fn update_global_last_hit_crf_hevc(crf: f64) {
     if crf > 0.0 {
-        GLOBAL_LAST_HIT_CRF_HEVC.store(
-            crate::numeric_cast::f64_to_u32_sat((crf * 100.0).round()),
-            Ordering::Relaxed,
-        );
+        match crate::numeric_cast::f64_to_u32_strict((crf * 100.0).round(), "last_hit_hevc") {
+            Some(val) => GLOBAL_LAST_HIT_CRF_HEVC.store(val, Ordering::Relaxed),
+            None => crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_ANOMALY,
+                &format!("Invalid HEVC last-hit CRF update rejected: {crf}")
+            ),
+        }
     }
 }
 
@@ -82,5 +88,47 @@ pub fn get_global_last_hit_crf_hevc() -> Option<f64> {
         Some(crate::numeric_cast::u32_to_f64(val) / 100.0)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_global_last_hit_crf_av1() {
+        assert_eq!(get_global_last_hit_crf_av1(), None);
+
+        update_global_last_hit_crf_av1(24.5);
+        assert_eq!(get_global_last_hit_crf_av1(), Some(24.5));
+
+        // Test precision (it stores value * 100 as u32)
+        update_global_last_hit_crf_av1(24.567);
+        // It rounds, so 24.567 * 100 = 2456.7 -> 2457 -> 24.57
+        assert_eq!(get_global_last_hit_crf_av1(), Some(24.57));
+
+        // Negative values or 0 are ignored
+        update_global_last_hit_crf_av1(0.0);
+        assert_eq!(get_global_last_hit_crf_av1(), Some(24.57));
+
+        update_global_last_hit_crf_av1(-5.0);
+        assert_eq!(get_global_last_hit_crf_av1(), Some(24.57));
+
+        // Reset for other tests if necessary
+        GLOBAL_LAST_HIT_CRF_AV1.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_global_last_hit_crf_hevc() {
+        assert_eq!(get_global_last_hit_crf_hevc(), None);
+
+        update_global_last_hit_crf_hevc(18.0);
+        assert_eq!(get_global_last_hit_crf_hevc(), Some(18.0));
+
+        update_global_last_hit_crf_hevc(18.12);
+        assert_eq!(get_global_last_hit_crf_hevc(), Some(18.12));
+
+        // Reset
+        GLOBAL_LAST_HIT_CRF_HEVC.store(0, Ordering::Relaxed);
     }
 }

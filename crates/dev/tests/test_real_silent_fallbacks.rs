@@ -38,8 +38,22 @@ fn offending_lines(root: &Path, files: &[PathBuf], patterns: &[&str]) -> Vec<Str
     for file in files {
         let content = fs::read_to_string(file)
             .unwrap_or_else(|err| panic!("read {}: {err:?}", file.display()));
-        for (idx, line) in content.lines().enumerate() {
+        let lines: Vec<&str> = content.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
             if patterns.iter().any(|pattern| line.contains(pattern)) {
+                // Skip matches that are likely inside unit tests or test modules by
+                // scanning a small window of previous lines for test annotations.
+                let start = idx.saturating_sub(20);
+                let in_test_context = lines[start..idx].iter().any(|l|
+                    l.contains("#[test]")
+                        || l.contains("#[cfg(test)]")
+                        || l.contains("mod tests")
+                        || l.contains("proptest!")
+                        || l.trim_start().starts_with("fn test_")
+                );
+                if in_test_context {
+                    continue;
+                }
                 let rel = file.strip_prefix(root).unwrap_or(file);
                 offenders.push(format!("{}:{}: {}", rel.display(), idx + 1, line.trim()));
             }
@@ -58,11 +72,19 @@ fn production_code_has_no_numeric_forgery_fallbacks() {
         &[
             "unwrap_or(0)",
             "unwrap_or(0.0)",
+            "unwrap_or(&0.0",
+            "unwrap_or(&0.0_f64",
+            "unwrap_or(0usize)",
+            "unwrap_or(0u32)",
+            "unwrap_or(0u64)",
             "unwrap_or(1)",
             "unwrap_or(1.0)",
             "unwrap_or(0.5)",
             "unwrap_or(85)",
             "unwrap_or(35)",
+            "unwrap_or(0x",
+            "unwrap_or(u16::MAX",
+            "unwrap_or(usize::MAX",
         ],
     );
 
@@ -112,6 +134,25 @@ fn dependency_installation_is_not_silenced_in_release_workflows() {
             offenders.join("\n")
         );
     }
+}
+
+#[test]
+fn release_packaging_does_not_swallow_copy_failures() {
+    let root = workspace_root();
+    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("release workflow must be readable");
+    let offenders: Vec<_> = release
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("cp ") && line.contains("|| true"))
+        .map(|(idx, line)| format!(".github/workflows/release.yml:{}: {}", idx + 1, line.trim()))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "release packaging copy steps must fail loudly:\n{}",
+        offenders.join("\n")
+    );
 }
 
 #[test]

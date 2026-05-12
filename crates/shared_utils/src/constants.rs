@@ -1131,6 +1131,10 @@ pub const VIDEO_QUALITY_SCORE_LOW: u8 = 40;
 pub const VIDEO_QUALITY_RESOLUTION_BONUS_UHD: u8 = 3;
 /// Bitrate threshold for high-bitrate H.264 recommendation (50 Mbps).
 pub const VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD: u64 = 50_000_000;
+/// Default CRF for video upgrade recommendations (AV1/SVT-AV1).
+pub const VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT: f32 = 20.0;
+/// Default SVT-AV1 preset for video upgrade recommendations.
+pub const VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT: u8 = 6;
 /// Maximum number of finalist candidates promoted for JXL e10 finalization (8).
 pub const JXL_FINALIST_LIMIT: usize = 8;
 /// Perceptual probe anchor at distance 0.03.

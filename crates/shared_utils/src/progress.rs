@@ -466,13 +466,17 @@ impl CoarseProgressBar {
             let remaining_secs = crate::numeric_cast::f64_to_u64_strict(
                 (elapsed.as_secs_f64() / percent) * (100.0 - percent),
                 "eta_remaining_secs",
+            );
+            remaining_secs.map_or_else(
+                || {
+                    crate::log_anomaly!(
+                        crate::static_logs::messages::LABEL_NUMERIC,
+                        "ETA calculation produced an invalid duration; rendering unknown ETA"
+                    );
+                    "???".to_string()
+                },
+                format_eta_simple,
             )
-            .unwrap_or(u64::MAX); // Saturate to MAX if invalid, format_eta_simple handles >1d
-            if remaining_secs == u64::MAX {
-                "???".to_string()
-            } else {
-                format_eta_simple(remaining_secs)
-            }
         } else {
             "---".to_string()
         };

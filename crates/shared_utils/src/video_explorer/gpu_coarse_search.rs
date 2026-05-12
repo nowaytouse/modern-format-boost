@@ -685,17 +685,24 @@ pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
         )?;
 
         let (final_crf, final_size) = if gpu_result.found_boundary {
+            let crf = gpu_result.gpu_boundary_crf.ok_or_else(|| {
+                anyhow::anyhow!("GPU search reported boundary found but missing boundary CRF")
+            })?;
             let size = gpu_result.gpu_best_size.ok_or_else(|| {
                 anyhow::anyhow!("GPU search reported boundary found but missing best size metadata")
             })?;
-            (gpu_result.gpu_boundary_crf, size)
+            (crf, size)
         } else {
             (gpu_config.max_crf, input_size)
         };
         gpu_progress.finish_iteration(final_crf, final_size, None);
 
         if gpu_result.found_boundary {
-            let gpu_crf = gpu_result.gpu_boundary_crf;
+            let gpu_crf = gpu_result.gpu_boundary_crf.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Inconsistent GPU result: boundary found but boundary CRF missing in post-processing"
+                )
+            })?;
             let gpu_size = gpu_result.gpu_best_size.ok_or_else(|| {
                 anyhow::anyhow!(
                     "Inconsistent GPU result: boundary found but size missing in post-processing"
@@ -1589,23 +1596,17 @@ pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
         }
     }
 
-    let input_size = fs::metadata(input).ok().map(|m| m.len());
     let output_size_actual = fs::metadata(output)
-        .ok()
-        .map_or(result.output_size, |m| m.len());
-    let size_change_line =
-        if let (Some(in_sz), Some(out_sz)) = (input_size, Some(output_size_actual)) {
-            if in_sz == 0 {
-                "   SizeChange: N/A (zero input size)".to_string()
-            } else {
-                let ratio = crate::numeric_cast::u64_to_f64(out_sz)
-                    / crate::numeric_cast::u64_to_f64(in_sz);
-                let pct = (ratio - 1.0_f64) * 100.0_f64;
-                format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
-            }
-        } else {
-            "   SizeChange: N/A (missing original or output size)".to_string()
-        };
+        .with_context(|| format!("Failed to read GPU output metadata: {}", output.display()))?
+        .len();
+    let size_change_line = if input_size == 0 {
+        "   SizeChange: N/A (zero input size)".to_string()
+    } else {
+        let ratio = crate::numeric_cast::u64_to_f64(output_size_actual)
+            / crate::numeric_cast::u64_to_f64(input_size);
+        let pct = (ratio - 1.0_f64) * 100.0_f64;
+        format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
+    };
     result.log.push(size_change_line);
 
     let quality_line = if let Some(summary) = result.ultimate_quality_summary() {
@@ -2683,9 +2684,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                         metrics_measured = true;
                         let chroma_avg = f64::midpoint(u, v_score);
                         let prev_best_vmaf_opt = tracking.best_vmaf;
-                        let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
-                        let vmaf_improved = prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
-                        let psnr_improved = prev_best_psnr_opt.is_some_and(|prev| chroma_avg.floor() > prev.floor());
+                        let prev_best_psnr_opt =
+                            tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
+                        let vmaf_improved =
+                            prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
+                        let psnr_improved = prev_best_psnr_opt
+                            .is_some_and(|prev| chroma_avg.floor() > prev.floor());
 
                         ultimate_metrics_str = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
 
@@ -3225,11 +3229,14 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Track best metrics to check for improvement
                     let prev_best_vmaf_opt = tracking.best_vmaf;
-                    let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
+                    let prev_best_psnr_opt =
+                        tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
 
                     // Check for integer-level improvement (ignoring decimals)
-                    let vmaf_improved = prev_best_vmaf_opt.is_none_or(|prev| v.floor() > prev.floor());
-                    let psnr_improved = prev_best_psnr_opt.is_none_or(|prev| chroma_avg.floor() > prev.floor());
+                    let vmaf_improved =
+                        prev_best_vmaf_opt.is_none_or(|prev| v.floor() > prev.floor());
+                    let psnr_improved =
+                        prev_best_psnr_opt.is_none_or(|prev| chroma_avg.floor() > prev.floor());
                     let improvement_indicator = if vmaf_improved || psnr_improved {
                         "↑"
                     } else {
@@ -3350,10 +3357,23 @@ fn cpu_fine_tune_from_gpu_boundary(
                 )
             );
 
-            let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
+            let compress_point = best_crf.ok_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "GPU Coarse Search: Failed to find valid best_crf; sampling logic invalidated"
+                );
+                anyhow::anyhow!("GPU Coarse Search: best_crf not found")
+            })?;
+            let compress_size = best_size.ok_or_else(|| {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_ANOMALY,
+                    "GPU Coarse Search: best_crf exists but best_size is missing; refusing to infer source-sized baseline"
+                );
+                anyhow::anyhow!("GPU Coarse Search: best_size not found")
+            })?;
             let mut current_step = crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP;
             let mut last_size_pct = if input_size > 0 {
-                (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size))
+                (crate::numeric_cast::u64_to_f64(compress_size)
                     / crate::numeric_cast::u64_to_f64(input_size.max(1))
                     - 1.0_f64)
                     * 100.0_f64
@@ -3409,10 +3429,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         let chroma_avg = f64::midpoint(u, v_score);
                         let prev_best_vmaf_opt = tracking.best_vmaf;
-                        let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
+                        let prev_best_psnr_opt =
+                            tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
 
-                        vmaf_improved = prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
-                        psnr_improved = prev_best_psnr_opt.is_some_and(|prev| chroma_avg.floor() > prev.floor());
+                        vmaf_improved =
+                            prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
+                        psnr_improved = prev_best_psnr_opt
+                            .is_some_and(|prev| chroma_avg.floor() > prev.floor());
 
                         // Diagnostics: VMAF:{v:.2} UV:{chroma_avg:.2}
 
@@ -3690,9 +3713,17 @@ fn cpu_fine_tune_from_gpu_boundary(
         && let Some(best) = best_crf
     {
         // Only refine if we actually have a compressed result (or within 1% tolerance)
-        let current_ratio = crate::numeric_cast::u64_to_f64(best_size.unwrap_or(u64::MAX))
-            / crate::numeric_cast::u64_to_f64(input_size.max(1));
-        if best < max_crf && current_ratio < 1.01_f64 {
+        let current_ratio = best_size.map(|current_best_size| {
+            crate::numeric_cast::u64_to_f64(current_best_size)
+                / crate::numeric_cast::u64_to_f64(input_size.max(1))
+        });
+        if current_ratio.is_none() {
+            crate::log_anomaly!(
+                crate::static_logs::messages::LABEL_PHASE_4,
+                "Skipping ultimate fine-tune because best_crf exists without best_size; refusing to forge an infinite size ratio"
+            );
+        }
+        if best < max_crf && current_ratio.is_some_and(|ratio| ratio < 1.01_f64) {
             crate::log_info!(
                 crate::static_logs::messages::LABEL_PHASE_4,
                 "Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack)"
@@ -4134,7 +4165,16 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
 
             // Back up the current best size file before overwriting
-            let _ = std::fs::rename(output, &backup_path);
+            if let Err(e) = std::fs::rename(output, &backup_path) {
+                crate::log_anomaly!(
+                    crate::static_logs::messages::LABEL_PHASE_5,
+                    &format!(
+                        "Phase-5 backup rename failed (src={}, dst={}): {e}; subsequent encode may overwrite current best",
+                        output.display(),
+                        backup_path.display()
+                    )
+                );
+            }
 
             crate::log_info!(
                 crate::static_logs::messages::LABEL_PHASE_5,

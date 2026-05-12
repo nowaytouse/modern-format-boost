@@ -1,8 +1,8 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-use shared_utils::image_detection::{detect_animation, detect_format_from_bytes, DetectedFormat};
 use shared_utils::constants::{JXL_HEADER_LONG, JXL_HEADER_SHORT};
+use shared_utils::image_detection::{DetectedFormat, detect_animation, detect_format_from_bytes};
 
 #[test]
 fn jxl_static_detected_from_short_header_is_static() {
@@ -16,7 +16,10 @@ fn jxl_static_detected_from_short_header_is_static() {
     assert!(matches!(fmt, DetectedFormat::JXL));
 
     let (is_animated, frame_count, _fps) = detect_animation(path, &fmt).expect("detect animation");
-    assert!(!is_animated, "short-header JXL should be treated as static when ffprobe/djxl unavailable");
+    assert!(
+        !is_animated,
+        "short-header JXL should be treated as static when ffprobe/djxl unavailable"
+    );
     assert_eq!(frame_count, Some(1));
 }
 
@@ -32,6 +35,9 @@ fn jxl_static_detected_from_long_header_is_static() {
     assert!(matches!(fmt, DetectedFormat::JXL));
 
     let (is_animated, frame_count, _fps) = detect_animation(path, &fmt).expect("detect animation");
-    assert!(!is_animated, "long-header JXL should be treated as static when ffprobe/djxl unavailable");
+    assert!(
+        !is_animated,
+        "long-header JXL should be treated as static when ffprobe/djxl unavailable"
+    );
     assert_eq!(frame_count, Some(1));
 }

@@ -2639,6 +2639,9 @@ pub fn assess(detection: &Detection) -> Verdict {
 /// - Long animations must NOT be forced into GIF (keep eligible for HEVC delivery).
 /// - Uncertain verdicts are forced to GIF in Apple mode to maximize compatibility.
 #[must_use]
+/// # Panics
+/// Will panic if `frame_count` is unexpectedly missing after the single-frame guard.
+/// This is a defensive assertion: callers should not hit this unless metadata is corrupted.
 pub fn apply_apple_compat_modern_animation_policy(
     verdict: Verdict,
     meta: &LoopMeta,
@@ -2668,6 +2671,9 @@ pub fn apply_apple_compat_modern_animation_policy(
     if meta.frame_count.is_none_or(|fc| fc <= 1) {
         return verdict;
     }
+    let frame_count = meta
+        .frame_count
+        .expect("frame_count is present after single-frame guard");
 
     // Long animations are video-like; never force GIF.
     if meta
@@ -2684,9 +2690,7 @@ pub fn apply_apple_compat_modern_animation_policy(
     {
         return Verdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) \u{2192} force GIF (duration={:.2}s, frames={}, audio={})",
-            dur,
-            meta.frame_count.map_or(0, |fc| fc),
-            meta.flags.streams.has_audio
+            dur, frame_count, meta.flags.streams.has_audio
         ));
     }
 
@@ -2697,8 +2701,7 @@ pub fn apply_apple_compat_modern_animation_policy(
     {
         return Verdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
-            meta.frame_count.map_or(0, |fc| fc),
-            meta.flags.streams.has_audio
+            frame_count, meta.flags.streams.has_audio
         ));
     }
 
@@ -2745,13 +2748,31 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
     let mut conn = if disable_db {
         None
     } else {
-        open_pg_client().ok()
+        match open_pg_client() {
+            Ok(client) => Some(client),
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "loop_intent: PG client unavailable; falling back to legacy thresholds"
+                );
+                None
+            }
+        }
     };
     let is_legacy_mode = conn.is_none();
 
-    let reference_profile = conn
-        .as_mut()
-        .and_then(|client| fetch_loop_reference_profile(client).ok());
+    let reference_profile = conn.as_mut().and_then(|client| {
+        match fetch_loop_reference_profile(client) {
+            Ok(profile) => Some(profile),
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "loop_intent: reference-profile fetch failed; falling back to legacy thresholds"
+                );
+                None
+            }
+        }
+    });
 
     let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
     let keywords = reference_profile

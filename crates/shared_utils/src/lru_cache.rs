@@ -27,7 +27,12 @@ impl<V> CacheEntry<V> {
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
             .as_millis();
-        u64::try_from(now_ms).unwrap_or(u64::MAX)
+        u64::try_from(now_ms).unwrap_or_else(|_| {
+            tracing::warn!(
+                "☢️ [ANOMALY] Current epoch millis exceeded u64; using u64::MAX as cache timestamp"
+            );
+            u64::MAX
+        })
     }
 
     fn new(value: V) -> Self {

@@ -3,7 +3,7 @@
 use arbitrary::{Arbitrary, Unstructured};
 use image::{DynamicImage, GrayImage, RgbImage};
 use libfuzzer_sys::fuzz_target;
-use shared_utils::hdr::{synthesize_hdr, GainMapParams};
+use shared_utils::hdr::{synthesize, GainMapParams};
 
 fuzz_target!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -35,5 +35,5 @@ fuzz_target!(|data: &[u8]| {
     // - Infinite loops
     // - Buffer overflows (should be caught by Rust but good to verify)
     // - Unexpected panics
-    let _ = synthesize_hdr(&sdr_img, &gain_img, &params, needs_p3_conversion);
+    let _ = synthesize(&sdr_img, &gain_img, &params, needs_p3_conversion);
 });

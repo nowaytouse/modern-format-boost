@@ -103,3 +103,24 @@ impl Point {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point_from_gpu_result() {
+        // GPU compression margin large (ratio = 500/1000 = 0.5 < 0.95)
+        // adjustment = 1.0, base_offset = 4.0, gpu_crf = 20.0
+        // predicted = 20 + 4 + 1 = 25.0
+        let p = Point::from_gpu_result(20.0, 500, 1000, None, 4.0);
+        assert!((p.predicted_cpu_crf - 25.0).abs() < 1e-6, "predicted_cpu_crf mismatch: got {}", p.predicted_cpu_crf);
+        assert!((p.confidence - 0.85).abs() < 1e-6, "confidence mismatch: got {}", p.confidence);
+
+        // GPU oversize (ratio = 1100/1000 = 1.1 >= 1.05)
+        // adjustment = -1.0, predicted = 20 + 4 - 1 = 23.0
+        let p2 = Point::from_gpu_result(20.0, 1100, 1000, None, 4.0);
+        assert!((p2.predicted_cpu_crf - 23.0).abs() < 1e-6, "predicted_cpu_crf mismatch: got {}", p2.predicted_cpu_crf);
+        assert!((p2.confidence - 0.70).abs() < 1e-6, "confidence mismatch: got {}", p2.confidence);
+    }
+}
