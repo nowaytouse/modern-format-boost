@@ -2151,7 +2151,12 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
         return Ok(0);
     }
 
-    let pb = ProgressBar::new(candidate_paths.len() as u64);
+    let pb = ProgressBar::new(
+        candidate_paths
+            .len()
+            .try_into()
+            .expect("candidate_paths.len() should fit in u64"),
+    );
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
@@ -2709,10 +2714,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if the database transaction or query fails.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+#[cfg_attr(not(feature = "high-precision"), allow(clippy::clone_on_copy))]
 fn map_row_to_sample(row: &postgres::Row) -> Option<SampleRow> {
     let width = crate::numeric_cast::i32_to_u32_strict(row.get::<_, i32>(2), "db_backfill_width")?;
     let height =
@@ -2868,10 +2870,6 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
 /// Fails silently -- never blocks the pipeline. Called after every
 /// verdict to build the feedback loop. Stores the meta snapshot,
 /// tree/KNN probabilities, final verdict, and layer exit information.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn log_inference_record(
     conn: &mut Client,
     meta: &LoopMeta,

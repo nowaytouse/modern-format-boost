@@ -472,6 +472,11 @@ pub fn is_jpeg_complete(data: &[u8]) -> bool {
 ///
 /// # Errors
 /// Returns an error if the JPEG data is invalid or DQT markers are missing.
+///
+/// # Panics
+/// Panics if the generated standard quantization table contains out-of-range values.
+/// This is considered a logic error as the IJG standard tables and quality scaling
+/// should always result in valid 16-bit table entries.
 pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> {
     let tables = extract_quantization_tables(data)?;
 

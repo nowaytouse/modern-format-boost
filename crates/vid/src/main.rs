@@ -2,10 +2,7 @@
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
 )]
-#![allow(
-    unexpected_cfgs,
-    reason = "macos_ui is an optional feature that may not be defined in all builds"
-)]
+
 
 use clap::{Parser, Subcommand};
 use shared_utils::log_detail;
@@ -521,14 +518,6 @@ fn main() -> anyhow::Result<()> {
     {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() {
-            #[allow(
-                unexpected_cfgs,
-                reason = "macos_ui is an optional feature that may not be defined in all builds"
-            )]
-            #[allow(
-                unexpected_cfgs,
-                reason = "macos_ui is an optional feature that may not be defined in all builds"
-            )]
             #[cfg(all(target_os = "macos", feature = "macos_ui"))]
             {
                 shared_utils::macos_ui::wait_for_exit_confirmation();

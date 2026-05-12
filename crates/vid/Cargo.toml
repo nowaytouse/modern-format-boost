@@ -28,6 +28,7 @@ which = { workspace = true }
 default = ["shared_utils/default", "high-precision"]
 high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "shared_utils/high-precision"]
 system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp"]
+macos_ui = ["shared_utils/macos_ui"]
 
 [lints]
 workspace = true

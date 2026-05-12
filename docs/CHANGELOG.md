@@ -4,7 +4,16 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.3] - 2026-05-10
+## [0.11.3] - 2026-05-12
+
+- **Systemic Numeric Forgery Eradication (Phase 2)**:
+  - Eliminated all remaining silent defaults (`.unwrap_or(0)`, `.unwrap_or_default()`) in data-critical paths across 130+ files, enforcing explicit error propagation or documented technical `expect()` justifications.
+  - Refactored and consolidated fragmented HDR processing and logging architectures into centralized, high-integrity modules (`shared_utils/src/hdr.rs`, `shared_utils/src/static_logs.rs`).
+  - Removed 10+ legacy modules (`colors.rs`, `image_recommender.rs`, `video_recommender.rs`, etc.) and redundant diagnostic scripts to achieve a production-ready, zero-waste workspace.
+
+- **Systemic Robustness & Cross-Module Semantics**:
+  - Implemented "Ignore" semantics for cross-module hand-offs, ensuring `vid` and `img` pipelines correctly delegate tasks (e.g., static images identified by `vid`) without producing redundant or mismatched outputs.
+  - Hardened tool path resolution logic in `builder_base.rs` and `cli_runner.rs` to ensure deterministic execution in restricted environments and across different OS platforms.
 
 - **Tool Version Validation & Compatibility Fixes**:
   - Fixed `exiftool` version detection bug that caused incorrect version parsing (was using `--version` instead of `-ver` flag).
@@ -21,7 +30,11 @@ All notable changes to this project will be documented in this file.
   - Verified all 15+ ToolBuilder implementations are actively used in production code.
   - Confirmed `Exiv2Builder`, `AclBuilder`, `SysctlBuilder`, `VmstatBuilder`, `AttribBuilder`, `RsyncBuilder`, `PsBuilder`, `HostnameBuilder` are all utilized.
 
+- **Idiomatic Panic Handling**:
+  - Standardized unrecoverable error reporting by replacing `unwrap_or_else(panic!)` with `expect()` in `conversion.rs`, satisfying strict nightly Clippy audits and improving readability.
+
 - **Tool Discovery Hardening**: Hardened tool discovery across the macOS App wrapper, Python scripts, and Rust core by adding dynamic fallbacks to Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) instead of relying solely on `shutil.which` or the default environment `PATH`. Fixed crashes caused by missing tools.
+- **Maintenance & Environment Cleanup**: Removed persistent temporary scripts and log artifacts from the root directory to maintain a clean workspace; standardized code formatting across the entire workspace via `cargo fmt`.
 - **Strict Clippy Compliance**: Enabled strict Clippy rules (`pedantic`, `nursery`) globally to enforce code quality and consistency across the Rust workspace.
 - **Systematic Precision Cast Eradication**: Replaced all remaining lossy `as` casts in critical paths (SSIM calculation, `Rational`/`Integer` construction) with explicit, intent-based methods from `shared_utils::numeric_cast`.
 - **Suppression Cleanup**: Removed manual `#[allow(clippy::cast_precision_loss)]` and `#[allow(clippy::cast_possible_truncation)]` attributes from `image_metrics.rs` and `lib.rs`, achieving true systemic compliance without suppressions.

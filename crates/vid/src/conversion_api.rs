@@ -782,10 +782,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+///
+/// # Panics
+///
+/// Panics if internal string formatting fails during x265 parameter construction.
+/// This is considered a logic error as standard formatting to a string should be infallible.
 pub fn auto_convert_with_cache(
     input: &Path,
     config: &ConversionConfig,
@@ -847,6 +848,41 @@ pub fn auto_convert_with_cache(
 
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
+    // Safety override: If the file is an image format and image_detection proves it's static,
+    // force single-frame so vid absolutely ignores static images (always routed to img).
+    if let Ok(format) = shared_utils::image_detection::detect_format_from_bytes(input) {
+        match format {
+            shared_utils::image_detection::DetectedFormat::PNG
+            | shared_utils::image_detection::DetectedFormat::JPEG
+            | shared_utils::image_detection::DetectedFormat::GIF
+            | shared_utils::image_detection::DetectedFormat::WebP
+            | shared_utils::image_detection::DetectedFormat::AVIF
+            | shared_utils::image_detection::DetectedFormat::JXL
+            | shared_utils::image_detection::DetectedFormat::TIFF
+            | shared_utils::image_detection::DetectedFormat::BMP
+            | shared_utils::image_detection::DetectedFormat::ICO
+            | shared_utils::image_detection::DetectedFormat::EXR
+            | shared_utils::image_detection::DetectedFormat::QOI
+            | shared_utils::image_detection::DetectedFormat::JP2
+            | shared_utils::image_detection::DetectedFormat::HEIC
+            | shared_utils::image_detection::DetectedFormat::HEIF => {
+                if let Ok((is_animated, native_frames, _)) =
+                    shared_utils::image_detection::detect_animation(input, &format)
+                {
+                    if !is_animated || native_frames.unwrap_or(1) <= 1 {
+                        shared_utils::progress_mode::emit_stderr(&format!(
+                            "⚙️ [VID-SAFEGUARD] Forcing single-frame (static image) for {} → vid will ignore",
+                            input.display()
+                        ));
+                        detection.frame_count = Some(1);
+                        detection.duration_secs = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Internal judgment reconciliation:
     // If vid sees single-frame on a format that can be animated, re-check with image_detection
     // (which includes structural + penetration animation verification) before static isolation.
@@ -864,7 +900,7 @@ pub fn auto_convert_with_cache(
         {
             match shared_utils::media_penetration::detect_real_frame_count(
                 input,
-                image_det.frame_count.map_or(0, u64::from),
+                u64::from(image_det.frame_count.unwrap_or(1)),
             ) {
                 shared_utils::media_penetration::PenetrationResult::Verified(count) => Some(count),
                 shared_utils::media_penetration::PenetrationResult::Failed
@@ -915,7 +951,9 @@ pub fn auto_convert_with_cache(
             "Unknown or zero frame count - vid ignores potentially non-animated media (handled by img)"
         };
 
-        let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
+        let file_size = std::fs::metadata(input)
+            .map_err(|e| VidQualityError::ConversionError(format!("Failed to read metadata for size: {e}")))?
+            .len();
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: String::new(),

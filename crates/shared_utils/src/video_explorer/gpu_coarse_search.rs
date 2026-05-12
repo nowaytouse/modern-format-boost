@@ -2682,14 +2682,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         metrics_measured = true;
                         let chroma_avg = f64::midpoint(u, v_score);
-                        let prev_best_vmaf = tracking
-                            .best_vmaf
-                            .expect("Required floating point value missing");
-                        let prev_best_psnr = tracking
-                            .best_psnr_uv
-                            .map_or(0.0_f64, |(u, v)| f64::midpoint(u, v));
-                        let vmaf_improved = v.floor() > prev_best_vmaf.floor();
-                        let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
+                        let prev_best_vmaf_opt = tracking.best_vmaf;
+                        let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
+                        let vmaf_improved = prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
+                        let psnr_improved = prev_best_psnr_opt.is_some_and(|prev| chroma_avg.floor() > prev.floor());
 
                         ultimate_metrics_str = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
 
@@ -3228,16 +3224,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let chroma_avg = f64::midpoint(u, v_score);
 
                     // Track best metrics to check for improvement
-                    let prev_best_vmaf = tracking
-                        .best_vmaf
-                        .expect("Required floating point value missing");
-                    let prev_best_psnr = tracking
-                        .best_psnr_uv
-                        .map_or(0.0_f64, |(u, v)| f64::midpoint(u, v));
+                    let prev_best_vmaf_opt = tracking.best_vmaf;
+                    let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
 
                     // Check for integer-level improvement (ignoring decimals)
-                    let vmaf_improved = v.floor() > prev_best_vmaf.floor();
-                    let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
+                    let vmaf_improved = prev_best_vmaf_opt.is_none_or(|prev| v.floor() > prev.floor());
+                    let psnr_improved = prev_best_psnr_opt.is_none_or(|prev| chroma_avg.floor() > prev.floor());
                     let improvement_indicator = if vmaf_improved || psnr_improved {
                         "↑"
                     } else {
@@ -3416,15 +3408,11 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         let chroma_avg = f64::midpoint(u, v_score);
-                        let prev_best_vmaf = tracking
-                            .best_vmaf
-                            .expect("Required floating point value missing");
-                        let prev_best_psnr = tracking
-                            .best_psnr_uv
-                            .map_or(0.0_f64, |(u, v)| f64::midpoint(u, v));
+                        let prev_best_vmaf_opt = tracking.best_vmaf;
+                        let prev_best_psnr_opt = tracking.best_psnr_uv.map(|(u, v)| f64::midpoint(u, v));
 
-                        vmaf_improved = v.floor() > prev_best_vmaf.floor();
-                        psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
+                        vmaf_improved = prev_best_vmaf_opt.is_some_and(|prev| v.floor() > prev.floor());
+                        psnr_improved = prev_best_psnr_opt.is_some_and(|prev| chroma_avg.floor() > prev.floor());
 
                         // Diagnostics: VMAF:{v:.2} UV:{chroma_avg:.2}
 

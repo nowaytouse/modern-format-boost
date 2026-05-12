@@ -281,35 +281,27 @@ mod tests {
         let exif_ver = exif_ver.unwrap();
         assert!(
             !exif_ver.contains("NAME"),
-            "exiftool version should not contain 'NAME' (wrong flag used?), got: {}",
-            exif_ver
+            "exiftool version should not contain 'NAME' (wrong flag used?), got: {exif_ver}"
         );
         // Should look like a version number (starts with digits.digits)
         assert!(
             exif_ver.chars().next().unwrap().is_ascii_digit(),
-            "exiftool version should start with digit, got: {}",
-            exif_ver
+            "exiftool version should start with digit, got: {exif_ver}"
         );
 
         // Test cjxl
-        let cjxl_ver = get_tool_version("cjxl");
-        if cjxl_ver.is_some() {
-            let ver = cjxl_ver.unwrap();
+        if let Some(ver) = get_tool_version("cjxl") {
             assert!(
                 ver.contains(char::is_numeric),
-                "cjxl version should contain numbers, got: {}",
-                ver
+                "cjxl version should contain numbers, got: {ver}"
             );
         }
 
         // Test ffmpeg
-        let ffmpeg_ver = get_tool_version("ffmpeg");
-        if ffmpeg_ver.is_some() {
-            let ver = ffmpeg_ver.unwrap();
+        if let Some(ver) = get_tool_version("ffmpeg") {
             assert!(
                 ver.contains(char::is_numeric),
-                "ffmpeg version should contain numbers, got: {}",
-                ver
+                "ffmpeg version should contain numbers, got: {ver}"
             );
         }
     }

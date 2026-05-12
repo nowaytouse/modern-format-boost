@@ -82,6 +82,9 @@ impl ManagedProcess {
 
     /// Kill the managed process using platform-specific tools.
     /// Uses `taskkill` on Windows, `kill` on Unix.
+    ///
+    /// # Errors
+    /// Returns error if the kill command fails to execute or the process cannot be terminated.
     pub fn kill(&self) -> anyhow::Result<()> {
         let pid = self.pid();
 

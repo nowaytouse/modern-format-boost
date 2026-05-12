@@ -710,6 +710,19 @@ pub fn detect_video(path: &Path) -> std::result::Result<Detection, FFprobeError>
         is_interlaced: None,
     };
 
+    if let Ok(format) = crate::image_detection::detect_format_from_bytes(path)
+        && matches!(format, crate::image_detection::DetectedFormat::JXL)
+        && let Ok((is_animated, native_frames, _)) = crate::image_detection::detect_animation(path, &format)
+        && (!is_animated || native_frames.unwrap_or(1) <= 1)
+    {
+        crate::progress_mode::emit_stderr(&format!(
+            "⚙️ [Detection] Forcing single-frame for static JXL to avoid vid routing: {}",
+            path.display()
+        ));
+        result.frame_count = Some(1);
+        result.duration_secs = None;
+    }
+
     // ── Penetrating Content Verification ──
     // Verify critical metadata claims by decoding actual content
     if result.flags.streams.has_audio

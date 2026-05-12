@@ -124,15 +124,15 @@ pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
 
     // PNG Heuristic Detection: Enable 4-layer analysis for PNG files
     // This supplements simple magic-bytes detection with structural/metadata/statistical analysis
-    if format == Some(image::ImageFormat::Png) {
-        if let Ok(analysis) = analyze_png_quantization(path) {
-            tracing::debug!(
-                is_quantized = analysis.is_quantized,
-                confidence = ?analysis.confidence,
-                detected_tool = ?analysis.detected_tool,
-                "PNG heuristic analysis completed"
-            );
-        }
+    if format == Some(image::ImageFormat::Png)
+        && let Ok(analysis) = analyze_png_quantization(path)
+    {
+        tracing::debug!(
+            is_quantized = analysis.is_quantized,
+            confidence = ?analysis.confidence,
+            detected_tool = ?analysis.detected_tool,
+            "PNG heuristic analysis completed"
+        );
     }
 
     Ok(img)
@@ -2046,6 +2046,7 @@ fn analyze_color_distribution(
     let mut color_set: HashMap<[u8; 4], u32> = HashMap::new();
 
     let (width, height) = rgba.dimensions();
+    let total_pixels_u64 = u64::from(width) * u64::from(height);
     let total_pixels =
         crate::numeric_cast::u64_to_usize_strict(u64::from(width * height), "width * height")
             .ok_or_else(|| {
@@ -2057,7 +2058,10 @@ fn analyze_color_distribution(
     let grid_size: u32 = 16; // 16x16 = 256 blocks
     let block_w = (width / grid_size).max(1);
     let block_h = (height / grid_size).max(1);
-    let samples_per_block = (target_samples / ((grid_size * grid_size) as usize)).max(1);
+    let samples_per_block = (target_samples
+        / crate::numeric_cast::u32_to_usize_strict(grid_size * grid_size, "grid_size_sq")
+            .expect("u32 should always fit in usize"))
+        .max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
@@ -2153,13 +2157,17 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> anyhow::Result<f64
             // Calculate coordinates using high-precision arithmetic to prevent overflow
             // Calculate coordinates using u64 to prevent overflow (sufficient for any practical image)
             let px = {
-                let x = (bx as u64) * (block_size as u64) + (block_size as u64) / 2;
+                let x = crate::numeric_cast::usize_to_u64(bx)
+                    * crate::numeric_cast::usize_to_u64(block_size)
+                    + crate::numeric_cast::usize_to_u64(block_size) / 2;
                 let max_x = u64::from(width).saturating_sub(1);
                 crate::numeric_cast::u64_to_u32_strict(x.min(max_x), "px")
                     .ok_or_else(|| anyhow::anyhow!("px overflow in color frequency analysis"))?
             };
             let py = {
-                let y = (by as u64) * (block_size as u64) + (block_size as u64) / 2;
+                let y = crate::numeric_cast::usize_to_u64(by)
+                    * crate::numeric_cast::usize_to_u64(block_size)
+                    + crate::numeric_cast::usize_to_u64(block_size) / 2;
                 let max_y = u64::from(height).saturating_sub(1);
                 crate::numeric_cast::u64_to_u32_strict(y.min(max_y), "py")
                     .ok_or_else(|| anyhow::anyhow!("py overflow in color frequency analysis"))?
@@ -3754,7 +3762,9 @@ mod tests {
         let analysis = result.unwrap();
         // Verify basic structure is populated
         assert!(
-            analysis.confidence >= 0.0 && analysis.confidence <= 1.0,
+            analysis
+                .confidence
+                .is_some_and(|c| (0.0..=1.0).contains(&c)),
             "Confidence should be in valid range"
         );
     }
@@ -3798,8 +3808,7 @@ mod tests {
         // Uniform black image should have very few colors after quantization
         assert!(
             count <= 10,
-            "Uniform image should have few unique colors, got {}",
-            count
+            "Uniform image should have few unique colors, got {count}"
         );
     }
 
@@ -3808,7 +3817,7 @@ mod tests {
         // Create diverse color image
         let mut img = image::RgbaImage::new(100, 100);
         for (x, y, pixel) in img.enumerate_pixels_mut() {
-            *pixel = image::Rgba([x as u8, y as u8, 128, 255]);
+            *pixel = image::Rgba([x.try_into().unwrap(), y.try_into().unwrap(), 128, 255]);
         }
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
 
@@ -3817,8 +3826,7 @@ mod tests {
         // Diverse image should have many colors
         assert!(
             count > 50,
-            "Diverse image should have many unique colors, got {}",
-            count
+            "Diverse image should have many unique colors, got {count}"
         );
     }
 }
