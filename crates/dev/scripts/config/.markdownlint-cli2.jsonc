@@ -1,0 +1,22 @@
+{
+  "config": {
+    "MD013": false,
+    "MD024": false,
+    "MD025": false,
+    "MD028": false,
+    "MD033": false,
+    "MD036": false,
+    "MD040": false,
+    "MD041": false,
+    "MD055": false,
+    "MD056": false,
+    "MD060": false
+  },
+  "ignores": [
+    "target/",
+    ".gemini/",
+    "crates/.modern_format_boost/.venv/",
+    ".venv_training/",
+    "docs/README_AR.md"
+  ]
+}

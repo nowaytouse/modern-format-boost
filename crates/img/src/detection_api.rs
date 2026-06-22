@@ -1,2 +1,2 @@
-//! Detection API Module - Re-exports from `shared_utils`
-pub use shared_utils::image_detection::*;
+//! Detection API Module - Re-exports from `foundation`
+pub use foundation::image_detection::*;

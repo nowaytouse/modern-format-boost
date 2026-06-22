@@ -1,0 +1,262 @@
+{
+  "app": {
+    "title": "PIXLY AI",
+    "subtitle": "智能滤镜优化"
+  },
+  "filter": {
+    "title": "🔮 滤镜模式",
+    "description": "像一层薄薄的不可见滤镜，在保持原格式的前提下，通过AI智能优化图像质量，实现不可察觉的质量提升。",
+    "modeActive": "🔮 滤镜模式：保持原格式，智能优化",
+    "imageOptions": "🖼️ 图像滤镜选项",
+    "videoOptions": "🎬 视频滤镜选项",
+    "aiOptimization": "🤖 AI智能优化",
+    "qualityValidation": "📊 质量验证",
+    "smartPreprocess": "✨ 智能预处理"
+  },
+  "header": {
+    "refresh": "刷新",
+    "help": "使用帮助",
+    "language": "切换语言",
+    "theme": "切换主题"
+  },
+  "empty": {
+    "title": "未选择文件",
+    "subtitle": "在 Eagle 中选择图片或视频",
+    "loadButton": "加载文件",
+    "selectTitle": "选择文件",
+    "selectSubtitle": "从列表中选择要转换的文件",
+    "filesAvailable": "个文件可用",
+    "selectImages": "仅图像",
+    "selectVideos": "仅视频"
+  },
+  "controls": {
+    "title": "🤖 智能选项",
+    "optimizeMode": "优化目标",
+    "balanced": "⚖️ 平衡模式",
+    "quality": "🎯 质量优先",
+    "size": "📦 体积优先"
+  },
+  "aiTransparency": {
+    "title": "AI决策透明面板",
+    "analyzing": "🔍 分析中",
+    "ready": "📊 就绪",
+    "fileAnalysis": "文件分析",
+    "featureExtraction": "特征提取",
+    "aiDecision": "AI决策",
+    "processingSteps": "处理流程",
+    "performance": "性能统计",
+    "fileSize": "文件大小",
+    "dimensions": "尺寸",
+    "format": "格式",
+    "colorDepth": "色深",
+    "recommendedFormat": "推荐格式",
+    "quality": "质量",
+    "speed": "速度",
+    "confidence": "置信度",
+    "reasoning": "决策理由",
+    "totalTime": "总耗时",
+    "originalSize": "原始大小",
+    "compressedSize": "压缩后大小",
+    "compressionRatio": "压缩率",
+    "features": {
+      "complexity": "复杂度",
+      "edgeStrength": "边缘强度",
+      "colorfulness": "色彩丰富度",
+      "textureDetail": "纹理细节",
+      "noiseLevel": "噪声水平"
+    }
+  },
+  "alphaPanel": {
+    "title": "透明度处理面板（已废弃）",
+    "subtitle": "深度展示Alpha通道处理的内部流程和技术细节",
+    "detection": "透明度检测",
+    "alphaDetected": "检测到Alpha通道",
+    "alphaPixels": "透明像素数量",
+    "alphaType": "透明度类型",
+    "types": {
+      "none": "无透明度",
+      "binary": "二值透明（简单抠图）",
+      "gradient": "渐变透明（平滑过渡）",
+      "complex": "复杂透明（混合类型）"
+    },
+    "processFlow": "处理流程",
+    "formatCompatibility": "格式兼容性",
+    "support": {
+      "full": "完全支持",
+      "partial": "部分支持",
+      "none": "不支持"
+    },
+    "quality": "质量",
+    "compression": "压缩方式",
+    "advancedOptions": "高级处理选项",
+    "alphaQuality": "Alpha通道质量",
+    "alphaQualityHint": "控制透明通道的压缩质量（0-100），值越高质量越好但文件越大",
+    "premultiplyAlpha": "预乘Alpha",
+    "premultiplyHint": "将RGB值与Alpha值预先相乘，可提高某些格式的压缩效率",
+    "separateAlpha": "分离Alpha通道",
+    "separateAlphaHint": "将Alpha通道单独编码，可能获得更好的压缩率",
+    "statistics": "处理统计",
+    "totalPixels": "总像素数",
+    "opaquePixels": "不透明像素",
+    "transparentPixels": "完全透明像素",
+    "semiTransparent": "半透明像素",
+    "technicalDetails": "技术细节",
+    "internalProcess": "内部处理流程",
+    "step1Title": "Alpha通道检测",
+    "step1Desc": "检查图像色彩空间是否包含Alpha通道",
+    "step2Title": "像素级分析",
+    "step2Desc": "遍历所有像素，统计Alpha值分布",
+    "step3Title": "类型分类",
+    "step3Desc": "根据Alpha值分布特征，分类透明度类型",
+    "step4Title": "格式兼容性检查",
+    "step4Desc": "验证目标格式对Alpha通道的支持程度",
+    "step5Title": "编码参数优化",
+    "step5Desc": "应用Alpha专用编码参数",
+    "algorithmDetails": "算法伪代码",
+    "steps": {
+      "detection": "Alpha通道检测",
+      "analysis": "像素分析",
+      "classification": "类型分类",
+      "optimization": "格式优化",
+      "encoding": "Alpha编码"
+    },
+    "mediaTypes": {
+      "all": "全部格式",
+      "image": "图像格式",
+      "animation": "动图格式",
+      "video": "视频格式"
+    }
+  },
+  "common": {
+    "yes": "是",
+    "no": "否",
+    "experimental": "实验性"
+  },
+  "log": {
+    "aiLog": "🔍 AI日志",
+    "features": "📋 功能说明",
+    "startProcessing": "开始处理 {count} 个文件",
+    "optimizeMode": "优化模式: {mode}",
+    "fileInfo": "文件: {name} ({size})",
+    "dimensions": "尺寸: {width}×{height}",
+    "processing": "[{current}/{total}] 处理: {file}",
+    "success": "✓ {file}",
+    "error": "✗ {file}: {error}",
+    "allComplete": "✅ 全部完成！成功: {success}/{total}",
+    "partialComplete": "⚠️ 部分完成！成功: {success}, 失败: {failed}",
+    "allFailed": "❌ 全部失败！失败: {failed}/{total}",
+    "compression": "压缩: {input} → {output} ({ratio}%)",
+    "targetFormat": "目标格式: {format}",
+    "aiPrediction": "AI参数预测: {status}",
+    "enabled": "已启用",
+    "disabled": "已禁用"
+  },
+  "image": {
+    "title": "🖼️ 图像选项",
+    "format": "输出格式",
+    "formatAuto": "🤖 自动选择",
+    "aiPrediction": "参数预测",
+    "fileValidation": "文件验证",
+    "ssimValidation": "质量验证",
+    "gpuAccel": "硬件加速",
+    "preprocess": "智能预处理",
+    "formatCorrection": "格式纠正",
+    "animationToVideo": "🎬 动画转视频"
+  },
+  "video": {
+    "title": "🎬 视频选项",
+    "codec": "视频编码器",
+    "codecAuto": "🤖 自动选择",
+    "codecRecommendation": "AI编码器推荐",
+    "animationToVideo": "动画转视频",
+    "sceneDetection": "场景检测",
+    "vmafValidation": "VMAF质量验证",
+    "twoPass": "两遍编码",
+    "container": "容器格式",
+    "crf": "质量控制",
+    "speed": "编码速度",
+    "pixelFormat": "像素格式"
+  },
+  "fileList": {
+    "title": "文件列表",
+    "selected": "已选择 {count} 个文件",
+    "selectAll": "全选",
+    "selectNone": "取消",
+    "selectInvert": "反选",
+    "selectImages": "图像",
+    "selectVideos": "视频",
+    "convertButton": "开始转换"
+  },
+  "button": {
+    "processing": "优化中...",
+    "startConvert": "开始处理",
+    "startOptimize": "开始滤镜优化"
+  },
+  "progress": {
+    "processing": "处理中...",
+    "complete": "转换完成！",
+    "failed": "转换失败",
+    "processingImages": "处理图像 ({count} 个)...",
+    "processingVideos": "处理视频 ({count} 个)...",
+    "imageProgress": "[图像 {current}/{total}] {filename}",
+    "videoProgress": "[视频 {current}/{total}] {filename}",
+    "success": "完成！成功: {success}/{total}"
+  },
+  "mode": {
+    "video": "视频模式",
+    "image": "图像模式",
+    "mixed": "混合模式"
+  },
+  "mixedMode": {
+    "title": "混合模式",
+    "description": "检测到混合选择，将自动分组处理：",
+    "images": "图像：{count} 个",
+    "videos": "视频：{count} 个",
+    "hint": "💡 图像和视频将使用各自的智能功能"
+  },
+  "features": {
+    "validation": "🔒 8层文件验证",
+    "xmpMerge": "💡 自动合并元数据",
+    "filenameNorm": "📝 自动规范文件名",
+    "metadataTitle": "📦 完整元数据保留",
+    "exif": "相机信息",
+    "xmp": "编辑历史",
+    "icc": "色彩配置",
+    "timestamps": "时间戳",
+    "extendedAttr": "扩展属性"
+  },
+  "xmp": {
+    "autoMerge": "XMP元数据自动合并",
+    "description": "检测到 {count} 个XMP元数据文件",
+    "hint": "💡 将使用exiftool自动合并XMP元数据到对应的媒体文件中"
+  },
+  "help": {
+    "title": "使用帮助",
+    "close": "关闭",
+    "vision": "插件愿景",
+    "visionDesc": "让智能算法成为你的转换专家 - 告别繁琐的参数调试，只需选择你的目标（极致压缩/视觉无损/平衡），系统会根据每张图片的特征（纹理复杂度、色彩分布、透明度等）自动优化所有参数。",
+    "modernFormats": "拥抱现代格式 - 默认推荐 AVIF、JXL、WebP 等新一代格式，相同质量下体积减少 30-50%，让你的资源库更轻盈。同时支持 HDR、动画、透明度等高级特性。",
+    "smartUpgrade": "智能格式升级 - 检测到 JPEG/PNG 等传统格式时，系统会评估升级收益（压缩率提升、特性增强），在合适的时机推荐现代格式，让每一次转换都物有所值。",
+    "metadataTitle": "元数据完整保留",
+    "metadataDesc": "所有元数据自动保留，无需任何配置：",
+    "metadataExif": "相机信息 - 拍摄参数、位置、设备型号",
+    "metadataXmp": "编辑历史 - 编辑软件的修改记录",
+    "metadataIcc": "色彩配置 - 色彩空间和配置文件",
+    "metadataXmpMerge": "外部元数据合并 - 自动合并外部元数据文件",
+    "metadataEagle": "资源信息 - 标签、评分、备注同步更新",
+    "metadataTimestamp": "文件时间戳 - 创建/修改/访问时间完整保留",
+    "metadataExtended": "扩展属性 - 系统扩展属性自动保留",
+    "imageFeaturesTitle": "图像智能功能",
+    "imageFeature1": "智能参数预测 - 分析图像特征，自动选择最优参数",
+    "imageFeature2": "文件验证 - 检测文件类型，防止伪装文件",
+    "imageFeature3": "质量验证 - 转换后自动验证画质损失",
+    "imageFeature4": "硬件加速 - 自动检测并使用硬件加速（速度提升 5-20 倍）",
+    "imageFeature5": "智能预处理 - 自动优化图像（去噪、锐化、色彩校正）",
+    "imageFeature6": "格式自动修正 - 检测文件扩展名与实际格式是否匹配，自动识别伪装文件",
+    "videoFeaturesTitle": "视频智能功能",
+    "videoFeature1": "动图转视频推荐 - 检测大型动图，智能推荐转为视频格式，体积减少 60-80%",
+    "videoFeature2": "场景检测 - 智能检测场景变化，优化关键帧分布",
+    "videoFeature3": "质量验证 - 使用业界标准算法验证视频质量",
+    "videoFeature4": "两遍编码 - 两次编码优化码率分配，相同质量下体积减少 10-20%"
+  }
+}

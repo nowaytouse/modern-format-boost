@@ -1,0 +1,480 @@
+name: Continuous Quality & Fuzzing
+
+on:
+  push:
+    branches: [main, nightly]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+  pull_request:
+    branches: [main, nightly]
+  schedule:
+    - cron: "0 0 * * *" # Daily at midnight
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: write
+
+concurrency:
+  group: maintenance-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+
+jobs:
+  # ── Blocking pipeline: each job needs the previous; first failure stops the chain ──
+
+  validation:
+    name: "1 · Configuration & Workflow Validation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: "1.39.0"
+
+      - name: Verify justfile recipes
+        id: just
+        continue-on-error: true
+        run: just --list
+
+      - name: Install actionlint & yamllint
+        run: |
+          # Install actionlint
+          for i in {1..3}; do
+            curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+              -o /tmp/download-actionlint.bash && break
+            if [ "$i" -eq 3 ]; then
+              echo "Failed to download actionlint installer after 3 attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          sudo bash /tmp/download-actionlint.bash latest /usr/local/bin
+
+          # Install yamllint via apt to avoid PEP 668 issues on Ubuntu 24.04
+          sudo apt-get update -qq
+          sudo apt-get install -y yamllint
+
+      - name: Validate workflow files
+        id: actionlint
+        continue-on-error: true
+        run: actionlint -color
+
+      - name: Check YAML syntax
+        id: yamllint
+        continue-on-error: true
+        run: |
+          YAMLLINT_CONFIG='{extends: relaxed, rules: {document-start: disable, truthy: disable, comments: disable, line-length: disable}}'
+          find .github/workflows \( -name "*.yml" -o -name "*.yaml" \) -print0 | \
+            xargs -0 -n1 yamllint -d "$YAMLLINT_CONFIG"
+
+      - name: Check validation outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.just.outcome }}" = "failure" ]; then
+            echo "::error::just --list failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.actionlint.outcome }}" = "failure" ]; then
+            echo "::error::actionlint failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.yamllint.outcome }}" = "failure" ]; then
+            echo "::error::yamllint failed"
+            exit_code=1
+          fi
+          exit $exit_code
+
+  dispatch2-macos:
+    name: "1b · dispatch2 (macOS / libdispatch)"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test dispatch2
+        working-directory: crates/dev/src/dispatch2
+        run: cargo test --no-fail-fast -- --test-threads=1
+
+  dispatch2-linux:
+    name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libglib2.0-dev build-essential cmake git clang libblocksruntime-dev pkg-config ninja-build
+          cd /tmp
+          curl -fsSL "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" -o libheif-src.tar.gz
+          tar xzf libheif-src.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_WARN_DEPRECATED=OFF \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF \
+            > /tmp/libheif-cmake.log 2>&1
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build libdispatch
+        env:
+          LIBDISPATCH_REF: release/6.0
+        run: cargo run --locked -p dev --bin build_libdispatch
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test dispatch2 (no objc2; Linux libdispatch)
+        working-directory: crates/dev/src/dispatch2
+        env:
+          LIBDISPATCH_PREFIX: /usr/local
+          LD_LIBRARY_PATH: /usr/local/lib
+          CC: clang
+          CXX: clang++
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        run: cargo test --no-default-features --features "std,libc,alloc" --no-fail-fast -- --test-threads=1
+
+  health-check:
+    name: "2 · Repository Health Check"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # check_all --ci (hack matrix + llvm-cov LCOV) often exceeds 60m on hosted runners.
+    timeout-minutes: 120
+    env:
+      # Match ClusterFuzzLite / fuzz: embedded libheif avoids libheif-sys build.rs PermissionDenied on runners.
+      LIBHEIF_STATIC: "1"
+      LIBHEIF_SYS_STATIC: "1"
+      # Suppress Node 24 punycode deprecation noise from upload-artifact and other JS actions.
+      NODE_OPTIONS: --no-deprecation
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+          components: rustfmt, clippy, miri, rust-src, llvm-tools
+
+      - name: Ensure required nightly components on pinned toolchain
+        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-05-23
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: "1.39.0"
+
+      - name: Just fmt check (early gate)
+        id: fmt_check
+        continue-on-error: true
+        run: just fmt-check
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            for attempt in 1 2 3; do
+              if curl -fsSL "$url" -o "$output"; then return 0; fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "Failed to download ${url} after 3 attempts" >&2
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libglib2.0-dev pkg-config clang cmake nasm ninja-build meson \
+            libgmp-dev libmpfr-dev libmpc-dev libjxl-dev libjxl-tools libnuma-dev \
+            libde265-dev libx265-dev libaom-dev \
+            ffmpeg exiftool imagemagick jpeginfo pngcheck exiv2 jhead libjpeg-turbo-progs libavif-bin \
+            curl build-essential
+
+          # Ubuntu's packaged ffmpeg currently lacks the libvmaf filter used by
+          # the runtime quality audit. Install a pinned static build for this job.
+          cd /tmp
+          FFMPEG_STATIC_ASSET="ffmpeg-N-124987-g9dd0fe0225-linux64-gpl"
+          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-12-14-04/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
+          echo "41cec775c64761d2f4ad2905abfb03c86456664e8ec3379713f44edb95152a80  ffmpeg-static.tar.xz" | sha256sum -c -
+          tar xf ffmpeg-static.tar.xz
+          sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffmpeg" /usr/local/bin/ffmpeg
+          sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffprobe" /usr/local/bin/ffprobe
+          ffmpeg -hide_banner -filters | grep -w libvmaf
+          ffmpeg -hide_banner -encoders | grep -w libx264
+          ffmpeg -hide_banner -encoders | grep -w libx265
+          ffmpeg -hide_banner -encoders | grep -w libaom-av1
+          ffmpeg -hide_banner -encoders | grep -w libsvtav1
+
+          # Build libheif 1.21 from source (apt version is too old for v1_21 API)
+          cd /tmp
+          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" libheif-src.tar.gz
+          tar xzf libheif-src.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_WARN_DEPRECATED=OFF \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF \
+            > /tmp/libheif-cmake.log 2>&1
+          cmake_rc=$?
+          rg -v '^(CMake Warning|  WARNING: MISSING PACKAGE|  ignore this warning)' \
+            /tmp/libheif-cmake.log || true
+          if [ "$cmake_rc" -ne 0 ]; then exit "$cmake_rc"; fi
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+
+          # apt libmpc-dev is 1.3.x; gmp-mpfr-sys (system-gmp / --all-features) requires MPC 1.4.1
+          cd /tmp
+          cargo run --locked --manifest-path "${{ github.workspace }}/Cargo.toml" -p dev --bin download_gnu_mpc -- mpc.tar.xz
+          tar xf mpc.tar.xz
+          cd mpc-1.4.1
+          ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Just read-only quality gate (after MPC/GMP/MPFR for gmp-mpfr-sys)
+        id: fix_gate
+        continue-on-error: true
+        run: just fix-gate
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-health-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-health-
+
+      - name: Install check_all CI tools (llvm-cov, hack, bloat, fuzz)
+        run: cargo install cargo-llvm-cov cargo-hack cargo-bloat cargo-fuzz --locked
+
+      - name: Repository health (check_all --ci, fail-fast)
+        id: check_all
+        continue-on-error: true
+        run: |
+          # SSOT: fmt, clippy_strict, check, CI tests, contract registry,
+          # rustdoc -D warnings, llvm-cov LCOV, cargo fuzz smoke, cargo hack
+          # feature matrix, cargo bloat — see check_all --ci
+          # Exits on first required/optional failure (--ci sets Tracker.fail_fast).
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke
+
+      - name: Verify LCOV artifact (fail-closed)
+        id: verify_lcov
+        continue-on-error: true
+        run: test -s lcov.info
+
+      - name: Upload LCOV artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-lcov-shared-utils
+          path: lcov.info
+          if-no-files-found: error
+
+      - name: Check health-check outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.fmt_check.outcome }}" = "failure" ]; then
+            echo "::error::just fmt-check failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.fix_gate.outcome }}" = "failure" ]; then
+            echo "::error::just fix-gate failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.check_all.outcome }}" = "failure" ]; then
+              echo "::error::check_all failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.verify_lcov.outcome }}" = "failure" ]; then
+            echo "::error::lcov.info check failed or missing"
+            exit_code=1
+          fi
+          exit $exit_code
+
+  security-audit:
+    name: "3 · Dependency Security Audit"
+    needs: health-check
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: cargo audit --deny warnings
+
+  nightly-release:
+    name: Build & Publish Nightly
+    if: github.ref == 'refs/heads/nightly' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.health-check.result == 'success' && needs.security-audit.result == 'success' && needs.validation.result == 'success'
+    needs:
+      - validation
+      - health-check
+      - security-audit
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/cd-nightly.yml
+    secrets: inherit
+
+  deep-audit:
+    name: Deep Production Audit
+    needs: security-audit
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Nightly Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+          components: clippy, rustfmt, miri, rust-src, llvm-tools
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            for attempt in 1 2 3; do
+              if curl -fsSL "$url" -o "$output"; then return 0; fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "Failed to download ${url} after 3 attempts" >&2
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libglib2.0-dev pkg-config clang cmake nasm ninja-build meson \
+            libgmp-dev libmpfr-dev libmpc-dev libjxl-dev libjxl-tools libnuma-dev \
+            libde265-dev libx265-dev libaom-dev \
+            ffmpeg exiftool imagemagick pngcheck \
+            curl build-essential
+
+          # Ubuntu's packaged ffmpeg currently lacks the libvmaf filter used by
+          # the runtime quality audit. Install a pinned static build for this job.
+          cd /tmp
+          FFMPEG_STATIC_ASSET="ffmpeg-N-124987-g9dd0fe0225-linux64-gpl"
+          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-12-14-04/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
+          echo "41cec775c64761d2f4ad2905abfb03c86456664e8ec3379713f44edb95152a80  ffmpeg-static.tar.xz" | sha256sum -c -
+          tar xf ffmpeg-static.tar.xz
+          sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffmpeg" /usr/local/bin/ffmpeg
+          sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffprobe" /usr/local/bin/ffprobe
+          ffmpeg -hide_banner -filters | grep -w libvmaf
+          ffmpeg -hide_banner -encoders | grep -w libx264
+          ffmpeg -hide_banner -encoders | grep -w libx265
+          ffmpeg -hide_banner -encoders | grep -w libaom-av1
+          ffmpeg -hide_banner -encoders | grep -w libsvtav1
+
+          cd /tmp
+          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" libheif-src.tar.gz
+          tar xzf libheif-src.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_WARN_DEPRECATED=OFF \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF \
+            > /tmp/libheif-cmake.log 2>&1
+          cmake_rc=$?
+          rg -v '^(CMake Warning|  WARNING: MISSING PACKAGE|  ignore this warning)' \
+            /tmp/libheif-cmake.log || true
+          if [ "$cmake_rc" -ne 0 ]; then exit "$cmake_rc"; fi
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+
+          cd /tmp
+          cargo run --locked --manifest-path "${{ github.workspace }}/Cargo.toml" -p dev --bin download_gnu_mpc -- mpc.tar.xz
+          tar xf mpc.tar.xz
+          cd mpc-1.4.1
+          ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Audit Tools
+        run: |
+          cargo install cargo-hack cargo-bloat cargo-nextest --locked
+
+      - name: Generate edge test media (gitignored fixtures)
+        run: cargo run --locked -p dev --bin generate_test_media
+
+      - name: Run Expensive Workspace Audit
+        run: |
+          # 运行 check_all 并启用昂贵检查：
+          # --build: 验证 Release 编译
+          # --fuzz-smoke: 验证并短跑所有 Fuzz 目标
+          # (不传 --no-expensive 默认开启 cargo hack feature matrix)
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --build --fuzz-smoke

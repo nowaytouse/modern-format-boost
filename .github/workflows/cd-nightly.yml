@@ -1,0 +1,277 @@
+name: Nightly Release
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+
+jobs:
+  build-macos:
+    name: Build (macOS ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            os: macos-14
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            os: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Homebrew)
+        shell: bash
+        run: |
+          # Force remove problematic taps that break brew on macOS runners
+          rm -rf /usr/local/Homebrew/Library/Taps/hashicorp \
+                 /usr/local/Homebrew/Library/Taps/aws \
+                 /opt/homebrew/Library/Taps/hashicorp \
+                 /opt/homebrew/Library/Taps/aws
+
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            BREW_BIN="/usr/local/bin/brew"
+            if [[ ! -x "${BREW_BIN}" ]]; then
+              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
+            fi
+          else
+            BREW_BIN="brew"
+          fi
+
+          BREW_FORMULAS=(
+            ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
+            gmp mpfr libmpc vvdec vvenc
+          )
+          MISSING=()
+          for formula in "${BREW_FORMULAS[@]}"; do
+            if ! "${BREW_BIN}" list --formula "${formula}" &>/dev/null; then
+              MISSING+=("${formula}")
+            fi
+          done
+          if ((${#MISSING[@]} > 0)); then
+            "${BREW_BIN}" update
+            "${BREW_BIN}" install "${MISSING[@]}"
+          else
+            echo "All required Homebrew formulas already installed."
+          fi
+
+          BREW_PREFIX=$("${BREW_BIN}" --prefix)
+          BREW_LIBS="${BREW_PREFIX}/lib"
+          for pkg in x264 vvdec vvenc; do
+            if [ -d "${BREW_PREFIX}/opt/${pkg}/lib" ]; then
+              BREW_LIBS="${BREW_PREFIX}/opt/${pkg}/lib:${BREW_LIBS}"
+            fi
+          done
+          {
+            echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig"
+            echo "CPATH=${BREW_PREFIX}/include${CPATH:+:$CPATH}"
+            echo "LIBRARY_PATH=${BREW_LIBS}${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Workaround for stdc++ on macOS
+        shell: bash
+        run: |
+          mkdir -p crates/.modern_format_boost/.tmp_lib
+          SDK_PATH=$(xcrun --show-sdk-path)
+          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" crates/.modern_format_boost/.tmp_lib/libstdc++.tbd
+          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" crates/.modern_format_boost/.tmp_lib/libstdc++.dylib
+          {
+            echo "LIBRARY_PATH=$(pwd)/crates/.modern_format_boost/.tmp_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p img -p vid \
+            --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/img" dist/
+          cp "target/${{ matrix.target }}/release/vid" dist/
+          cp -r crates/dev/scripts dist/
+          cp LICENSE README.md docs/CHANGELOG.md dist/
+          cd dist
+          tar czf "../modern-format-boost-${{ matrix.target }}.tar.gz" ./*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: modern-format-boost-${{ matrix.target }}
+          path: modern-format-boost-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  build-linux:
+    name: Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            local attempt
+
+            for attempt in 1 2 3; do
+              if curl -fsSL "$url" -o "$output"; then
+                return 0
+              fi
+
+              if [[ "$attempt" == "3" ]]; then
+                echo "Failed to download ${url} after 3 attempts" >&2
+                return 1
+              fi
+
+              sleep 10
+            done
+          }
+
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libglib2.0-dev pkg-config clang cmake nasm ninja-build meson \
+            libde265-dev libx265-dev libaom-dev \
+            libturbojpeg0-dev libpng-dev jpeginfo pngcheck exiv2 jhead libjpeg-turbo-progs libavif-bin \
+            libgmp-dev libmpfr-dev libjxl-dev libjxl-tools libnuma-dev \
+            curl build-essential autoconf automake libtool m4
+
+          cd /tmp
+
+          download_with_retry "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz" dav1d.tar.gz
+          tar xzf dav1d.tar.gz
+          cd dav1d-1.5.1
+          meson setup build --buildtype=release --prefix=/usr/local -Denable_tools=false -Denable_tests=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+          cd /tmp
+          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" libheif.tar.gz
+          tar xzf libheif.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+
+          cd /tmp
+          cargo run --locked --manifest-path "${{ github.workspace }}/Cargo.toml" -p dev --bin download_gnu_mpc -- mpc.tar.xz
+          tar xf mpc.tar.xz
+          cd mpc-1.4.1
+          ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu -p img -p vid \
+            --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/img dist/
+          cp target/x86_64-unknown-linux-gnu/release/vid dist/
+          cp -r crates/dev/scripts dist/
+          cp LICENSE README.md docs/CHANGELOG.md dist/
+          cd dist
+          tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz ./*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: modern-format-boost-linux-x64
+          path: modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish Nightly Release
+    needs:
+      - build-macos
+      - build-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Move nightly tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly-latest "${GITHUB_SHA}"
+          git push origin refs/tags/nightly-latest --force
+
+      - name: Create release notes
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "Automated nightly build for \`${GITHUB_SHA}\`." \
+            "" \
+            "Source branch: \`${GITHUB_REF_NAME}\`" \
+            "Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`" \
+            > /tmp/nightly_release_notes.md
+
+      - name: Publish nightly release
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          tag_name: nightly-latest
+          name: Nightly Build
+          body_path: /tmp/nightly_release_notes.md
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          prerelease: true
+          make_latest: false
+          token: ${{ secrets.GITHUB_TOKEN }}

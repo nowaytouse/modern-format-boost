@@ -1,0 +1,385 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      COSIGN_KEY_PRESENT: ${{ secrets.COSIGN_PRIVATE_KEY != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: macos-arm64
+
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_name: macos-x64
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # ── Linux ──────────────────────────────────────────────────────────────
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            local attempt
+
+            for attempt in 1 2 3; do
+              if curl -fsSL "$url" -o "$output"; then
+                return 0
+              fi
+
+              if [[ "$attempt" == "3" ]]; then
+                echo "Failed to download ${url} after 3 attempts" >&2
+                return 1
+              fi
+
+              sleep 10
+            done
+          }
+
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libglib2.0-dev pkg-config clang cmake nasm ninja-build meson \
+            libde265-dev libx265-dev libaom-dev \
+            libturbojpeg0-dev libpng-dev jpeginfo pngcheck exiv2 jhead libjpeg-turbo-progs libavif-bin \
+            libgmp-dev libmpfr-dev libjxl-dev libjxl-tools libnuma-dev \
+            curl build-essential autoconf automake libtool m4
+
+          cd /tmp
+
+          download_with_retry "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz" dav1d.tar.gz
+          tar xzf dav1d.tar.gz
+          cd dav1d-1.5.1
+          meson setup build --buildtype=release --prefix=/usr/local -Denable_tools=false -Denable_tests=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+          cd /tmp
+          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" libheif.tar.gz
+          tar xzf libheif.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+
+          cd /tmp
+          cargo run --locked --manifest-path "${{ github.workspace }}/Cargo.toml" -p dev --bin download_gnu_mpc -- mpc.tar.xz
+          tar xf mpc.tar.xz
+          cd mpc-1.4.1
+          ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      # ── macOS ARM64 (native) ────────────────────────────────────────────────
+      - name: Install dependencies (macOS ARM64)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          # Force remove problematic taps that break brew on macOS runners
+          rm -rf /usr/local/Homebrew/Library/Taps/hashicorp \
+                 /usr/local/Homebrew/Library/Taps/aws \
+                 /opt/homebrew/Library/Taps/hashicorp \
+                 /opt/homebrew/Library/Taps/aws
+
+          BREW_FORMULAS=(
+            ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
+            gmp mpfr libmpc vvdec vvenc
+          )
+          MISSING=()
+          for formula in "${BREW_FORMULAS[@]}"; do
+            if ! brew list --formula "${formula}" &>/dev/null; then
+              MISSING+=("${formula}")
+            fi
+          done
+          if ((${#MISSING[@]} > 0)); then
+            brew update
+            brew install "${MISSING[@]}"
+          else
+            echo "All required Homebrew formulas already installed."
+          fi
+          BREW_PREFIX=$(brew --prefix)
+          {
+            echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig"
+            echo "CPATH=${BREW_PREFIX}/include${CPATH:+:$CPATH}"
+            echo "LIBRARY_PATH=${BREW_PREFIX}/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Workaround for stdc++ on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p /tmp/libstdcxx-fix
+          ln -s /usr/lib/libc++.1.dylib /tmp/libstdcxx-fix/libstdc++.dylib
+          {
+            echo "LIBRARY_PATH=/tmp/libstdcxx-fix${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      # ── macOS x86_64 (native Intel runner) ─────────────────────────────────
+      - name: Install dependencies (macOS x86_64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          # Force remove problematic taps that break brew on macOS runners
+          rm -rf /usr/local/Homebrew/Library/Taps/hashicorp \
+                 /usr/local/Homebrew/Library/Taps/aws \
+                 /opt/homebrew/Library/Taps/hashicorp \
+                 /opt/homebrew/Library/Taps/aws
+
+          # Use native Intel Homebrew on the Intel runner image.
+          if [ ! -f /usr/local/bin/brew ]; then
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
+          fi
+          BREW_BIN="/usr/local/bin/brew"
+          BREW_FORMULAS=(
+            ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
+            gmp mpfr libmpc vvdec vvenc
+          )
+          MISSING=()
+          for formula in "${BREW_FORMULAS[@]}"; do
+            if ! "${BREW_BIN}" list --formula "${formula}" &>/dev/null; then
+              MISSING+=("${formula}")
+            fi
+          done
+          if ((${#MISSING[@]} > 0)); then
+            "${BREW_BIN}" update
+            "${BREW_BIN}" install "${MISSING[@]}"
+          else
+            echo "All required Homebrew formulas already installed."
+          fi
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "CPATH=/usr/local/include${CPATH:+:$CPATH}"
+            echo "LIBRARY_PATH=/usr/local/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      # ── Windows ────────────────────────────────────────────────────────────
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/cd-stable.yml', '**/Cargo.lock') }}
+          restore-keys: |
+            vcpkg-x64-windows-static-
+            vcpkg-x64-windows-
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Install pkg-config (needed by dav1d-sys, libheif-sys build scripts)
+          choco install pkgconfiglite --yes --no-progress
+
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$env:VCPKG_INSTALLATION_ROOT\packages,readwrite"
+          vcpkg install libheif:x64-windows-static dav1d:x64-windows-static libjxl:x64-windows-static gmp:x64-windows-static mpfr:x64-windows-static mpc:x64-windows-static --recurse
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          echo "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$root\installed\x64-windows-static\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "VCPKGRS_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
+          echo "INCLUDE=$root\installed\x64-windows-static\include" >> $env:GITHUB_ENV
+          echo "LIB=$root\installed\x64-windows-static\lib" >> $env:GITHUB_ENV
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build release binaries
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            -p vid -p img --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+
+      # ── Package ────────────────────────────────────────────────────────────
+      - name: Package artifacts
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="ModernFormatBoost-${TAG}-${{ matrix.artifact_name }}.zip"
+          mkdir -p dist
+          EXT=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            EXT=".exe"
+          fi
+
+          for bin in vid img; do
+            cp "target/${{ matrix.target }}/release/${bin}${EXT}" dist/
+          done
+          cp -r crates/dev/scripts dist/
+          cp README.md dist/
+          cp LICENSE dist/
+
+          cd dist
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            7z a "../${ARCHIVE}" .
+          else
+            zip -r "../${ARCHIVE}" .
+          fi
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.10.1
+      - name: Sign release archive (cosign)
+        if: env.COSIGN_KEY_PRESENT == 'true'
+        shell: bash
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f cosign.key' EXIT
+          printf '%s\n' "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+          chmod 600 cosign.key
+          for archive in ModernFormatBoost-*-${{ matrix.artifact_name }}.zip; do
+            cosign sign-blob \
+              --key cosign.key \
+              --output "${archive}.sig" \
+              --tlog-upload=false \
+              "${archive}"
+          done
+      - name: Upload artifact (inter-job)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ModernFormatBoost-*-${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+      - name: Upload cosign signatures
+        if: env.COSIGN_KEY_PRESENT == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-cosign
+          path: ModernFormatBoost-*-${{ matrix.artifact_name }}.zip.sig
+          if-no-files-found: error
+
+  # ── Create / update GitHub Release ─────────────────────────────────────────
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for CHANGELOG)
+        uses: actions/checkout@v6.0.2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh release-assets/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-05-23
+
+      - name: Generate workspace SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --workspace --format json --override-filename sbom
+          mv sbom.json release-assets/sbom.cdx.json
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-staged
+          cp release-assets/*.zip release-staged/
+          cp release-assets/sbom.cdx.json release-staged/
+          for sig in release-assets/*.zip.sig; do
+            cp "$sig" release-staged/
+          done
+          ls -lh release-staged/
+
+      - name: Extract version changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          # Try to use RELEASE_NOTES file first
+          if [ -f "RELEASE_NOTES_${TAG}.md" ]; then
+            echo "Using RELEASE_NOTES_${TAG}.md"
+            cp "RELEASE_NOTES_${TAG}.md" /tmp/release_notes.md
+          else
+            # Fallback to extracting from CHANGELOG.md
+            echo "Extracting from CHANGELOG.md for version ${VERSION}"
+            NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" docs/CHANGELOG.md 2>/dev/null | head -80)
+            if [ -z "$NOTES" ]; then
+              NOTES="See commit history for changes in ${TAG}."
+            fi
+            printf '%s\n' "$NOTES" > /tmp/release_notes.md
+          fi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
+          files: release-staged/*
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "contract_invariants": 66,
+  "allowlist_live": 0,
+  "numeric_forgery_offenders": 0,
+  "gate_log_anomaly_count": 1
+}

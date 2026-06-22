@@ -1,0 +1,16 @@
+-- Legacy single-table seed dump removed.
+--
+-- New-schema only:
+-- - LoopIntent seeds belong in `loop_samples`
+-- - Static quality seeds belong in `image_quality_samples`
+-- - Animated-image quality seeds belong in `animated_image_quality_samples`
+-- - Video quality seeds belong in `video_quality_samples`
+--
+-- This file intentionally contains no executable INSERT statements. Synthetic
+-- placeholder rows without validated 256D embeddings would pollute the HNSW
+-- indexes and contradict the strict multi-scenario training path.
+--
+-- Supported ingestion paths:
+--   python3 crates/dev/scripts/run_training.py --execute --use-api
+--   cargo run -p foundation --bin train_knn -- <path> --label <loop|non-loop>
+--   cargo run -p foundation --bin train_quality -- <path> --label <...> --scenario <...>

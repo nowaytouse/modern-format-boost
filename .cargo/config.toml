@@ -9,17 +9,45 @@
 # -----------------------------------------------------------------------------
 [build]
 # Enable overflow checks by default for all targets
-rustflags = [
-    "-C", "overflow-checks=on",
-]
+rustflags = ["-C", "overflow-checks=on"]
 
-# macOS-specific optimizations
-[target.'cfg(target_os = "macos")']
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "26.0"
+CMAKE_PREFIX_PATH = "/opt/homebrew/opt/aom:/opt/homebrew/opt/libjpeg-turbo:/opt/homebrew"
+C_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
+CPLUS_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
+LIBRARY_PATH = "/opt/homebrew/lib:/usr/local/lib"
+PKG_CONFIG_PATH = "/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
+
+# macOS ARM64 (Apple Silicon) optimizations
+[target.aarch64-apple-darwin]
 rustflags = [
-    "-C", "overflow-checks=on",
-    # Enable Faster Linker (system default is usually fine on Sonoma+, 
-    # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
+  "-C",
+  "overflow-checks=on",
+  # Fix libstdc++ linking issue on macOS (use libc++ instead)
+  "-L",
+  "crates/.modern_format_boost/.tmp_lib",
+  "-C",
+  "link-arg=-lc++",
 ]
+rustdocflags = ["-L", "crates/.modern_format_boost/.tmp_lib"]
+
+# macOS x86_64 (Intel) optimizations
+[target.x86_64-apple-darwin]
+rustflags = [
+  "-C",
+  "overflow-checks=on",
+  # Fix libstdc++ linking issue on macOS (use libc++ instead)
+  "-L",
+  "crates/.modern_format_boost/.tmp_lib",
+  # Homebrew paths for x86_64 (Intel) - Standard and specific overrides
+  "-L",
+  "/usr/local/lib",
+  "-C",
+  "link-arg=-lc++",
+]
+rustdocflags = ["-L", "crates/.modern_format_boost/.tmp_lib"]
 
 # -----------------------------------------------------------------------------
 # Incremental Compilation Optimizations
@@ -124,3 +152,7 @@ color = "always"
 # Optimize network requests for registry updates
 retry = 3
 git-fetch-with-cli = true
+
+# Strict Clippy (see scripts/clippy_strict.py and clippy.toml)
+[alias]
+clippy-strict = "clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo -W unreachable_pub -W dead_code -A clippy::multiple_crate_versions"

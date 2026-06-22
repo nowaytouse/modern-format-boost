@@ -1,0 +1,262 @@
+{
+  "app": {
+    "title": "PIXLY AI",
+    "subtitle": "Intelligent Filter Optimization"
+  },
+  "filter": {
+    "title": "🔮 Filter Mode",
+    "description": "Like an invisible thin filter layer, AI intelligently optimizes image quality while preserving the original format, achieving imperceptible quality improvements.",
+    "modeActive": "🔮 Filter Mode: Preserving format, AI optimization",
+    "imageOptions": "🖼️ Image Filter Options",
+    "videoOptions": "🎬 Video Filter Options",
+    "aiOptimization": "🤖 AI Smart Optimization",
+    "qualityValidation": "📊 Quality Validation",
+    "smartPreprocess": "✨ Smart Preprocessing"
+  },
+  "header": {
+    "refresh": "Refresh",
+    "help": "Help",
+    "language": "Switch Language",
+    "theme": "Toggle Theme"
+  },
+  "empty": {
+    "title": "No Files Selected",
+    "subtitle": "Select images or videos in Eagle",
+    "loadButton": "Load Files",
+    "selectTitle": "Select Files",
+    "selectSubtitle": "Choose files from the list to start conversion",
+    "filesAvailable": "files available",
+    "selectImages": "Images Only",
+    "selectVideos": "Videos Only"
+  },
+  "controls": {
+    "title": "🤖 AI Smart Options",
+    "optimizeMode": "Optimization Target",
+    "balanced": "⚖️ Balanced - Quality & Size",
+    "quality": "🎯 Quality - Best Quality",
+    "size": "📦 Size - Smallest File"
+  },
+  "aiTransparency": {
+    "title": "AI Decision Transparency",
+    "analyzing": "🔍 Analyzing",
+    "ready": "📊 Ready",
+    "fileAnalysis": "File Analysis",
+    "featureExtraction": "Feature Extraction",
+    "aiDecision": "AI Decision",
+    "processingSteps": "Processing Steps",
+    "performance": "Performance Statistics",
+    "fileSize": "File Size",
+    "dimensions": "Dimensions",
+    "format": "Format",
+    "colorDepth": "Color Depth",
+    "recommendedFormat": "Recommended Format",
+    "quality": "Quality",
+    "speed": "Speed",
+    "confidence": "Confidence",
+    "reasoning": "Decision Reasoning",
+    "totalTime": "Total Time",
+    "originalSize": "Original Size",
+    "compressedSize": "Compressed Size",
+    "compressionRatio": "Compression Ratio",
+    "features": {
+      "complexity": "Complexity",
+      "edgeStrength": "Edge Strength",
+      "colorfulness": "Colorfulness",
+      "textureDetail": "Texture Detail",
+      "noiseLevel": "Noise Level"
+    }
+  },
+  "alphaPanel": {
+    "title": "Alpha Channel Processing Panel (Deprecated)",
+    "subtitle": "Deep dive into internal alpha channel processing flow and technical details",
+    "detection": "Transparency Detection",
+    "alphaDetected": "Alpha Channel Detected",
+    "alphaPixels": "Transparent Pixels",
+    "alphaType": "Transparency Type",
+    "types": {
+      "none": "No Transparency",
+      "binary": "Binary (Simple Cutout)",
+      "gradient": "Gradient (Smooth Fade)",
+      "complex": "Complex (Mixed Types)"
+    },
+    "processFlow": "Processing Flow",
+    "formatCompatibility": "Format Compatibility",
+    "support": {
+      "full": "Full Support",
+      "partial": "Partial Support",
+      "none": "Not Supported"
+    },
+    "quality": "Quality",
+    "compression": "Compression",
+    "advancedOptions": "Advanced Processing Options",
+    "alphaQuality": "Alpha Channel Quality",
+    "alphaQualityHint": "Control alpha channel compression quality (0-100), higher values mean better quality but larger files",
+    "premultiplyAlpha": "Premultiply Alpha",
+    "premultiplyHint": "Premultiply RGB values with alpha, can improve compression efficiency for certain formats",
+    "separateAlpha": "Separate Alpha Channel",
+    "separateAlphaHint": "Encode alpha channel separately, may achieve better compression ratio",
+    "statistics": "Processing Statistics",
+    "totalPixels": "Total Pixels",
+    "opaquePixels": "Opaque Pixels",
+    "transparentPixels": "Fully Transparent",
+    "semiTransparent": "Semi-Transparent",
+    "technicalDetails": "Technical Details",
+    "internalProcess": "Internal Processing Flow",
+    "step1Title": "Alpha Channel Detection",
+    "step1Desc": "Check if image color space contains alpha channel",
+    "step2Title": "Pixel-Level Analysis",
+    "step2Desc": "Iterate through all pixels, analyze alpha value distribution",
+    "step3Title": "Type Classification",
+    "step3Desc": "Classify transparency type based on alpha distribution characteristics",
+    "step4Title": "Format Compatibility Check",
+    "step4Desc": "Verify target format's alpha channel support level",
+    "step5Title": "Encoding Parameter Optimization",
+    "step5Desc": "Apply alpha-specific encoding parameters",
+    "algorithmDetails": "Algorithm Pseudocode",
+    "steps": {
+      "detection": "Alpha Channel Detection",
+      "analysis": "Pixel Analysis",
+      "classification": "Type Classification",
+      "optimization": "Format Optimization",
+      "encoding": "Alpha Encoding"
+    },
+    "mediaTypes": {
+      "all": "All Formats",
+      "image": "Image Formats",
+      "animation": "Animation Formats",
+      "video": "Video Formats"
+    }
+  },
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "experimental": "Exp"
+  },
+  "log": {
+    "aiLog": "🔍 AI Log",
+    "features": "📋 Features",
+    "startProcessing": "Starting to process {count} files",
+    "optimizeMode": "Optimization mode: {mode}",
+    "fileInfo": "File: {name} ({size})",
+    "dimensions": "Dimensions: {width}×{height}",
+    "processing": "[{current}/{total}] Processing: {file}",
+    "success": "✓ {file}",
+    "error": "✗ {file}: {error}",
+    "allComplete": "✅ All complete! Success: {success}/{total}",
+    "partialComplete": "⚠️ Partially complete! Success: {success}, Failed: {failed}",
+    "allFailed": "❌ All failed! Failed: {failed}/{total}",
+    "compression": "Compression: {input} → {output} ({ratio}%)",
+    "targetFormat": "Target format: {format}",
+    "aiPrediction": "AI parameter prediction: {status}",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "image": {
+    "title": "🖼️ Image Options",
+    "format": "Output Format",
+    "formatAuto": "🤖 Auto - AI Smart Selection",
+    "aiPrediction": "AI Parameter Prediction",
+    "fileValidation": "File Type Validation",
+    "ssimValidation": "SSIM Quality Validation",
+    "gpuAccel": "GPU Hardware Acceleration",
+    "preprocess": "Smart Preprocessing",
+    "formatCorrection": "Format Correction",
+    "animationToVideo": "🎬 Animation to Video"
+  },
+  "video": {
+    "title": "🎬 Video Options",
+    "codec": "Video Codec",
+    "codecAuto": "🤖 Auto - AI Smart Selection",
+    "codecRecommendation": "AI Codec Recommendation",
+    "animationToVideo": "Animation to Video",
+    "sceneDetection": "Scene Detection",
+    "vmafValidation": "VMAF Quality Validation",
+    "twoPass": "Two-Pass Encoding",
+    "container": "Container Format",
+    "crf": "Quality Control (CRF)",
+    "speed": "Encoding Speed",
+    "pixelFormat": "Pixel Format"
+  },
+  "fileList": {
+    "title": "File List",
+    "selected": "{count} files selected",
+    "selectAll": "Select All",
+    "selectNone": "Deselect",
+    "selectInvert": "Invert",
+    "selectImages": "Images",
+    "selectVideos": "Videos",
+    "convertButton": "Start Conversion"
+  },
+  "button": {
+    "processing": "Optimizing...",
+    "startConvert": "Start AI Processing",
+    "startOptimize": "Start AI Filter"
+  },
+  "progress": {
+    "processing": "Processing...",
+    "complete": "Conversion Complete!",
+    "failed": "Conversion Failed",
+    "processingImages": "Processing images ({count} files)...",
+    "processingVideos": "Processing videos ({count} files)...",
+    "imageProgress": "[Image {current}/{total}] {filename}",
+    "videoProgress": "[Video {current}/{total}] {filename}",
+    "success": "Complete! Success: {success}/{total}"
+  },
+  "mode": {
+    "video": "Video Mode",
+    "image": "Image Mode",
+    "mixed": "Mixed Mode"
+  },
+  "mixedMode": {
+    "title": "Mixed Mode",
+    "description": "Detected mixed selection, will auto-group:",
+    "images": "Images: {count}",
+    "videos": "Videos: {count}",
+    "hint": "💡 Images and videos will use their respective AI features"
+  },
+  "features": {
+    "validation": "🔒 8-Layer Validation",
+    "xmpMerge": "💡 Auto XMP Merge",
+    "filenameNorm": "📝 Auto Filename Normalization",
+    "metadataTitle": "📦 Complete Metadata Preservation",
+    "exif": "EXIF",
+    "xmp": "XMP",
+    "icc": "ICC",
+    "timestamps": "Timestamps",
+    "extendedAttr": "Extended Attributes"
+  },
+  "xmp": {
+    "autoMerge": "XMP Auto-Merge",
+    "description": "Detected {count} XMP metadata file(s)",
+    "hint": "💡 XMP metadata will be automatically merged into corresponding media files using exiftool"
+  },
+  "help": {
+    "title": "Help",
+    "close": "Close",
+    "vision": "Plugin Vision",
+    "visionDesc": "Let AI be your conversion expert - Say goodbye to tedious parameter tuning. Just choose your goal (extreme compression/visual lossless/balanced), and AI will automatically optimize all parameters based on each image's characteristics (texture complexity, color distribution, transparency, etc.).",
+    "modernFormats": "Embrace Modern Formats - Default recommendation of next-generation formats like AVIF, JXL, WebP, reducing file size by 30-50% at the same quality, making your resource library lighter. Also supports advanced features like HDR, animation, and transparency.",
+    "smartUpgrade": "Smart Format Upgrade - When detecting traditional formats like JPEG/PNG, AI evaluates upgrade benefits (compression improvement, feature enhancement) and recommends modern formats at the right time, making every conversion worthwhile.",
+    "metadataTitle": "Complete Metadata Preservation",
+    "metadataDesc": "All metadata is automatically preserved without any configuration:",
+    "metadataExif": "EXIF Camera Info - Shooting parameters, GPS location, device model",
+    "metadataXmp": "XMP Edit History - Photoshop/Lightroom edit records",
+    "metadataIcc": "ICC Color Profile - Color space and profile",
+    "metadataXmpMerge": "XMP Sidecar Merge - Automatically merge external XMP files using exiftool",
+    "metadataEagle": "Eagle Resource Info - Tags, ratings, notes synced",
+    "metadataTimestamp": "File Timestamps - Creation/modification/access times fully preserved",
+    "metadataExtended": "Extended Attributes - macOS xattr, Windows ADS automatically preserved",
+    "imageFeaturesTitle": "Image AI Features",
+    "imageFeature1": "Smart Parameter Prediction - AI analyzes image features and automatically selects optimal parameters",
+    "imageFeature2": "AI File Validation - Uses Google Magika to detect file types and prevent disguised files",
+    "imageFeature3": "SSIM Quality Validation - Automatically validates quality loss after conversion",
+    "imageFeature4": "GPU Hardware Acceleration - Automatically detects and uses GPU acceleration (5-20x speed boost)",
+    "imageFeature5": "Smart Preprocessing - Automatically optimizes images (denoising, sharpening, color correction)",
+    "imageFeature6": "Format Auto-Correction - Detects if file extension matches actual format, automatically identifies disguised files (e.g., .jpg is actually .png)",
+    "videoFeaturesTitle": "Video AI Features",
+    "videoFeature1": "Animation to Video Recommendation - Detects large animations (GIF/APNG/WebP), intelligently recommends converting to video format (MP4/WebM), reducing size by 60-80%",
+    "videoFeature2": "Scene Detection - Intelligently detects scene changes and optimizes keyframe distribution",
+    "videoFeature3": "VMAF Quality Validation - Uses Netflix VMAF algorithm to validate video quality",
+    "videoFeature4": "Two-Pass Encoding - Two-pass encoding optimizes bitrate allocation, reducing size by 10-20% at the same quality"
+  }
+}

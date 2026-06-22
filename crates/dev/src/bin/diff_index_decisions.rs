@@ -1,11 +1,18 @@
-//! 🔍 Decision Diff Tool - Media Index System
+#![allow(unused_imports)]
+
+//! Decision Diff Tool - Media Index System
 //!
 //! Compares two decision snapshots or compares a snapshot against live production audit data
 //! to detect "Decision Drift" during development or production runs.
 
+use foundation::{
+    log_anomaly, log_corruption, log_debug, log_detail, log_failure, log_fatal, log_hint,
+    log_ignore, log_info, log_skip, log_success,
+};
+
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::media_index::MediaIndex;
+use dev::media::index::MediaIndex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -40,17 +47,18 @@ struct Decision {
 }
 
 fn main() -> Result<()> {
+    use core::fmt::Write;
     let args = Args::parse();
     let index = MediaIndex::open(&args.db)?;
 
     let db_display = args.db.display();
-    println!("🔍 Comparing decisions in: {db_display}");
+    log_detail!(" Comparing decisions in: {db_display}");
 
     // 1. Load Left Side (Baseline Snapshot)
     let left_map = load_snapshot(&index, &args.left)?;
     let left_count = left_map.len();
     let left_tag = &args.left;
-    println!("📈 Baseline [{left_tag}]: {left_count} decisions");
+    log_detail!(" Baseline [{left_tag}]: {left_count} decisions");
 
     // 2. Load Right Side (Comparison Snapshot or Live Audit)
     let (right_name, right_map) = if args.live {
@@ -65,8 +73,8 @@ fn main() -> Result<()> {
         (format!("SNAPSHOT [{tag}]"), map)
     };
     let right_count = right_map.len();
-    println!("📈 Target   [{right_name}]: {right_count} decisions");
-    println!("--------------------------------------------------");
+    log_detail!(" Target [{right_name}]: {right_count} decisions");
+    log_detail!("--------------------------------------------------");
 
     let mut format_changes = 0;
     let mut total_diffs = 0;
@@ -80,12 +88,12 @@ fn main() -> Result<()> {
             if left_dec.format != right_dec.format {
                 format_changes += 1;
                 diff = true;
-                use std::fmt::Write;
-                let _ = write!(
+                write!(
                     diff_msg,
                     "FORMAT: {} -> {}",
                     left_dec.format, right_dec.format
-                );
+                )
+                .expect("String formatting should not fail");
             }
 
             if left_dec.params_json != right_dec.params_json {
@@ -100,27 +108,27 @@ fn main() -> Result<()> {
                 total_diffs += 1;
                 // Try to resolve path from media_entries
                 let path = get_path(&index, blake3).unwrap_or_else(|_| "unknown_file".to_string());
-                println!("⚠️  DRIFT: {path} ({diff_msg})");
+                log_detail!(" DRIFT: {path} ({diff_msg})");
                 let left_reason = &left_dec.reason;
                 let right_reason = &right_dec.reason;
-                println!("   - Left Reason:  {left_reason}");
-                println!("   - Right Reason: {right_reason}");
+                log_detail!(" - Left Reason: {left_reason}");
+                log_detail!(" - Right Reason: {right_reason}");
             }
         }
     }
 
-    println!("--------------------------------------------------");
-    println!("📊 Diff Summary:");
+    log_detail!("--------------------------------------------------");
+    log_detail!(" Diff Summary:");
     let matched_count = left_map
         .keys()
         .filter(|k| right_map.contains_key(*k))
         .count();
-    println!("   - Total Files Matched: {matched_count}");
-    println!("   - Total Drifts:        {total_diffs}");
-    println!("   - Format Changes:      {format_changes}");
+    log_detail!(" - Total Files Matched: {matched_count}");
+    log_detail!(" - Total Drifts: {total_diffs}");
+    log_detail!(" - Format Changes: {format_changes}");
 
     if total_diffs == 0 {
-        println!("✅ No decision drift detected between snapshots.");
+        log_detail!(" No decision drift detected between snapshots.");
     }
 
     Ok(())
@@ -128,8 +136,8 @@ fn main() -> Result<()> {
 
 fn load_snapshot(index: &MediaIndex, tag: &str) -> Result<HashMap<String, Decision>> {
     let mut stmt = index.conn_prepare(
-        "SELECT blake3, decided_format, decision_reason, decided_params_json FROM decision_snapshots WHERE version_tag = ?1"
-    )?;
+"SELECT blake3, decided_format, decision_reason, decided_params_json FROM decision_snapshots WHERE version_tag = ?1"
+)?;
     let mut map = HashMap::new();
     let iter = stmt.query_map([tag], |row| {
         Ok((

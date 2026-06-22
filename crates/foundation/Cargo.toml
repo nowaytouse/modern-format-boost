@@ -1,0 +1,84 @@
+[package]
+name = "foundation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Shared utilities for modern_format_boost tools"
+
+[lib]
+crate-type = ["rlib"]
+
+[lints]
+workspace = true
+
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+indicatif = { workspace = true }
+bitflags = { workspace = true }
+console = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+walkdir = { workspace = true }
+libc = { workspace = true }
+xattr = { workspace = true }
+filetime = { workspace = true }
+log = { workspace = true }
+which = { workspace = true }
+tempfile = { workspace = true }
+image = { workspace = true }
+rayon = { workspace = true }
+libheif-rs = { workspace = true }
+jpegxl-rs = { workspace = true, optional = true }
+flate2 = { workspace = true }
+ctrlc = { workspace = true }
+blake3 = { workspace = true }
+postgres = { workspace = true }
+pgvector = { workspace = true }
+rusqlite = { workspace = true }
+rmp-serde = { workspace = true }
+crc32fast = { workspace = true }
+infer = { workspace = true }
+quick-xml = { workspace = true }
+exr = { workspace = true }
+proptest = { workspace = true }
+serial_test = ">= 3.0"
+arbitrary = {   features = ["derive"], optional = true, version = ">= 1.0"}
+rug = { workspace = true, optional = true }
+gmp-mpfr-sys = { workspace = true, optional = true }
+gif = ">= 0.12"
+webp = ">= 0.2"
+jxl-oxide = { git = "https://github.com/tirr-c/jxl-oxide.git", version = ">= 0.12" }
+
+
+[[bin]]
+name = "train_knn"
+path = "src/bin/train_knn.rs"
+
+[[bin]]
+name = "recompute_stats"
+path = "src/bin/recompute_stats.rs"
+
+[[bin]]
+name = "train_quality"
+path = "src/bin/train_quality.rs"
+
+[features]
+default = ["v1_21", "jpegxl-ffi", "high-precision"]
+v1_21 = ["libheif-rs/v1_21"]
+jpegxl-ffi = ["dep:jpegxl-rs"]
+ci-static-build = ["libheif-rs/embedded-libheif", "v1_21"]
+fuzzing = ["dep:arbitrary"]
+high-precision = ["dep:rug", "dep:gmp-mpfr-sys"]
+system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs"]

@@ -1,0 +1,5 @@
+[tool.ruff]
+cache-dir = "crates/.modern_format_boost/.ruff_cache"
+
+[tool.pytest.ini_options]
+cache_dir = "crates/.modern_format_boost/.pytest_cache"

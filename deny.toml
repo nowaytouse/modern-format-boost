@@ -4,73 +4,110 @@
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-    # paste - no longer maintained (transitive dependency of image/rav1e in nightly)
-    "RUSTSEC-2024-0436",
+  # paste - no longer maintained (transitive dependency of image/rav1e in nightly)
+  "RUSTSEC-2024-0436",
 ]
 
 [licenses]
 # MIT, Apache-2.0, and Zlib are standard and allowed for this project
 allow = [
-    "MIT",
-    "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "Zlib",
-    # Common media/image dependency licenses
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "MPL-2.0",
-    "NCSA",
-    "IJG",
-    "Unicode-3.0",
-    "GPL-3.0-or-later",
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "Zlib",
+  # Common media/image dependency licenses
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "NCSA",
+  "Unicode-3.0",
+  "GPL-3.0-or-later",
+  "LGPL-3.0-or-later",
+  "ISC",
+  "CC0-1.0",
 ]
 confidence-threshold = 0.8
+
+[[licenses.clarify]]
+crate = "gmp-mpfr-sys"
+expression = "LGPL-3.0-or-later"
+license-files = [{ path = "LICENSE-LGPL.md", hash = 986959994 }]
+
+[[licenses.clarify]]
+crate = "rug"
+expression = "LGPL-3.0-or-later"
+license-files = [{ path = "LICENSE-LGPL.md", hash = 986959994 }]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+skip = [
+  { crate = "fallible-iterator", reason = "postgres and rusqlite currently require different major/minor lines" },
+  { crate = "getrandom", reason = "registry 0.3 and git 0.4 are required by independent upstream dependency trees" },
+  { crate = "hashbrown", reason = "rusqlite transitively pulls both registry and git lines" },
+  { crate = "libc", reason = "stable registry and git alpha lines are required by independent upstream dependency trees" },
+  { crate = "miniz_oxide", reason = "image and flate2 currently require separate upstream lines" },
+  { crate = "quick-error", reason = "transitive dependencies currently require separate quick-error lines" },
+  { crate = "r-efi", reason = "getrandom/WASI dependency trees currently require separate source lines" },
+  { crate = "rand", reason = "codec and database/proptest dependency trees currently require separate lines" },
+  { crate = "rand_chacha", reason = "rand and proptest dependency trees currently require separate lines" },
+  { crate = "rand_core", reason = "rand 0.9 and 0.10 dependency trees currently require separate lines" },
+  { crate = "wasi", reason = "tokio and wasite dependency trees currently require separate WASI lines" },
+  { crate = "wasip2", reason = "registry and git WASI dependency trees are both present transitively" },
+  { crate = "weezl", reason = "gif and tiff dependency trees currently require separate lines" },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-git = [
-    "https://github.com/image-rs/image",
-    "https://github.com/mozilla/mp4parse-rust",
-    "https://github.com/rusqlite/rusqlite",
-    "https://github.com/BLAKE3-team/BLAKE3",
-    "https://github.com/rust-random/getrandom",
-    "https://github.com/rust-lang/hashbrown",
-    "https://github.com/dtolnay/anyhow",
-    "https://github.com/dtolnay/thiserror",
-    "https://github.com/tokio-rs/tracing",
-    "https://github.com/clap-rs/clap",
-    "https://github.com/serde-rs/serde",
-    "https://github.com/serde-rs/json",
-    "https://github.com/rayon-rs/rayon",
-    "https://github.com/console-rs/indicatif",
-    "https://github.com/BurntSushi/walkdir",
-    "https://github.com/alexcrichton/filetime",
-    "https://github.com/rust-lang/libc",
-    "https://github.com/Stebalien/xattr",
-    "https://github.com/harryfei/which-rs",
-    "https://github.com/rust-lang/log",
-    "https://github.com/console-rs/console",
-    "https://github.com/chronotope/chrono",
-    "https://github.com/Cykooz/libheif-rs",
-    "https://github.com/Stebalien/tempfile",
-    "https://github.com/proptest-rs/proptest",
-    "https://github.com/mitsuhiko/insta",
-    "https://github.com/bheisler/criterion.rs",
-    "https://github.com/rust-lang/flate2-rs",
-    "https://github.com/Detegr/rust-ctrlc",
-    "https://github.com/rust-random/rand",
-    "https://github.com/3Hren/msgpack-rust",
-    "https://github.com/bojand/infer",
-    "https://github.com/srijs/rust-crc32fast",
-    "https://github.com/tafia/quick-xml",
-    "https://github.com/johannesvollmer/exrs",
-    "https://github.com/indexmap-rs/indexmap",
-    "https://github.com/dtolnay/syn",
-    "https://github.com/dtolnay/quote",
-    "https://github.com/dtolnay/proc-macro2",
+  "https://github.com/image-rs/image",
+  "https://github.com/BLAKE3-team/BLAKE3",
+  "https://github.com/rust-random/getrandom",
+  "https://github.com/rust-lang/hashbrown",
+  "https://github.com/dtolnay/anyhow",
+  "https://github.com/dtolnay/thiserror",
+  "https://github.com/tokio-rs/tracing",
+  "https://github.com/clap-rs/clap",
+  "https://github.com/serde-rs/serde",
+  "https://github.com/serde-rs/json",
+  "https://github.com/rayon-rs/rayon",
+  "https://github.com/console-rs/indicatif",
+  "https://github.com/BurntSushi/walkdir",
+  "https://github.com/alexcrichton/filetime",
+  "https://github.com/rust-lang/libc",
+  "https://github.com/Stebalien/xattr",
+  "https://github.com/harryfei/which-rs",
+  "https://github.com/rust-lang/log",
+  "https://github.com/console-rs/console",
+  "https://github.com/chronotope/chrono",
+  "https://github.com/Cykooz/libheif-rs",
+  "https://github.com/Stebalien/tempfile",
+  "https://github.com/proptest-rs/proptest",
+  "https://github.com/mitsuhiko/insta",
+  "https://github.com/rust-lang/flate2-rs",
+  "https://github.com/Detegr/rust-ctrlc",
+  "https://github.com/rust-random/rand",
+  "https://github.com/3Hren/msgpack-rust",
+  "https://github.com/bojand/infer",
+  "https://github.com/srijs/rust-crc32fast",
+  "https://github.com/tafia/quick-xml",
+  "https://github.com/johannesvollmer/exrs",
+  "https://github.com/Cykooz/libheif-sys",
+  "https://github.com/Frommi/miniz_oxide",
+  "https://github.com/bitflags/bitflags",
+  "https://github.com/inflation/jpegxl-rs",
+  "https://github.com/orlp/foldhash",
+  "https://github.com/pgvector/pgvector-rust",
+  "https://github.com/sfackler/rust-postgres",
+  "https://github.com/tailhook/quick-error",
+  "https://gitlab.com/tspiteri/rug",
+  "https://github.com/bytecodealliance/wasi",
+  "https://github.com/image-rs/image-gif",
+  "https://github.com/jaredforth/webp",
+  "https://github.com/palfrey/serial_test",
+  "https://github.com/r-efi/r-efi",
+  "https://github.com/rust-fuzz/arbitrary",
+  "https://github.com/rust-fuzz/libfuzzer",
+  "https://github.com/tirr-c/jxl-oxide",
+  "https://gitlab.com/tspiteri/gmp-mpfr-sys",
 ]

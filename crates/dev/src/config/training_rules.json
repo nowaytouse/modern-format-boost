@@ -1,0 +1,401 @@
+{
+  "_consumer": "run_training.py",
+  "_comment": "Runtime JSON loader: run_training.py load_rules() ONLY (invoke: python3 crates/dev/scripts/run_training.py — no shell wrappers). Rust training_tier_audit.rs mirrors static_image.*.rules via constants. Local overlay: training_rules.local.json.",
+  "rule_engine": {
+    "schema_version": 1,
+    "strict_no_silent_fallbacks": true,
+    "strict_unknown_rules": true,
+    "tier_ambiguous_policy": "exclude"
+  },
+
+  "remote_apis": {
+    "direct_memes": {
+      "url_template": "file://dummy",
+      "direct_links": [
+        "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNmQ3OTY4MTRjMDVhMjEzYTYyZDdmNDVlM2RkOTY4NWNhNmY0Zjc5YiZlcD12MV9pbnRlcm5hbF9naWZzX2dpZklkJmN0PWc/3o7aCSPqXE5C6T8tBC/giphy.gif",
+        "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMjVkMjM0OGI5NjEyYjc3OGI4ZTU1M2Q0NjY1NzQ4YmE3NWI1ZDc4ZCZlcD12MV9pbnRlcm5hbF9naWZzX2dpZklkJmN0PWc/JIX9t2j0ZTN9S/giphy.gif",
+        "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExYzNjMmIwNmEzNDcxZTE5MTIyZTRiNTk0NDZlNjMyMzlmMmUyODZiYyZlcD12MV9pbnRlcm5hbF9naWZzX2dpZklkJmN0PWc/l0HlBO7eyXzSZkJri/giphy.gif",
+        "https://media.tenor.com/q1n4j9h6W7cAAAAC/cat-typing.gif",
+        "https://media.tenor.com/x8v1oNUOmg4AAAAd/rickroll-roll.gif"
+      ]
+    }
+  },
+
+  "static_image": {
+    "high_quality": {
+      "selection_strategy": "file_quality_filtered",
+      "file_quality_filter": {
+        "logic": "ALL",
+        "rules": [
+          {
+            "rule": "is_supported_image_file",
+            "desc": "must be a decodable static image format"
+          },
+          {
+            "rule": "file_size_kb_ge",
+            "value": 48,
+            "desc": "skip tiny placeholder or broken files (<48KB)"
+          },
+          {
+            "rule": "file_size_kb_le",
+            "value": 12288,
+            "desc": "exclude abnormally huge still images (>12MB)"
+          },
+          {
+            "rule": "extension_not_in",
+            "value": [
+              "tmp",
+              "db",
+              "json",
+              "txt",
+              "md",
+              "xmp",
+              "log",
+              "csv",
+              "zip"
+            ],
+            "desc": "exclude non-media sidecar/junk files"
+          },
+          {
+            "rule": "path_not_contains_any",
+            "value": [
+              "cache",
+              "thumbnail",
+              "thumb",
+              "backup",
+              "redundant",
+              "preview",
+              "draft",
+              "/tmp/"
+            ],
+            "desc": "exclude cache/temp/backup/preview paths"
+          },
+          {
+            "rule": "filename_not_matches_regex",
+            "value": "^(img|image|mmexport|screenshot|temp|tmp)[_-]?\\d{0,6}\\.(jpg|jpeg|png|webp|gif)$",
+            "desc": "exclude low-signal auto-exported generic filenames"
+          }
+        ]
+      },
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "entropy_ge",
+          "value": 7.7,
+          "desc": "high entropy, rich information (one rule enough)"
+        },
+        {
+          "rule": "pixel_min_dim_ge",
+          "value": 1080,
+          "desc": "≥1080px short side; requires entropy ≥ 5.5 in Rust guard (one rule enough)"
+        }
+      ],
+      "sample_sources": {
+        "local_dirs": [],
+        "remote_apis": []
+      }
+    },
+    "low_quality": {
+      "selection_strategy": "file_quality_filtered",
+      "file_quality_filter": {
+        "logic": "ALL",
+        "rules": [
+          {
+            "rule": "is_supported_image_file",
+            "desc": "must be a decodable static image format"
+          },
+          {
+            "rule": "file_size_kb_ge",
+            "value": 8,
+            "desc": "still require minimum integrity to avoid invalid files"
+          },
+          {
+            "rule": "file_size_kb_le",
+            "value": 4096,
+            "desc": "exclude oversized files for low-quality corpus (>4MB)"
+          },
+          {
+            "rule": "extension_not_in",
+            "value": [
+              "tmp",
+              "db",
+              "json",
+              "txt",
+              "md",
+              "xmp",
+              "log",
+              "csv",
+              "zip"
+            ],
+            "desc": "exclude non-media sidecar/junk files"
+          },
+          {
+            "rule": "path_not_contains_any",
+            "value": [
+              "backup",
+              "redundant",
+              "cache",
+              "thumbnail",
+              "thumb",
+              "preview",
+              "/tmp/",
+              "/tmp-",
+              "_tmp"
+            ],
+            "desc": "low corpus: block temp/backup/cache/preview paths"
+          }
+        ]
+      },
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "entropy_le",
+          "value": 2.8,
+          "desc": "low entropy, blurry or uniform (one rule enough)"
+        },
+        {
+          "rule": "pixel_max_dim_le",
+          "value": 512,
+          "desc": "≤512px max side; requires entropy ≤ 5.5 in Rust guard (one rule enough)"
+        }
+      ],
+      "sample_sources": {
+        "local_dirs": [],
+        "remote_apis": ["direct_memes"]
+      }
+    }
+  },
+
+  "animated_image": {
+    "non_loop_intent": {
+      "_comment": "Contrast corpus for --loop-intent-label video (probe bucket non_loop). Outside grey-zone duration policy in video.*. Examples: short clips with audio, ultra-slow GIF/WebP/APNG, modern animated formats.",
+      "selection_strategy": "file_quality_filtered",
+      "file_quality_filter": {
+        "logic": "ALL",
+        "rules": [
+          {
+            "rule": "is_supported_non_loop_media_file",
+            "desc": "animated raster or video container (mp4/webm/mov/mkv + gif/webp/apng)"
+          },
+          {
+            "rule": "file_size_kb_ge",
+            "value": 24,
+            "desc": "skip tiny/broken clips"
+          },
+          {
+            "rule": "file_size_kb_le",
+            "value": 65536,
+            "desc": "allow larger non-loop sources (≤64MB)"
+          },
+          {
+            "rule": "extension_not_in",
+            "value": [
+              "tmp",
+              "db",
+              "json",
+              "txt",
+              "md",
+              "xmp",
+              "log",
+              "csv",
+              "zip"
+            ],
+            "desc": "exclude non-media sidecar/junk files"
+          },
+          {
+            "rule": "path_not_contains_any",
+            "value": [
+              "cache",
+              "thumbnail",
+              "thumb",
+              "backup",
+              "redundant",
+              "/tmp/"
+            ],
+            "desc": "exclude cache/temp/backup paths"
+          }
+        ]
+      },
+      "sample_sources": {
+        "local_dirs": [],
+        "remote_apis": []
+      }
+    },
+    "loop_intent": {
+      "_comment": "Loop lanes use Rust probe_loop_intent. --loop-intent-label high keeps probe bucket loop; --loop-intent-label low keeps probe bucket uncertain (grey-zone / low-confidence loop), then may backfill strong loop samples if grey-zone supply is sparse.",
+      "selection_strategy": "file_quality_filtered",
+      "file_quality_filter": {
+        "logic": "ALL",
+        "rules": [
+          {
+            "rule": "is_supported_loop_intent_media_file",
+            "desc": "GIF/WebP/APNG plus mp4/webm/mov/mkv (probe classifies loop vs video bucket)"
+          },
+          {
+            "rule": "file_size_kb_ge",
+            "value": 24,
+            "desc": "skip tiny/broken clips (still allow short silent loop videos)"
+          },
+          {
+            "rule": "file_size_kb_le",
+            "value": 65536,
+            "desc": "allow larger loop/video sources (≤64MB)"
+          },
+          {
+            "rule": "extension_not_in",
+            "value": [
+              "tmp",
+              "db",
+              "json",
+              "txt",
+              "md",
+              "xmp",
+              "log",
+              "csv",
+              "zip"
+            ],
+            "desc": "exclude non-media sidecar/junk files"
+          },
+          {
+            "rule": "path_not_contains_any",
+            "value": [
+              "cache",
+              "thumbnail",
+              "thumb",
+              "backup",
+              "redundant",
+              "/tmp/"
+            ],
+            "desc": "exclude cache/temp/backup paths"
+          }
+        ]
+      },
+      "sample_sources": {
+        "local_dirs": [],
+        "remote_apis": ["direct_memes"]
+      }
+    },
+    "high_quality": {
+      "selection_strategy": "file_quality_filtered",
+      "file_quality_filter": {
+        "logic": "ALL",
+        "rules": [
+          {
+            "rule": "is_supported_animated_image_file",
+            "desc": "must be a decodable animated image format"
+          },
+          {
+            "rule": "file_size_kb_ge",
+            "value": 32,
+            "desc": "skip tiny/broken animated files"
+          },
+          {
+            "rule": "file_size_kb_le",
+            "value": 32768,
+            "desc": "exclude extreme-size animated files (>32MB)"
+          },
+          {
+            "rule": "extension_not_in",
+            "value": [
+              "tmp",
+              "db",
+              "json",
+              "txt",
+              "md",
+              "xmp",
+              "log",
+              "csv",
+              "zip"
+            ],
+            "desc": "exclude non-media sidecar/junk files"
+          },
+          {
+            "rule": "path_not_contains_any",
+            "value": [
+              "cache",
+              "thumbnail",
+              "thumb",
+              "backup",
+              "redundant",
+              "/tmp/"
+            ],
+            "desc": "exclude cache/temp/backup paths"
+          }
+        ]
+      },
+      "sample_sources": {
+        "local_dirs": [],
+        "remote_apis": ["direct_memes"]
+      }
+    }
+  },
+
+  "video": {
+    "_comment_duration": "Grey band reference: 6.0s–15.0s (constants.rs EXTREME_SHORT_ABSOLUTE_LIMIT_SECS / EXTREME_LONG_ABSOLUTE_LIMIT_SECS). These rules are schema/documentation only; Rust loop_intent probe decides buckets. loop_high: fast silent shorts. loop_low: grey-zone/uncertain first, with scarcity fallback outside grey-zone only to strong loop positives.",
+    "contrast_fast_silent_loop": {
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "no_audio AND duration_lt",
+          "value": 4.0,
+          "desc": "very short silent clip — fast loop / boomerang-style video (strong loop_intent)"
+        },
+        {
+          "rule": "no_audio AND duration_lt",
+          "value": 8.0,
+          "desc": "short silent take — tight meme loop video (<8s)"
+        }
+      ]
+    },
+    "prefer_grey_zone_loop_low": {
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "no_audio AND duration_in_grey_zone",
+          "grey_zone_secs": { "min": 6.0, "max": 15.0 },
+          "desc": "loop_low target band: silent mid-length dynamic media where tree/KNN arbitration is intentionally uncertain"
+        },
+        {
+          "rule": "has_audio AND duration_in_grey_zone",
+          "grey_zone_secs": { "min": 6.0, "max": 15.0 },
+          "desc": "audio-bearing grey-zone media stays auditable; Rust probe may route it away from loop positives"
+        }
+      ]
+    },
+    "contrast_with_audio": {
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "has_audio AND duration_lt",
+          "value": 6.0,
+          "desc": "very short clip with sound — strong non-loop / meme reaction"
+        },
+        {
+          "rule": "has_audio AND duration_gt",
+          "value": 15.0,
+          "desc": "longer clip with sound — narrative video, not tight loop"
+        }
+      ]
+    },
+    "contrast_silent_anim": {
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "no_audio AND duration_gt",
+          "value": 15.0,
+          "desc": "silent long take — slow slideshow / timelapse-style animation"
+        }
+      ]
+    },
+    "deprioritize_grey_zone": {
+      "logic": "ANY",
+      "rules": [
+        {
+          "rule": "no_audio AND duration_in_grey_zone",
+          "grey_zone_secs": { "min": 6.0, "max": 15.0 },
+          "desc": "silent mid-length ambiguous band — low contrast vs loop_high"
+        }
+      ]
+    }
+  }
+}

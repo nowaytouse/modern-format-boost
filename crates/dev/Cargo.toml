@@ -4,13 +4,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Regression test suite and development tools for Modern Format Boost"
 
+[lib]
+doctest = false
+
 [dependencies]
-shared_utils = { workspace = true }
+postgres = { workspace = true }
+foundation = { workspace = true }
 img = { workspace = true }
+vid = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
+libc = { workspace = true }
+nix = {   features = ["term", "fs"], version = ">= 0.29"}
+notify = ">= 6.0"
+sysinfo = ">= 0.30"
+ctrlc = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
@@ -18,6 +32,88 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 blake3 = { workspace = true }
 walkdir = { workspace = true }
+proptest = { workspace = true }
+insta = { workspace = true }
+serial_test = ">= 3.0"
+sha2 = ">= 0.10"
+attohttpc = ">= 0.28"
+
+# Integration tests live in subdirs (folder layout only); paths registered here.
+[[test]]
+name = "test_real_silent_fallbacks"
+path = "src/tests/contract/test_real_silent_fallbacks.rs"
+[[test]]
+name = "test_silent_numeric_fallbacks"
+path = "src/tests/contract/test_silent_numeric_fallbacks.rs"
+[[test]]
+name = "numeric_cast_safety"
+path = "src/tests/contract/numeric_cast_safety.rs"
+[[test]]
+name = "comprehensive_weakness_audit"
+path = "src/tests/contract/comprehensive_weakness_audit.rs"
+[[test]]
+name = "test_webp_animated_classification"
+path = "src/tests/media/test_webp_animated_classification.rs"
+[[test]]
+name = "test_webp_duration_parser"
+path = "src/tests/media/test_webp_duration_parser.rs"
+[[test]]
+name = "test_cjxl_errors"
+path = "src/tests/media/test_cjxl_errors.rs"
+[[test]]
+name = "test_ultrahdr_hardening"
+path = "src/tests/media/test_ultrahdr_hardening.rs"
+[[test]]
+name = "deny_animated_jxl"
+path = "src/tests/media/deny_animated_jxl.rs"
+[[test]]
+name = "test_animated_frame_consistency"
+path = "src/tests/media/test_animated_frame_consistency.rs"
+[[test]]
+name = "headless_gif_regression"
+path = "src/tests/media/headless_gif_regression.rs"
+[[test]]
+name = "vmaf_baseline_missing"
+path = "src/tests/media/vmaf_baseline_missing.rs"
+[[test]]
+name = "parity_tests"
+path = "src/tests/matrix/parity_tests.rs"
+[[test]]
+name = "mode_matrix_tests"
+path = "src/tests/matrix/mode_matrix_tests.rs"
+[[test]]
+name = "property_tests"
+path = "src/tests/matrix/property_tests.rs"
+[[test]]
+name = "classification_snapshots"
+path = "src/tests/matrix/classification_snapshots.rs"
+[[test]]
+name = "snapshot_tests"
+path = "src/tests/matrix/snapshot_tests.rs"
+[[test]]
+name = "runtime_probe_regression"
+path = "src/tests/runtime/runtime_probe_regression.rs"
+[[test]]
+name = "ctrlc_behavior"
+path = "src/tests/runtime/ctrlc_behavior.rs"
+[[test]]
+name = "path_safety"
+path = "src/tests/runtime/path_safety.rs"
+[[test]]
+name = "create_live_photo"
+path = "src/tests/runtime/create_live_photo.rs"
+[[test]]
+name = "setup_private_db"
+path = "src/tests/runtime/setup_private_db.rs"
+[[test]]
+name = "ignored_static"
+path = "src/tests/runtime/ignored_static.rs"
+[[test]]
+name = "ignored_semantics"
+path = "src/tests/runtime/ignored_semantics.rs"
 
 [lints]
-workspace = true
+[lints.clippy]
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"

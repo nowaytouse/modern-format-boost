@@ -1,11 +1,11 @@
 //! `FFprobe` wrapper module
 //!
-//! Re-exports from `shared_utils::ffprobe` to eliminate duplication.
+//! Re-exports from `foundation::ffprobe` to eliminate duplication.
 //! Provides a thin wrapper for error type conversion.
 
-pub use shared_utils::ffprobe::{
-    detect_bit_depth, get_duration, get_frame_count, is_ffprobe_available, parse_frame_rate,
-    FFprobeError, FFprobeResult,
+pub use foundation::ffprobe::{
+    FFprobeError, FFprobeResult, detect_bit_depth, get_duration, get_frame_count,
+    is_ffprobe_available, parse_frame_rate,
 };
 
 use crate::{Result, VidQualityError};
@@ -16,5 +16,5 @@ use std::path::Path;
 /// # Errors
 /// Returns an error if the file is invalid or ffprobe fails.
 pub fn probe_video(path: &Path) -> Result<FFprobeResult> {
-    shared_utils::ffprobe::probe_video(path).map_err(VidQualityError::from)
+    foundation::ffprobe::probe_video(path).map_err(VidQualityError::from)
 }

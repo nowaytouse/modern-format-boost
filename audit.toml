@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+  # paste is a transitive dependency from rav1e/ravif/image in the current graph.
+  # This matches the existing deny.toml policy until the upstream chain moves off it.
+  "RUSTSEC-2024-0436",
+]

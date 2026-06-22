@@ -4,23 +4,43 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "High-performance image format converter and analyzer"
 
 [dependencies]
+rug = { workspace = true, optional = true }
+gmp-mpfr-sys = { workspace = true, optional = true }
+
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
-shared_utils = { workspace = true }
-vid = { path = "../vid" }
+foundation = { path = "../foundation", default-features = false }
+vid = { path = "../vid", default-features = false }
 tempfile = { workspace = true }
 console = { workspace = true }
 tracing = { workspace = true }
+bitflags = { workspace = true }
 
 [features]
-default = ["v1_21"]
-v1_21 = ["shared_utils/v1_21"]
+default = ["v1_21", "foundation/default", "vid/default", "high-precision"]
+v1_21 = ["foundation/v1_21"]
+high-precision = [
+  "dep:rug",
+  "dep:gmp-mpfr-sys",
+  "foundation/high-precision",
+  "vid/high-precision",
+]
+system-gmp = [
+  "dep:gmp-mpfr-sys",
+  "gmp-mpfr-sys/use-system-libs",
+  "foundation/system-gmp",
+  "vid/system-gmp",
+]
 
 [lints]
 workspace = true
