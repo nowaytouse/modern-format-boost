@@ -750,7 +750,6 @@ on run argv
     set batchNumber to 0
     with timeout of 3600 seconds
         tell application "Photos" to launch
-        set rootFolder to my mfbEnsureTopLevelFolder(rootFolderName)
         set currentAlbumName to ""
         set fileList to {}
         set rawPaths to {}
@@ -768,7 +767,7 @@ on run argv
             end if
             if mustFlush then
                 set batchNumber to batchNumber + 1
-                set importedIds to importedIds & (my mfbImportFileList(fileList, rawPaths, currentAlbumName, rootFolder, skipDuplicateCheck, batchNumber))
+                set importedIds to importedIds & (my mfbImportFileList(fileList, rawPaths, currentAlbumName, skipDuplicateCheck, batchNumber))
                 set fileList to {}
                 set rawPaths to {}
                 if batchDelayMs > 0 then
@@ -788,7 +787,7 @@ on run argv
         end repeat
         if (count of fileList) > 0 then
             set batchNumber to batchNumber + 1
-            set importedIds to importedIds & (my mfbImportFileList(fileList, rawPaths, currentAlbumName, rootFolder, skipDuplicateCheck, batchNumber))
+            set importedIds to importedIds & (my mfbImportFileList(fileList, rawPaths, currentAlbumName, skipDuplicateCheck, batchNumber))
         end if
     end timeout
     set resultText to importedIds as text
@@ -796,10 +795,10 @@ on run argv
     return resultText
 end run
 
-on mfbImportFileList(fileList, rawPaths, albumName, rootFolder, skipDuplicateCheck, batchNumber)
+on mfbImportFileList(fileList, rawPaths, albumName, skipDuplicateCheck, batchNumber)
     set firstPath to item 1 of rawPaths
     set expectedCount to count of fileList
-    set targetAlbumId to my mfbEnsureAlbumIdInFolder(albumName, rootFolder)
+    set targetAlbumId to my mfbEnsureAlbumIdForPath(albumName)
     tell application "Photos"
                 set importedItems to import fileList into album id (targetAlbumId) skip check duplicates skipDuplicateCheck
     end tell
@@ -831,17 +830,36 @@ on mfbEnsureTopLevelFolder(folderName)
     end tell
 end mfbEnsureTopLevelFolder
 
-on mfbEnsureAlbumIdInFolder(albumName, targetFolder)
-    tell application "Photos"
-        repeat with candidateAlbum in albums of targetFolder
-            if name of candidateAlbum is albumName then
-                return (id of candidateAlbum as text)
-            end if
-        end repeat
-        set createdAlbum to make new album named albumName at targetFolder
-        return (id of createdAlbum as text)
-    end tell
-end mfbEnsureAlbumIdInFolder
+on mfbEnsureAlbumIdForPath(albumPath)
+    set AppleScript's text item delimiters to "/"
+    set pathItems to every text item of albumPath
+    set AppleScript's text item delimiters to linefeed
+    if (count of pathItems) > 1 then
+        set folderName to item 1 of pathItems
+        set targetAlbumName to item 2 of pathItems
+        set targetFolder to my mfbEnsureTopLevelFolder(folderName)
+        tell application "Photos"
+            repeat with candidateAlbum in albums of targetFolder
+                if name of candidateAlbum is targetAlbumName then
+                    return (id of candidateAlbum as text)
+                end if
+            end repeat
+            set createdAlbum to make new album named targetAlbumName at targetFolder
+            return (id of createdAlbum as text)
+        end tell
+    else
+        set targetAlbumName to item 1 of pathItems
+        tell application "Photos"
+            repeat with candidateAlbum in albums
+                if name of candidateAlbum is targetAlbumName then
+                    return (id of candidateAlbum as text)
+                end if
+            end repeat
+            set createdAlbum to make new album named targetAlbumName
+            return (id of createdAlbum as text)
+        end tell
+    end if
+end mfbEnsureAlbumIdForPath
 "#;
 
 fn import_jxl_outputs_with_photos_checkpoint<Q, P>(
@@ -2023,7 +2041,7 @@ fn photos_applescript_import_chunk_error(
     let advice = if stderr.contains("-1743")
         || stderr.contains("Not authorized to send Apple events")
     {
-        " macOS Authorization Denied! Please open macOS System Settings -> Privacy & Security -> Automation, and enable 'Photos' under your terminal app. Then try again."
+        " ❌ Import Failed: Missing AppleScript Automation Privilege! Please open macOS System Settings -> Privacy & Security -> Automation, check 'Photos' under your terminal app (or Modern Format Boost), and try again."
     } else if context.is_some() {
         " Photos returned success with an empty import result for this file; this usually means the Photos/iCloud Photos library session is unhealthy or rejected the item before creating an asset. The verifier fails closed and preserves sources until destructive cleanup gates pass."
     } else {
@@ -2295,21 +2313,32 @@ fn osxphotos_uuid_from_photos_import_identifier(import_identifier: &str) -> Resu
 }
 
 fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &str) -> String {
-    let rel_parent_leaf = Path::new(rel_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .and_then(Path::file_name);
-    let folder_name = rel_parent_leaf
-        .or_else(|| marker.working_copy.file_name())
+    let folder_name = marker
+        .working_copy
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Imported");
     let cleaned = fast_img_strip_optimized_import_suffixes(folder_name);
-    if cleaned.is_empty() {
+    let top_level = if cleaned.is_empty() {
         "✨Imported".to_string()
     } else if !cleaned.starts_with('✨') {
         format!("✨{cleaned}")
     } else {
-        cleaned
+        cleaned.to_string()
+    };
+
+    let rel_parent_leaf = Path::new(rel_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+
+    if let Some(sub) = rel_parent_leaf {
+        // e.g. "✨A/B"
+        format!("{top_level}/{sub}")
+    } else {
+        // e.g. "✨A/✨A" or just top_level
+        format!("{top_level}/{top_level}")
     }
 }
 
@@ -2583,6 +2612,13 @@ fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAs
                 let err_str = e.to_string();
                 let is_timeout =
                     err_str.contains("timed out") || err_str.contains("subprocess killed");
+                let is_fatal_auth = err_str.contains("OperationalError")
+                    || err_str.contains("unable to open database file")
+                    || err_str.contains("TCC")
+                    || err_str.contains("Operation not permitted");
+                if is_fatal_auth {
+                    return Err(e);
+                }
                 if !is_timeout || attempt == MAX_RETRIES {
                     return Err(e);
                 }
@@ -2680,6 +2716,16 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
             output.stderr.trim()
         )));
     }
+    let stderr = output.stderr.trim();
+    if stderr.contains("OperationalError")
+        || stderr.contains("unable to open database file")
+        || stderr.contains("Operation not permitted")
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "osxphotos query blocked by system permissions or locked DB: {stderr}"
+        )));
+    }
+
     let records: Vec<FastImgQueryRecord> = serde_json::from_str(&output.stdout).map_err(|e| {
         ImgQualityError::AnalysisError(format!("parse osxphotos query JSON failed: {e}"))
     })?;
@@ -3614,9 +3660,9 @@ mod tests {
         let wc = temp_dir.path().join("Batch_optimized");
         let mut marker = WorkingCopyMarker::new(src_root, wc, 3);
         let cases = [
-            ("root.JXL", "✨Batch"),
-            ("微信/a.JXL", "✨微信"),
-            ("foo/bar/b.JXL", "✨bar"),
+            ("root.JXL", "✨Batch/✨Batch"),
+            ("微信/a.JXL", "✨Batch/微信"),
+            ("foo/bar/b.JXL", "✨Batch/bar"),
         ];
 
         for (rel_path, expected_album) in cases {
@@ -3629,7 +3675,7 @@ mod tests {
         marker.working_copy = temp_dir.path().join("Batch_collected_optimized");
         assert_eq!(
             fast_img_optimized_import_album_name(&marker, "root.JXL"),
-            "✨Batch"
+            "✨Batch/✨Batch"
         );
     }
 
@@ -3654,7 +3700,7 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, wc.join("微信/a.JXL"));
-        assert_eq!(entries[0].1, "✨微信");
+        assert_eq!(entries[0].1, "✨Batch/微信");
     }
 
     #[test]
@@ -3747,7 +3793,7 @@ mod tests {
             rel_path: "nested/a.GIF".to_string(),
             path: out.clone(),
             blake3: out_hash.clone(),
-            album_name: "✨nested".to_string(),
+            album_name: "✨clip_gif".to_string(),
         }];
 
         let handle = library_handle_from_media_output_probes(
@@ -3889,7 +3935,7 @@ mod tests {
         assert_eq!(plan.pending_entries[0].source_rel, "b.jpg");
         assert_eq!(plan.pending_entries[0].rel_path, "b.JXL");
         assert_eq!(plan.pending_entries[0].path, pending);
-        assert_eq!(plan.pending_entries[0].album_name, "✨Batch");
+        assert_eq!(plan.pending_entries[0].album_name, "✨Batch/✨Batch");
         Ok(())
     }
 
