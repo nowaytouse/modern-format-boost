@@ -307,7 +307,6 @@ pub fn pre_claim_output_path(input: &Path, output: &Path) {
     reservations.entry(output_key).or_insert(input_key);
 }
 
-
 /// Clears all output path reservations.
 ///
 /// Used for testing to reset reservation state between test runs.

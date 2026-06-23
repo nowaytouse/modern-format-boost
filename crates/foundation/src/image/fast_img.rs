@@ -748,7 +748,7 @@ on run argv
     end if
     set importedIds to {}
     set batchNumber to 0
-    with timeout of 3600 seconds
+    with timeout of 86400 seconds
         tell application "Photos" to launch
         set currentAlbumName to ""
         set fileList to {}
@@ -1095,17 +1095,18 @@ where
                     Ok(stdout) => break stdout,
                     Err(err) => {
                         let detail = err.to_string();
-                        if !photos_import_error_is_poisoned_session(&detail) {
+                        let Some(poison_reason) = photos_import_poison_reason(&detail) else {
                             return Err(err);
-                        }
+                        };
                         tracing::warn!(
                             target: "photos_import",
                             window_start = window.start,
                             batch_number,
                             batch_count,
                             poisoned_attempts,
+                            poison_reason,
                             detail = %detail,
-                            "Photos import batch poisoned"
+                            "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
                         );
                         if poisoned_attempts >= FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT {
                             return Err(err);
@@ -1119,6 +1120,15 @@ where
                                 "Photos import poison retry counter overflowed".to_string(),
                             )
                         })?;
+                        tracing::info!(
+                            target: "photos_import",
+                            window_start = window.start,
+                            batch_number,
+                            batch_count,
+                            poisoned_attempts,
+                            poison_reason,
+                            "Photos import recovery complete; automatically retrying current batch"
+                        );
                     }
                 }
             };
@@ -1705,14 +1715,26 @@ fn get_photos_pid() -> Result<Option<String>> {
     }
 }
 
-fn photos_import_error_is_poisoned_session(detail: &str) -> bool {
+fn photos_import_poison_reason(detail: &str) -> Option<&'static str> {
     let lower = detail.to_ascii_lowercase();
-    photos_zero_import_context(detail).is_some()
+    if photos_zero_import_context(detail).is_some()
         || lower.contains("photos returned 0 imported items")
-        || lower.contains("invalid connection")
+    {
+        Some("zero_import_items")
+    } else if lower.contains("invalid connection")
         || lower.contains("connection is invalid")
         || lower.contains("(-609)")
         || detail.contains("连接无效")
+    {
+        Some("invalid_connection")
+    } else if lower.contains("(-1712)")
+        || detail.contains("超时")
+        || detail.contains("AppleEvent已超时")
+    {
+        Some("appleevent_timeout")
+    } else {
+        None
+    }
 }
 
 fn handle_photos_import_recovery(
@@ -4488,13 +4510,29 @@ mod tests {
     }
 
     #[test]
-    fn photos_import_poison_detection_covers_zero_import_and_invalid_connection() {
-        assert!(photos_import_error_is_poisoned_session(
-            "execution error: Photos returned 0 imported items for /tmp/a.JXL (-2700)"
-        ));
-        assert!(photos_import_error_is_poisoned_session(
-            "execution error: “Photos”遇到一个错误：连接无效。 (-609)"
-        ));
+    fn photos_import_poison_detection_covers_zero_import_invalid_connection_and_timeout() {
+        assert!(
+            photos_import_poison_reason(
+                "execution error: Photos returned 0 imported items for /tmp/a.JXL (-2700)"
+            )
+            .is_some()
+        );
+        assert!(
+            photos_import_poison_reason("execution error: “Photos”遇到一个错误：连接无效。 (-609)")
+                .is_some()
+        );
+        assert!(
+            photos_import_poison_reason(
+                "execution error: “Photos”遇到一个错误：AppleEvent已超时。 (-1712)"
+            )
+            .is_some()
+        );
+        assert_eq!(
+            photos_import_poison_reason(
+                "execution error: “Photos”遇到一个错误：AppleEvent已超时。 (-1712)"
+            ),
+            Some("appleevent_timeout")
+        );
     }
 
     #[test]

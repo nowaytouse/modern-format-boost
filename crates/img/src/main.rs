@@ -4702,8 +4702,7 @@ fn fast_img_run_transcode_phase(
             .blake3_log
             .get(&rel_key)
             .map(|entry| fast_img_marker_entry_output_path(marker, &rel_key, entry))
-            .transpose()?
-            ;
+            .transpose()?;
         let existing_output_current = match resume_out.as_ref() {
             Some(output) if output.exists() => match marker.blake3_log.get(&rel_key) {
                 Some(entry) => fast_img_skip_hashes_match(source, output, entry)?,
@@ -6391,7 +6390,8 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&cjxl.stdout),
             String::from_utf8_lossy(&cjxl.stderr)
         );
-        let current_source_hashes = fast_img_source_hash_set(&src_root, std::slice::from_ref(&src))?;
+        let current_source_hashes =
+            fast_img_source_hash_set(&src_root, std::slice::from_ref(&src))?;
         let out_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 1);
         marker.blake3_log.insert(
@@ -6474,13 +6474,15 @@ mod fast_img_hardening_tests {
 
         // Build a marker with a STALE source hash so hashes won't match,
         // forcing existing_output_current = false → re-transcode branch
-        let stale_src_hash = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
-        let stale_out_hash  = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+        let stale_src_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let stale_out_hash =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
-                out_rel: Some("a.JXL".to_string()),  // marker already records a.JXL
+                out_rel: Some("a.JXL".to_string()), // marker already records a.JXL
                 src: stale_src_hash,
                 out: stale_out_hash,
                 library_asset: None,

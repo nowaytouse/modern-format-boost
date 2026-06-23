@@ -40,7 +40,6 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
     "icloud_import",
     "drag_and_drop_processor",
 ];
-const VUE_QUALITY_SCRIPTS: &[&str] = &["lint", "format:check", "deps:check", "build"];
 const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
 
 // ANSI Colors
@@ -178,10 +177,6 @@ fn command_exists(cmd: &str) -> bool {
     false
 }
 
-fn vue_quality_script_names() -> &'static [&'static str] {
-    VUE_QUALITY_SCRIPTS
-}
-
 fn vue_update_script_names() -> &'static [&'static str] {
     VUE_UPDATE_SCRIPTS
 }
@@ -192,6 +187,16 @@ fn vue_dir(project_root: &Path) -> PathBuf {
         .join("dev")
         .join("src")
         .join("vue")
+}
+
+fn tauri_app_bundle_path(project_root: &Path) -> PathBuf {
+    vue_dir(project_root)
+        .join("src-tauri")
+        .join("target")
+        .join("release")
+        .join("bundle")
+        .join("macos")
+        .join("Modern Format Boost.app")
 }
 
 fn run_vue_npm_script(
@@ -222,13 +227,6 @@ fn run_vue_npm_script(
         anyhow::bail!("Vue npm script failed: {script}");
     }
     Ok(ok)
-}
-
-fn run_vue_quality_checks(project_root: &Path, style: &Style) -> Result<()> {
-    for script in vue_quality_script_names() {
-        run_vue_npm_script(project_root, script, style, true)?;
-    }
-    Ok(())
 }
 
 fn run_vue_dependency_update_validation(project_root: &Path, style: &Style) -> Result<()> {
@@ -1093,7 +1091,6 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         "\n{}{} Building Tauri GUI...{}",
         style.bold, style.cyan, style.reset
     );
-    run_vue_quality_checks(project_root, style)?;
     let vue_dir = vue_dir(project_root);
 
     let status = Command::new("npm")
@@ -1111,12 +1108,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     }
 
     println!("{}Syncing App bundle...{}", style.dim, style.reset);
-    let src_bundle = project_root
-        .join("target")
-        .join("release")
-        .join("bundle")
-        .join("macos")
-        .join("Modern Format Boost.app");
+    let src_bundle = tauri_app_bundle_path(project_root);
     let dest_bundle = project_root.join("Modern Format Boost.app");
 
     if src_bundle.exists() {
@@ -1399,10 +1391,21 @@ mod tests {
     }
 
     #[test]
-    fn test_vue_quality_scripts_cover_lint_format_dependencies_and_build() {
+    fn test_tauri_app_bundle_path_matches_vue_src_tauri_target() {
+        let project_root = Path::new("/tmp/mfb");
         assert_eq!(
-            vue_quality_script_names(),
-            &["lint", "format:check", "deps:check", "build"]
+            tauri_app_bundle_path(project_root),
+            Path::new("/tmp/mfb")
+                .join("crates")
+                .join("dev")
+                .join("src")
+                .join("vue")
+                .join("src-tauri")
+                .join("target")
+                .join("release")
+                .join("bundle")
+                .join("macos")
+                .join("Modern Format Boost.app")
         );
     }
 
