@@ -286,11 +286,33 @@ pub fn reserve_output_path(input: &Path, candidate: &Path) -> PathBuf {
     reserve_unique_output_path(input, candidate.to_path_buf())
 }
 
+/// Pre-claims an output path for a known input→output pair from a previous run,
+/// bypassing the on-disk existence check.
+///
+/// Unlike [`reserve_output_path`], this function does **not** treat an
+/// existing on-disk file as a collision: it is specifically for restoring the
+/// reservation table on resume so that a subsequent `reserve_output_path` call
+/// for the same pair recognises the output as already owned by this input
+/// (hitting the `Some(owner) if owner == &input_key => false` arm).
+///
+/// If the slot is already occupied by a **different** input the call is a
+/// no-op, preserving the existing owner.
+pub fn pre_claim_output_path(input: &Path, output: &Path) {
+    let input_key = stable_path_key(input);
+    let output_key = stable_path_key(output);
+    let mut reservations = crate::media_conversion_gate::mutex_guard_or_recover(
+        "reserved_output_paths_lock",
+        RESERVED_OUTPUT_PATHS.lock(),
+    );
+    reservations.entry(output_key).or_insert(input_key);
+}
+
+
 /// Clears all output path reservations.
 ///
 /// Used for testing to reset reservation state between test runs.
 #[cfg(test)]
-fn clear_reserved_output_paths() {
+pub fn clear_reserved_output_paths_for_test() {
     let mut reservations = crate::media_conversion_gate::mutex_guard_or_recover(
         "reserved_output_paths_lock",
         RESERVED_OUTPUT_PATHS.lock(),
@@ -3667,7 +3689,7 @@ mod tests {
         let _lock = TEST_RESERVATION_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        clear_reserved_output_paths();
+        clear_reserved_output_paths_for_test();
         let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
@@ -3681,7 +3703,7 @@ mod tests {
         let _lock = TEST_RESERVATION_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        clear_reserved_output_paths();
+        clear_reserved_output_paths_for_test();
         let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
@@ -3696,7 +3718,7 @@ mod tests {
         let _lock = TEST_RESERVATION_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        clear_reserved_output_paths();
+        clear_reserved_output_paths_for_test();
         let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/video.mp4");
@@ -3713,7 +3735,7 @@ mod tests {
         let _lock = TEST_RESERVATION_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        clear_reserved_output_paths();
+        clear_reserved_output_paths_for_test();
         let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
@@ -3734,7 +3756,7 @@ mod tests {
         let _lock = TEST_RESERVATION_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        clear_reserved_output_paths();
+        clear_reserved_output_paths_for_test();
         let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
@@ -4321,7 +4343,7 @@ mod tests {
         let candidate = temp_dir_path.join("output.jxl");
 
         // Ensure reservations are clear
-        super::clear_reserved_output_paths();
+        super::clear_reserved_output_paths_for_test();
 
         // 1. First reservation
         let path1 = super::reserve_unique_output_path(&input1, candidate.clone());
@@ -4381,6 +4403,6 @@ mod tests {
             super::path_with_collision_suffix(&multi_candidate, 2)
         ); // -2 (NOT -1-2)
 
-        super::clear_reserved_output_paths();
+        super::clear_reserved_output_paths_for_test();
     }
 }

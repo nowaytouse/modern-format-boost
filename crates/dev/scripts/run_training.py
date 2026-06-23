@@ -224,8 +224,8 @@ FOUR_LANE_SPECS: Final[tuple[tuple[str, list[str]], ...]] = (
             "--training-mode",
             "loop",
             "--loop-intent-label",
-            "low",
-            "--max-loop",
+            "video",
+            "--max-non-loop",
             FOUR_LANE_LOOP_INTENT_DB_CAP,
         ],
     ),
@@ -233,15 +233,21 @@ FOUR_LANE_SPECS: Final[tuple[tuple[str, list[str]], ...]] = (
 FOUR_LANE_KNOWN_LANES: Final[frozenset[str]] = frozenset(
     lane for lane, _ in FOUR_LANE_SPECS
 )
-DB_TRAIN_CLOSURE_DOC_MARKERS: Final[tuple[tuple[str, str], ...]] = (
-    ("AUDIT_SINGLE_SOURCE_OF_TRUTH_WITH_VERIFY.md", "DB_TRAIN_BOUNDED_AUDIT=17/17"),
-    ("SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md", "DB_TRAIN_FOUR_LANE_RESET_GATE=4/4"),
+DB_TRAIN_CLOSURE_DOC_MARKERS: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
     (
-        "SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md",
+        ("AUDIT_SINGLE_SOURCE_OF_TRUTH_WITH_VERIFY.md", "SSOT.md"),
+        "DB_TRAIN_BOUNDED_AUDIT=17/17",
+    ),
+    (
+        ("SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md", "SSOT.md"),
+        "DB_TRAIN_FOUR_LANE_RESET_GATE=4/4",
+    ),
+    (
+        ("SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md", "SSOT.md"),
         "DB_TRAIN_LAUNCHER_CLOSURE_DOC_GATE=4/4",
     ),
     (
-        "SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md",
+        ("SINGLE_SOURCE_OF_TRUTH_WITH_CLOSURE.md", "SSOT.md"),
         "DB_TRAIN_TRAINING_LAUNCH_ALLOWED=yes",
     ),
 )
@@ -725,15 +731,22 @@ def ensure_db_training_closure_before_training(
 ) -> None:
     hardening_root = hardening_dir or default_hardening_dir()
     missing: list[str] = []
-    for filename, marker in DB_TRAIN_CLOSURE_DOC_MARKERS:
-        path = hardening_root / filename
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            missing.append(f"{filename}: unreadable: {exc}")
-            continue
-        if marker not in text:
-            missing.append(f"{filename}: missing {marker!r}")
+    for filenames, marker in DB_TRAIN_CLOSURE_DOC_MARKERS:
+        errors: list[str] = []
+        marker_found = False
+        for filename in filenames:
+            path = hardening_root / filename
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                errors.append(f"{filename}: unreadable: {exc}")
+                continue
+            if marker in text:
+                marker_found = True
+                break
+            errors.append(f"{filename}: missing {marker!r}")
+        if not marker_found:
+            missing.append(" or ".join(errors))
 
     if missing:
         details = "; ".join(missing)

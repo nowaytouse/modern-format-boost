@@ -391,6 +391,19 @@ class TestFabricationGuards(unittest.TestCase):
 
             start_training_four.ensure_db_training_closure_before_training(hardening)
 
+    def test_db_training_closure_docs_accept_current_ssot_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hardening = Path(tmp)
+            (hardening / "SSOT.md").write_text(
+                "DB_TRAIN_BOUNDED_AUDIT=17/17\n"
+                "DB_TRAIN_FOUR_LANE_RESET_GATE=4/4\n"
+                "DB_TRAIN_LAUNCHER_CLOSURE_DOC_GATE=4/4\n"
+                "DB_TRAIN_TRAINING_LAUNCH_ALLOWED=yes\n",
+                encoding="utf-8",
+            )
+
+            start_training_four.ensure_db_training_closure_before_training(hardening)
+
     def test_four_lane_dry_run_does_not_spawn_training_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(run_training.subprocess, "run") as run_mock:
@@ -432,8 +445,19 @@ class TestFabricationGuards(unittest.TestCase):
             "450",
         )
         self.assertEqual(
-            lane_args["loop_low"][lane_args["loop_low"].index("--max-loop") + 1],
+            lane_args["loop_low"][lane_args["loop_low"].index("--max-non-loop") + 1],
             "450",
+        )
+        self.assertEqual(
+            lane_args["loop_low"][
+                lane_args["loop_low"].index("--loop-intent-label") + 1
+            ],
+            "video",
+        )
+        self.assertEqual(run_training.explicit_loop_balance_bucket("video"), "non_loop")
+        self.assertEqual(
+            start_training_four._lane_slug_from_tail(lane_args["loop_low"]),
+            "loop_low",
         )
 
     def test_four_lane_static_lanes_finalize_lightgbm_model(self):

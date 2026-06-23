@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -272,6 +273,9 @@ QUALITY_REGRESSION_MODEL_SCRIPT = (
 NORMALIZE_STALE_EMBED_BIN = "normalize_stale_embed_measurement_slots"
 MULTI_SCENARIO_MIGRATION_SQL = ROOT / "migrations" / "001_multi_scenario_embedding.sql"
 WORKSPACE_VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
+CRATES_WORKSPACE_VENV_PYTHON = (
+    ROOT / "crates" / ".modern_format_boost" / ".venv" / "bin" / "python"
+)
 QUALITY_MODEL_PYTHON_ENV = "MFB_QUALITY_MODEL_PYTHON"
 IMAGE_QUALITY_MODEL_NAME = "lightgbm_model.txt"
 IMAGE_QUALITY_METADATA_NAME = "lightgbm_model.metadata.json"
@@ -304,9 +308,27 @@ def preferred_training_python() -> str:
     explicit = os.environ.get(QUALITY_MODEL_PYTHON_ENV)
     if explicit and explicit.strip():
         return explicit.strip()
+    for candidate in (
+        WORKSPACE_VENV_PYTHON,
+        CRATES_WORKSPACE_VENV_PYTHON,
+        Path(sys.executable),
+    ):
+        if candidate.exists() and python_has_quality_model_deps(candidate):
+            return str(candidate)
     if WORKSPACE_VENV_PYTHON.exists():
         return str(WORKSPACE_VENV_PYTHON)
     return sys.executable
+
+
+def python_has_quality_model_deps(python: Path) -> bool:
+    result = subprocess.run(
+        [str(python), "-c", "import lightgbm, numpy, sklearn, psycopg2"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def artifact_is_stale(artifact: Path, sources: Sequence[Path]) -> bool:

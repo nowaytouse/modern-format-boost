@@ -2649,19 +2649,8 @@ fn fast_img_planned_output_rel(
 ) -> anyhow::Result<(PathBuf, String)> {
     let naive_out = working_copy.join(rel.with_extension("JXL"));
     let reserved_out = foundation::conversion::reserve_output_path(source, &naive_out);
-    let out_rel_path = foundation::media_conversion_gate::strip_prefix_or_self(
-        &reserved_out,
-        working_copy,
-        "fast_img_planned_output_rel",
-    );
-    if out_rel_path == reserved_out.as_path() {
-        anyhow::bail!(
-            "fast-img reserved output {} is outside working copy {}",
-            reserved_out.display(),
-            working_copy.display()
-        );
-    }
-    let out_rel_key = out_rel_path.to_string_lossy().to_string();
+    let out_rel_key =
+        fast_img_output_rel_key(&reserved_out, working_copy, "fast_img_planned_output_rel")?;
     if reserved_out != naive_out {
         println!(
             "[NOTICE  ] {} reserved output {out_rel_key} due to filename collision with an existing reservation or on-disk JXL",
@@ -2676,6 +2665,23 @@ fn fast_img_planned_output_rel(
         );
     }
     Ok((reserved_out, out_rel_key))
+}
+
+fn fast_img_output_rel_key(
+    output: &Path,
+    working_copy: &Path,
+    context: &'static str,
+) -> anyhow::Result<String> {
+    let out_rel_path =
+        foundation::media_conversion_gate::strip_prefix_or_self(output, working_copy, context);
+    if out_rel_path == output {
+        anyhow::bail!(
+            "fast-img reserved output {} is outside working copy {}",
+            output.display(),
+            working_copy.display()
+        );
+    }
+    Ok(out_rel_path.to_string_lossy().to_string())
 }
 
 fn fast_img_emit_explicit_skip(rel_key: &str, reason: &str) {
@@ -4667,6 +4673,7 @@ fn fast_img_run_transcode_phase(
     let total = source_jpegs.len();
     let mut completed_from_resume = 0usize;
     let mut jobs = Vec::new();
+
     for source in source_jpegs {
         let rel = source.strip_prefix(src_dir).map_err(|err| {
             anyhow::anyhow!(
@@ -4676,7 +4683,6 @@ fn fast_img_run_transcode_phase(
             )
         })?;
         let rel_key = rel.to_string_lossy().to_string();
-        let (reserved_out, out_rel_key) = fast_img_planned_output_rel(source, working_copy, rel)?;
 
         if let Some(entry) = marker.skipped_sources.get(&rel_key) {
             fast_img_emit_explicit_skip(&rel_key, &entry.reason);
@@ -4697,28 +4703,75 @@ fn fast_img_run_transcode_phase(
             .get(&rel_key)
             .map(|entry| fast_img_marker_entry_output_path(marker, &rel_key, entry))
             .transpose()?
-            .unwrap_or(reserved_out.clone());
-        let existing_output_current = if resume_out.exists() {
-            match marker.blake3_log.get(&rel_key) {
-                Some(entry) => fast_img_skip_hashes_match(source, &resume_out, entry)?,
+            ;
+        let existing_output_current = match resume_out.as_ref() {
+            Some(output) if output.exists() => match marker.blake3_log.get(&rel_key) {
+                Some(entry) => fast_img_skip_hashes_match(source, output, entry)?,
                 None => false,
-            }
-        } else {
-            false
+            },
+            _ => false,
         };
         if existing_output_current {
+            let resume_out =
+                resume_out.context("missing fast-img resume output after current proof")?;
+            let resume_out_rel_key =
+                fast_img_output_rel_key(&resume_out, working_copy, "fast_img_resume_output_rel")?;
             let refreshed_out_hash = fast_img_refresh_reused_jxl_delivery(source, &resume_out)?;
             if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
                 if entry.out != refreshed_out_hash {
                     entry.library_asset = None;
                 }
                 entry.out = refreshed_out_hash;
-                entry.out_rel = Some(out_rel_key.clone());
+                entry.out_rel = Some(resume_out_rel_key.clone());
             }
-            println!("[TRANSCODE] reused verified output for {rel_key} -> {out_rel_key}");
+            println!("[TRANSCODE] reused verified output for {rel_key} -> {resume_out_rel_key}");
             completed_from_resume += 1;
             continue;
         }
+
+        // If the marker already has a recorded out_rel for this source from a
+        // prior run, pre-claim that exact path before calling
+        // `fast_img_planned_output_rel`.  Without this, `reserve_output_path`
+        // would see the on-disk JXL, find it unclaimed, and bump to a
+        // collision suffix (`a (1).JXL`) — diverging from the marker record.
+        //
+        // `pre_claim_output_path` bypasses the `None if exists_on_disk => true`
+        // arm and inserts the (output → input) pair directly.  We then call
+        // `reserve_output_path` with the marker path (not the naive
+        // `rel.with_extension("JXL")`) so that even a genuine prior-run
+        // collision path like `a (1).JXL` is honoured.
+        let (_reserved_out, out_rel_key) = if let Some(recorded_out_rel) = marker
+            .blake3_log
+            .get(&rel_key)
+            .and_then(|e| e.out_rel.as_deref())
+        {
+            let recorded_out = working_copy.join(recorded_out_rel);
+            foundation::conversion::pre_claim_output_path(source, &recorded_out);
+            tracing::debug!(
+                target: "fast_img",
+                rel = %rel_key,
+                recorded_out_rel = %recorded_out_rel,
+                "pre-claimed marker output path for stale-proof retranscode"
+            );
+            let reserved = foundation::conversion::reserve_output_path(source, &recorded_out);
+            let out_rel_key = fast_img_output_rel_key(
+                &reserved,
+                working_copy,
+                "fast_img_resume_retranscode_rel",
+            )?;
+            if reserved != recorded_out {
+                tracing::warn!(
+                    target: "fast_img",
+                    rel = %rel_key,
+                    recorded = %recorded_out_rel,
+                    actual = %reserved.display(),
+                    "stale-proof retranscode: marker out_rel was already taken by another source; using new path"
+                );
+            }
+            (reserved, out_rel_key)
+        } else {
+            fast_img_planned_output_rel(source, working_copy, rel)?
+        };
 
         jobs.push(FastImgTranscodeJob {
             source: source.clone(),
@@ -5479,8 +5532,8 @@ mod fast_img_hardening_tests {
         fast_img_planned_output_rel, fast_img_post_gate1_policy, fast_img_prune_empty_source_dirs,
         fast_img_reconcile_unrecorded_source_disposition, fast_img_refresh_marker_jxl_deliveries,
         fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_transcode_output,
-        fast_img_retry_marker_source_set_is_stale, fast_img_skip_hashes_match,
-        fast_img_source_hash_set, fast_img_strip_non_jxl_files,
+        fast_img_retry_marker_source_set_is_stale, fast_img_run_transcode_phase,
+        fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_jxl_files,
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
@@ -6307,6 +6360,160 @@ mod fast_img_hardening_tests {
         assert_eq!(refreshed, 1);
         assert_ne!(entry.out, old_hash);
         assert_eq!(entry.library_asset, None);
+        Ok(())
+    }
+
+    #[test]
+    fn resume_reused_fast_img_output_keeps_recorded_collision_path() -> anyhow::Result<()> {
+        if !foundation::ExiftoolBuilder::check_available()
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
+        {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let src_root = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let src = src_root.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::create_dir_all(&src_root)?;
+        std::fs::create_dir_all(&wc)?;
+        write_real_jpeg(&src, [10, 20, 30])?;
+        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
+            .arg(&src)
+            .arg(&out)
+            .arg("--lossless_jpeg=1")
+            .arg("--effort=7")
+            .output()
+            .context("encode source JXL")?;
+        assert!(
+            cjxl.status.success(),
+            "encode source JXL failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&cjxl.stdout),
+            String::from_utf8_lossy(&cjxl.stderr)
+        );
+        let current_source_hashes = fast_img_source_hash_set(&src_root, std::slice::from_ref(&src))?;
+        let out_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
+        let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: current_source_hashes
+                    .get("a.jpg")
+                    .cloned()
+                    .context("missing source hash")?,
+                out: out_hash.clone(),
+                library_asset: Some(out_hash),
+            },
+        );
+
+        fast_img_run_transcode_phase(
+            &mut marker,
+            std::slice::from_ref(&src),
+            &current_source_hashes,
+            &src_root,
+            &wc,
+            false,
+            false,
+            false,
+        )?;
+
+        let entry = marker
+            .blake3_log
+            .get("a.jpg")
+            .context("missing reused marker entry")?;
+        assert_eq!(entry.out_rel.as_deref(), Some("a.JXL"));
+        assert!(
+            !wc.join("a (1).JXL").exists(),
+            "resume reuse must not move proof to a fresh collision reservation"
+        );
+        Ok(())
+    }
+
+    /// Regression test: when a marker entry has `out_rel = "a.JXL"` but the
+    /// source hash changed (stale proof), `fast_img_planned_output_rel` must
+    /// honour the marker's recorded output path via `reserve_output_path`
+    /// instead of treating the on-disk `a.JXL` as a foreign collision and
+    /// producing `a (1).JXL`.
+    #[test]
+    fn stale_proof_retranscode_keeps_marker_out_rel_path() -> anyhow::Result<()> {
+        if !foundation::ExiftoolBuilder::check_available()
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
+        {
+            return Ok(());
+        }
+
+        let root = TempDir::new()?;
+        let src_root = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let src = src_root.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::create_dir_all(&src_root)?;
+        std::fs::create_dir_all(&wc)?;
+
+        // Write a real JPEG so cjxl can encode it
+        write_real_jpeg(&src, [10, 20, 30])?;
+
+        // Produce the initial JXL (simulates a previous run that wrote a.JXL)
+        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
+            .arg(&src)
+            .arg(&out)
+            .arg("--lossless_jpeg=1")
+            .arg("--effort=7")
+            .output()
+            .context("encode source JXL")?;
+        assert!(
+            cjxl.status.success(),
+            "encode source JXL failed: {}",
+            String::from_utf8_lossy(&cjxl.stderr)
+        );
+
+        // Compute the *current* source hash (needed for the transcode phase scan)
+        let current_source_hashes =
+            fast_img_source_hash_set(&src_root, std::slice::from_ref(&src))?;
+
+        // Build a marker with a STALE source hash so hashes won't match,
+        // forcing existing_output_current = false → re-transcode branch
+        let stale_src_hash = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let stale_out_hash  = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+        let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),  // marker already records a.JXL
+                src: stale_src_hash,
+                out: stale_out_hash,
+                library_asset: None,
+            },
+        );
+
+        // Run the transcode phase — it will detect stale proof, re-transcode,
+        // and must write back to a.JXL (not a (1).JXL)
+        fast_img_run_transcode_phase(
+            &mut marker,
+            std::slice::from_ref(&src),
+            &current_source_hashes,
+            &src_root,
+            &wc,
+            false,
+            false,
+            false,
+        )?;
+
+        let entry = marker
+            .blake3_log
+            .get("a.jpg")
+            .context("missing marker entry after retranscode")?;
+
+        assert_eq!(
+            entry.out_rel.as_deref(),
+            Some("a.JXL"),
+            "stale-proof retranscode must keep the marker's recorded out_rel"
+        );
+        assert!(
+            !wc.join("a (1).JXL").exists(),
+            "stale-proof retranscode must not produce a spurious collision path"
+        );
         Ok(())
     }
 

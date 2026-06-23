@@ -38,7 +38,7 @@ Parallel training lanes (separate ``MFB_LOG_DIR`` per job):
 | ``static_high`` | ``--training-mode static --label high --no-loop`` |
 | ``static_low`` | ``--training-mode static --label low --no-loop`` |
 | ``loop_high`` | ``--training-mode loop --loop-intent-label high`` |
-| ``loop_low`` | ``--training-mode loop --loop-intent-label low`` (grey-zone / uncertain loop) |
+| ``loop_low`` | ``--training-mode loop --loop-intent-label video`` (video / non-loop contrast) |
 
 Session stamp: ``YYYYMMDD_HHMMSS`` (legacy ``YYYY-MM-DD_HH-MM-SS`` still parsed).
 """
@@ -217,7 +217,7 @@ def training_lane_slug(
         if li == "low":
             return "loop_low"
         if li == "video":
-            return "loop_video"
+            return "loop_low"
         return "loop"
     if mode == "all":
         li = (loop_intent_label or "auto").strip().lower()
