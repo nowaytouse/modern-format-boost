@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, reactive } from "vue";
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -18,9 +18,16 @@ const processing = ref(false);
 const progress = ref(0);
 const folderPath = ref("");
 const logs = ref<string[]>([]);
-const displayedLogs = computed(() => logs.value.slice(-200));
+const uiNotice = ref("");
+const prefersReducedMotion = ref(false);
+const displayedLogs = computed(() => logs.value.slice(-160));
 const terminalRef = ref<HTMLElement | null>(null);
 const processorBinaryPath = ref<string>("");
+const cliCommandPreview = computed(() => generateCliCommand());
+const shouldAnimateAmbient = computed(
+  () => !prefersReducedMotion.value && !isCliMode.value,
+);
+const AUTO_SCROLL_THRESHOLD = 48;
 
 // ─── Exact Drag & Drop Script Configs ───
 // Processing Mode: Both, Images Only, Videos Only
@@ -95,7 +102,6 @@ const onDrop = (e: DragEvent) => {
     startMockProcessing();
   }
 };
-let dialogTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const selectFolder = async () => {
   if (processing.value) return;
@@ -135,6 +141,56 @@ const selectFolder = async () => {
 };
 
 let progressInterval: ReturnType<typeof setInterval> | null = null;
+let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
+let dialogTimeout: ReturnType<typeof setTimeout> | null = null;
+let noticeTimeout: ReturnType<typeof setTimeout> | null = null;
+let motionMediaQuery: MediaQueryList | null = null;
+let stopVisualWatch: (() => void) | null = null;
+const tauriUnlisteners: UnlistenFn[] = [];
+
+const setUiNotice = (message: string, durationMs = 3200) => {
+  uiNotice.value = message;
+  if (noticeTimeout) {
+    clearTimeout(noticeTimeout);
+  }
+  noticeTimeout = setTimeout(() => {
+    uiNotice.value = "";
+    noticeTimeout = null;
+  }, durationMs);
+};
+
+const shouldStickTerminalToBottom = () => {
+  const terminal = terminalRef.value;
+  if (!terminal) {
+    return true;
+  }
+  return (
+    terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight <
+    AUTO_SCROLL_THRESHOLD
+  );
+};
+
+const appendLog = (entry: string) => {
+  const shouldStick = shouldStickTerminalToBottom();
+  logs.value.push(entry);
+
+  // Memory bound: avoid infinite array growth over very long sessions
+  if (logs.value.length > 3000) {
+    logs.value.splice(0, 600);
+  }
+
+  if (!shouldStick || scrollTimeout) {
+    return;
+  }
+
+  scrollTimeout = setTimeout(() => {
+    if (terminalRef.value) {
+      terminalRef.value.scrollTop = terminalRef.value.scrollHeight;
+    }
+    scrollTimeout = null;
+  }, 16);
+};
+
 const startMockProcessing = () => {
   if (progressInterval) clearInterval(progressInterval);
   processing.value = true;
@@ -158,12 +214,13 @@ const startMockProcessing = () => {
 const startCliProcessing = async () => {
   if (processing.value) return;
   if (!folderPath.value) {
-    alert("Please select a folder first");
+    setUiNotice("Please select a folder first.");
     return;
   }
 
   processing.value = true;
-  logs.value = [`[INFO] Starting processing: ${folderPath.value}`];
+  logs.value = [];
+  appendLog(`[INFO] Starting processing: ${folderPath.value}`);
 
   try {
     const result = await invoke("process_media", {
@@ -175,12 +232,12 @@ const startCliProcessing = async () => {
       resume: mfbToggles.resumeMode,
       shortestPath: mfbToggles.shortestPath,
     });
-    logs.value.push(`[SUCCESS] ${String(result)}`);
+    appendLog(`[SUCCESS] ${String(result)}`);
   } catch (error) {
-    logs.value.push(`[ERROR] ${String(error)}`);
+    appendLog(`[ERROR] ${String(error)}`);
   } finally {
     processing.value = false;
-    logs.value.push(
+    appendLog(
       "[INFO] Processing completed. You can close this window or process another folder.",
     );
   }
@@ -260,13 +317,13 @@ const generateCliCommand = () => {
 const copyCliCommand = async () => {
   const command = generateCliCommand();
   if (!command) {
-    alert("Please select a folder first");
+    setUiNotice("Please select a folder first.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(command);
-    alert("Command copied to clipboard! Paste it in your terminal.");
+    setUiNotice("Command copied to clipboard.");
   } catch {
     // Fallback for older browsers
     const textarea = document.createElement("textarea");
@@ -276,14 +333,14 @@ const copyCliCommand = async () => {
     // eslint-disable-next-line @typescript-eslint/no-deprecated
     document.execCommand("copy");
     textarea.remove();
-    alert("Command copied to clipboard! Paste it in your terminal.");
+    setUiNotice("Command copied to clipboard.");
   }
 };
 
 const openInTerminal = async () => {
   const command = generateCliCommand();
   if (!command) {
-    alert("Please select a folder first");
+    setUiNotice("Please select a folder first.");
     return;
   }
 
@@ -294,9 +351,10 @@ const openInTerminal = async () => {
     // Try to open in external terminal
     const result = await invoke("open_in_terminal", { command: command });
     console.log(result);
+    setUiNotice("Command copied and forwarded to your terminal.");
   } catch (error) {
     console.error("Failed to open terminal:", error);
-    alert("Command copied to clipboard. Please paste it in your terminal.");
+    setUiNotice("Command copied to clipboard. Paste it in your terminal.");
   }
 };
 
@@ -305,7 +363,22 @@ let rafId: number | null = null;
 let currentMouseX = 0;
 let currentMouseY = 0;
 
+const resetPointerPosition = () => {
+  document.documentElement.style.setProperty("--mouse-x", "0px");
+  document.documentElement.style.setProperty("--mouse-y", "0px");
+};
+
+const syncReducedMotionPreference = (
+  event: MediaQueryList | MediaQueryListEvent,
+) => {
+  prefersReducedMotion.value = event.matches;
+  if (prefersReducedMotion.value) {
+    resetPointerPosition();
+  }
+};
+
 const onMouseMove = (e: MouseEvent) => {
+  if (prefersReducedMotion.value) return;
   currentMouseX = e.clientX;
   currentMouseY = e.clientY;
   if (rafId === null) {
@@ -323,6 +396,19 @@ const onMouseMove = (e: MouseEvent) => {
   }
 };
 
+const syncPointerTracking = () => {
+  globalThis.removeEventListener("mousemove", onMouseMove);
+  if (shouldAnimateAmbient.value) {
+    globalThis.addEventListener("mousemove", onMouseMove, { passive: true });
+    return;
+  }
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  resetPointerPosition();
+};
+
 const preventDrag = (e: Event) => {
   e.preventDefault();
 };
@@ -336,8 +422,14 @@ onMounted(() => {
   // Web Fallbacks
   globalThis.addEventListener("dragover", preventDrag);
   globalThis.addEventListener("drop", preventDrag);
-  globalThis.addEventListener("mousemove", onMouseMove, { passive: true });
   document.documentElement.dataset.theme = "dark";
+
+  motionMediaQuery = globalThis.matchMedia("(prefers-reduced-motion: reduce)");
+  syncReducedMotionPreference(motionMediaQuery);
+  motionMediaQuery.addEventListener("change", syncReducedMotionPreference);
+  stopVisualWatch = watch(shouldAnimateAmbient, syncPointerTracking, {
+    immediate: true,
+  });
 
   // Fetch processor binary path
   invoke<string>("get_processor_binary_path")
@@ -373,32 +465,34 @@ onMounted(() => {
         startMockProcessing();
       }
     }
-  }).catch(() => {});
+  })
+    .then((unlisten) => {
+      tauriUnlisteners.push(unlisten);
+    })
+    .catch(() => {});
 
-  let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
   listen<string>("process-log", (event) => {
-    logs.value.push(event.payload);
-
-    // Memory bound: avoid infinite array growth over very long sessions
-    if (logs.value.length > 5000) {
-      logs.value.splice(0, 1000);
-    }
-
-    // Auto-scroll logic for both CLI and main mode (Throttled to eliminate layout thrashing)
-    if (!scrollTimeout) {
-      scrollTimeout = setTimeout(() => {
-        if (terminalRef.value) {
-          terminalRef.value.scrollTop = terminalRef.value.scrollHeight;
-        }
-        scrollTimeout = null;
-      }, 16);
-    }
-  }).catch(() => {});
+    appendLog(event.payload);
+  })
+    .then((unlisten) => {
+      tauriUnlisteners.push(unlisten);
+    })
+    .catch(() => {});
 });
 onUnmounted(() => {
   globalThis.removeEventListener("dragover", preventDrag);
   globalThis.removeEventListener("drop", preventDrag);
   globalThis.removeEventListener("mousemove", onMouseMove);
+  motionMediaQuery?.removeEventListener("change", syncReducedMotionPreference);
+  stopVisualWatch?.();
+  for (const unlisten of tauriUnlisteners) {
+    unlisten();
+  }
+  tauriUnlisteners.length = 0;
+  if (dialogTimeout) clearTimeout(dialogTimeout);
+  if (noticeTimeout) clearTimeout(noticeTimeout);
+  if (progressInterval) clearInterval(progressInterval);
+  if (scrollTimeout) clearTimeout(scrollTimeout);
   if (rafId !== null) cancelAnimationFrame(rafId);
 });
 </script>
@@ -406,7 +500,10 @@ onUnmounted(() => {
 <template>
   <div class="app" @contextmenu.prevent>
     <!-- Dynamic background hardware accelerated mapping -->
-    <div class="ambient-bg" />
+    <div
+      class="ambient-bg"
+      :class="{ 'ambient-bg--static': !shouldAnimateAmbient }"
+    />
 
     <!-- ─── HEADER (Liquid Glass) ─── -->
     <header class="header liquid-glass" data-tauri-drag-region>
@@ -475,6 +572,10 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <div v-if="uiNotice" class="ui-notice liquid-glass" role="status" aria-live="polite">
+      {{ uiNotice }}
+    </div>
+
     <!-- ─── CLI MODE CONTENT ─── -->
     <main v-if="isCliMode" class="cli-content">
       <div class="cli-panel">
@@ -531,7 +632,7 @@ onUnmounted(() => {
             </button>
           </div>
           <div v-if="folderPath" class="cli-command-preview">
-            <pre>{{ generateCliCommand() }}</pre>
+            <pre>{{ cliCommandPreview }}</pre>
           </div>
           <p class="cli-hint">
             {{ t("cli.command_hint") }}
@@ -672,7 +773,7 @@ onUnmounted(() => {
         @dragleave="onDragLeave"
         @drop="onDrop"
       >
-        <div class="drag-glow" :style="{ opacity: isDragging ? 1 : 0 }" />
+        <div class="drag-glow" :class="{ visible: isDragging }" />
 
         <Transition name="fade" mode="out-in">
           <!-- Idle State -->
@@ -772,7 +873,7 @@ onUnmounted(() => {
   padding: 12px 16px;
   margin-bottom: 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color 0.2s ease;
 }
 .cli-toggle-row:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -810,7 +911,10 @@ onUnmounted(() => {
   outline: none;
   font-size: 14px;
   border-radius: 4px;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
 }
 .cli-field select:focus,
 .cli-field button:hover {
@@ -846,6 +950,9 @@ onUnmounted(() => {
   font-size: 13px;
   color: #ccc;
   border-radius: 4px;
+  contain: content;
+  content-visibility: auto;
+  overscroll-behavior: contain;
 }
 .cli-log-line {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -874,7 +981,11 @@ onUnmounted(() => {
   border-radius: 6px;
   cursor: pointer;
   outline: none;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
   font-family: monospace;
 }
 .cli-action-btn:hover:not(:disabled) {
@@ -939,6 +1050,9 @@ onUnmounted(() => {
   line-height: 1.4;
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.3);
+  contain: content;
+  content-visibility: auto;
+  overscroll-behavior: contain;
 }
 .log-line {
   white-space: pre-wrap;
@@ -1031,6 +1145,10 @@ body {
   );
   transition: opacity 0.5s ease;
 }
+.ambient-bg--static {
+  transform: translate3d(0, 0, 0);
+  will-change: auto;
+}
 
 .app {
   width: 100vw;
@@ -1039,6 +1157,14 @@ body {
   flex-direction: column;
   padding: 12px;
   gap: 12px;
+}
+
+.ui-notice {
+  align-self: center;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-main);
 }
 
 /* ─── LIQUID GLASS MATERIAL ─── */
@@ -1175,6 +1301,7 @@ body {
 .panel {
   display: flex;
   flex-direction: column;
+  contain: layout paint;
 }
 
 /* Left Panel */
@@ -1246,7 +1373,11 @@ body {
   padding: 8px 4px;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
   color: var(--text-muted);
   position: relative;
 }
@@ -1381,7 +1512,12 @@ body {
     inset 0 1px 1px var(--glass-highlight),
     0 4px 12px rgba(0, 0, 0, 0.1);
   border: 1px solid var(--glass-border);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .liquid-btn.primary {
   background: var(--accent);
@@ -1413,7 +1549,10 @@ body {
   align-items: center;
   justify-content: center;
   position: relative;
-  transition: all 0.3s;
+  transition:
+    border-color 0.3s ease,
+    transform 0.3s ease,
+    box-shadow 0.3s ease;
 }
 .files-panel.drag-active {
   border-color: var(--accent);
@@ -1424,7 +1563,11 @@ body {
   inset: 0;
   background: rgba(10, 132, 255, 0.1);
   pointer-events: none;
+  opacity: 0;
   transition: opacity 0.3s;
+}
+.drag-glow.visible {
+  opacity: 1;
 }
 
 .drop-idle,
@@ -1556,5 +1699,19 @@ body {
 .fade-leave-to {
   opacity: 0;
   transform: scale(0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-bg,
+  .drop-icon-container,
+  .ripple-ring,
+  .pulse-indicator,
+  .ring-fill,
+  .files-panel,
+  .fade-enter-active,
+  .fade-leave-active {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 </style>

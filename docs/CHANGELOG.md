@@ -18,6 +18,37 @@ All notable changes to this project will be documented in this file.
 
 This release consolidates 5 weeks of extensive architectural refactoring, systemic hardening, media pipeline maturity, and performance optimizations.
 
+### Consolidated Summary
+
+- **Version scope**: The current public release line in this repository is still
+  `0.11.3`. Recent pushes after `v0.11.2` continue to land under `0.11.3`; no
+  newer released version number is present in the recent history.
+- **Launcher + packaging**: The cycle moved the launcher toward a Rust-first
+  path, hardened app-bundle replacement/discovery, improved terminal handoff,
+  and tightened Vue/Tauri GUI packaging checks.
+- **Core refactor**: `shared_utils` was folded into `foundation`, config / SQL
+  assets were centralized, workspace structure was cleaned up, and dependency /
+  lockfile handling was refreshed for the split workspace.
+- **Media pipeline**: `fast_img`, conversion safety, metadata/timestamp/xattr
+  preservation, loop-intent routing, video exploration, and fail-closed gates
+  were all hardened across the `0.11.3` line.
+- **Desktop UI**: The Vue 3 + Tauri desktop launcher landed with native file
+  drop, command preview, log streaming, and desktop-oriented launcher flow.
+- **Docs + status**: README and related docs were refreshed around the actual
+  two-binary model (`img` + `vid`). The current SSOT still does **not** claim
+  `img-only fastmode` is "100% complete" across all dimensions.
+
+### Follow-up Pushes Still Under 0.11.3
+
+- **`chore: harden launcher packaging`**: Tightened GUI quality gates, bundle
+  replacement flow, and dependency metadata/lockfile alignment.
+- **Recent `fix` commits**: Continued hardening `fast_img`, `conversion.rs`,
+  `img/src/main.rs`, `run_training.py`, `training_pipeline.py`, and related
+  build/log glue without cutting a new release number.
+- **Reading guide**: The detailed notes below are preserved as the full
+  long-form `0.11.3` record; this summary is the merged overview of that same
+  version line.
+
 ### Recent Core Refactor & Cleanup (48-hour Squash)
 
 - **User Perception**:
