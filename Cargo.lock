@@ -425,7 +425,7 @@ dependencies = [
 [[package]]
 name = "chrono"
 version = "0.4.45"
-source = "git+https://github.com/chronotope/chrono#bcfa377ec881d2b21ccab05de356adfb5958b21c"
+source = "git+https://github.com/chronotope/chrono#3ffcd1b107fd3085bc184a1f5f7445b97a0d655f"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -1123,7 +1123,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#f83dfb3ae63398fc2807eddde86c9fb3f6775d86"
+source = "git+https://github.com/image-rs/image#73acea5729bc40eeaeac08aeb4c02c413ac08c42"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
