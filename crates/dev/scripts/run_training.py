@@ -3893,9 +3893,7 @@ def rebuild_rust_artifacts(bin_names: list[str]) -> None:
     cmd = ["cargo", "build", "-p", "foundation"]
     for bin_name in bin_names:
         cmd.extend(["--bin", bin_name])
-    print(
-        f"  [BUILD] Refreshing Rust artifacts: {' '.join(bin_names) or 'foundation'}"
-    )
+    print(f"  [BUILD] Refreshing Rust artifacts: {' '.join(bin_names) or 'foundation'}")
     result = subprocess.run(
         cmd, cwd=ROOT, text=True, env=sanitized_subprocess_env(), check=False
     )

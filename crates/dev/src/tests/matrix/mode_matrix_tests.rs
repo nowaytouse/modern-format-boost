@@ -44,7 +44,7 @@ fn video_file(name: &str) -> PathBuf {
     // build ffmpeg command depending on requested codec hinted by filename
     let output = if name.ends_with(".webm") || name.contains("vp9") {
         Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-y",
                 "-v",
                 "error",
@@ -72,7 +72,7 @@ fn video_file(name: &str) -> PathBuf {
             .expect("failed to spawn ffmpeg for fixture generation")
     } else if name.contains("hevc") {
         Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-y",
                 "-v",
                 "error",
@@ -102,7 +102,7 @@ fn video_file(name: &str) -> PathBuf {
             .expect("failed to spawn ffmpeg for fixture generation")
     } else {
         Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-y",
                 "-v",
                 "error",

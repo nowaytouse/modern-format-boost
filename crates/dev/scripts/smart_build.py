@@ -37,7 +37,6 @@ BREW_MEDIA_FORMULAE = (
 )
 
 
-
 ALL_PROJECTS = {"crates/img": "img", "crates/vid": "vid", "crates/dev": "verify"}
 
 DEFAULT_PROJECTS = ["crates/img", "crates/vid", "crates/dev"]
@@ -110,7 +109,9 @@ def bootstrap_macos_path() -> None:
 
 
 def perform_updates():
-    print(f"\n{CYAN}{BOLD}Running Dependency Updates (cargo update, brew, pip, etc.)…{NC}\n")
+    print(
+        f"\n{CYAN}{BOLD}Running Dependency Updates (cargo update, brew, pip, etc.)…{NC}\n"
+    )
     bootstrap_macos_path()
 
     if shutil.which("brew"):
@@ -124,10 +125,10 @@ def perform_updates():
         venv_python = PROJECT_ROOT / "crates/.modern_format_boost/.venv/bin/python"
         if venv_python.is_file():
             python_bin = str(venv_python)
-            
+
         _run_update_step(
             "pip requirements",
-            [python_bin, "-m", "pip", "install", "-U", "-r", str(requirements)]
+            [python_bin, "-m", "pip", "install", "-U", "-r", str(requirements)],
         )
 
     rust_toolchain_file = PROJECT_ROOT / "rust-toolchain.toml"
@@ -135,6 +136,7 @@ def perform_updates():
     components = ["rustfmt", "clippy", "llvm-tools"]
     if rust_toolchain_file.is_file():
         import re
+
         text = rust_toolchain_file.read_text(encoding="utf-8")
         match = re.search(r'^\s*channel\s*=\s*"([^"]+)"', text, re.MULTILINE)
         if match:
@@ -153,13 +155,15 @@ def perform_updates():
             for component in components:
                 _run_update_step(
                     f"rustup component {component}",
-                    ["rustup", "component", "add", component, "--toolchain", channel]
+                    ["rustup", "component", "add", component, "--toolchain", channel],
                 )
 
     if shutil.which("cargo"):
         cargo_cmd = ["rtk", "cargo"] if shutil.which("rtk") else ["cargo"]
         _run_update_step("cargo update", cargo_cmd + ["update"])
-        _run_update_step("cargo install kondo", cargo_cmd + ["install", "kondo", "--locked", "-q"])
+        _run_update_step(
+            "cargo install kondo", cargo_cmd + ["install", "kondo", "--locked", "-q"]
+        )
 
     print(f"\n{GREEN}{BOLD}Dependency updates finished.{NC}\n")
 
@@ -280,13 +284,15 @@ def build_project(project_dir, binary_name, retry_count, args):
     cmd = []
     if shutil.which("rtk"):
         cmd.append("rtk")
-    cmd.extend([
-        str(toolchain.cargo),
-        "build",
-        "--release",
-        "--manifest-path",
-        f"{project_dir}/Cargo.toml",
-    ])
+    cmd.extend(
+        [
+            str(toolchain.cargo),
+            "build",
+            "--release",
+            "--manifest-path",
+            f"{project_dir}/Cargo.toml",
+        ]
+    )
 
     env = os.environ.copy()
     env.update(toolchain.env())
@@ -393,8 +399,15 @@ def sync_app_bundle():
         return
     print(f"\n{DIM}Syncing binaries to App Bundle...{NC}")
     binaries = [
-        "img", "vid", "verify", "cache_cleaner", "database_manager", 
-        "collect_optimized", "merge_xmp", "icloud_import", "drag_and_drop_processor"
+        "img",
+        "vid",
+        "verify",
+        "cache_cleaner",
+        "database_manager",
+        "collect_optimized",
+        "merge_xmp",
+        "icloud_import",
+        "drag_and_drop_processor",
     ]
     target_release = PROJECT_ROOT / "target" / "release"
     for bin_name in binaries:
@@ -410,14 +423,22 @@ def sync_app_bundle():
 def build_and_sync_gui():
     print(f"\n{BOLD}{CYAN} Building Tauri GUI...{NC}")
     vue_dir = os.path.join(PROJECT_ROOT, "crates", "dev", "src", "vue")
-    
+
     result = subprocess.run(["npm", "run", "tauri", "build"], cwd=vue_dir)
     if result.returncode != 0:
         print(f"{RED}Tauri build failed.{NC}")
         sys.exit(1)
 
     print(f"{DIM}Syncing App bundle...{NC}")
-    src_bundle = os.path.join(vue_dir, "src-tauri", "target", "release", "bundle", "macos", "Modern Format Boost.app")
+    src_bundle = os.path.join(
+        vue_dir,
+        "src-tauri",
+        "target",
+        "release",
+        "bundle",
+        "macos",
+        "Modern Format Boost.app",
+    )
     dest_bundle = os.path.join(PROJECT_ROOT, "Modern Format Boost.app")
 
     if os.path.exists(src_bundle):
@@ -428,7 +449,7 @@ def build_and_sync_gui():
     else:
         print(f"{RED}Built app bundle not found at {src_bundle}{NC}")
         sys.exit(1)
-        
+
     sync_app_bundle()
 
 

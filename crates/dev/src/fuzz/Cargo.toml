@@ -11,7 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = ">= 0.4"
-arbitrary = {   features = ["derive"], version = ">= 1.0"}
+arbitrary = { features = ["derive"], version = ">= 1.0" }
 image = { workspace = true }
 # Keep default foundation features off here. Vendored libjxl builds its own
 # fuzzers under sanitizer instrumentation, which conflicts with ClusterFuzzLite.

@@ -1,67 +1,55 @@
 <template>
   <div class="ai-transparency-panel">
-    <div
-      class="panel-header"
-      @click="toggleExpanded"
-    >
+    <div class="panel-header" @click="toggleExpanded">
       <div class="header-left">
         <span class="icon">🔍</span>
-        <h3>{{ $t('aiTransparency.title') }}</h3>
-        <span
-          class="badge"
-          :class="{ active: hasDecisionData }"
-        >
-          {{ hasDecisionData ? $t('aiTransparency.analyzing') : $t('aiTransparency.ready') }}
+        <h3>{{ $t("aiTransparency.title") }}</h3>
+        <span class="badge" :class="{ active: hasDecisionData }">
+          {{
+            hasDecisionData
+              ? $t("aiTransparency.analyzing")
+              : $t("aiTransparency.ready")
+          }}
         </span>
       </div>
-      <span
-        class="toggle-icon"
-        :class="{ expanded: isExpanded }"
-      >▼</span>
+      <span class="toggle-icon" :class="{ expanded: isExpanded }">▼</span>
     </div>
 
     <transition name="slide">
-      <div
-        v-if="isExpanded"
-        class="panel-content"
-      >
+      <div v-if="isExpanded" class="panel-content">
         <!-- 文件分析阶段 -->
-        <div
-          v-if="fileAnalysis"
-          class="section"
-        >
+        <div v-if="fileAnalysis" class="section">
           <div class="section-header">
             <span class="step-number">1</span>
-            <h4>{{ $t('aiTransparency.fileAnalysis') }}</h4>
+            <h4>{{ $t("aiTransparency.fileAnalysis") }}</h4>
           </div>
           <div class="info-grid">
             <div class="info-item">
-              <span class="label">{{ $t('aiTransparency.fileSize') }}</span>
+              <span class="label">{{ $t("aiTransparency.fileSize") }}</span>
               <span class="value">{{ formatFileSize(fileAnalysis.size) }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('aiTransparency.dimensions') }}</span>
-              <span class="value">{{ fileAnalysis.width }} × {{ fileAnalysis.height }}</span>
+              <span class="label">{{ $t("aiTransparency.dimensions") }}</span>
+              <span class="value"
+                >{{ fileAnalysis.width }} × {{ fileAnalysis.height }}</span
+              >
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('aiTransparency.format') }}</span>
+              <span class="label">{{ $t("aiTransparency.format") }}</span>
               <span class="value">{{ fileAnalysis.format }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('aiTransparency.colorDepth') }}</span>
+              <span class="label">{{ $t("aiTransparency.colorDepth") }}</span>
               <span class="value">{{ fileAnalysis.colorDepth }} bit</span>
             </div>
           </div>
         </div>
 
         <!-- 特征提取阶段 -->
-        <div
-          v-if="featureExtraction"
-          class="section"
-        >
+        <div v-if="featureExtraction" class="section">
           <div class="section-header">
             <span class="step-number">2</span>
-            <h4>{{ $t('aiTransparency.featureExtraction') }}</h4>
+            <h4>{{ $t("aiTransparency.featureExtraction") }}</h4>
           </div>
           <div class="feature-list">
             <div
@@ -69,7 +57,9 @@
               :key="key"
               class="feature-item"
             >
-              <span class="feature-name">{{ $t(`aiTransparency.features.${key}`) }}</span>
+              <span class="feature-name">{{
+                $t(`aiTransparency.features.${key}`)
+              }}</span>
               <div class="feature-bar">
                 <div
                   class="feature-fill"
@@ -82,44 +72,47 @@
         </div>
 
         <!-- AI决策阶段 -->
-        <div
-          v-if="aiDecision"
-          class="section"
-        >
+        <div v-if="aiDecision" class="section">
           <div class="section-header">
             <span class="step-number">3</span>
-            <h4>{{ $t('aiTransparency.aiDecision') }}</h4>
+            <h4>{{ $t("aiTransparency.aiDecision") }}</h4>
           </div>
           <div class="decision-card">
             <div class="decision-item">
-              <span class="decision-label">{{ $t('aiTransparency.recommendedFormat') }}</span>
-              <span class="decision-value highlight">{{ aiDecision.format }}</span>
+              <span class="decision-label">{{
+                $t("aiTransparency.recommendedFormat")
+              }}</span>
+              <span class="decision-value highlight">{{
+                aiDecision.format
+              }}</span>
             </div>
             <div class="decision-item">
-              <span class="decision-label">{{ $t('aiTransparency.quality') }}</span>
+              <span class="decision-label">{{
+                $t("aiTransparency.quality")
+              }}</span>
               <span class="decision-value">{{ aiDecision.quality }}</span>
             </div>
             <div class="decision-item">
-              <span class="decision-label">{{ $t('aiTransparency.speed') }}</span>
+              <span class="decision-label">{{
+                $t("aiTransparency.speed")
+              }}</span>
               <span class="decision-value">{{ aiDecision.speed }}</span>
             </div>
             <div class="decision-item">
-              <span class="decision-label">{{ $t('aiTransparency.confidence') }}</span>
-              <span class="decision-value">{{ (aiDecision.confidence * 100).toFixed(1) }}%</span>
+              <span class="decision-label">{{
+                $t("aiTransparency.confidence")
+              }}</span>
+              <span class="decision-value"
+                >{{ (aiDecision.confidence * 100).toFixed(1) }}%</span
+              >
             </div>
           </div>
-          
+
           <!-- 决策理由 -->
-          <div
-            v-if="aiDecision.reasoning"
-            class="reasoning"
-          >
-            <h5>{{ $t('aiTransparency.reasoning') }}</h5>
+          <div v-if="aiDecision.reasoning" class="reasoning">
+            <h5>{{ $t("aiTransparency.reasoning") }}</h5>
             <ul>
-              <li
-                v-for="(reason, index) in aiDecision.reasoning"
-                :key="index"
-              >
+              <li v-for="(reason, index) in aiDecision.reasoning" :key="index">
                 {{ reason }}
               </li>
             </ul>
@@ -127,43 +120,36 @@
         </div>
 
         <!-- 处理流程阶段 -->
-        <div
-          v-if="processingSteps.length > 0"
-          class="section"
-        >
+        <div v-if="processingSteps.length > 0" class="section">
           <div class="section-header">
             <span class="step-number">4</span>
-            <h4>{{ $t('aiTransparency.processingSteps') }}</h4>
+            <h4>{{ $t("aiTransparency.processingSteps") }}</h4>
           </div>
           <div class="timeline">
-            <div 
-              v-for="(step, index) in processingSteps" 
-              :key="index" 
+            <div
+              v-for="(step, index) in processingSteps"
+              :key="index"
               class="timeline-item"
-              :class="{ active: step.status === 'active', completed: step.status === 'completed' }"
+              :class="{
+                active: step.status === 'active',
+                completed: step.status === 'completed',
+              }"
             >
               <div class="timeline-marker">
                 <span v-if="step.status === 'completed'">✓</span>
-                <span
-                  v-else-if="step.status === 'active'"
-                  class="spinner"
-                >⟳</span>
+                <span v-else-if="step.status === 'active'" class="spinner"
+                  >⟳</span
+                >
                 <span v-else>{{ index + 1 }}</span>
               </div>
               <div class="timeline-content">
                 <div class="step-name">
                   {{ step.name }}
                 </div>
-                <div
-                  v-if="step.detail"
-                  class="step-detail"
-                >
+                <div v-if="step.detail" class="step-detail">
                   {{ step.detail }}
                 </div>
-                <div
-                  v-if="step.duration"
-                  class="step-time"
-                >
+                <div v-if="step.duration" class="step-time">
                   {{ step.duration }}ms
                 </div>
               </div>
@@ -172,21 +158,16 @@
         </div>
 
         <!-- 性能统计 -->
-        <div
-          v-if="performanceStats"
-          class="section"
-        >
+        <div v-if="performanceStats" class="section">
           <div class="section-header">
             <span class="step-number">5</span>
-            <h4>{{ $t('aiTransparency.performance') }}</h4>
+            <h4>{{ $t("aiTransparency.performance") }}</h4>
           </div>
           <div class="stats-grid">
             <div class="stat-card">
-              <div class="stat-value">
-                {{ performanceStats.totalTime }}ms
-              </div>
+              <div class="stat-value">{{ performanceStats.totalTime }}ms</div>
               <div class="stat-label">
-                {{ $t('aiTransparency.totalTime') }}
+                {{ $t("aiTransparency.totalTime") }}
               </div>
             </div>
             <div class="stat-card">
@@ -194,7 +175,7 @@
                 {{ formatFileSize(performanceStats.originalSize) }}
               </div>
               <div class="stat-label">
-                {{ $t('aiTransparency.originalSize') }}
+                {{ $t("aiTransparency.originalSize") }}
               </div>
             </div>
             <div class="stat-card">
@@ -202,7 +183,7 @@
                 {{ formatFileSize(performanceStats.compressedSize) }}
               </div>
               <div class="stat-label">
-                {{ $t('aiTransparency.compressedSize') }}
+                {{ $t("aiTransparency.compressedSize") }}
               </div>
             </div>
             <div class="stat-card">
@@ -210,7 +191,7 @@
                 {{ performanceStats.compressionRatio }}%
               </div>
               <div class="stat-label">
-                {{ $t('aiTransparency.compressionRatio') }}
+                {{ $t("aiTransparency.compressionRatio") }}
               </div>
             </div>
           </div>
@@ -221,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch } from "vue";
 
 // $t is available globally via main.js setup
 // No need to inject or setup - templates can use {{ $t('key') }} directly
@@ -229,69 +210,90 @@ import { ref, computed, watch } from 'vue'
 const properties = defineProps({
   decisionData: {
     type: Object,
-    default: null
-  }
-})
+    default: null,
+  },
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyRecord = Record<string, any>
+type AnyRecord = Record<string, any>;
 
-const isExpanded = ref(true)
-const fileAnalysis = ref<AnyRecord | null>(null)
-const featureExtraction = ref<AnyRecord | null>(null)
-const aiDecision = ref<AnyRecord | null>(null)
-const processingSteps = ref<AnyRecord[]>([])
-const performanceStats = ref<AnyRecord | null>(null)
+const isExpanded = ref(true);
+const fileAnalysis = ref<AnyRecord | null>(null);
+const featureExtraction = ref<AnyRecord | null>(null);
+const aiDecision = ref<AnyRecord | null>(null);
+const processingSteps = ref<AnyRecord[]>([]);
+const performanceStats = ref<AnyRecord | null>(null);
 
 const hasDecisionData = computed(() => {
-  return Boolean(fileAnalysis.value) || Boolean(aiDecision.value) || processingSteps.value.length > 0
-})
+  return (
+    Boolean(fileAnalysis.value) ||
+    Boolean(aiDecision.value) ||
+    processingSteps.value.length > 0
+  );
+});
 
 const toggleExpanded = () => {
-  isExpanded.value = !isExpanded.value
-}
+  isExpanded.value = !isExpanded.value;
+};
 
 const formatFileSize = (bytes: number) => {
-  if (!bytes) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const index = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, index)).toFixed(2)} ${sizes[index]}`
-}
+  if (!bytes) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const index = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, index)).toFixed(2)} ${sizes[index]}`;
+};
 
 // 监听外部数据更新
-watch(() => properties.decisionData, (newData: AnyRecord | null) => {
-  if (!newData) {
-  	return;
-  }
+watch(
+  () => properties.decisionData,
+  (newData: AnyRecord | null) => {
+    if (!newData) {
+      return;
+    }
 
-  fileAnalysis.value = (newData.fileAnalysis as AnyRecord | null) || null
-  featureExtraction.value = (newData.featureExtraction as AnyRecord | null) || null
-  aiDecision.value = (newData.aiDecision as AnyRecord | null) || null
-  processingSteps.value = (newData.processingSteps as AnyRecord[] | undefined) ?? []
-  performanceStats.value = (newData.performanceStats as AnyRecord | null) || null
-}, { deep: true, immediate: true })
+    fileAnalysis.value = (newData.fileAnalysis as AnyRecord | null) || null;
+    featureExtraction.value =
+      (newData.featureExtraction as AnyRecord | null) || null;
+    aiDecision.value = (newData.aiDecision as AnyRecord | null) || null;
+    processingSteps.value =
+      (newData.processingSteps as AnyRecord[] | undefined) ?? [];
+    performanceStats.value =
+      (newData.performanceStats as AnyRecord | null) || null;
+  },
+  { deep: true, immediate: true },
+);
 
 // 暴露方法供父组件调用
 defineExpose({
-  updateFileAnalysis: (data: AnyRecord) => { fileAnalysis.value = data },
-  updateFeatureExtraction: (data: AnyRecord) => { featureExtraction.value = data },
-  updateAIDecision: (data: AnyRecord) => { aiDecision.value = data },
-  addProcessingStep: (step: AnyRecord) => { processingSteps.value.push(step) },
+  updateFileAnalysis: (data: AnyRecord) => {
+    fileAnalysis.value = data;
+  },
+  updateFeatureExtraction: (data: AnyRecord) => {
+    featureExtraction.value = data;
+  },
+  updateAIDecision: (data: AnyRecord) => {
+    aiDecision.value = data;
+  },
+  addProcessingStep: (step: AnyRecord) => {
+    processingSteps.value.push(step);
+  },
   updateProcessingStep: (index: number, updates: AnyRecord) => {
     if (processingSteps.value.length > index) {
-      Object.assign(processingSteps.value[index], updates)
+      Object.assign(processingSteps.value[index], updates);
     }
   },
-  updatePerformanceStats: (data: AnyRecord) => { performanceStats.value = data },
+  updatePerformanceStats: (data: AnyRecord) => {
+    performanceStats.value = data;
+  },
   reset: () => {
-    fileAnalysis.value = null
-    featureExtraction.value = null
-    aiDecision.value = null
-    processingSteps.value = []
-    performanceStats.value = null
-  }
-})
+    fileAnalysis.value = null;
+    featureExtraction.value = null;
+    aiDecision.value = null;
+    processingSteps.value = [];
+    performanceStats.value = null;
+  },
+});
 </script>
 
 <style scoped>
@@ -349,8 +351,13 @@ defineExpose({
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .toggle-icon {
@@ -448,7 +455,11 @@ defineExpose({
 
 .feature-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--color-primary), var(--color-success));
+  background: linear-gradient(
+    90deg,
+    var(--color-primary),
+    var(--color-success)
+  );
   transition: width 0.5s ease;
 }
 
@@ -525,7 +536,7 @@ defineExpose({
 }
 
 .timeline-item:not(:last-child)::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 14px;
   top: 32px;
@@ -564,8 +575,12 @@ defineExpose({
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .timeline-content {

@@ -1,6 +1,8 @@
 # Rust
 target/
 Cargo.lock
+!crates/dev/src/dispatch2/Cargo.lock
+!crates/dev/src/vue/src-tauri/Cargo.lock
 
 # Build artifacts
 *.o

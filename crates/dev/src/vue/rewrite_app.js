@@ -1,7 +1,7 @@
-const fs = require('fs');
-const content = fs.readFileSync('src/App.vue', 'utf8');
+const fs = require("fs");
+const content = fs.readFileSync("src/App.vue", "utf8");
 
-const styleStart = content.indexOf('<style scoped>');
+const styleStart = content.indexOf("<style scoped>");
 const styleContent = content.substring(styleStart);
 
 const newTemplateAndScript = `
@@ -126,5 +126,5 @@ const triggerAction = (tool) => {
 
 `;
 
-fs.writeFileSync('src/App.vue', newTemplateAndScript + styleContent);
-console.log('App.vue updated successfully.');
+fs.writeFileSync("src/App.vue", newTemplateAndScript + styleContent);
+console.log("App.vue updated successfully.");

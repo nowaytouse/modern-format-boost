@@ -20,7 +20,9 @@ class TestProjectArtifactPaths(unittest.TestCase):
         else:
             lib_name = "libfoundation.so"
 
-        expected = python_api.ROOT / "crates" / ".modern_format_boost" / "artifacts" / lib_name
+        expected = (
+            python_api.ROOT / "crates" / ".modern_format_boost" / "artifacts" / lib_name
+        )
         candidates = python_api.candidate_library_paths()
 
         self.assertIn(expected, candidates)

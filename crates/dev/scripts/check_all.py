@@ -558,6 +558,11 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
                 f" got '{executable}'"
             )
 
+        for key in ("NSAppDataUsageDescription", "NSAppleEventsUsageDescription"):
+            value = pl.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"Missing required macOS privacy key: {key}")
+
         binary_path = (
             root
             / "Modern Format Boost.app"
@@ -1639,9 +1644,9 @@ def main() -> None:
                 if args.fuzz_smoke:
                     fuzz_targets = sorted(
                         path.stem
-                        for path in (repo_root / "crates/dev/src/fuzz/fuzz_targets").glob(
-                            "*.rs"
-                        )
+                        for path in (
+                            repo_root / "crates/dev/src/fuzz/fuzz_targets"
+                        ).glob("*.rs")
                     )
                     if not fuzz_targets:
                         fail_required_step(

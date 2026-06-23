@@ -59,6 +59,6 @@
     "use_external_terminal": "外部ターミナルを使用（推奨）",
     "open_in_terminal": "ターミナルで開く",
     "copy_command": "コピー",
-    "command_hint": "Warp、Ghostty、Kitty、iTerm、または Terminal で自動的に開きます。"
+    "command_hint": "Ghostty、kitty、iTerm、または Terminal で自動的に開きます。"
   }
 }

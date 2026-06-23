@@ -779,7 +779,20 @@ def ensure_tools_ready(*, force: bool = False, quiet: bool = False) -> None:
     cmd = []
     if shutil.which("rtk"):
         cmd.append("rtk")
-    cmd.extend(["cargo", "run", "--release", "--locked", "-p", "dev", "--bin", "smart_build", "--", "--update"])
+    cmd.extend(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "smart_build",
+            "--",
+            "--update",
+        ]
+    )
     if force:
         cmd.append("--force")
     if PROCESSING_MODE == "images_only":

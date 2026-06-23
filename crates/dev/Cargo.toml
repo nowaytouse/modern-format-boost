@@ -21,7 +21,7 @@ vid = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 libc = { workspace = true }
-nix = {   features = ["term", "fs"], version = ">= 0.29"}
+nix = { features = ["term", "fs"], version = ">= 0.29" }
 notify = ">= 6.0"
 sysinfo = ">= 0.30"
 ctrlc = { workspace = true }
@@ -36,7 +36,6 @@ proptest = { workspace = true }
 insta = { workspace = true }
 serial_test = ">= 3.0"
 sha2 = ">= 0.10"
-attohttpc = ">= 0.28"
 
 # Integration tests live in subdirs (folder layout only); paths registered here.
 [[test]]

@@ -160,6 +160,7 @@ fn map_legacy_rel(rel: &str) -> String {
                 "performance_schedule.rs",
                 "process_lock.rs",
                 "safety.rs",
+                "static_logs.rs",
                 "system_memory.rs",
                 "test_ci_contract.rs",
                 "thread_manager.rs",
@@ -17927,7 +17928,6 @@ fn python_production_scripts_declare_guard_main() {
         "run_training.py",
         "training_pipeline.py",
         "quality_regression_model.py",
-        "drag_and_drop_processor.py",
     ] {
         assert!(
             block.contains(&format!("\"{script}\"")),
@@ -17940,6 +17940,13 @@ fn python_production_scripts_declare_guard_main() {
             "{script} must call guard_main() at entry"
         );
     }
+    let drag_source = root.join("crates/dev/scripts/archive/drag_and_drop_processor.py");
+    let content = fs::read_to_string(&drag_source)
+        .unwrap_or_else(|err| panic!("read {}: {err:?}", drag_source.display())); // audited: contract test assertion path; panic/expect is test-only failure signal
+    assert!(
+        content.contains("guard_main("),
+        "archived drag_and_drop_processor.py must retain guard_main() for parity reference"
+    );
 }
 
 #[test]
@@ -17950,7 +17957,6 @@ fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
         "ci/clippy_strict.py",
         "ci/download_gnu_mpc.py",
         "ci/just_fix_gate.py",
-        "drag_and_drop_processor.py",
         "run_training.py",
     ];
 
@@ -17960,6 +17966,11 @@ fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
             "py2bin source must remain until Rust parity is explicitly proven: {script}"
         );
     }
+    assert!(
+        root.join("crates/dev/scripts/archive/drag_and_drop_processor.py")
+            .is_file(),
+        "py2bin archived source must remain until Rust parity is explicitly proven: drag_and_drop_processor.py"
+    );
 
     let drag_rs = fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
         .expect("drag_and_drop_processor.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal

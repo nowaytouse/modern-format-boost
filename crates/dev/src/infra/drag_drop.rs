@@ -899,7 +899,24 @@ fn parse_size_line_exact_bytes(rest: &str) -> Option<u64> {
         .chars()
         .filter(|c| c.is_ascii_digit())
         .collect();
-    digits.parse().ok()
+    digits.parse::<u64>().map_or_else(
+        |err| {
+            eprintln!("failed to parse fast-img byte count `{digits}`: {err}");
+            None
+        },
+        Some,
+    )
+}
+
+fn parse_size_metric_u64(label: &str, rest: &str) -> Option<u64> {
+    let value = rest.trim();
+    value.parse::<u64>().map_or_else(
+        |err| {
+            eprintln!("failed to parse fast-img metric `{label}` from `{value}`: {err}");
+            None
+        },
+        Some,
+    )
 }
 
 /// Parse fast-img `[SIZE]` session accounting lines from child stdout/log text.
@@ -913,9 +930,9 @@ pub fn fast_img_session_size_metrics(summary: &str) -> FastImgSessionSizeMetrics
         } else if let Some(rest) = trimmed.strip_prefix("[SIZE    ] output_bytes_actual:") {
             metrics.output_bytes_actual = parse_size_line_exact_bytes(rest);
         } else if let Some(rest) = trimmed.strip_prefix("[SIZE    ] files_converted:") {
-            metrics.files_converted = rest.trim().parse().ok();
+            metrics.files_converted = parse_size_metric_u64("files_converted", rest);
         } else if let Some(rest) = trimmed.strip_prefix("[SIZE    ] resume_reused_count:") {
-            metrics.resume_reused_count = rest.trim().parse().ok();
+            metrics.resume_reused_count = parse_size_metric_u64("resume_reused_count", rest);
         }
     }
     metrics

@@ -132,9 +132,9 @@ def report() -> int:
 
 
 def load_allowlist() -> list[tuple[str, str]]:
-    test_rs = (REPO_ROOT / "crates/dev/src/tests/test_real_silent_fallbacks.rs").read_text(
-        encoding="utf-8"
-    )
+    test_rs = (
+        REPO_ROOT / "crates/dev/src/tests/test_real_silent_fallbacks.rs"
+    ).read_text(encoding="utf-8")
     block = test_rs.split("const ALLOWLIST")[1].split("];")[0]
     return re.findall(r'\(\s*\n\s*"([^"]+)",\s*\n\s*"([^"]+)"', block)
 

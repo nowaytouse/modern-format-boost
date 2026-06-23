@@ -780,6 +780,9 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .map_or("", |message| message);
         assert!(error.contains("mfb_probe_loop_intent"));
-        assert!(error.contains("unknown invoker"));
+        assert!(
+            error.contains("unknown invoker") || error.contains("shell-wrapped process"),
+            "unexpected guard error: {error}"
+        );
     }
 }

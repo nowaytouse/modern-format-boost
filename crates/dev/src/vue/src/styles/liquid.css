@@ -1,121 +1,121 @@
 /* 🍎 True Apple Liquid Glass System (Clean & Static) */
 
 :root {
-    --liquid-blur: 30px;
-    --liquid-saturate: 180%;
-    --liquid-border: rgba(255, 255, 255, 0.15);
-    --liquid-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    --panel-radius: 24px;
-    --btn-radius: 9999px;
+  --liquid-blur: 30px;
+  --liquid-saturate: 180%;
+  --liquid-border: rgba(255, 255, 255, 0.15);
+  --liquid-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --panel-radius: 24px;
+  --btn-radius: 9999px;
 }
 
 /* 🌊 基础面板 (保持深色玻璃感) */
 .liquid-glass {
-    position: relative;
-    background: rgba(30, 30, 40, 0.5);
-    backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate));
-    -webkit-backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate));
-    border: 1px solid var(--liquid-border);
-    border-top-color: rgba(255, 255, 255, 0.25);
-    box-shadow: var(--liquid-shadow);
-    border-radius: var(--panel-radius);
-    overflow: hidden;
-    transform: translateZ(0);
+  position: relative;
+  background: rgba(30, 30, 40, 0.5);
+  backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate));
+  -webkit-backdrop-filter: blur(var(--liquid-blur))
+    saturate(var(--liquid-saturate));
+  border: 1px solid var(--liquid-border);
+  border-top-color: rgba(255, 255, 255, 0.25);
+  box-shadow: var(--liquid-shadow);
+  border-radius: var(--panel-radius);
+  overflow: hidden;
+  transform: translateZ(0);
 }
 
 /* 移除所有旋转的伪元素 */
 .liquid-glass::before,
 .liquid-glass::after {
-    display: none;
+  display: none;
 }
 
 /* 💧 选中的 Tab (Apple Style) */
 /* 静止、高亮、通透的药丸 */
 .type-tab.active {
-    position: relative;
-    background: rgba(255, 255, 255, 0.15) !important;
-    border-radius: 9999px !important;
-    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  position: relative;
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-radius: 9999px !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
 
-    /* 核心光影：顶部高光 + 底部反光 + 柔和阴影 */
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        inset 0 -1px 0 rgba(255, 255, 255, 0.2),
-        0 4px 12px rgba(0, 0, 0, 0.2) !important;
+  /* 核心光影：顶部高光 + 底部反光 + 柔和阴影 */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2),
+    0 4px 12px rgba(0, 0, 0, 0.2) !important;
 
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-    color: white !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-    z-index: 10;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  color: white !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  z-index: 10;
 }
 
 /* 移除 Tab 的所有伪元素动画 */
 .type-tab.active::before,
 .type-tab.active::after {
-    display: none !important;
+  display: none !important;
 }
 
 /* 💧 主按钮 (Apple Style) */
 .btn-primary {
-    position: relative;
-    /* 品牌色底色，但保持通透 */
-    background: rgba(99, 102, 241, 0.3) !important;
-    border-radius: 9999px !important;
-    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  position: relative;
+  /* 品牌色底色，但保持通透 */
+  background: rgba(99, 102, 241, 0.3) !important;
+  border-radius: 9999px !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
 
-    /* 核心光影 */
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        inset 0 -1px 0 rgba(255, 255, 255, 0.2),
-        inset 0 0 20px rgba(99, 102, 241, 0.4),
-        /* 内部蓝色光晕 */
-        0 8px 20px rgba(99, 102, 241, 0.3) !important;
+  /* 核心光影 */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 0 20px rgba(99, 102, 241, 0.4),
+    /* 内部蓝色光晕 */ 0 8px 20px rgba(99, 102, 241, 0.3) !important;
 
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-    color: white !important;
-    font-weight: 600;
-    overflow: hidden;
-    transition: all 0.2s ease;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  color: white !important;
+  font-weight: 600;
+  overflow: hidden;
+  transition: all 0.2s ease;
 }
 
 /* 移除按钮的所有伪元素动画 */
 .btn-primary::before,
 .btn-primary::after {
-    display: none !important;
+  display: none !important;
 }
 
 .btn-primary:hover {
-    transform: translateY(-1px);
-    background: rgba(99, 102, 241, 0.4) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.8),
-        inset 0 -1px 0 rgba(255, 255, 255, 0.3),
-        inset 0 0 25px rgba(99, 102, 241, 0.5),
-        0 12px 25px rgba(99, 102, 241, 0.4) !important;
+  transform: translateY(-1px);
+  background: rgba(99, 102, 241, 0.4) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.3),
+    inset 0 0 25px rgba(99, 102, 241, 0.5),
+    0 12px 25px rgba(99, 102, 241, 0.4) !important;
 }
 
 .btn-primary:active {
-    transform: translateY(1px);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.4),
-        0 4px 10px rgba(99, 102, 241, 0.3) !important;
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 4px 10px rgba(99, 102, 241, 0.3) !important;
 }
 
 /* 💧 选中的文件 */
 .file-item.selected {
-    background: rgba(99, 102, 241, 0.15) !important;
-    border: 1px solid rgba(99, 102, 241, 0.3) !important;
-    border-radius: 16px !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.4),
-        0 4px 12px rgba(0, 0, 0, 0.1) !important;
+  background: rgba(99, 102, 241, 0.15) !important;
+  border: 1px solid rgba(99, 102, 241, 0.3) !important;
+  border-radius: 16px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 4px 12px rgba(0, 0, 0, 0.1) !important;
 }
 
 .file-item.selected::before,
 .file-item.selected::after {
-    display: none !important;
+  display: none !important;
 }
 
 /* 强制覆盖基础面板 */
@@ -126,16 +126,17 @@
 .glass-panel,
 .titlebar,
 .type-tabs {
-    position: relative;
-    background: rgba(30, 30, 40, 0.5) !important;
-    backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate)) !important;
-    -webkit-backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate)) !important;
-    border: 1px solid var(--liquid-border) !important;
-    border-top-color: rgba(255, 255, 255, 0.25) !important;
-    box-shadow: var(--liquid-shadow) !important;
-    border-radius: var(--panel-radius) !important;
-    overflow: hidden;
-    z-index: 1;
+  position: relative;
+  background: rgba(30, 30, 40, 0.5) !important;
+  backdrop-filter: blur(var(--liquid-blur)) saturate(var(--liquid-saturate)) !important;
+  -webkit-backdrop-filter: blur(var(--liquid-blur))
+    saturate(var(--liquid-saturate)) !important;
+  border: 1px solid var(--liquid-border) !important;
+  border-top-color: rgba(255, 255, 255, 0.25) !important;
+  box-shadow: var(--liquid-shadow) !important;
+  border-radius: var(--panel-radius) !important;
+  overflow: hidden;
+  z-index: 1;
 }
 
 /* 移除面板的所有伪元素动画 */
@@ -146,5 +147,5 @@
 .glass-panel::before,
 .titlebar::before,
 .type-tabs::before {
-    display: none !important;
+  display: none !important;
 }

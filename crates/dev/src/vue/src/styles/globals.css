@@ -1,7 +1,7 @@
 /* 全局样式 - Pixly Premium Design System */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
 
 * {
   margin: 0;
@@ -89,7 +89,11 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--bg-app);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
   font-size: 13px;
   color: var(--text-primary);
 }
@@ -127,13 +131,18 @@ body {
 }
 
 .panel::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.1),
+    transparent
+  );
   opacity: 0.5;
 }
 
@@ -174,15 +183,17 @@ body {
 
 /* 按钮内部流光效果 */
 .btn::before {
-  content: '';
+  content: "";
   position: absolute;
   top: -50%;
   left: -50%;
   width: 200%;
   height: 200%;
-  background: radial-gradient(circle,
-      rgba(255, 255, 255, 0.2) 0%,
-      transparent 50%);
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.2) 0%,
+    transparent 50%
+  );
   opacity: 0;
   transition: opacity var(--duration-fast);
 }
@@ -193,7 +204,6 @@ body {
 }
 
 @keyframes shimmer {
-
   0%,
   100% {
     transform: translate(-25%, -25%);
@@ -205,7 +215,11 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), hsl(var(--hue-primary), 80%, 50%));
+  background: linear-gradient(
+    135deg,
+    var(--color-primary),
+    hsl(var(--hue-primary), 80%, 50%)
+  );
   color: white;
   box-shadow:
     0 4px 12px hsla(var(--hue-primary), 90%, 60%, 0.3),
@@ -298,14 +312,18 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%;
   background: white;
   cursor: pointer;
-  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--color-primary);
+  box-shadow:
+    0 0 0 2px var(--bg-panel),
+    0 0 0 4px var(--color-primary);
   transition: all var(--duration-fast) var(--ease-elastic);
   transform: scale(1);
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
-  box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 6px var(--color-primary);
+  box-shadow:
+    0 0 0 2px var(--bg-panel),
+    0 0 0 6px var(--color-primary);
 }
 
 /* 🔥 Component: Checkbox */
@@ -342,7 +360,7 @@ input[type="checkbox"]:checked {
 }
 
 input[type="checkbox"]:checked::after {
-  content: '';
+  content: "";
   position: absolute;
   left: 5px;
   top: 2px;

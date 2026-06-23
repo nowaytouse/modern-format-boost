@@ -59,6 +59,6 @@
     "use_external_terminal": "Use External Terminal (Recommended)",
     "open_in_terminal": "Open in Terminal",
     "copy_command": "Copy",
-    "command_hint": "Opens in Warp, Ghostty, Kitty, iTerm, or Terminal (auto-detected priority)."
+    "command_hint": "Opens in Ghostty, kitty, iTerm, or Terminal (auto-detected priority)."
   }
 }

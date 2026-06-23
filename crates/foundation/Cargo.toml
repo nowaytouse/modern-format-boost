@@ -54,7 +54,7 @@ quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
 serial_test = ">= 3.0"
-arbitrary = {   features = ["derive"], optional = true, version = ">= 1.0"}
+arbitrary = { features = ["derive"], optional = true, version = ">= 1.0" }
 rug = { workspace = true, optional = true }
 gmp-mpfr-sys = { workspace = true, optional = true }
 gif = ">= 0.12"

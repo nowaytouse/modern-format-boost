@@ -1556,6 +1556,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn unified_log_dir_rejects_workspace_home_root_logs() {
         let _lock = ENV_TEST_LOCK
             .lock()
@@ -1567,46 +1568,16 @@ mod tests {
         let home = temp_dir.path().join("home");
         fs::create_dir_all(&home).unwrap_or_else(|e| panic!("error: {e:?}"));
         let expected = home.join(".modern_format_boost").join("logs");
-        let prev_log_dir = saved_env_var(crate::constants::ENV_MFB_LOG_DIR);
-        let prev_home_root = saved_env_var(crate::constants::ENV_MFB_HOME_ROOT);
-        let prev_home = saved_env_var(crate::constants::ENV_HOME);
-        // SAFETY: guarded by ENV_TEST_LOCK.
-        unsafe {
-            std::env::remove_var(crate::constants::ENV_MFB_LOG_DIR);
-            std::env::set_var(
-                crate::constants::ENV_MFB_HOME_ROOT,
-                workspace.to_str().expect("utf-8 path"),
-            );
-            std::env::set_var(
-                crate::constants::ENV_HOME,
-                home.to_str().expect("utf-8 path"),
-            );
-        }
+        let _log_guard = RemovedEnvGuard::remove(crate::constants::ENV_MFB_LOG_DIR);
+        let _home_root_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            workspace.to_str().expect("utf-8 path"),
+        );
+        let _home_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_HOME,
+            home.to_str().expect("utf-8 path"),
+        );
         assert_eq!(LogConfig::unified_log_dir(), expected);
-        match prev_log_dir {
-            Some(value) => unsafe {
-                std::env::set_var(crate::constants::ENV_MFB_LOG_DIR, value);
-            },
-            None => unsafe {
-                std::env::remove_var(crate::constants::ENV_MFB_LOG_DIR);
-            },
-        }
-        match prev_home_root {
-            Some(value) => unsafe {
-                std::env::set_var(crate::constants::ENV_MFB_HOME_ROOT, value);
-            },
-            None => unsafe {
-                std::env::remove_var(crate::constants::ENV_MFB_HOME_ROOT);
-            },
-        }
-        match prev_home {
-            Some(value) => unsafe {
-                std::env::set_var(crate::constants::ENV_HOME, value);
-            },
-            None => unsafe {
-                std::env::remove_var(crate::constants::ENV_HOME);
-            },
-        }
     }
 
     #[test]

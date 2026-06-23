@@ -669,13 +669,14 @@ fn run_fast_img_delivery_check(
 
     let mut optimized_size = 0u64;
     for path in &optimized_jxl {
-        if let Ok(m) = std::fs::metadata(path) {
-            optimized_size += m.len();
-        } else {
-            optimized_probe_errors.push((
-                path.clone(),
-                anyhow::anyhow!("failed to stat optimized file"),
-            ));
+        match std::fs::metadata(path) {
+            Ok(meta) => optimized_size += meta.len(),
+            Err(err) => {
+                optimized_probe_errors.push((
+                    path.clone(),
+                    anyhow::anyhow!("failed to stat optimized file: {err}"),
+                ));
+            }
         }
     }
 

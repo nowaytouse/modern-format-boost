@@ -277,6 +277,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
         }
     }
 
+    drop(reservations);
     resolved
 }
 

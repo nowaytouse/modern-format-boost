@@ -103,3 +103,6 @@ missing_copy_implementations = "warn"
 non_ascii_idents = "deny"
 unreachable_pub = "warn"
 unsafe_op_in_unsafe_fn = "deny"
+
+[workspace]
+resolver = "2"

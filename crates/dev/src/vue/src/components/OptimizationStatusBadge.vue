@@ -1,78 +1,78 @@
 <template>
-  <div
-    class="optimization-badge"
-    :class="badgeClass"
-  >
+  <div class="optimization-badge" :class="badgeClass">
     <span class="icon">{{ statusIcon }}</span>
     <span class="text">{{ statusText }}</span>
-    <span
-      v-if="showSavings && savings !== null"
-      class="savings"
-    >
+    <span v-if="showSavings && savings !== null" class="savings">
       {{ formatSavings(savings) }}
     </span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed } from "vue";
 
 const properties = defineProps({
   status: {
     type: String,
     required: true,
-    validator: (value: string) => ['optimal', 'minor', 'significant', 'critical', 'unknown'].includes(value)
+    validator: (value: string) =>
+      ["optimal", "minor", "significant", "critical", "unknown"].includes(
+        value,
+      ),
   },
   savings: {
     type: Number,
-    default: null
+    default: null,
   },
   showSavings: {
     type: Boolean,
-    default: true
-  }
-})
+    default: true,
+  },
+});
 
-type StatusType = 'optimal' | 'minor' | 'significant' | 'critical' | 'unknown'
+type StatusType = "optimal" | "minor" | "significant" | "critical" | "unknown";
 
-const statusConfig: Record<StatusType, { icon: string; text: string; class: string }> = {
+const statusConfig: Record<
+  StatusType,
+  { icon: string; text: string; class: string }
+> = {
   optimal: {
-    icon: '✅',
-    text: '已优化',
-    class: 'badge-optimal'
+    icon: "✅",
+    text: "已优化",
+    class: "badge-optimal",
   },
   minor: {
-    icon: '👍',
-    text: '可选优化',
-    class: 'badge-minor'
+    icon: "👍",
+    text: "可选优化",
+    class: "badge-minor",
   },
   significant: {
-    icon: '⚠️',
-    text: '建议优化',
-    class: 'badge-significant'
+    icon: "⚠️",
+    text: "建议优化",
+    class: "badge-significant",
   },
   critical: {
-    icon: '❌',
-    text: '必须优化',
-    class: 'badge-critical'
+    icon: "❌",
+    text: "必须优化",
+    class: "badge-critical",
   },
   unknown: {
-    icon: '❓',
-    text: '未分析',
-    class: 'badge-unknown'
-  }
-}
+    icon: "❓",
+    text: "未分析",
+    class: "badge-unknown",
+  },
+};
 
-const config = computed(() => statusConfig[properties.status as StatusType])
-const statusIcon = computed(() => config.value.icon)
-const statusText = computed(() => config.value.text)
-const badgeClass = computed(() => config.value.class)
+const config = computed(() => statusConfig[properties.status as StatusType]);
+const statusIcon = computed(() => config.value.icon);
+const statusText = computed(() => config.value.text);
+const badgeClass = computed(() => config.value.class);
 
 const formatSavings = (percent: number | null | undefined) => {
-  if (percent === null || percent === undefined) return ''
-  if (percent < 1) return '<1%↓'
-  return `${String(Math.round(percent))}%↓`
-}
+  if (percent === null || percent === undefined) return "";
+  if (percent < 1) return "<1%↓";
+  return `${String(Math.round(percent))}%↓`;
+};
 </script>
 
 <style scoped>

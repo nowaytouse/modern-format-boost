@@ -59,6 +59,6 @@
     "use_external_terminal": "使用外部终端（推荐）",
     "open_in_terminal": "在终端中打开",
     "copy_command": "复制",
-    "command_hint": "自动检测并在 Warp、Ghostty、Kitty、iTerm 或 Terminal 中打开。"
+    "command_hint": "自动检测并在 Ghostty、kitty、iTerm 或 Terminal 中打开。"
   }
 }

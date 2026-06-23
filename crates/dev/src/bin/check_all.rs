@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
+const VUE_QUALITY_SCRIPTS: [&str; 4] = ["lint", "format:check", "deps:check", "build"];
 
 #[derive(Parser, Debug)]
 #[command(name = "check_all", about = "MFB Multi-Language Auditor")]
@@ -568,6 +569,12 @@ fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Re
                 "Executable name mismatch: expected 'Modern Format Boost', got '{be}'"
             ));
         }
+        for key in ["NSAppDataUsageDescription", "NSAppleEventsUsageDescription"] {
+            match parse_plist_string_key(&plist_content, key) {
+                Some(value) if !value.trim().is_empty() => {}
+                _ => errors.push(format!("Missing required macOS privacy key: {key}")),
+            }
+        }
         let binary_path = repo_root
             .join("Modern Format Boost.app")
             .join("Contents")
@@ -616,6 +623,67 @@ fn ensure_edge_test_media(repo_root: &Path) -> Result<()> {
 
 const fn ci_feature_args() -> [&'static str; 3] {
     ["--all-features", "--features", "foundation/ci-static-build"]
+}
+
+fn vue_quality_script_names() -> &'static [&'static str] {
+    &VUE_QUALITY_SCRIPTS
+}
+
+fn vue_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join("crates").join("dev").join("src").join("vue")
+}
+
+fn run_vue_quality_checks(repo_root: &Path) -> Result<()> {
+    let vue_dir = vue_dir(repo_root);
+    if !vue_dir.join("package.json").is_file() {
+        println!("  Skipped: Vue quality checks (package.json missing)");
+        return Ok(());
+    }
+
+    let prefix = vue_dir.to_string_lossy().into_owned();
+    for script in vue_quality_script_names() {
+        run_required_vec(
+            repo_root,
+            &format!("Vue npm run {script}"),
+            "npm",
+            &[
+                "--prefix".to_string(),
+                prefix.clone(),
+                "run".to_string(),
+                (*script).to_string(),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn cargo_check_args(ci: bool) -> Vec<String> {
+    let mut args = vec![
+        "check".to_string(),
+        "--workspace".to_string(),
+        "--all-targets".to_string(),
+        "--locked".to_string(),
+    ];
+    if ci {
+        args.extend([
+            "--all-features".to_string(),
+            "--features".to_string(),
+            "foundation/ci-static-build".to_string(),
+        ]);
+    } else {
+        args.push("--all-features".to_string());
+    }
+    args
+}
+
+#[cfg(test)]
+fn workspace_members_block(manifest: &str) -> Option<&str> {
+    let members_start = manifest.find("members")?;
+    let after_members = &manifest[members_start..];
+    let list_start = after_members.find('[')?;
+    let after_list_start = &after_members[list_start + 1..];
+    let list_end = after_list_start.find(']')?;
+    Some(&after_list_start[..list_end])
 }
 
 fn apply_ci_runner_env() {
@@ -850,6 +918,13 @@ fn main() -> Result<()> {
             pyupgrade_args.extend(py_files.iter().cloned());
             let _ = Command::new("pyupgrade").args(pyupgrade_args).status();
         }
+        let vue_path = vue_dir(&repo_root);
+        if vue_path.join("package.json").is_file() {
+            let vue_prefix = vue_path.to_string_lossy().into_owned();
+            let _ = Command::new("npm")
+                .args(["--prefix", &vue_prefix, "run", "format"])
+                .status();
+        }
         let mut prettier_targets = md_files.clone();
         prettier_targets.extend(json_files.iter().cloned());
         prettier_targets.extend(yaml_files.iter().cloned());
@@ -898,12 +973,7 @@ fn main() -> Result<()> {
 
     // 4. cargo check
     println!("Checking compilation (cargo check)...");
-    let mut check_args = vec!["check", "--workspace", "--all-targets", "--locked"];
-    if args.ci {
-        check_args.extend(["--all-features", "--features", "foundation/ci-static-build"]);
-    } else {
-        check_args.push("--all-features");
-    }
+    let check_args = cargo_check_args(args.ci);
     let check_status = Command::new("cargo")
         .args(&check_args)
         .status()
@@ -954,6 +1024,7 @@ fn main() -> Result<()> {
     }
 
     run_python_syntax_check(&repo_root, &py_files)?;
+    run_vue_quality_checks(&repo_root)?;
 
     run_required(
         &repo_root,
@@ -1585,5 +1656,38 @@ mod tests {
         assert!(components.rust_src);
         assert!(components.llvm_tools);
         assert_eq!(components.missing_components(), vec!["miri"]);
+    }
+
+    #[test]
+    fn vue_quality_scripts_cover_lint_format_dependencies_and_build() {
+        assert_eq!(
+            vue_quality_script_names(),
+            &["lint", "format:check", "deps:check", "build"]
+        );
+    }
+
+    #[test]
+    fn ci_cargo_check_does_not_reference_non_workspace_tauri_launcher() {
+        let args = cargo_check_args(true);
+        let rendered = args.join(" ");
+        assert!(rendered.contains("--workspace"));
+        assert!(
+            !rendered.contains("mfb_launcher"),
+            "mfb_launcher is not a root workspace member, so CI cargo check must not reference it: {rendered}"
+        );
+    }
+
+    #[test]
+    fn root_workspace_members_do_not_include_macos_only_crates() {
+        let root_manifest = include_str!("../../../../Cargo.toml");
+        let members = workspace_members_block(root_manifest).expect("workspace members block");
+        assert!(
+            !members.contains("crates/dev/src/vue/src-tauri"),
+            "macOS-only Tauri launcher must not be audited by the root workspace"
+        );
+        assert!(
+            !members.contains("crates/dev/src/dispatch2"),
+            "macOS-only dispatch2 must stay in its dedicated workflow, not the root workspace"
+        );
     }
 }

@@ -24,6 +24,8 @@ allow = [
   "LGPL-3.0-or-later",
   "ISC",
   "CC0-1.0",
+  # Required by jpeg-encoder through image's JPEG support.
+  "IJG",
 ]
 confidence-threshold = 0.8
 
@@ -96,6 +98,7 @@ allow-git = [
   "https://github.com/Frommi/miniz_oxide",
   "https://github.com/bitflags/bitflags",
   "https://github.com/inflation/jpegxl-rs",
+  "https://github.com/dtolnay/paste",
   "https://github.com/orlp/foldhash",
   "https://github.com/pgvector/pgvector-rust",
   "https://github.com/sfackler/rust-postgres",

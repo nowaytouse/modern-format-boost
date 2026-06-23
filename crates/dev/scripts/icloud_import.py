@@ -183,7 +183,7 @@ def get_album_name(target_dir):
     name = path.name
     if not name:
         raise ValueError("target path has no valid directory name")
-    
+
     # In case the target already has emoji prepended by Mode 1 or earlier runs
     name = name.removeprefix("✨")
     name = name.removeprefix("[*]")

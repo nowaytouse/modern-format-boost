@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
   - **Fast Development Cycle**: Replaced `cargo run` with `rust-script` for dev tools (`tool_refresh`, `smart_build`, `setup_private_db`), reducing startup latency from ~90s to ~8s.
   - **Full UX Parity**: PTY streaming, signal handling, watch mode, session audit trails, integrity verification, handoff preservation, and metadata protection.
   - **Pipeline Routing**: All workflows (img/vid/fastmode/collect/merge_xmp/icloud_import/diagnostic/maintenance) now route through Rust CLI.
+- **Launcher Packaging Hardening**: Tightened macOS app-bundle binary discovery, added Vue/Tauri quality gates to `check_all`, and refreshed dependency metadata/lockfiles for the split workspace layout.
 
 ## [0.11.3] - 2026-06-16
 
@@ -19,14 +20,14 @@ This release consolidates 5 weeks of extensive architectural refactoring, system
 
 ### Recent Core Refactor & Cleanup (48-hour Squash)
 
-- **User Perception**: 
+- **User Perception**:
   - **Cleaner Workspace**: The project root is visibly cleaner as development and temporary folders (such as `.venv` and `.tmp_lib`) have been silently sandboxed into `crates/.modern_format_boost/`.
   - **Ghostty Terminal Support**: macOS users utilizing the `Ghostty` terminal can now natively double-click and launch the app without it defaulting to Apple's standard Terminal.
-- **Developer Perception**: 
+- **Developer Perception**:
   - **Simplified Architecture**: The `shared_utils` crate has been entirely eradicated and logically folded into `foundation`, eliminating tedious cross-crate mental overhead.
   - **Unified Bleeding-Edge Dependencies**: Removed stagnant local version locks (e.g., `clap`, `tracing`, `anyhow`); all core tooling now pulls directly from Git repositories.
   - **Seamless CI Environment**: Linux CI workflows are natively equipped with `libwebkit2gtk-4.1-dev` and source-compiled `libheif`, eliminating silent failures during cross-platform test runs.
-- **Functional Changes**: 
+- **Functional Changes**:
   - Executed a repository-wide AST-level migration (`shared_utils::` -> `foundation::`, `core::` -> `mfb_core::`).
   - Adjusted Github Actions runners to inject `-DCMAKE_BUILD_TYPE=Release` and properly link `libstdc++` workarounds exclusively inside the new `.modern_format_boost/` sandbox.
 

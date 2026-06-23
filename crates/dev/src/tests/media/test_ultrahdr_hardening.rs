@@ -233,9 +233,11 @@ fn test_ultrahdr_absolute_offset_fallback() -> anyhow::Result<()> {
         Err(e) => {
             if e.contains("No MPF") {
                 panic!("❌ Failed to find MPF: {e}");
-            } else if e.contains("Failed to decode base JPEG") {
+            } else if e.contains("Failed to decode base JPEG")
+                || e.contains("Failed to create JPEG reader")
+            {
                 // Expected: this synthetic file intentionally proves MPF offset handling
-                // without carrying a decodable base JPEG fixture.
+                // without carrying decodable base or gainmap JPEG fixtures.
             } else {
                 panic!("Unexpected Ultra HDR extraction error: {e}");
             }

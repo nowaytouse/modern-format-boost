@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppDataUsageDescription</key>
+	<string>Modern Format Boost reads user-selected media folders and Photos metadata only when processing or importing media.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Modern Format Boost controls Photos during iCloud imports and opens Terminal only when you request an external terminal launch.</string>
+</dict>
+</plist>

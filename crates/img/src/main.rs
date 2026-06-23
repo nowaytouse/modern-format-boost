@@ -7432,7 +7432,7 @@ mod fast_img_hardening_tests {
         write_jpeg(&missing_src, b"missing")?;
         std::fs::create_dir_all(&wc)?;
         std::fs::write(&out, b"jxl-output")?;
-        let sources = vec![converted_src.clone(), missing_src.clone()];
+        let sources = vec![converted_src, missing_src];
         let current_hashes = fast_img_source_hash_set(&src_root, &sources)?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 2);
         marker.stage = FastImgStageName::Gate1Passed;

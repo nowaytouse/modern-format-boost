@@ -830,14 +830,40 @@ on mfbEnsureTopLevelFolder(folderName)
     end tell
 end mfbEnsureTopLevelFolder
 
+on mfbEnsureChildFolder(parentFolder, folderName)
+    tell application "Photos"
+        repeat with candidateFolder in folders of parentFolder
+            if name of candidateFolder is folderName then
+                return candidateFolder
+            end if
+        end repeat
+        return make new folder named folderName at parentFolder
+    end tell
+end mfbEnsureChildFolder
+
 on mfbEnsureAlbumIdForPath(albumPath)
+    set savedDelimiters to AppleScript's text item delimiters
     set AppleScript's text item delimiters to "/"
-    set pathItems to every text item of albumPath
-    set AppleScript's text item delimiters to linefeed
+    set rawPathItems to every text item of albumPath
+    set AppleScript's text item delimiters to savedDelimiters
+    set pathItems to {}
+    repeat with rawPathItem in rawPathItems
+        set pathItem to contents of rawPathItem
+        if pathItem is not "" then
+            set end of pathItems to pathItem
+        end if
+    end repeat
+    if (count of pathItems) is 0 then
+        error "Photos import received an empty album path"
+    end if
     if (count of pathItems) > 1 then
-        set folderName to item 1 of pathItems
-        set targetAlbumName to item 2 of pathItems
-        set targetFolder to my mfbEnsureTopLevelFolder(folderName)
+        set targetFolder to my mfbEnsureTopLevelFolder(item 1 of pathItems)
+        if (count of pathItems) > 2 then
+            repeat with pathIndex from 2 to ((count of pathItems) - 1)
+                set targetFolder to my mfbEnsureChildFolder(targetFolder, item pathIndex of pathItems)
+            end repeat
+        end if
+        set targetAlbumName to item (count of pathItems) of pathItems
         tell application "Photos"
             repeat with candidateAlbum in albums of targetFolder
                 if name of candidateAlbum is targetAlbumName then
@@ -2240,24 +2266,13 @@ fn photos_import_batch_sizes(total: usize) -> Vec<usize> {
 }
 
 fn photos_import_batch_sizes_for_strategy(
-    strategy: PhotosImportStrategy,
+    _strategy: PhotosImportStrategy,
     total: usize,
 ) -> Vec<usize> {
     if total == 0 {
         return Vec::new();
     }
-    if strategy == PhotosImportStrategy::FastSmallSet {
-        return vec![total];
-    }
-    let mut sizes = Vec::new();
-    sizes.push(1);
-    let mut remaining = total - 1;
-    while remaining > 0 {
-        let next = remaining.min(FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE);
-        sizes.push(next);
-        remaining -= next;
-    }
-    sizes
+    vec![total]
 }
 
 const fn photos_import_strategy(total: usize) -> PhotosImportStrategy {
@@ -2319,26 +2334,23 @@ fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &s
         .and_then(|name| name.to_str())
         .unwrap_or("Imported");
     let cleaned = fast_img_strip_optimized_import_suffixes(folder_name);
-    let top_level = if cleaned.is_empty() {
+    let inner_root = if cleaned.is_empty() {
         "✨Imported".to_string()
     } else if !cleaned.starts_with('✨') {
         format!("✨{cleaned}")
     } else {
-        cleaned.to_string()
+        cleaned
     };
 
-    let rel_parent_leaf = Path::new(rel_path)
+    let rel_parent = Path::new(rel_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str());
+        .and_then(|parent| parent.to_str());
 
-    if let Some(sub) = rel_parent_leaf {
-        // e.g. "✨A/B"
-        format!("{top_level}/{sub}")
+    if let Some(sub) = rel_parent {
+        format!("✨/{inner_root}/{sub}")
     } else {
-        // e.g. "✨A/✨A" or just top_level
-        format!("{top_level}/{top_level}")
+        format!("✨/{inner_root}")
     }
 }
 
@@ -3660,9 +3672,9 @@ mod tests {
         let wc = temp_dir.path().join("Batch_optimized");
         let mut marker = WorkingCopyMarker::new(src_root, wc, 3);
         let cases = [
-            ("root.JXL", "✨Batch/✨Batch"),
-            ("微信/a.JXL", "✨Batch/微信"),
-            ("foo/bar/b.JXL", "✨Batch/bar"),
+            ("root.JXL", "✨/✨Batch"),
+            ("微信/a.JXL", "✨/✨Batch/微信"),
+            ("foo/bar/b.JXL", "✨/✨Batch/foo/bar"),
         ];
 
         for (rel_path, expected_album) in cases {
@@ -3675,7 +3687,7 @@ mod tests {
         marker.working_copy = temp_dir.path().join("Batch_collected_optimized");
         assert_eq!(
             fast_img_optimized_import_album_name(&marker, "root.JXL"),
-            "✨Batch/✨Batch"
+            "✨/✨Batch"
         );
     }
 
@@ -3700,7 +3712,7 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, wc.join("微信/a.JXL"));
-        assert_eq!(entries[0].1, "✨Batch/微信");
+        assert_eq!(entries[0].1, "✨/✨Batch/微信");
     }
 
     #[test]
@@ -3877,6 +3889,24 @@ mod tests {
     }
 
     #[test]
+    fn photos_import_script_preserves_nested_album_paths() {
+        assert!(
+            FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("mfbEnsureChildFolder"),
+            "Photos import must create nested folders instead of flattening album paths"
+        );
+        assert!(
+            FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT
+                .contains("repeat with pathIndex from 2 to ((count of pathItems) - 1)"),
+            "Photos import must walk all intermediate path components"
+        );
+        assert!(
+            !FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT
+                .contains("set targetAlbumName to item 2 of pathItems"),
+            "Photos import must not truncate album paths after the second component"
+        );
+    }
+
+    #[test]
     fn photos_import_windows_force_periodic_relaunch_before_poison_threshold() {
         let windows = photos_import_windows(100, 10, 25).unwrap();
 
@@ -3935,13 +3965,14 @@ mod tests {
         assert_eq!(plan.pending_entries[0].source_rel, "b.jpg");
         assert_eq!(plan.pending_entries[0].rel_path, "b.JXL");
         assert_eq!(plan.pending_entries[0].path, pending);
-        assert_eq!(plan.pending_entries[0].album_name, "✨Batch/✨Batch");
+        assert_eq!(plan.pending_entries[0].album_name, "✨/✨Batch");
         Ok(())
     }
 
     #[test]
     #[serial_test::serial]
-    fn photos_import_checkpoints_completed_batches_before_later_batch_failure() -> Result<()> {
+    fn photos_import_failed_window_leaves_entries_pending_without_partial_checkpoint() -> Result<()>
+    {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -3970,21 +4001,9 @@ mod tests {
             );
         }
 
-        let mut run_calls = 0usize;
-        let mut run_import_batch = |_batch_entries: &[(PathBuf, String)]| -> Result<String> {
-            run_calls = run_calls.checked_add(1).ok_or_else(|| {
-                ImgQualityError::AnalysisError(
-                    "Photos import test run call counter overflowed".to_string(),
-                )
-            })?;
-            match run_calls {
-                1 => Ok("UUID-f00\n".to_string()),
-                2 => Ok("UUID-f01\nUUID-f02\nUUID-f03\nUUID-f04\nUUID-f05\nUUID-f06\nUUID-f07\nUUID-f08\nUUID-f09\nUUID-f10\n".to_string()),
-                _ => Err(ImgQualityError::AnalysisError(
-                    "execution error: Photos returned 0 imported items for /tmp/c.JXL (-2700)"
-                        .to_string(),
-                )),
-            }
+        let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| -> Result<String> {
+            assert_eq!(batch_entries.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
+            Ok("UUID-f00\n".to_string())
         };
         let mut query_assets = |uuids: &[String]| {
             uuids
@@ -4016,24 +4035,11 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            err.to_string().contains("Photos import batch poisoned")
-                || err
-                    .to_string()
-                    .contains("Photos returned 0 imported items for /tmp/c.JXL"),
+            err.to_string()
+                .contains("Photos AppleScript import returned 1 IDs for 100 JXL outputs"),
             "unexpected err: {err}"
         );
-        for idx in 0..=10usize {
-            let key = format!("f{idx:02}.jpg");
-            assert!(
-                checkpoint_marker
-                    .blake3_log
-                    .get(&key)
-                    .and_then(|entry| entry.library_asset.as_ref())
-                    .is_some(),
-                "{key} should be checkpointed before later batch failure"
-            );
-        }
-        for idx in 11..total {
+        for idx in 0..FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP {
             let key = format!("f{idx:02}.jpg");
             assert!(
                 checkpoint_marker
@@ -4041,7 +4047,7 @@ mod tests {
                     .get(&key)
                     .and_then(|entry| entry.library_asset.as_ref())
                     .is_none(),
-                "{key} should remain pending after later batch failure"
+                "{key} should remain pending after failed window import"
             );
         }
         Ok(())
@@ -4319,7 +4325,7 @@ mod tests {
         );
         assert_eq!(
             photos_import_batch_sizes_for_strategy(strategy, windows[0].len),
-            vec![1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 9]
+            vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP]
         );
         Ok(())
     }
@@ -4385,18 +4391,18 @@ mod tests {
     }
 
     #[test]
-    fn photos_import_batch_sizes_uses_canary_then_fixed_batches() {
+    fn photos_import_batch_sizes_use_one_process_per_window() {
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 1),
             vec![1]
         );
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 11),
-            vec![1, 10]
+            vec![11]
         );
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 21),
-            vec![1, 10, 10]
+            vec![21]
         );
     }
 
@@ -4418,10 +4424,8 @@ mod tests {
     fn photos_import_batch_sizes_keep_stable_path_for_large_pending_sets() {
         assert_eq!(
             photos_import_batch_sizes(151),
-            vec![
-                1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10
-            ],
-            "StableCheckpointed must keep original canary + fixed batches above 150 files"
+            vec![151],
+            "StableCheckpointed must use one AppleScript process per import window"
         );
     }
 

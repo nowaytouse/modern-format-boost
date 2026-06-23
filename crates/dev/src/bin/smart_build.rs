@@ -1,7 +1,7 @@
 //! Modern Format Boost - Smart Build System in Rust.
 //! Compiles img and vid release binaries incrementally based on source file modifications.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use dev::infra::logger::setup_logger;
 use dev::infra::ui_tokens::pick_symbol;
@@ -28,6 +28,20 @@ const BREW_MEDIA_FORMULAE: &[&str] = &[
 ];
 
 const RUST_TOOLCHAIN_FILE: &str = "rust-toolchain.toml";
+const APP_BUNDLE_CODESIGN_IDENTITY: &str = "MFB-Dev-Signing";
+const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
+    "img",
+    "vid",
+    "verify",
+    "cache_cleaner",
+    "database_manager",
+    "collect_optimized",
+    "merge_xmp",
+    "icloud_import",
+    "drag_and_drop_processor",
+];
+const VUE_QUALITY_SCRIPTS: &[&str] = &["lint", "format:check", "deps:check", "build"];
+const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
 
 // ANSI Colors
 const RED: &str = "\x1b[38;5;196m";
@@ -162,6 +176,66 @@ fn command_exists(cmd: &str) -> bool {
         }
     }
     false
+}
+
+fn vue_quality_script_names() -> &'static [&'static str] {
+    VUE_QUALITY_SCRIPTS
+}
+
+fn vue_update_script_names() -> &'static [&'static str] {
+    VUE_UPDATE_SCRIPTS
+}
+
+fn vue_dir(project_root: &Path) -> PathBuf {
+    project_root
+        .join("crates")
+        .join("dev")
+        .join("src")
+        .join("vue")
+}
+
+fn run_vue_npm_script(
+    project_root: &Path,
+    script: &str,
+    style: &Style,
+    required: bool,
+) -> Result<bool> {
+    let vue_dir = vue_dir(project_root);
+    if !vue_dir.join("package.json").is_file() {
+        println!(
+            "{}   · Vue package.json missing; skipping npm {script}.{}",
+            style.dim, style.reset
+        );
+        return Ok(true);
+    }
+    if !command_exists("npm") {
+        if required {
+            anyhow::bail!("npm not found; cannot run Vue npm script {script}");
+        }
+        return Ok(false);
+    }
+
+    let mut command = Command::new("npm");
+    command.arg("run").arg(script).current_dir(&vue_dir);
+    let ok = run_update_step(&format!("npm run {script}"), &mut command, style, required);
+    if required && !ok {
+        anyhow::bail!("Vue npm script failed: {script}");
+    }
+    Ok(ok)
+}
+
+fn run_vue_quality_checks(project_root: &Path, style: &Style) -> Result<()> {
+    for script in vue_quality_script_names() {
+        run_vue_npm_script(project_root, script, style, true)?;
+    }
+    Ok(())
+}
+
+fn run_vue_dependency_update_validation(project_root: &Path, style: &Style) -> Result<()> {
+    for script in vue_update_script_names() {
+        run_vue_npm_script(project_root, script, style, true)?;
+    }
+    Ok(())
 }
 
 fn get_project_root() -> Result<PathBuf> {
@@ -560,11 +634,13 @@ fn build_project(
     if let Some(name) = &toolchain.name {
         debug!("Using rustup toolchain: {name}");
     }
-    let mut command = if let Ok(true) = std::process::Command::new("which")
-        .arg("rtk")
-        .output()
-        .map(|o| o.status.success())
-    {
+    let mut command = if matches!(
+        std::process::Command::new("which")
+            .arg("rtk")
+            .output()
+            .map(|o| o.status.success()),
+        Ok(true)
+    ) {
         let mut c = Command::new("rtk");
         c.arg(&toolchain.cargo);
         c
@@ -671,7 +747,13 @@ fn run_update_step(label: &str, cmd: &mut Command, style: &Style, required: bool
 
 fn pinned_rust_channel(project_root: &Path) -> Option<String> {
     let toml_path = project_root.join(RUST_TOOLCHAIN_FILE);
-    let text = std::fs::read_to_string(&toml_path).ok()?;
+    let text = match std::fs::read_to_string(&toml_path) {
+        Ok(text) => text,
+        Err(err) => {
+            debug!("Failed to read {}: {err}", toml_path.display());
+            return None;
+        }
+    };
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("channel") {
@@ -759,18 +841,25 @@ fn bootstrap_macos_path() {
 fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()> {
     let cache_file = project_root.join("crates/.modern_format_boost/.last_tool_refresh");
     if !force {
-        if let Ok(meta) = std::fs::metadata(&cache_file) {
-            if let Ok(mtime) = meta.modified() {
-                if let Ok(dur) = std::time::SystemTime::now().duration_since(mtime) {
-                    if dur.as_secs() < 12 * 3600 {
-                        println!(
-                            "{}   · Updates checked within 12h. Skipping network pre-checks.{}",
-                            style.dim, style.reset
-                        );
-                        return Ok(());
-                    }
-                }
+        match std::fs::metadata(&cache_file)
+            .and_then(|meta| meta.modified())
+            .and_then(|mtime| {
+                std::time::SystemTime::now()
+                    .duration_since(mtime)
+                    .map_err(std::io::Error::other)
+            }) {
+            Ok(dur) if dur.as_secs() < 12 * 3600 => {
+                println!(
+                    "{}   · Updates checked within 12h. Skipping network pre-checks.{}",
+                    style.dim, style.reset
+                );
+                return Ok(());
             }
+            Ok(_) => {}
+            Err(err) => debug!(
+                "Update cache check skipped for {}: {err}",
+                cache_file.display()
+            ),
         }
     }
 
@@ -893,6 +982,8 @@ fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()
         );
     }
 
+    run_vue_dependency_update_validation(project_root, style)?;
+
     println!(
         "\n{}{} Dependency updates finished.{}\n",
         style.bold, style.green, style.reset
@@ -913,20 +1004,9 @@ fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
         "\n{}Syncing binaries to App Bundle...{}",
         style.dim, style.reset
     );
-    let binaries = [
-        "img",
-        "vid",
-        "verify",
-        "cache_cleaner",
-        "database_manager",
-        "collect_optimized",
-        "merge_xmp",
-        "icloud_import",
-        "drag_and_drop_processor",
-    ];
     let target_release = project_root.join("target").join("release");
 
-    for bin in binaries {
+    for bin in APP_BUNDLE_RESOURCE_BINARIES {
         let src = target_release.join(bin);
         if src.is_file() {
             let dest = app_res_dir.join(bin);
@@ -935,7 +1015,77 @@ fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
     }
     println!("{}App Bundle updated.{}", style.green, style.reset);
 
+    sign_app_bundle(project_root, style)?;
+
     Ok(())
+}
+
+fn sign_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
+    let app_bundle = project_root.join("Modern Format Boost.app");
+    if !app_bundle.is_dir() {
+        return Ok(());
+    }
+
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    if !command_exists("codesign") {
+        anyhow::bail!("codesign not found; cannot seal Modern Format Boost.app");
+    }
+
+    let entitlements = project_root
+        .join("crates")
+        .join("dev")
+        .join("src")
+        .join("vue")
+        .join("src-tauri")
+        .join("entitlements.plist");
+    let app_resources = app_bundle.join("Contents").join("Resources");
+    for bin in APP_BUNDLE_RESOURCE_BINARIES {
+        let bundled = app_resources.join(bin);
+        if bundled.is_file() {
+            let mut command = Command::new("codesign");
+            command
+                .arg("--force")
+                .arg("--sign")
+                .arg(app_bundle_codesign_identity());
+            if entitlements.is_file() {
+                command.arg("--entitlements").arg(&entitlements);
+            }
+            let status = command.arg(&bundled).status()?;
+            if !status.success() {
+                anyhow::bail!("codesign failed for {}", bundled.display());
+            }
+        }
+    }
+
+    let mut command = Command::new("codesign");
+    command
+        .arg("--force")
+        .arg("--deep")
+        .arg("--sign")
+        .arg(app_bundle_codesign_identity());
+    if entitlements.is_file() {
+        command.arg("--entitlements").arg(&entitlements);
+    }
+    let status = command.arg(&app_bundle).status()?;
+
+    if !status.success() {
+        anyhow::bail!("codesign failed for {}", app_bundle.display());
+    }
+
+    println!(
+        "{}App Bundle signed with {}.{}",
+        style.green,
+        app_bundle_codesign_identity(),
+        style.reset
+    );
+    Ok(())
+}
+
+fn app_bundle_codesign_identity() -> &'static str {
+    APP_BUNDLE_CODESIGN_IDENTITY
 }
 
 fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
@@ -943,11 +1093,8 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         "\n{}{} Building Tauri GUI...{}",
         style.bold, style.cyan, style.reset
     );
-    let vue_dir = project_root
-        .join("crates")
-        .join("dev")
-        .join("src")
-        .join("vue");
+    run_vue_quality_checks(project_root, style)?;
+    let vue_dir = vue_dir(project_root);
 
     let status = Command::new("npm")
         .arg("run")
@@ -969,7 +1116,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         .join("release")
         .join("bundle")
         .join("macos")
-        .join("MFB_UI1.app");
+        .join("Modern Format Boost.app");
     let dest_bundle = project_root.join("Modern Format Boost.app");
 
     if src_bundle.exists() {
@@ -1011,9 +1158,11 @@ fn main() -> Result<()> {
         perform_updates(&project_root, &style, args.force)?;
         let cache_file = project_root.join("crates/.modern_format_boost/.last_tool_refresh");
         if let Some(parent) = cache_file.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create update cache directory {}", parent.display()))?;
         }
-        std::fs::write(&cache_file, "done").ok();
+        std::fs::write(&cache_file, "done")
+            .with_context(|| format!("write update cache marker {}", cache_file.display()))?;
     }
 
     let mut projects_to_build = Vec::new();
@@ -1197,7 +1346,7 @@ fn main() -> Result<()> {
         }
     }
 
-    let _ = sync_app_bundle(&project_root, &style);
+    sync_app_bundle(&project_root, &style)?;
 
     Ok(())
 }
@@ -1235,6 +1384,31 @@ mod tests {
             toolchain_name_from_cargo_path(Path::new("/usr/bin/cargo")),
             None
         );
+    }
+
+    #[test]
+    fn test_app_bundle_codesign_identity_is_stable() {
+        let identity = app_bundle_codesign_identity();
+        assert_eq!(identity, "MFB-Dev-Signing");
+        assert_ne!(identity, "-");
+    }
+
+    #[test]
+    fn test_app_bundle_resource_binaries_include_terminal_processor() {
+        assert!(APP_BUNDLE_RESOURCE_BINARIES.contains(&"drag_and_drop_processor"));
+    }
+
+    #[test]
+    fn test_vue_quality_scripts_cover_lint_format_dependencies_and_build() {
+        assert_eq!(
+            vue_quality_script_names(),
+            &["lint", "format:check", "deps:check", "build"]
+        );
+    }
+
+    #[test]
+    fn test_vue_update_scripts_validate_dependency_updates() {
+        assert_eq!(vue_update_script_names(), &["deps:update", "deps:check"]);
     }
 
     #[test]

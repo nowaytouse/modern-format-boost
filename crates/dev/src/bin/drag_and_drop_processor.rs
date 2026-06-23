@@ -516,17 +516,29 @@ impl LaunchCommand {
 }
 
 fn resolve_runtime_root() -> Result<PathBuf> {
-    if let Ok(root) = project_root() {
-        return Ok(root);
+    match project_root() {
+        Ok(root) => Ok(root),
+        Err(root_err) => {
+            if let Some(bundle) = app_bundle_root() {
+                Ok(bundle)
+            } else {
+                Err(root_err)
+            }
+        }
     }
-    if let Some(bundle) = app_bundle_root() {
-        return Ok(bundle);
-    }
-    project_root() // Fallback to original strict failure for clear error
 }
 
 fn app_bundle_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!(
+                "{} current_exe lookup failed while resolving app bundle root: {err}",
+                pick_symbol("⚠️", "[WARN]")
+            );
+            return None;
+        }
+    };
     let exe_dir = exe.parent()?;
     #[cfg(target_os = "macos")]
     {
@@ -536,6 +548,26 @@ fn app_bundle_root() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn is_app_bundle_resource_root(root: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let name = root.file_name().and_then(|n| n.to_str());
+        matches!(name, Some("Resources" | "MacOS"))
+            && root.parent().is_some_and(|parent| {
+                parent.file_name().and_then(|n| n.to_str()) == Some("Contents")
+            })
+            && root
+                .parent()
+                .and_then(|contents| contents.parent())
+                .is_some_and(|bundle| bundle.extension().and_then(|e| e.to_str()) == Some("app"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = root;
+        false
+    }
 }
 
 fn project_root() -> Result<PathBuf> {
@@ -577,12 +609,12 @@ fn project_root() -> Result<PathBuf> {
 }
 
 fn cli_binary(project_root: &Path, name: &str) -> PathBuf {
-    if project_root.join("Cargo.toml").exists() {
+    if is_app_bundle_resource_root(project_root) {
+        // When running from an app bundle, binaries are packaged alongside the executable.
+        project_root.join(name)
+    } else {
         // smart_build always produces release binaries, regardless of how drag_and_drop_processor was compiled
         project_root.join("target").join("release").join(name)
-    } else {
-        // When running from an app bundle, binaries are alongside the executable
-        project_root.join(name)
     }
 }
 
@@ -828,7 +860,7 @@ fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
         LaunchMode::Images | LaunchMode::FastImg | LaunchMode::RestoreJpeg
     );
 
-    if !project_root.join("Cargo.toml").exists() {
+    if is_app_bundle_resource_root(project_root) {
         // App bundle mode: binaries are pre-packaged. Just verify existence.
         if needs_img && !img_bin.is_file() {
             bail!("App bundle is missing img binary: {}", img_bin.display());
@@ -1575,10 +1607,16 @@ fn run_drag_drop(
             match run_fast_img_with_retry(args, &root, session.expect("session")) {
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
-                    if let Ok(text) = fs::read_to_string(&session.expect("session").verbose_log) {
-                        let metrics = fast_img_session_size_metrics(&text);
-                        summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
-                        summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                    match fs::read_to_string(&session.expect("session").verbose_log) {
+                        Ok(text) => {
+                            let metrics = fast_img_session_size_metrics(&text);
+                            summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
+                            summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                        }
+                        Err(err) => eprintln!(
+                            "{} fast-img size metrics log read failed: {err}",
+                            pick_symbol("⚠️", "[WARN]")
+                        ),
                     }
                     if stats.exit_code != 0 {
                         if fail_fast {
@@ -1723,10 +1761,14 @@ fn run_drag_drop(
                 let before = summary
                     .fast_img_session_source_bytes
                     .unwrap_or(scan.media_total_size);
-                let after = summary
+                let after = if let Some(bytes) = summary
                     .fast_img_size_after_override
                     .or(summary.fast_img_session_output_bytes)
-                    .unwrap_or_else(|| du_size_recursive(&adjacent_output_dir(args)).unwrap_or(0));
+                {
+                    bytes
+                } else {
+                    du_size_recursive(&adjacent_output_dir(args))?
+                };
                 (before, after)
             } else if args.in_place {
                 (scan.media_total_size, scan.media_total_size)
@@ -2428,6 +2470,25 @@ fn report_drag_drop_failure(result: &Result<()>) {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn cli_binary_uses_release_path_for_workspace_like_roots() {
+        assert_eq!(
+            cli_binary(Path::new("/repo"), "img"),
+            PathBuf::from("/repo/target/release/img")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cli_binary_uses_packaged_binary_inside_macos_app_bundle() {
+        let resources = Path::new("/Applications/Modern Format Boost.app/Contents/Resources");
+        assert!(is_app_bundle_resource_root(resources));
+        assert_eq!(
+            cli_binary(resources, "img"),
+            PathBuf::from("/Applications/Modern Format Boost.app/Contents/Resources/img")
+        );
+    }
 
     #[test]
     fn test_auto_directory_defaults_to_rust_img_and_vid_cli() {

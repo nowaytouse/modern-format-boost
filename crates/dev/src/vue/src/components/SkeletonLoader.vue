@@ -1,10 +1,6 @@
 <template>
   <div class="skeleton-grid">
-    <div
-      v-for="i in count"
-      :key="i"
-      class="skeleton-item glass-panel"
-    >
+    <div v-for="i in count" :key="i" class="skeleton-item glass-panel">
       <div class="skeleton-thumb shimmer" />
       <div class="skeleton-content">
         <div class="skeleton-line title shimmer" />
@@ -18,9 +14,9 @@
 defineProps({
   count: {
     type: Number,
-    default: 6
-  }
-})
+    default: 6,
+  },
+});
 </script>
 
 <style scoped>
@@ -75,7 +71,7 @@ defineProps({
 }
 
 .shimmer::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -91,7 +87,11 @@ defineProps({
 }
 
 @keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 </style>
