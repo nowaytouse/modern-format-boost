@@ -59,7 +59,8 @@ impl BitDepthMetadata {
     }
 }
 
-/// Unified interface for media types that carry HDR signaling plus sample-depth provenance.
+/// Unified interface for media types that carry HDR signaling plus sample-depth
+/// provenance.
 pub trait MediaPrecision {
     fn bit_depth_metadata(&self) -> BitDepthMetadata;
     fn has_hdr_signaling(&self) -> bool;
@@ -96,7 +97,8 @@ pub trait MediaPrecision {
     }
 }
 
-/// Return the HEVC-compatible yuv420 output pixel format that preserves source precision.
+/// Return the HEVC-compatible yuv420 output pixel format that preserves source
+/// precision.
 #[must_use]
 pub fn hevc_yuv420_output_pix_fmt(source: &impl MediaPrecision) -> &'static str {
     if source.should_preserve_high_bit_depth() {
@@ -216,7 +218,8 @@ impl ImagePrecisionProfile {
         }
     }
 
-    /// Still-image pipe RGB format for CJXL pre-decode (16-bit when policy requires; never float to 48-bit PNG).
+    /// Still-image pipe RGB format for CJXL pre-decode (16-bit when policy
+    /// requires; never float to 48-bit PNG).
     #[must_use]
     pub const fn still_pipe_rgb_pix_fmt(self) -> crate::ffmpeg_builder::PixFmt {
         if self.should_use_high_precision_png16_decode() {
@@ -226,7 +229,8 @@ impl ImagePrecisionProfile {
         }
     }
 
-    /// RGB `pix_fmt` name for PNG16 preservation decode (`decode_image_to_png16_preserving_precision`).
+    /// RGB `pix_fmt` name for PNG16 preservation decode
+    /// (`decode_image_to_png16_preserving_precision`).
     #[must_use]
     pub const fn png16_decode_rgb_pix_fmt_name(self) -> &'static str {
         if self.should_use_high_precision_png16_decode() {

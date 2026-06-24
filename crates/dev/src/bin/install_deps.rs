@@ -1,5 +1,6 @@
 //! Modern Format Boost - Dependency Installer in Rust.
-//! Installs macOS and Linux system dependencies, Rust utilities, Python packages, and Node tools.
+//! Installs macOS and Linux system dependencies, Rust utilities, Python
+//! packages, and Node tools.
 
 use anyhow::{Context, Result, anyhow};
 use dev::infra::ui_tokens::pick_symbol;
@@ -149,7 +150,8 @@ fn main() -> Result<()> {
             println!("Installing ffmpeg (standard version)...");
             print_c(
                 DIM,
-                "   💡 For full-featured ffmpeg, see script header for homebrew-ffmpeg tap instructions.",
+                "   💡 For full-featured ffmpeg, see script header for homebrew-ffmpeg tap \
+                 instructions.",
             );
             run_cmd("brew install ffmpeg", true)?;
         }
@@ -254,10 +256,9 @@ fn main() -> Result<()> {
             println!("Installing system dependencies via apt...");
             run_cmd("sudo apt-get update", true)?;
             run_cmd(
-                "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick \
-                 webp libheif-dev libavif-bin jpeginfo pngcheck exiv2 \
-                 coreutils nodejs npm shellcheck shfmt curl git \
-                 build-essential postgresql postgresql-contrib libchromaprint-dev \
+                "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp \
+                 libheif-dev libavif-bin jpeginfo pngcheck exiv2 coreutils nodejs npm shellcheck \
+                 shfmt curl git build-essential postgresql postgresql-contrib libchromaprint-dev \
                  libvmaf-dev pkg-config",
                 true,
             )?;
@@ -277,7 +278,8 @@ fn main() -> Result<()> {
         } else {
             print_c(
                 RED,
-                "❌ Unsupported Linux distribution (apt not found). Please install dependencies manually.",
+                "❌ Unsupported Linux distribution (apt not found). Please install dependencies \
+                 manually.",
             );
             std::process::exit(1);
         }

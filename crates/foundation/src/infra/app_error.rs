@@ -1,6 +1,7 @@
 //! `AppError` - Unified application error type
 //!
-//! Provides clear error categorization, distinguishing between recoverable and non-recoverable errors.
+//! Provides clear error categorization, distinguishing between recoverable and
+//! non-recoverable errors.
 
 use crate::error_handler::ErrorCategory;
 use crate::types::{CrfError, IterationError, SsimError};
@@ -96,7 +97,8 @@ pub enum AppError {
         operation: Option<String>,
     },
 
-    /// The conversion failed because the output size was not smaller than the input size.
+    /// The conversion failed because the output size was not smaller than the
+    /// input size.
     CompressionFailed {
         input_size: u64,
         output_size: u64,
@@ -314,7 +316,8 @@ impl AppError {
                     / crate::numeric_cast::u64_to_f64(*input_size)
                     * 100.0;
                 let mut msg = user_err_msg(format!(
-                    "Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
+                    "Compression failed: output ({output_size} bytes) >= input ({input_size} \
+                     bytes), ratio {ratio:.1}%"
                 ));
                 if let Some(path) = file_path {
                     append_user_detail(
@@ -331,7 +334,8 @@ impl AppError {
                 file_path,
             } => {
                 let mut msg = user_err_msg(format!(
-                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
+                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual \
+                     {actual_ssim:.4}"
                 ));
                 if let Some(path) = file_path {
                     append_user_detail(
@@ -654,7 +658,8 @@ impl AppError {
                 } => {
                     write!(
                         f,
-                        "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
+                        "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got \
+                         {actual_ssim:.4}"
                     )?;
                     if let Some(path) = file_path {
                         write!(f, "\n  File: {}", path.display())?;

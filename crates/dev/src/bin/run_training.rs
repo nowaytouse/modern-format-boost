@@ -1,7 +1,8 @@
 //! Modern Format Boost - Training Pipeline Driver (Rust port)
 //!
 //! Strict alignment with Multi-Scenario architecture.
-//! References: `crates/dev/scripts/run_training.py` (retained as compat reference).
+//! References: `crates/dev/scripts/run_training.py` (retained as compat
+//! reference).
 //!
 //! Core responsibilities:
 //! - Training corpus collection (static image quality / loop intent)
@@ -67,7 +68,8 @@ fn training_session_heartbeat(rec: Option<&Arc<Mutex<TrainingSessionRecorder>>>)
     }
 }
 
-/// Mirror py `apply_training_scan_defaults`: set `MFB_PERF_TIER=tight` unless already set.
+/// Mirror py `apply_training_scan_defaults`: set `MFB_PERF_TIER=tight` unless
+/// already set.
 fn apply_training_scan_defaults() {
     if env::var("MFB_PERF_TIER").is_err() {
         // SAFETY: single-threaded at this point (before any thread spawn in main)
@@ -116,9 +118,9 @@ fn validate_finalize_flags(args: &Args) -> Result<()> {
         && (args.finalize.finalize_image_quality_model || args.finalize.finalize_loop_intent)
     {
         bail!(
-            "Default runtime fill already finalizes loop_intent and image_quality; \
-             do not combine with --finalize-image-quality-model or --finalize-loop-intent. \
-             For partial finalize only, pass --no-fill-runtime-assets with one of those flags."
+            "Default runtime fill already finalizes loop_intent and image_quality; do not combine \
+             with --finalize-image-quality-model or --finalize-loop-intent. For partial finalize \
+             only, pass --no-fill-runtime-assets with one of those flags."
         );
     }
     if args.assets.verify_after && !args.effective_fill_runtime_assets() {
@@ -320,7 +322,8 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "run_training: collected {} samples  training_mode={:?}  dry_run={}  use_api={}  fill_runtime={}  verbose={}",
+        "run_training: collected {} samples  training_mode={:?}  dry_run={}  use_api={}  \
+         fill_runtime={}  verbose={}",
         samples.len(),
         args.training_mode,
         args.plan.dry_run,

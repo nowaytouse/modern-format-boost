@@ -1,6 +1,7 @@
 //! Legacy three-lane training entry point.
 //!
-//! Compatibility shim aligned with `crates/dev/scripts/start_training_three.py`.
+//! Compatibility shim aligned with
+//! `crates/dev/scripts/start_training_three.py`.
 //!
 //! The canonical four-lane launcher is `start_training_four`. This bin exists
 //! purely for backward compatibility: existing invocations that reference

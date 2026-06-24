@@ -123,7 +123,8 @@ pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), St
             "delivery_ui",
             path,
             format!(
-                "WARNING: You are about to {} files in '{}'. This is a common location for important files. Make sure you have backups before proceeding.",
+                "WARNING: You are about to {} files in '{}'. This is a common location for \
+                 important files. Make sure you have backups before proceeding.",
                 operation,
                 path.display()
             ),
@@ -142,9 +143,10 @@ pub fn is_extension_allowed(path: &Path, allowed_extensions: &[&str]) -> bool {
 
 /// Check if a path is inside an Apple Photos library package
 ///
-/// Apple Photos libraries are special package directories (*.photoslibrary) that contain
-/// a complex internal structure managed by Photos.app. Direct manipulation of files
-/// inside these packages can corrupt the library database and cause data loss.
+/// Apple Photos libraries are special package directories (*.photoslibrary)
+/// that contain a complex internal structure managed by Photos.app. Direct
+/// manipulation of files inside these packages can corrupt the library database
+/// and cause data loss.
 ///
 /// This function checks if the given path is:
 /// 1. Inside a directory ending with .photoslibrary

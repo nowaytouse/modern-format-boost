@@ -40,30 +40,39 @@ impl CliProcessingResult for crate::conversion::TaskResult {
             crate::conversion::Outcome::Skipped | crate::conversion::Outcome::FallbackPreserved
         )
     }
+
     fn is_ignored(&self) -> bool {
         self.outcome() == crate::conversion::Outcome::Ignored
     }
+
     fn is_success(&self) -> bool {
         self.outcome() == crate::conversion::Outcome::Converted
     }
+
     fn skip_reason(&self) -> Option<&str> {
         self.skip_reason.as_deref()
     }
+
     fn input_path(&self) -> &str {
         &self.input_path
     }
+
     fn output_path(&self) -> Option<&str> {
         self.output_path.as_deref()
     }
+
     fn input_size(&self) -> u64 {
         self.input_size
     }
+
     fn output_size(&self) -> Option<u64> {
         self.output_size
     }
+
     fn message(&self) -> &str {
         &self.message
     }
+
     fn blake3(&self) -> Option<&str> {
         self.blake3.as_deref()
     }
@@ -79,8 +88,9 @@ pub struct Config {
     pub protect_destructive_dirs: bool,
 }
 
-/// Resolve `base_dir` for video `run` command. Shared by `vid_hevc` and `vid_av1` to reduce duplication.
-/// Returns: explicit override, or when recursive and input is a dir then input, else parent of input.
+/// Resolve `base_dir` for video `run` command. Shared by `vid_hevc` and
+/// `vid_av1` to reduce duplication. Returns: explicit override, or when
+/// recursive and input is a dir then input, else parent of input.
 pub fn resolve_video_run_base_dir(
     input: &Path,
     recursive: bool,
@@ -112,7 +122,9 @@ where
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 #[allow(clippy::too_many_lines)]
 fn process_directory<F, R>(config: &Config, converter: F) -> Result<()>
 where
@@ -154,9 +166,8 @@ where
             "delivery_pipeline_batch",
             input,
             format!(
-                "No video files found in directory: {}\n\
-                 Supported video formats: {}\n\
-                 Use img for images",
+                "No video files found in directory: {}\nSupported video formats: {}\nUse img for \
+                 images",
                 input.display(),
                 SUPPORTED_VIDEO_EXTENSIONS.join(", ")
             ),
@@ -173,14 +184,16 @@ where
         crate::infra::static_logs::messages::MSG_STRATEGY_DESCRIPTION
     );
 
-    // Reset global session stats to zero at the start of each directory processing run.
-    // This ensures that progressive UI stats (X: 12v, etc.) reflect the current task.
+    // Reset global session stats to zero at the start of each directory processing
+    // run. This ensures that progressive UI stats (X: 12v, etc.) reflect the
+    // current task.
     crate::progress_mode::reset_session_stats();
 
-    // Pre-flight disk space check: require at least the total input size free on the output volume.
-    // This catches "No space left on device" before encoding starts rather than mid-encode.
-    // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
-    // Initialize checkpoint manager if resume is enabled
+    // Pre-flight disk space check: require at least the total input size free on
+    // the output volume. This catches "No space left on device" before encoding
+    // starts rather than mid-encode. Skip if MFB_SKIP_DISK_PRECHECK=1 (script
+    // has already done the check). Initialize checkpoint manager if resume is
+    // enabled
     let checkpoint = if config.resume {
         match crate::checkpoint::Manager::new_resuming_with_context(input, config.output.as_deref())
         {
@@ -221,10 +234,15 @@ where
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
                     crate::media_conversion_gate::delivery_pipeline_path_audit(
-                "delivery_pipeline_cli",
-                f,
-                format!("Failed to retrieve metadata for {}; skipping in total size estimation: {}", f.display(), err),
-            );
+                        "delivery_pipeline_cli",
+                        f,
+                        format!(
+                            "Failed to retrieve metadata for {}; skipping in total size \
+                             estimation: {}",
+                            f.display(),
+                            err
+                        ),
+                    );
                     0
                 }
             })
@@ -235,7 +253,8 @@ where
             "cli_runner disk preflight",
         );
         if let Some(avail) = crate::system_memory::get_available_disk_bytes(check_path) {
-            // Reserve safety headroom on top of total input size (temp files, partial encodes, etc.)
+            // Reserve safety headroom on top of total input size (temp files, partial
+            // encodes, etc.)
             let required =
                 total_input_size.saturating_add(crate::constants::DISK_SAFETY_HEADROOM_BYTES);
             if avail < required {
@@ -244,7 +263,9 @@ where
                 let required_gb = crate::numeric_cast::u64_to_f64(required)
                     / (1_024.0_f64 * 1_024.0_f64 * 1_024.0_f64);
                 anyhow::bail!(format!(
-                    "{}\n   💾 Available: {avail_gb:.2} GB\n   💾 Required:  {required_gb:.2} GB (estimated input size + 1 GB safety headroom)\n   {} Free up space or specify a different output volume via --output.",
+                    "{}\n   💾 Available: {avail_gb:.2} GB\n   💾 Required:  {required_gb:.2} GB \
+                     (estimated input size + 1 GB safety headroom)\n   {} Free up space or \
+                     specify a different output volume via --output.",
                     crate::media_conversion_gate::ui_user_facing_error(
                         "Insufficient disk space on output volume."
                     ),
@@ -350,14 +371,18 @@ where
             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                 "delivery_pipeline_batch",
                 format!(
-                    "Failed to initialize {parallel_tasks}-thread video pool: {err}. Falling back to sequential execution (1 thread)."
+                    "Failed to initialize {parallel_tasks}-thread video pool: {err}. Falling back \
+                     to sequential execution (1 thread)."
                 ),
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
                 .build()
                 .map_err(|fallback_err| {
-                    anyhow::anyhow!("Thread Manager: Critical failure creating fallback thread pool: {fallback_err}")
+                    anyhow::anyhow!(
+                        "Thread Manager: Critical failure creating fallback thread pool: \
+                         {fallback_err}"
+                    )
                 })?
         }
     };
@@ -379,8 +404,9 @@ where
 
             progress_bar.set_message(&display_name);
 
-            // Fix extension by content first; after fix, only treat as video if extension still
-            // matches. When writing to a separate output tree, keep the source immutable.
+            // Fix extension by content first; after fix, only treat as video if extension
+            // still matches. When writing to a separate output tree, keep the
+            // source immutable.
             let fixed = match if config.output.is_some() {
                 crate::smart_file_copier::check_extension_mismatch_readonly(file)
             } else {
@@ -518,7 +544,8 @@ where
                         );
                         skipped.fetch_add(1, Ordering::Relaxed);
 
-                        // Copy original file to output directory for skips to ensure a complete output set.
+                        // Copy original file to output directory for skips to ensure a complete
+                        // output set.
                         if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
                             &fixed,
                             config.output.as_deref(),
@@ -620,7 +647,8 @@ where
                     let error_msg = err.to_string();
                     let maybe_ue = err.downcast_ref::<crate::unified_error::UnifiedError>();
 
-                    // Fallback: search the error chain if direct downcast fails (handles multiple wrapping layers)
+                    // Fallback: search the error chain if direct downcast fails (handles multiple
+                    // wrapping layers)
                     let ue_from_chain = if maybe_ue.is_none() {
                         err.chain()
                             .find_map(|e| e.downcast_ref::<crate::unified_error::UnifiedError>())
@@ -669,7 +697,8 @@ where
                         skipped.fetch_add(1, Ordering::Relaxed);
 
                         if should_copy {
-                            // Copy original file to output directory for skip errors to ensure a complete output set.
+                            // Copy original file to output directory for skip errors to ensure a
+                            // complete output set.
                             if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
                                 &fixed,
                                 config.output.as_deref(),
@@ -879,14 +908,17 @@ where
             std::cmp::Ordering::Greater => (
                 false,
                 crate::media_conversion_gate::ui_user_facing_error(format!(
-                    "Verification FAILED: missing {adjusted_diff} files after excluding {ignored_count} ignored and {failed_count} failed inputs (expected {adjusted_expected}, got {})",
+                    "Verification FAILED: missing {adjusted_diff} files after excluding \
+                     {ignored_count} ignored and {failed_count} failed inputs (expected \
+                     {adjusted_expected}, got {})",
                     verify.actual
                 )),
             ),
             std::cmp::Ordering::Less => (
                 true,
                 format!(
-                    "{} Output has {} extra files after excluding {} ignored and {} failed inputs (expected {}, got {})",
+                    "{} Output has {} extra files after excluding {} ignored and {} failed inputs \
+                     (expected {}, got {})",
                     crate::modern_ui::symbols::styled_warning_icon(),
                     -adjusted_diff,
                     ignored_count,
@@ -960,9 +992,10 @@ where
         anyhow::bail!("{e}");
     }
 
-    // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
-    // When an output directory is configured the source tree must remain immutable:
-    // use the readonly variant that logs mismatches without renaming source files.
+    // Fix extension by content first so all downstream checks see the real format
+    // (avoids disguised-extension panic). When an output directory is
+    // configured the source tree must remain immutable: use the readonly
+    // variant that logs mismatches without renaming source files.
     let fixed_input = if config.output.is_some() {
         crate::smart_file_copier::check_extension_mismatch_readonly(&config.input)?
     } else {
@@ -976,7 +1009,8 @@ where
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_BATCH,
             &format!(
-                "IGNORED: outside video domain: {input_display} (extension after content check: .{ext_str}; supported video formats: {supported})",
+                "IGNORED: outside video domain: {input_display} (extension after content check: \
+                 .{ext_str}; supported video formats: {supported})",
                 input_display = input.display(),
             )
         );

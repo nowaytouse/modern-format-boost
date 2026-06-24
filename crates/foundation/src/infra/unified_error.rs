@@ -135,9 +135,12 @@ impl UnifiedError {
     /// Get error category.
     ///
     /// ## Semantics
-    /// - `Optional`: Optimization target not met, but original is preserved. (Triggers Skip & Copy)
-    /// - `Recoverable`: Non-fatal failure in processing (e.g. analysis error). (Triggers Error & No Copy)
-    /// - `Fatal`: System or I/O failure that should stop the batch. (Triggers Error & No Copy)
+    /// - `Optional`: Optimization target not met, but original is preserved.
+    ///   (Triggers Skip & Copy)
+    /// - `Recoverable`: Non-fatal failure in processing (e.g. analysis error).
+    ///   (Triggers Error & No Copy)
+    /// - `Fatal`: System or I/O failure that should stop the batch. (Triggers
+    ///   Error & No Copy)
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
@@ -302,7 +305,8 @@ impl UnifiedError {
                     / crate::numeric_cast::u64_to_f64(*input_size)
                     * 100.0;
                 let mut msg = user_err(format!(
-                    "Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
+                    "Compression failed: output ({output_size} bytes) >= input ({input_size} \
+                     bytes), ratio {ratio:.1}%"
                 ));
                 if let Some(path) = file_path {
                     append_file_line(&mut msg, path);
@@ -315,7 +319,8 @@ impl UnifiedError {
                 file_path,
             } => {
                 let mut msg = user_err(format!(
-                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
+                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual \
+                     {actual_ssim:.4}"
                 ));
                 if let Some(path) = file_path {
                     append_file_line(&mut msg, path);
@@ -375,11 +380,14 @@ impl UnifiedError {
         matches!(self.category(), ErrorCategory::Optional)
     }
 
-    /// Check if this error should trigger an automatic copy of the original to output.
+    /// Check if this error should trigger an automatic copy of the original to
+    /// output.
     ///
     /// Based on the "Loud and Honest" policy:
-    /// - Optimization failures (Skips) -> Copy original (ensure complete output set).
-    /// - Processing failures (Errors) -> Do NOT copy (avoid silent corruption/partial data).
+    /// - Optimization failures (Skips) -> Copy original (ensure complete output
+    ///   set).
+    /// - Processing failures (Errors) -> Do NOT copy (avoid silent
+    ///   corruption/partial data).
     #[must_use]
     pub const fn should_copy_original(&self) -> bool {
         self.is_skip()
@@ -638,7 +646,8 @@ impl UnifiedError {
                 } => {
                     write!(
                         f,
-                        "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
+                        "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got \
+                         {actual_ssim:.4}"
                     )?;
                     if let Some(path) = file_path {
                         write!(f, "\n  File: {}", path.display())?;
@@ -882,7 +891,8 @@ mod tests {
 
     #[test]
     fn test_optimization_failure_semantics() {
-        // Optimization failures (Iteration limit / Quality threshold) MUST be Optional Skips
+        // Optimization failures (Iteration limit / Quality threshold) MUST be Optional
+        // Skips
         let iter_err = UnifiedError::IterationLimitExceeded(crate::IterationError {
             current: 100,
             max: 100,

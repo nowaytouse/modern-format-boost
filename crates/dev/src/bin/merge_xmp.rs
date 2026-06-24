@@ -45,7 +45,8 @@ struct Args {
     #[arg(value_name = "FILE_OR_DIR")]
     target: PathBuf,
 
-    /// Delete sidecar after verified merge (default: delete on success, matching py behaviour)
+    /// Delete sidecar after verified merge (default: delete on success,
+    /// matching py behaviour)
     #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
     delete_sidecar: bool,
 
@@ -494,7 +495,8 @@ fn restore_timestamps(path: &Path, ts: &FileTimestamps) {
             return;
         }
     };
-    // SAFETY: cpath is valid NUL-terminated C string; times is a 2-element array on the stack.
+    // SAFETY: cpath is valid NUL-terminated C string; times is a 2-element array on
+    // the stack.
     let ret = unsafe { libc::utimes(cpath.as_ptr(), times.as_ptr()) };
     if ret != 0 {
         eprintln!(

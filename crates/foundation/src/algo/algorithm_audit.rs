@@ -99,7 +99,8 @@ mod tests {
         "quality_verifier_enhanced.rs",
     ];
 
-    /// Sources that may reference algorithm symbols but are not substring-audited here.
+    /// Sources that may reference algorithm symbols but are not
+    /// substring-audited here.
     const AUDIT_EXEMPT: &[&str] = &["lib.rs", "metadata/macos.rs"];
 
     const FORBIDDEN_SUBSTRINGS: &[&str] = &[
@@ -170,7 +171,8 @@ mod tests {
             || trimmed.starts_with("/*")
     }
 
-    /// Runtime gates must not read legacy `MODERN_FORMAT_ENABLE_*` algorithm env keys.
+    /// Runtime gates must not read legacy `MODERN_FORMAT_ENABLE_*` algorithm
+    /// env keys.
     #[test]
     fn algorithm_runtime_rejects_legacy_enable_env_keys() {
         let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -189,7 +191,8 @@ mod tests {
         }
     }
 
-    /// Audited inference modules must route gates through `algorithm_runtime` (`DISABLE_*`), not legacy `ENABLE_*`.
+    /// Audited inference modules must route gates through `algorithm_runtime`
+    /// (`DISABLE_*`), not legacy `ENABLE_*`.
     #[test]
     fn algorithm_modules_reject_legacy_enable_env_reads() {
         let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -232,7 +235,8 @@ mod tests {
         "tests/video_detection.rs",
     ];
 
-    /// Every `src/**/*.rs` file that calls `algorithm_runtime` / `algorithm_seal` must be listed in `MODULES` or `AUDIT_EXEMPT`.
+    /// Every `src/**/*.rs` file that calls `algorithm_runtime` /
+    /// `algorithm_seal` must be listed in `MODULES` or `AUDIT_EXEMPT`.
     #[test]
     fn algorithm_audit_modules_cover_runtime_callers() {
         let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -293,7 +297,8 @@ mod tests {
         );
     }
 
-    /// Files that mutate process env in tests must use `serial_test` or an internal mutex.
+    /// Files that mutate process env in tests must use `serial_test` or an
+    /// internal mutex.
     #[test]
     fn env_mutation_test_modules_declare_serial_isolation() {
         let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");

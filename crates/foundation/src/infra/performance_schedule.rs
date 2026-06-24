@@ -1,22 +1,25 @@
 //! Unified performance governor (SSOT).
 //!
-//! Wider thread/scan headroom when RAM is plentiful; faster tightening under memory
-//! pressure, multi-instance contention, or explicit low-memory mode.
+//! Wider thread/scan headroom when RAM is plentiful; faster tightening under
+//! memory pressure, multi-instance contention, or explicit low-memory mode.
 //!
-//! **Stability:** absolute parallelism ceilings, minimum OS core reserve, and compute
-//! fan-out caps prevent OOM / UI freezes even when tier is `relaxed` or env requests `wide`.
+//! **Stability:** absolute parallelism ceilings, minimum OS core reserve, and
+//! compute fan-out caps prevent OOM / UI freezes even when tier is `relaxed` or
+//! env requests `wide`.
 
 use crate::system_memory::{self, MemoryPressure};
 use crate::thread_manager;
 use crate::thread_manager::WorkloadType;
 use crate::x265_params::X265MemoryProfile;
 
-/// Ratio below which `Normal` RAM still maps to `tight` (early preemptive throttle).
+/// Ratio below which `Normal` RAM still maps to `tight` (early preemptive
+/// throttle).
 const PREEMPTIVE_TIGHT_RATIO: f64 = 0.24;
 /// Available MB below which `Normal` RAM still maps to `tight`.
 const PREEMPTIVE_TIGHT_MIN_MB: u64 = 2304;
 
-/// Scheduling aggressiveness derived from live system signals and env overrides.
+/// Scheduling aggressiveness derived from live system signals and env
+/// overrides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PerfGovernorTier {
     /// Max headroom: fewer reserved cores, higher parallelism caps.
@@ -112,9 +115,11 @@ pub fn perf_tier_uncapped() -> PerfGovernorTier {
     }
 }
 
-/// Downgrade auto-selected `relaxed` when RAM/host signals cannot safely sustain max throughput.
+/// Downgrade auto-selected `relaxed` when RAM/host signals cannot safely
+/// sustain max throughput.
 ///
-/// Explicit `MFB_PERF_TIER` is honored except under `MemoryPressure::High` (OOM guard).
+/// Explicit `MFB_PERF_TIER` is honored except under `MemoryPressure::High` (OOM
+/// guard).
 #[must_use]
 pub fn clamp_tier_for_stability(tier: PerfGovernorTier) -> PerfGovernorTier {
     let env_override = perf_tier_from_env().is_some();
@@ -159,7 +164,8 @@ pub fn perf_tier_was_downgraded_for_stability() -> bool {
 pub fn stability_cap_hint() -> Option<&'static str> {
     if perf_tier_was_downgraded_for_stability() {
         Some(
-            "performance tier downgraded for system stability (RAM pressure, host size, or contention)",
+            "performance tier downgraded for system stability (RAM pressure, host size, or \
+             contention)",
         )
     } else {
         None
@@ -171,7 +177,8 @@ fn stability_cap_usize(value: usize, max: usize) -> usize {
     value.min(max)
 }
 
-/// Minimum cores left for the OS/desktop under load (in addition to fraction-based reserve).
+/// Minimum cores left for the OS/desktop under load (in addition to
+/// fraction-based reserve).
 #[must_use]
 pub fn minimum_os_reserve_cores(total_cores: usize, tier: PerfGovernorTier) -> usize {
     if total_cores <= 2 {
@@ -185,7 +192,8 @@ pub fn minimum_os_reserve_cores(total_cores: usize, tier: PerfGovernorTier) -> u
     reserve.min(8).min(total_cores.saturating_sub(1).max(1))
 }
 
-/// Cap `parallel_tasks * child_threads` to avoid thread/RAM storms on wide CPUs.
+/// Cap `parallel_tasks * child_threads` to avoid thread/RAM storms on wide
+/// CPUs.
 #[must_use]
 pub fn clamp_compute_fanout(
     workload: WorkloadType,
@@ -248,7 +256,8 @@ pub fn headroom_reservation(
     }
 }
 
-/// Upper bound on image batch parallelism for the given RAM profile and governor tier.
+/// Upper bound on image batch parallelism for the given RAM profile and
+/// governor tier.
 #[must_use]
 pub fn image_parallel_cap(profile: X265MemoryProfile, tier: PerfGovernorTier) -> usize {
     match (profile, tier) {
@@ -303,7 +312,8 @@ pub const fn default_child_threads_per_task(tier: PerfGovernorTier) -> usize {
     }
 }
 
-/// Default GPU encode slot cap when `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` is unset.
+/// Default GPU encode slot cap when `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` is
+/// unset.
 #[must_use]
 pub fn gpu_concurrency_cap(tier: PerfGovernorTier) -> usize {
     let base = crate::constants::GPU_DEFAULT_CONCURRENCY;
@@ -317,7 +327,8 @@ pub fn gpu_concurrency_cap(tier: PerfGovernorTier) -> usize {
     }
 }
 
-/// Cap libx265 pool threads after RAM profile caps (`format` / `format_x265_lossless_params`).
+/// Cap libx265 pool threads after RAM profile caps (`format` /
+/// `format_x265_lossless_params`).
 #[must_use]
 pub fn x265_pool_thread_cap(requested: usize, tier: PerfGovernorTier) -> usize {
     let requested = requested.max(1);

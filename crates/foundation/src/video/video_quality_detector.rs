@@ -1,4 +1,5 @@
-//! 🔬 Video Quality Detector - Precision-Validated Video Analysis for Auto Routing
+//! 🔬 Video Quality Detector - Precision-Validated Video Analysis for Auto
+//! Routing
 //!
 //! This module provides unified video quality detection for:
 //! - Auto format routing decisions (AV1/HEVC/FFV1)
@@ -297,8 +298,11 @@ impl CompressionLevel {
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-/// Analyze video quality (codec type, bpp, content type, compression level, etc.).
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
+/// Analyze video quality (codec type, bpp, content type, compression level,
+/// etc.).
 ///
 /// # Errors
 /// Returns an error if video quality analysis fails due to invalid parameters.
@@ -486,7 +490,8 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     })
 }
 
-/// Terminal contract for [`VideoQualityAnalysis`] before routing / CRF prediction.
+/// Terminal contract for [`VideoQualityAnalysis`] before routing / CRF
+/// prediction.
 fn finalize_video_quality_analysis(
     mut analysis: VideoQualityAnalysis,
 ) -> Result<VideoQualityAnalysis, String> {
@@ -512,8 +517,9 @@ fn finalize_video_quality_analysis(
 
 /// Build [`VideoQualityAnalysis`] from [`Detection`] for logging/display.
 ///
-/// Use when you already have detection (e.g. before SSIM exploration) and want media info for log file only.
-/// Analyze video quality based on a previous detection result.
+/// Use when you already have detection (e.g. before SSIM exploration) and want
+/// media info for log file only. Analyze video quality based on a previous
+/// detection result.
 ///
 /// # Errors
 /// Returns an error message if analysis fails.
@@ -623,14 +629,18 @@ fn extract_crf_from_params(params: &str) -> Result<Option<u8>, String> {
     Ok(None)
 }
 
-/// Format [`VideoQualityAnalysis`] as multi-line media info. **Log file only** — does not write to
-/// terminal. Call when a log file is configured (e.g. alongside SSIM/quality runs).
+/// Format [`VideoQualityAnalysis`] as multi-line media info. **Log file only**
+/// — does not write to terminal. Call when a log file is configured (e.g.
+/// alongside SSIM/quality runs).
 pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &Path) {
     if !crate::progress_mode::has_log_file() {
         return;
     }
     tracing::debug!(
-        "[Media info] {} | codec={} type={:?} modern={} size={}x{} fps={} duration={}s frames={:?} bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={} pix_fmt={} chroma={:?} has_b_frames={} content_type={:?} compression={:?} quality_score={} estimated_crf={} HDR={}",
+        "[Media info] {} | codec={} type={:?} modern={} size={}x{} fps={} duration={}s \
+         frames={:?} bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={} pix_fmt={} chroma={:?} \
+         has_b_frames={} content_type={:?} compression={:?} quality_score={} estimated_crf={} \
+         HDR={}",
         input_path.display(),
         analysis.codec,
         analysis.codec_type,
@@ -668,7 +678,8 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
 /// Converts to `QualityAnalysis`.
 ///
 /// # Panics
-/// Panics if `width` or `height` is missing, which `analyze_video_quality` guarantees are present.
+/// Panics if `width` or `height` is missing, which `analyze_video_quality`
+/// guarantees are present.
 #[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
     if analysis.color_space.is_none() {
@@ -683,14 +694,16 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
             match analysis.width {
                 Some(w) => w,
                 None => unreachable!(
-                    "CRITICAL: width missing in VideoQualityAnalysis to_quality_analysis (codec={}, path={:?})",
+                    "CRITICAL: width missing in VideoQualityAnalysis to_quality_analysis \
+                     (codec={}, path={:?})",
                     analysis.codec, analysis.frame_count
                 ),
             },
             match analysis.height {
                 Some(h) => h,
                 None => unreachable!(
-                    "CRITICAL: height missing in VideoQualityAnalysis to_quality_analysis (codec={}, path={:?})",
+                    "CRITICAL: height missing in VideoQualityAnalysis to_quality_analysis \
+                     (codec={}, path={:?})",
                     analysis.codec, analysis.frame_count
                 ),
             },
@@ -701,7 +714,8 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         .video_bitrate(match analysis.video_bitrate.or(analysis.total_bitrate) {
             Some(v) => v,
             None => unreachable!(
-                "CRITICAL: total_bitrate missing in VideoQualityAnalysis to_quality_analysis (codec={}, path={:?})",
+                "CRITICAL: total_bitrate missing in VideoQualityAnalysis to_quality_analysis \
+                 (codec={}, path={:?})",
                 analysis.codec, analysis.frame_count
             ),
         })

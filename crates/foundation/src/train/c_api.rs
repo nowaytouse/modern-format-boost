@@ -6,7 +6,8 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// Last per-path ingestion diagnostic (for C API / Python callers to classify failures).
+/// Last per-path ingestion diagnostic (for C API / Python callers to classify
+/// failures).
 static LAST_INGEST_ERR: Mutex<Option<CString>> = Mutex::new(None);
 
 fn set_last_ingest_error(msg: &str) {
@@ -57,12 +58,13 @@ fn ingest_batch_fatal(code: i32, audit_tag: &'static str, msg: &str) -> i32 {
     code
 }
 
-/// Return the last ingest error as a NUL-terminated UTF-8 string (valid until the next ingest API call).
+/// Return the last ingest error as a NUL-terminated UTF-8 string (valid until
+/// the next ingest API call).
 ///
 /// # Safety
 ///
-/// The returned pointer is valid until the next ingest API call on this process.
-/// It must not be freed by the caller.
+/// The returned pointer is valid until the next ingest API call on this
+/// process. It must not be freed by the caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mfb_last_ingest_error() -> *const c_char {
     static EMPTY: &[u8] = b"\0";
@@ -265,7 +267,8 @@ pub unsafe extern "C" fn ingest_media_samples_batch(
                 crate::training_progress::path_basename_for_log(Path::new(path_raw.trim()))
             };
             crate::training_progress::emit_ingest_progress_line(&format!(
-                "[INGEST-RUST] progress {index_one_based}/{total_paths} file={path_preview} scenario={scenario_name} elapsed={}",
+                "[INGEST-RUST] progress {index_one_based}/{total_paths} file={path_preview} \
+                 scenario={scenario_name} elapsed={}",
                 crate::training_progress::format_elapsed_secs(batch_started.elapsed())
             ));
         }
@@ -487,7 +490,8 @@ pub unsafe extern "C" fn ingest_media_samples_batch(
         let not_ok =
             total_paths.saturating_sub(crate::numeric_cast::i32_to_usize_sat(success_count));
         crate::training_progress::emit_ingest_progress_line(&format!(
-            "[INGEST-RUST] batch_done scenario={scenario_name} ok={success_count} not_ok={not_ok} n={total_paths} elapsed={}",
+            "[INGEST-RUST] batch_done scenario={scenario_name} ok={success_count} not_ok={not_ok} \
+             n={total_paths} elapsed={}",
             crate::training_progress::format_elapsed_secs(batch_started.elapsed())
         ));
     }
@@ -499,14 +503,16 @@ fn probe_json_ptr(value: &serde_json::Value, api: &str) -> *mut c_char {
     crate::media_conversion_gate::ffi_probe_json_ptr_or_null(value, api)
 }
 
-/// Probe a static still image for training-tier geometry/entropy (same engine as ingest).
+/// Probe a static still image for training-tier geometry/entropy (same engine
+/// as ingest).
 ///
 /// Returns a heap-allocated JSON string; free with [`mfb_free_string`].
 /// On null/invalid path, returns JSON `{"ok":false,"error":"..."}`.
 ///
 /// # Safety
 ///
-/// `path_ptr` must be a valid NUL-terminated UTF-8 path for the duration of the call.
+/// `path_ptr` must be a valid NUL-terminated UTF-8 path for the duration of the
+/// call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mfb_probe_static_still_image(path_ptr: *const c_char) -> *mut c_char {
     if path_ptr.is_null() {
@@ -590,13 +596,15 @@ pub unsafe extern "C" fn mfb_probe_static_still_image(path_ptr: *const c_char) -
     }
 }
 
-/// Probe loop vs non-loop training bucket (same heuristics as `loop_intent` ingest).
+/// Probe loop vs non-loop training bucket (same heuristics as `loop_intent`
+/// ingest).
 ///
 /// Returns heap-allocated JSON; free with [`mfb_free_string`].
 ///
 /// # Safety
 ///
-/// `path_ptr` must be a valid NUL-terminated UTF-8 path for the duration of the call.
+/// `path_ptr` must be a valid NUL-terminated UTF-8 path for the duration of the
+/// call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mfb_probe_loop_intent(path_ptr: *const c_char) -> *mut c_char {
     if path_ptr.is_null() {
@@ -671,7 +679,8 @@ pub unsafe extern "C" fn mfb_probe_loop_intent(path_ptr: *const c_char) -> *mut 
 ///
 /// # Safety
 ///
-/// `ptr` must be null or exactly one pointer returned by a probe C-API and not yet freed.
+/// `ptr` must be null or exactly one pointer returned by a probe C-API and not
+/// yet freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mfb_free_string(ptr: *mut c_char) {
     if ptr.is_null() {

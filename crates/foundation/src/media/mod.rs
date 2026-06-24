@@ -1,4 +1,5 @@
-//! `media` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `media` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod media_meta_utils;
 

@@ -1,6 +1,8 @@
-//! Path-tree scan snapshots — `PostgreSQL` primary + `SQLite` offline replica (M213/M214).
+//! Path-tree scan snapshots — `PostgreSQL` primary + `SQLite` offline replica
+//! (M213/M214).
 //!
-//! Table DDL must match `crates/dev/src/config/sql/analysis_cache_pg.sql` (`path_tree_snapshots`).
+//! Table DDL must match `crates/dev/src/config/sql/analysis_cache_pg.sql`
+//! (`path_tree_snapshots`).
 
 use anyhow::{Context, Result};
 use postgres::Client;
@@ -128,7 +130,8 @@ fn save_pg_snapshot<T: Serialize>(
     let mut client = open_pg_client()?;
     ensure_path_tree_table(&mut client)?;
     client.execute(
-        "INSERT INTO path_tree_snapshots (cache_key, media_kind, root_path, schema_version, payload, updated_at)
+        "INSERT INTO path_tree_snapshots (cache_key, media_kind, root_path, schema_version, \
+         payload, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (cache_key) DO UPDATE SET
             media_kind = EXCLUDED.media_kind,
@@ -195,7 +198,8 @@ pub fn load_path_tree_snapshot<T: DeserializeOwned>(
     }
 }
 
-/// Persist a path-tree snapshot to `PostgreSQL` (required) and `SQLite` replica.
+/// Persist a path-tree snapshot to `PostgreSQL` (required) and `SQLite`
+/// replica.
 ///
 /// # Errors
 /// Returns an error when the `PostgreSQL` write fails.

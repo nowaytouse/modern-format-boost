@@ -4,8 +4,11 @@
 //! completely excluding the impact of container format and metadata.
 //!
 //! ## Core Logic
-//! - Main Criterion: `output_video_stream_size < input_video_stream_size + DEFAULT_SIZE_TOLERANCE_BYTES`
-//! - As long as the pure video stream shrinks or increases slightly (less than the standard tolerance), it's considered a success, regardless of total file size.
+//! - Main Criterion: `output_video_stream_size < input_video_stream_size +
+//!   DEFAULT_SIZE_TOLERANCE_BYTES`
+//! - As long as the pure video stream shrinks or increases slightly (less than
+//!   the standard tolerance), it's considered a success, regardless of total
+//!   file size.
 
 use crate::stream_size::Info;
 #[cfg(feature = "high-precision")]
@@ -105,7 +108,8 @@ impl PureMediaVerifyResult {
         if self.video_compressed {
             if self.is_container_overhead_issue() {
                 format!(
-                    "✅ Video compressed ({:+.1}%), but container overhead increased total size ({:+.1}%)",
+                    "✅ Video compressed ({:+.1}%), but container overhead increased total size \
+                     ({:+.1}%)",
                     self.video_size_change_percent(),
                     self.total_size_change_percent()
                 )

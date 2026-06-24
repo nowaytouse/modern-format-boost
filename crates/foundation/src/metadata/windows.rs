@@ -139,7 +139,8 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) -> io::Result<()> {
     }
     // List all ADS names (excludes the default :$DATA stream)
     let list_script = format!(
-        "Get-Item -LiteralPath '{}' -Stream * | Where-Object {{ $_.Stream -ne ':$DATA' }} | Select-Object -ExpandProperty Stream",
+        "Get-Item -LiteralPath '{}' -Stream * | Where-Object {{ $_.Stream -ne ':$DATA' }} | \
+         Select-Object -ExpandProperty Stream",
         src.to_string_lossy().replace('\'', "''")
     );
     let out = crate::tool_builders::PowershellBuilder::new()
@@ -181,7 +182,8 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) -> io::Result<()> {
     for stream_name in streams.lines().map(str::trim).filter(|s| !s.is_empty()) {
         // Read stream content and write to dst
         let copy_script = format!(
-            "Get-Content -LiteralPath '{}' -Stream '{}' -Raw | Set-Content -LiteralPath '{}' -Stream '{}'",
+            "Get-Content -LiteralPath '{}' -Stream '{}' -Raw | Set-Content -LiteralPath '{}' \
+             -Stream '{}'",
             src.to_string_lossy().replace('\'', "''"),
             stream_name.replace('\'', "''"),
             dst.to_string_lossy().replace('\'', "''"),
@@ -212,12 +214,14 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) -> io::Result<()> {
                     "delivery_metadata",
                     dst,
                     format!(
-                        "Failed to launch PowerShell while copying ADS stream '{stream_name}' to {path}: {e}",
+                        "Failed to launch PowerShell while copying ADS stream '{stream_name}' to \
+                         {path}: {e}",
                         path = dst.display()
                     ),
                 );
                 failures.push(format!(
-                    "failed to launch PowerShell while copying ADS stream '{stream_name}' to {}: {e}",
+                    "failed to launch PowerShell while copying ADS stream '{stream_name}' to {}: \
+                     {e}",
                     dst.display()
                 ));
             }

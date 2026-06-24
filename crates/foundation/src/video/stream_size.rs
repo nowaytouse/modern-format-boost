@@ -1,13 +1,15 @@
 //! Video Stream Size Extraction Module
 //!
 //! Accurately extract video and audio stream sizes using ffprobe,
-//! used for pure media comparison during exploration and final verification stages.
+//! used for pure media comparison during exploration and final verification
+//! stages.
 //!
 //! ## Core Features
 //! - Extract pure video stream size (excluding container overhead)
 //! - Extract audio stream size (if present)
 //! - Calculate container overhead
-//! - Supports multiple extraction methods (direct ffprobe / bitrate calculation / estimation)
+//! - Supports multiple extraction methods (direct ffprobe / bitrate calculation
+//!   / estimation)
 
 use crate::builder_base::ToolBuilder;
 use rug::Rational;
@@ -208,8 +210,9 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
         }
     };
 
-    // Duration is required for bitrate-based size estimation. If absent or unparseable,
-    // fall through to estimation rather than panicking or using a fictitious value.
+    // Duration is required for bitrate-based size estimation. If absent or
+    // unparseable, fall through to estimation rather than panicking or using a
+    // fictitious value.
     let Some(duration_secs) = parsed.format.duration.as_ref().and_then(|d| {
         crate::media_conversion_gate::probe_ffprobe_duration_text_or_none(
             d,
@@ -219,7 +222,8 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
         crate::media_conversion_gate::stream_size_duration_fallback_audit(
             path,
             format!(
-                "ffprobe stream-size: format duration missing or unparseable; falling back to estimation (path={})",
+                "ffprobe stream-size: format duration missing or unparseable; falling back to \
+                 estimation (path={})",
                 path.display()
             ),
         );
@@ -276,7 +280,8 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<Info> {
         crate::media_conversion_gate::stream_size_probe_failure_audit(
             path,
             format!(
-                "ffprobe stream-size extraction produced no usable video bitrate; falling back to estimated sizing (path={})",
+                "ffprobe stream-size extraction produced no usable video bitrate; falling back to \
+                 estimated sizing (path={})",
                 path.display()
             ),
         );
@@ -379,22 +384,23 @@ pub fn get_output_video(output_path: &Path) -> u64 {
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> Info {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
-        let overhead_r = match crate::numeric_cast::f64_to_rational_strict(
-            overhead_percent,
-            "overhead_percent",
-        ) {
-            Some(v) => v,
-            None => unreachable!(
-                "CRITICAL: Overhead percent constant ({}) is non-finite or NaN in stream_size estimation for path: {}",
-                overhead_percent,
-                path.display()
-            ),
-        };
+        let overhead_r =
+            match crate::numeric_cast::f64_to_rational_strict(overhead_percent, "overhead_percent")
+            {
+                Some(v) => v,
+                None => unreachable!(
+                    "CRITICAL: Overhead percent constant ({}) is non-finite or NaN in stream_size \
+                     estimation for path: {}",
+                    overhead_percent,
+                    path.display()
+                ),
+            };
         let overhead = Rational::from(total_file_size) * overhead_r;
         match crate::numeric_cast::f64_to_u64_strict(overhead.to_f64(), "overhead") {
             Some(v) => v,
             None => unreachable!(
-                "CRITICAL: Estimated overhead calculation overflowed or resulted in NaN (total_file_size={}, overhead_percent={}, result_f64={}) for path: {}",
+                "CRITICAL: Estimated overhead calculation overflowed or resulted in NaN \
+                 (total_file_size={}, overhead_percent={}, result_f64={}) for path: {}",
                 total_file_size,
                 overhead_percent,
                 overhead.to_f64(),

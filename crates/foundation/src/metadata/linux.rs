@@ -7,7 +7,8 @@ use std::path::Path;
 pub(super) fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
     let mut failures = Vec::new();
 
-    // ACL preservation via getfacl/setfacl --restore (more complete than -m per-entry)
+    // ACL preservation via getfacl/setfacl --restore (more complete than -m
+    // per-entry)
     if which::which("getfacl").is_ok() && which::which("setfacl").is_ok() {
         let output = crate::tool_builders::AclBuilder::getfacl()
             .input(src)

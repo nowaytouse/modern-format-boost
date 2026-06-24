@@ -20,7 +20,8 @@ struct Args {
     #[arg(value_name = "EVENT")]
     event: String,
 
-    /// Override the audit log path (default: `MFB_SESSION_AUDIT`; otherwise no-op)
+    /// Override the audit log path (default: `MFB_SESSION_AUDIT`; otherwise
+    /// no-op)
     #[arg(long, value_name = "PATH")]
     path: Option<PathBuf>,
 }

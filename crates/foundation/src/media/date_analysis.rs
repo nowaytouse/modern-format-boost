@@ -245,8 +245,8 @@ pub fn analyze_directory(dir: &Path, config: &AnalysisConfig) -> Result<Analysis
 
 /// Extracts and analyzes the best date from EXIF data.
 ///
-/// Collects all available date fields from EXIF data, analyzes their reliability,
-/// and determines the most accurate creation date for the file.
+/// Collects all available date fields from EXIF data, analyzes their
+/// reliability, and determines the most accurate creation date for the file.
 ///
 /// # Arguments
 /// * `item` - The EXIF data output from the file

@@ -455,7 +455,9 @@ impl ToolBuilder for FfmpegBuilder {
         &[constants::FFMPEG_ARG_HIDE_BANNER, constants::ARG_VERSION]
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     /// Construct the `std::process::Command`.
     fn build(&self) -> Command {
         self.assert_output_target();

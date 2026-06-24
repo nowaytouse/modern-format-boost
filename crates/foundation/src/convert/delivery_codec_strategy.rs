@@ -1,4 +1,5 @@
-//! Delivery strategy SSOT — **`img` static stills** vs **`vid` video/animated**.
+//! Delivery strategy SSOT — **`img` static stills** vs **`vid`
+//! video/animated**.
 //!
 //! ## Product boundary (no cross-pipeline relay)
 //!
@@ -7,7 +8,8 @@
 //! | **`img`** | **Static stills only** | **`hevc`** (default) → **JXL** batch; **`av1`** → **AVIF** still strategy. Animated assets are **ignored** (never forwarded to `vid`). |
 //! | **`vid`** | **Video + animated raster** | **HEVC** / **AV1** video delivery (`SelectedCodec`). |
 //!
-//! Same flag names, **different semantics per binary**. `img` does **not** invoke `vid` and does **not** pass work to `vid`.
+//! Same flag names, **different semantics per binary**. `img` does **not**
+//! invoke `vid` and does **not** pass work to `vid`.
 //!
 //! ## Layers (do not conflate)
 //!
@@ -56,7 +58,8 @@ pub const DEFAULT_IMG_STATIC_DELIVERY: ImgStaticDelivery = ImgStaticDelivery::Jx
 pub enum ImgStaticDelivery {
     /// CLI `hevc` → primary **JXL** batch path (default).
     Jxl,
-    /// CLI `av1` → **AVIF** still strategy for applicable lossy assets (not video AV1).
+    /// CLI `av1` → **AVIF** still strategy for applicable lossy assets (not
+    /// video AV1).
     Avif,
 }
 
@@ -64,7 +67,8 @@ impl ImgStaticDelivery {
     /// Parse `img run --codec` (`hevc` → JXL, `av1` → AVIF).
     ///
     /// # Errors
-    /// Returns an error when the label is not `hevc`/`av1` (or accepted aliases).
+    /// Returns an error when the label is not `hevc`/`av1` (or accepted
+    /// aliases).
     pub fn parse_cli_label(label: &str) -> Result<Self, String> {
         match label.trim().to_ascii_lowercase().as_str() {
             "hevc" | "h265" | "x265" | "jxl" => Ok(Self::Jxl),
@@ -78,11 +82,13 @@ impl ImgStaticDelivery {
     /// Fail-closed validation for `img run` flags.
     ///
     /// # Errors
-    /// Returns an error when AVIF static strategy is combined with `--apple-compat`.
+    /// Returns an error when AVIF static strategy is combined with
+    /// `--apple-compat`.
     pub fn validate_img_flags(self, apple_compat: bool) -> Result<()> {
         if self == Self::Avif && apple_compat {
             bail!(
-                "AVIF static strategy (--codec av1) does not use --apple-compat; that flag is for vid video delivery"
+                "AVIF static strategy (--codec av1) does not use --apple-compat; that flag is for \
+                 vid video delivery"
             );
         }
         Ok(())
@@ -233,7 +239,8 @@ impl RunDeliveryFlags {
     }
 }
 
-/// Map run flags to shared [`ConvertOptions`] (vid video / animated raster paths only).
+/// Map run flags to shared [`ConvertOptions`] (vid video / animated raster
+/// paths only).
 #[must_use]
 pub fn build_video_convert_options(flags: &RunDeliveryFlags) -> ConvertOptions {
     let convert_flags = ConvertFlags::empty()
@@ -309,7 +316,8 @@ pub fn build_video_convert_options(flags: &RunDeliveryFlags) -> ConvertOptions {
     }
 }
 
-/// `FFmpeg` video encoder tuple for animated lossless intermediate (CRF 0) encodes.
+/// `FFmpeg` video encoder tuple for animated lossless intermediate (CRF 0)
+/// encodes.
 #[derive(Debug, Clone)]
 pub struct AnimatedFfmpegVideoSpec {
     pub v_codec: &'static str,
@@ -323,7 +331,8 @@ impl SelectedCodec {
     /// Parse `--codec` label (`hevc` default, `av1` optional).
     ///
     /// # Errors
-    /// Returns an error when the label is not `hevc` or `av1` (or accepted aliases).
+    /// Returns an error when the label is not `hevc` or `av1` (or accepted
+    /// aliases).
     pub fn parse_cli_label(label: &str) -> Result<Self, String> {
         match label.trim().to_ascii_lowercase().as_str() {
             "hevc" | "h265" | "x265" => Ok(Self::Hevc),
@@ -334,10 +343,12 @@ impl SelectedCodec {
         }
     }
 
-    /// Parse `--codec` for **`vid run`** (video HEVC/AV1). Use [`resolve_cli_img_static_delivery`] on `img`.
+    /// Parse `--codec` for **`vid run`** (video HEVC/AV1). Use
+    /// [`resolve_cli_img_static_delivery`] on `img`.
     ///
     /// # Errors
-    /// Returns an error when the label is unsupported or delivery flags are incompatible.
+    /// Returns an error when the label is unsupported or delivery flags are
+    /// incompatible.
     pub fn resolve_cli_delivery_codec(
         _product: DeliveryProduct,
         label: &str,
@@ -353,7 +364,8 @@ impl SelectedCodec {
     pub const fn delivery_policy_summary(self) -> &'static str {
         match self {
             Self::Hevc => {
-                "HEVC: MP4/MOV (hvc1 apple-compat), libx265/GPU, ultimate search→slower final, HDR x265 merge"
+                "HEVC: MP4/MOV (hvc1 apple-compat), libx265/GPU, ultimate search→slower final, HDR \
+                 x265 merge"
             }
             Self::Av1 => {
                 "AV1: MP4 av01 only, libsvtav1/GPU, no apple-compat, SVT single-preset explore"
@@ -372,14 +384,17 @@ impl SelectedCodec {
         }
     }
 
-    /// Fail-closed validation before strategy or explore (AV1 + Apple compat is illegal).
+    /// Fail-closed validation before strategy or explore (AV1 + Apple compat is
+    /// illegal).
     ///
     /// # Errors
-    /// Returns an error when AV1 is combined with `--apple-compat` or the codec is experimental.
+    /// Returns an error when AV1 is combined with `--apple-compat` or the codec
+    /// is experimental.
     pub fn validate_delivery_flags(self, apple_compat: bool) -> Result<()> {
         if self == Self::Av1 && apple_compat {
             bail!(
-                "AV1 strategy does not support Apple compatibility; remove --apple-compat or use --codec hevc"
+                "AV1 strategy does not support Apple compatibility; remove --apple-compat or use \
+                 --codec hevc"
             );
         }
         if self.is_experimental() {
@@ -394,11 +409,13 @@ impl SelectedCodec {
     /// Fail-closed guard before routing lossless sources to archival MKV.
     ///
     /// # Errors
-    /// Returns an error when `lossless` is requested for a codec that cannot archival-deliver.
+    /// Returns an error when `lossless` is requested for a codec that cannot
+    /// archival-deliver.
     pub fn validate_lossless_archival_delivery(self, lossless: bool) -> Result<()> {
         if lossless && !self.supports_lossless_archival_mkv() {
             bail!(
-                "lossless archival MKV requires --codec hevc; {} does not support lossless archival delivery",
+                "lossless archival MKV requires --codec hevc; {} does not support lossless \
+                 archival delivery",
                 self.delivery_label_prefix()
             );
         }
@@ -413,14 +430,16 @@ impl SelectedCodec {
 
     /// Output container target for lossy delivery.
     ///
-    /// For `lossless == true`, only [`SelectedCodec::Hevc`] is valid; callers must use
-    /// `supports_lossless_archival_mkv` or `validate_lossless_archival_delivery` first.
+    /// For `lossless == true`, only [`SelectedCodec::Hevc`] is valid; callers
+    /// must use `supports_lossless_archival_mkv` or
+    /// `validate_lossless_archival_delivery` first.
     #[must_use]
     pub const fn delivery_target(self, apple_compat: bool, lossless: bool) -> TargetVideoFormat {
         if lossless {
             debug_assert!(
                 self.supports_lossless_archival_mkv(),
-                "lossless archival MKV requires HEVC; non-HEVC must fail-closed before delivery_target"
+                "lossless archival MKV requires HEVC; non-HEVC must fail-closed before \
+                 delivery_target"
             );
             return TargetVideoFormat::HevcLosslessMkv;
         }
@@ -479,7 +498,8 @@ impl SelectedCodec {
     /// Predicted CRF from a built [`QualityAnalysis`] for this delivery codec.
     ///
     /// # Errors
-    /// Returns an error when delivery flags are invalid or CRF calculation fails.
+    /// Returns an error when delivery flags are invalid or CRF calculation
+    /// fails.
     pub fn calculate_crf_from_quality_analysis(
         self,
         analysis: &QualityAnalysis,
@@ -497,7 +517,8 @@ impl SelectedCodec {
         }
     }
 
-    /// Persist a successful explore hit for warm-start (codec-specific global hint).
+    /// Persist a successful explore hit for warm-start (codec-specific global
+    /// hint).
     pub fn record_global_crf_hit(self, crf: f32) {
         if crf <= 0.0 {
             return;
@@ -516,7 +537,8 @@ impl SelectedCodec {
     /// Animated raster lossless intermediate encode (CRF 0) `FFmpeg` knobs.
     ///
     /// # Errors
-    /// Returns an error when delivery flags are invalid or the codec is not implemented.
+    /// Returns an error when delivery flags are invalid or the codec is not
+    /// implemented.
     pub fn animated_lossless_ffmpeg_video_spec(
         self,
         apple_compat: bool,
@@ -565,7 +587,8 @@ impl SelectedCodec {
         }
     }
 
-    /// Dispatch GPU coarse-search explore (HEVC dual-preset ultimate vs AV1 SVT-AV1).
+    /// Dispatch GPU coarse-search explore (HEVC dual-preset ultimate vs AV1
+    /// SVT-AV1).
     ///
     /// # Errors
     /// Returns an error when flags are invalid or exploration fails.
@@ -581,7 +604,8 @@ impl SelectedCodec {
     }
 }
 
-/// Build [`GpuSearchFlags`] with AV1 never inheriting `apple_compat` (HEVC-only tag path).
+/// Build [`GpuSearchFlags`] with AV1 never inheriting `apple_compat` (HEVC-only
+/// tag path).
 #[must_use]
 pub const fn gpu_search_flags_for_codec(
     codec: SelectedCodec,

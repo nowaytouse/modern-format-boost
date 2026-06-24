@@ -1,7 +1,9 @@
 //! Project-wide CLI / C-API entry guards (fail-closed).
 //!
-//! - Rejects shell `*.sh` wrapper chains that invoke MFB Python or ingest binaries.
-//! - Validates `MFB_INVOKER` / `MFB_TRAINING_INVOKER` for delegated Rust/Python tools.
+//! - Rejects shell `*.sh` wrapper chains that invoke MFB Python or ingest
+//!   binaries.
+//! - Validates `MFB_INVOKER` / `MFB_TRAINING_INVOKER` for delegated Rust/Python
+//!   tools.
 //! - See `docs/dev/config/CONFIG_CONSUMERS.md` for JSON config ownership.
 
 use anyhow::{Result, bail};
@@ -10,7 +12,8 @@ use std::sync::OnceLock;
 
 /// Primary invoker token (Python script or Rust binary name).
 pub const MFB_INVOKER_ENV: &str = "MFB_INVOKER";
-/// Training-specific alias (Rust ingest children); read after `MFB_INVOKER` if unset.
+/// Training-specific alias (Rust ingest children); read after `MFB_INVOKER` if
+/// unset.
 pub const TRAINING_INVOKER_ENV: &str = "MFB_TRAINING_INVOKER";
 pub const RUST_DIRECT_OK_ENV: &str = "MFB_RUST_DIRECT_OK";
 
@@ -53,15 +56,17 @@ pub struct CliEntryGuard<'a> {
     pub expected_bin: &'a str,
     pub allowed_invokers: &'a [&'a str],
     pub production_hint: &'a str,
-    /// When true, empty invoker is rejected unless [`RUST_DIRECT_OK_ENV`] + `direct`.
+    /// When true, empty invoker is rejected unless [`RUST_DIRECT_OK_ENV`] +
+    /// `direct`.
     pub require_invoker: bool,
 }
 
 impl CliEntryGuard<'_> {
     /// # Errors
     ///
-    /// Returns an error when `argv[0]` is not the expected binary, a shell wrapper is
-    /// detected in the process ancestry, or the invoker environment is missing or invalid.
+    /// Returns an error when `argv[0]` is not the expected binary, a shell
+    /// wrapper is detected in the process ancestry, or the invoker
+    /// environment is missing or invalid.
     pub fn assert(self) -> Result<()> {
         assert_canonical_argv0(self.expected_bin)?;
         if let Some(wrapper) = shell_wrapper_in_ancestry(6) {
@@ -83,7 +88,8 @@ impl CliEntryGuard<'_> {
 ///
 /// # Errors
 ///
-/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`] fail.
+/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`]
+/// fail.
 pub fn assert_product_cli_entry(expected_bin: &str) -> Result<()> {
     CliEntryGuard {
         expected_bin,
@@ -98,7 +104,8 @@ pub fn assert_product_cli_entry(expected_bin: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`] fail.
+/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`]
+/// fail.
 pub fn assert_pipeline_tool_entry(expected_bin: &str) -> Result<()> {
     CliEntryGuard {
         expected_bin,
@@ -113,7 +120,8 @@ pub fn assert_pipeline_tool_entry(expected_bin: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`] fail.
+/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`]
+/// fail.
 pub fn assert_dev_tool_entry(expected_bin: &str) -> Result<()> {
     CliEntryGuard {
         expected_bin,
@@ -166,8 +174,8 @@ fn assert_invoker(context: &str, allowed_invokers: &[&str], require_invoker: boo
         }
         let allowed_list = allowed_invokers.join(", ");
         bail!(
-            "refusing {context} without {MFB_INVOKER_ENV} or {TRAINING_INVOKER_ENV} \
-             (allowed: {allowed_list}). {}",
+            "refusing {context} without {MFB_INVOKER_ENV} or {TRAINING_INVOKER_ENV} (allowed: \
+             {allowed_list}). {}",
             production_hint_for(context)
         );
     }

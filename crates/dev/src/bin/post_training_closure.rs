@@ -1,7 +1,8 @@
 //! Post-four-lane training closure.
 //!
 //! After four-lane training completes: aggregate ingest evidence from lane logs
-//! and run verify-stack-readiness. Does NOT run CI. Fills runtime closure artifacts only.
+//! and run verify-stack-readiness. Does NOT run CI. Fills runtime closure
+//! artifacts only.
 //!
 //! Port of `crates/dev/scripts/post_training_closure.py`.
 
@@ -224,7 +225,9 @@ fn write_runtime_evidence(
     if !pending && total_ok > 0 {
         let baseline = repo_root.join("RUNTIME_BASELINE.md");
         let append = format!(
-            "\n## Auto-append {now} stamp {stamp}\n\n- Four-lane ingest aggregate: **{total_ok} OK**, **{total_fail} FAIL**\n- Detail: [`RUNTIME_EVIDENCE_{stamp}.md`](RUNTIME_EVIDENCE_{stamp}.md)\n"
+            "\n## Auto-append {now} stamp {stamp}\n\n- Four-lane ingest aggregate: **{total_ok} \
+             OK**, **{total_fail} FAIL**\n- Detail: \
+             [`RUNTIME_EVIDENCE_{stamp}.md`](RUNTIME_EVIDENCE_{stamp}.md)\n"
         );
         if baseline.is_file() {
             let existing = fs::read_to_string(&baseline).unwrap_or_default();
@@ -274,7 +277,8 @@ fn run_verify_stack(conn_str: &str, repo_root: &Path, stamp: &str, log_dir: &Pat
     let now = chrono_now_date();
     let status_str = if code == 0 { "PASS" } else { "FAIL" };
     let block = format!(
-        "\n## Auto-run {now} stamp {stamp}\n\n| verify-stack-readiness | {status_str} |\n| Exit code | {code} |\n| Log | {} |\n",
+        "\n## Auto-run {now} stamp {stamp}\n\n| verify-stack-readiness | {status_str} |\n| Exit \
+         code | {code} |\n| Log | {} |\n",
         log_path.display()
     );
     let verify_md = repo_root.join("RUNTIME_VERIFY.md");
@@ -306,7 +310,8 @@ fn finalize_image_quality_model(
     let now = chrono_now_date();
     let status_str = if code == 0 { "PASS" } else { "FAIL" };
     let block = format!(
-        "\n## Auto-run {now} stamp {stamp}\n\n| finalize-image-quality-model | {status_str} |\n| Exit code | {code} |\n| Log | {} |\n",
+        "\n## Auto-run {now} stamp {stamp}\n\n| finalize-image-quality-model | {status_str} |\n| \
+         Exit code | {code} |\n| Log | {} |\n",
         log_path.display()
     );
     let finalize_md = repo_root.join("RUNTIME_FINALIZE.md");
@@ -336,15 +341,11 @@ fn write_closure_cycle2(
     let verdict = if blocked { "BLOCKED" } else { "PASS" };
 
     let content = format!(
-        "# CLOSURE — Cycle 2 (Runtime) — stamp {stamp}\n\n\
-         **Date:** {now}\n\
-         **Contract:** [`CLOSURE_CONTRACT_CYCLE2.md`](CLOSURE_CONTRACT_CYCLE2.md)\n\n\
-         | Gate | Status |\n\
-         |------|--------|\n\
-         | Four-lane ingest evidence | {} |\n\
-         | verify-stack-readiness | {verify_status} |\n\n\
-         **Verdict:** {verdict}\n\n\
-         CI quality remains outside this closure (see [`PROJECT_SIGNOFF.md`](PROJECT_SIGNOFF.md)).\n",
+        "# CLOSURE — Cycle 2 (Runtime) — stamp {stamp}\n\n**Date:** {now}\n**Contract:** \
+         [`CLOSURE_CONTRACT_CYCLE2.md`](CLOSURE_CONTRACT_CYCLE2.md)\n\n| Gate | Status \
+         |\n|------|--------|\n| Four-lane ingest evidence | {} |\n| verify-stack-readiness | \
+         {verify_status} |\n\n**Verdict:** {verdict}\n\nCI quality remains outside this closure \
+         (see [`PROJECT_SIGNOFF.md`](PROJECT_SIGNOFF.md)).\n",
         if pending { "PENDING" } else { "RECORDED" }
     );
     fs::write(repo_root.join("CLOSURE_CYCLE2.md"), content)?;

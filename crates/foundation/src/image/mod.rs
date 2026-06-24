@@ -1,4 +1,5 @@
-//! `image` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `image` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod image_analyzer;
 

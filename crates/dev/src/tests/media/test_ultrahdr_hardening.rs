@@ -41,7 +41,8 @@ fn test_ultrahdr_to_jxl_conversion() -> anyhow::Result<()> {
 
     if !status.success() {
         println!(
-            "cargo:warning=failed to download Ultra HDR sample, skipping conversion test due to network issue."
+            "cargo:warning=failed to download Ultra HDR sample, skipping conversion test due to \
+             network issue."
         );
         return Ok(());
     }
@@ -55,10 +56,11 @@ fn test_ultrahdr_to_jxl_conversion() -> anyhow::Result<()> {
     let result = convert_ultrahdr_jpeg_to_jxl(
         &sample_path,
         &output_jxl,
-        false,                     // apple_compat
-        IntermediateFormat::Png16, // Use PNG16 as it's typically faster/more compatible without OpenEXR lib setup
-        false,                     // ultimate
-        false,                     // archive
+        false, // apple_compat
+        IntermediateFormat::Png16, /* Use PNG16 as it's typically faster/more compatible without
+                * OpenEXR lib setup */
+        false, // ultimate
+        false, // archive
     );
 
     match result {
@@ -113,7 +115,8 @@ fn test_real_ultrahdr_samples_from_github() -> anyhow::Result<()> {
 
     if !status.success() {
         println!(
-            "cargo:warning=failed to download Ultra HDR sample, skipping extraction test due to network issue."
+            "cargo:warning=failed to download Ultra HDR sample, skipping extraction test due to \
+             network issue."
         );
         return Ok(());
     }
@@ -153,8 +156,12 @@ fn test_ultrahdr_absolute_offset_fallback() -> anyhow::Result<()> {
     // 2) APP1 XMP
     let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"2.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
     let xmp_hdr = b"http://ns.adobe.com/xap/1.0/\0";
-    let xmp_seg_len = u16::try_from(xmp_hdr.len() + xmp_content.len() + 2)
-        .map_err(|_| anyhow::anyhow!("Failed to parse integer or missing required value: XMP segment length calculation overflow"))?;
+    let xmp_seg_len = u16::try_from(xmp_hdr.len() + xmp_content.len() + 2).map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to parse integer or missing required value: XMP segment length calculation \
+             overflow"
+        )
+    })?;
 
     data.push(0xFF);
     data.push(0xE1);
@@ -178,8 +185,12 @@ fn test_ultrahdr_absolute_offset_fallback() -> anyhow::Result<()> {
     mpf_payload.extend_from_slice(&1u32.to_be_bytes());
     mpf_payload.extend_from_slice(&2u32.to_be_bytes());
     // Entry 2: MPEntry (Tag 0xB002)
-    let mp_entry_val_offset = u32::try_from(mpf_payload.len() + 12 + 4)
-        .map_err(|_| anyhow::anyhow!("Failed to parse integer or missing required value: MP entry offset calculation overflow"))?;
+    let mp_entry_val_offset = u32::try_from(mpf_payload.len() + 12 + 4).map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to parse integer or missing required value: MP entry offset calculation \
+             overflow"
+        )
+    })?;
     mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
     mpf_payload.extend_from_slice(&7u16.to_be_bytes()); // UNDEFINED
     mpf_payload.extend_from_slice(&32u32.to_be_bytes()); // 2 images * 16 bytes
@@ -192,16 +203,20 @@ fn test_ultrahdr_absolute_offset_fallback() -> anyhow::Result<()> {
     mpf_payload.extend_from_slice(&[0u8; 16]);
     // Gainmap
     let gainmap_size = 10u32;
-    // We want to force an ABSOLUTE offset that is valid, but RELATIVE would be invalid.
-    // Let's place the gainmap at the VERY end of the file.
+    // We want to force an ABSOLUTE offset that is valid, but RELATIVE would be
+    // invalid. Let's place the gainmap at the VERY end of the file.
     let absolute_offset = 1000u32; // Just pick a large enough fixed offset
     mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Attributes
     mpf_payload.extend_from_slice(&gainmap_size.to_be_bytes());
     mpf_payload.extend_from_slice(&absolute_offset.to_be_bytes());
     mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Deps
 
-    let mpf_seg_len = u16::try_from(mpf_id.len() + mpf_payload.len() + 2)
-        .map_err(|_| anyhow::anyhow!("Failed to parse integer or missing required value: MPF segment length calculation overflow"))?;
+    let mpf_seg_len = u16::try_from(mpf_id.len() + mpf_payload.len() + 2).map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to parse integer or missing required value: MPF segment length calculation \
+             overflow"
+        )
+    })?;
     data.push(0xFF);
     data.push(0xE2);
     data.extend_from_slice(&mpf_seg_len.to_be_bytes());
@@ -236,8 +251,9 @@ fn test_ultrahdr_absolute_offset_fallback() -> anyhow::Result<()> {
             } else if e.contains("Failed to decode base JPEG")
                 || e.contains("Failed to create JPEG reader")
             {
-                // Expected: this synthetic file intentionally proves MPF offset handling
-                // without carrying decodable base or gainmap JPEG fixtures.
+                // Expected: this synthetic file intentionally proves MPF offset
+                // handling without carrying decodable base or
+                // gainmap JPEG fixtures.
             } else {
                 panic!("Unexpected Ultra HDR extraction error: {e}");
             }

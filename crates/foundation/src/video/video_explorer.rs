@@ -1,25 +1,31 @@
 //! Video CRF Explorer Module - Unified video quality explorer
 //!
-//! Recommended mode: `explore + match-quality + compress` (enabled by default, see `flag_validator`).
-//! Only supports animated image-to-video and video-to-video conversions; static images use lossless conversion and do not support exploration mode.
+//! Recommended mode: `explore + match-quality + compress` (enabled by default,
+//! see `flag_validator`). Only supports animated image-to-video and
+//! video-to-video conversions; static images use lossless conversion and do not
+//! support exploration mode.
 //!
 //! ## Modular Design
 //!
-//! All exploration logic is centralized in this module; other modules (`img_hevc`, `vid_hevc`)
-//! only need to call this module's helper functions, avoiding redundant implementations.
+//! All exploration logic is centralized in this module; other modules
+//! (`img_hevc`, `vid_hevc`) only need to call this module's helper functions,
+//! avoiding redundant implementations.
 //!
 //! ## Unified Selection Philosophy
 //!
-//! All candidate/finalist selection across direct `VideoExplorer` APIs and strategy implementations
-//! follows the same ranking priorities, ensuring consistency:
+//! All candidate/finalist selection across direct `VideoExplorer` APIs and
+//! strategy implementations follows the same ranking priorities, ensuring
+//! consistency:
 //!
-//! 1. **Gating/Pass Status**: Size gates, quality checks (`quality_passed`, `ms_ssim_passed`)
+//! 1. **Gating/Pass Status**: Size gates, quality checks (`quality_passed`,
+//!    `ms_ssim_passed`)
 //! 2. **Quality Metrics**: VMAF > CAMBI > `PSNR_UV` > MS-SSIM > SSIM > PSNR
 //! 3. **Size Efficiency**: Output file size (prefer smaller)
 //! 4. **Parameter**: CRF value (prefer lower/more aggressive as tiebreaker)
 //! 5. **Preset**: Encoder preset rank (prefer slower/higher quality)
 //!
-//! For terminology and comparator utilities, see the `candidate_comparator` module.
+//! For terminology and comparator utilities, see the `candidate_comparator`
+//! module.
 
 use anyhow::{Context, Result, anyhow, bail};
 use rug::Rational;
@@ -69,7 +75,8 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = crate::constants::BINARY_SEARCH_MA
 /// Hard global limit for any single file exploration to prevent infinite loops.
 pub const GLOBAL_MAX_ITERATIONS: u32 = crate::constants::GLOBAL_MAX_ITERATIONS;
 
-/// Files below this size are considered "small" and may trigger more aggressive margins.
+/// Files below this size are considered "small" and may trigger more aggressive
+/// margins.
 pub const SMALL_FILE_THRESHOLD: u64 = crate::constants::SMALL_FILE_THRESHOLD_BYTES;
 
 /// Minimum absolute metadata margin in bytes.
@@ -96,7 +103,8 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
             ) {
                 Some(v) => v,
                 None => unreachable!(
-                    "CRITICAL: METADATA_MARGIN_PERCENT constant ({}) must be finite in calculate_metadata_margin (input_size={})",
+                    "CRITICAL: METADATA_MARGIN_PERCENT constant ({}) must be finite in \
+                     calculate_metadata_margin (input_size={})",
                     METADATA_MARGIN_PERCENT, input_size
                 ),
             };
@@ -104,7 +112,8 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
             match crate::numeric_cast::f64_to_u64_strict(m.to_f64(), "margin") {
                 Some(v) => v,
                 None => unreachable!(
-                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in calculate_metadata_margin (input_size={}, result_f64={})",
+                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in \
+                     calculate_metadata_margin (input_size={}, result_f64={})",
                     input_size,
                     m.to_f64()
                 ),
@@ -118,7 +127,8 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
             ) {
                 Some(v) => v,
                 None => unreachable!(
-                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in calculate_metadata_margin [non-rug] (input_size={}, percent={})",
+                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in \
+                     calculate_metadata_margin [non-rug] (input_size={}, percent={})",
                     input_size, METADATA_MARGIN_PERCENT
                 ),
             }
@@ -134,14 +144,16 @@ pub const fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u6
     post_metadata_size.saturating_sub(pre_metadata_size)
 }
 
-/// Extracts the pure video size by subtracting metadata from the total file size.
+/// Extracts the pure video size by subtracting metadata from the total file
+/// size.
 #[inline]
 #[must_use]
 pub const fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
     total_size.saturating_sub(metadata_size)
 }
 
-/// Calculates the target file size for compression, accounting for metadata overhead.
+/// Calculates the target file size for compression, accounting for metadata
+/// overhead.
 #[inline]
 #[must_use]
 pub fn compression_target_size(input_size: u64) -> u64 {
@@ -149,7 +161,8 @@ pub fn compression_target_size(input_size: u64) -> u64 {
     input_size.saturating_sub(margin)
 }
 
-/// Returns true if the output file size is below the compression target (accounting for metadata).
+/// Returns true if the output file size is below the compression target
+/// (accounting for metadata).
 #[inline]
 #[must_use]
 pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
@@ -199,13 +212,16 @@ pub const fn verify_compression_simple(
 
 pub use precision::*;
 
-/// Minimum consecutive wall-clock hits required for saturation detection in ultimate mode.
+/// Minimum consecutive wall-clock hits required for saturation detection in
+/// ultimate mode.
 pub const ULTIMATE_MIN_WALL_HITS: u32 = crate::constants::ULTIMATE_MIN_WALL_HITS;
 
-/// Maximum consecutive wall-clock hits allowed for saturation detection in ultimate mode.
+/// Maximum consecutive wall-clock hits allowed for saturation detection in
+/// ultimate mode.
 pub const ULTIMATE_MAX_WALL_HITS: u32 = crate::constants::ULTIMATE_MAX_WALL_HITS;
 
-/// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
+/// In ultimate mode, absolute saturation requires 50 consecutive samples to be
+/// statistically certain.
 use crate::constants::{
     ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION,
     ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE, CHANGE_RATE_THRESHOLD,
@@ -213,28 +229,34 @@ use crate::constants::{
     SSIM_PLATEAU_THRESHOLD, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 
-/// Required consecutive zero-gain encodes for saturation detection in ultimate mode.
+/// Required consecutive zero-gain encodes for saturation detection in ultimate
+/// mode.
 pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = crate::constants::ULTIMATE_REQUIRED_ZERO_GAINS;
 
 /// Maximum consecutive wall hits for normal mode (uses zero-gains as proxy).
 pub const NORMAL_MAX_WALL_HITS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS;
 
-/// Required consecutive zero-gain encodes for saturation detection in normal mode.
+/// Required consecutive zero-gain encodes for saturation detection in normal
+/// mode.
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS;
 
-/// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
-/// encode/decode test is more expensive; this is an intentional cost vs. precision tradeoff.
+/// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see
+/// below) because each encode/decode test is more expensive; this is an
+/// intentional cost vs. precision tradeoff.
 pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = crate::constants::LONG_VIDEO_FALLBACK_ITERATIONS;
 
-/// Max iterations for ≥10 min videos. Lower than `LONG_VIDEO_FALLBACK_ITERATIONS`: longer videos
-/// cost more per iteration, so we cap iterations to keep total runtime reasonable.
+/// Max iterations for ≥10 min videos. Lower than
+/// `LONG_VIDEO_FALLBACK_ITERATIONS`: longer videos cost more per iteration, so
+/// we cap iterations to keep total runtime reasonable.
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 =
     crate::constants::VERY_LONG_VIDEO_FALLBACK_ITERATIONS;
 
-/// Required consecutive zero-gain encodes for saturation detection in long videos (5-10 min).
+/// Required consecutive zero-gain encodes for saturation detection in long
+/// videos (5-10 min).
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = crate::constants::LONG_VIDEO_REQUIRED_ZERO_GAINS;
 
-/// Calculates the maximum exploration iterations allowed based on video duration and mode.
+/// Calculates the maximum exploration iterations allowed based on video
+/// duration and mode.
 ///
 /// Longer videos get fewer iterations to keep total runtime reasonable.
 #[must_use]
@@ -250,8 +272,8 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     }
 }
 
-/// Calculates the required zero-gain encodes for saturation detection based on video duration.
-/// # Errors
+/// Calculates the required zero-gain encodes for saturation detection based on
+/// video duration. # Errors
 /// Returns an error if the calculation fails due to invalid parameters.
 pub fn calculate_zero_gains_for_duration(
     duration_secs: f32,
@@ -264,7 +286,8 @@ pub fn calculate_zero_gains_for_duration(
     )
 }
 
-/// Calculates the required zero-gain encodes for saturation detection, with explicit CRF range.
+/// Calculates the required zero-gain encodes for saturation detection, with
+/// explicit CRF range.
 ///
 /// Scales the base requirement based on video duration and CRF range.
 /// # Errors
@@ -307,8 +330,8 @@ pub const ADAPTIVE_WALL_LOG_BASE: u32 = crate::constants::ADAPTIVE_WALL_LOG_BASE
 
 /// Calculates the adaptive maximum wall-clock hits based on CRF search range.
 ///
-/// Uses a logarithmic formula to scale the hit requirement with search range breadth.
-/// # Errors
+/// Uses a logarithmic formula to scale the hit requirement with search range
+/// breadth. # Errors
 /// Returns an error if the calculation fails due to invalid parameters.
 pub fn calculate_adaptive_max_walls(crf_range: f32) -> anyhow::Result<u32> {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
@@ -357,7 +380,8 @@ pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
 /// Default minimum MS-SSIM threshold for quality validation.
 pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = crate::constants::DEFAULT_MIN_MS_SSIM;
 
-/// Calculates the optimal number of encoding threads based on CPU count and resolution.
+/// Calculates the optimal number of encoding threads based on CPU count and
+/// resolution.
 ///
 /// Balances parallelism against per-thread overhead for different resolutions.
 #[must_use]
@@ -379,19 +403,22 @@ pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -
 
 /// Operation mode for the CRF exploration process.
 ///
-/// Each mode determines how aggressively the explorer searches for the optimal CRF value
-/// and whether it prioritizes quality matching, compression, or both.
+/// Each mode determines how aggressively the explorer searches for the optimal
+/// CRF value and whether it prioritizes quality matching, compression, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExploreMode {
     /// Only search for a CRF that produces a smaller file; no quality checks.
     SizeOnly,
     /// Encode at the predicted CRF and verify quality meets thresholds.
     QualityMatch,
-    /// Iteratively search for the CRF that best matches the input quality (SSIM).
+    /// Iteratively search for the CRF that best matches the input quality
+    /// (SSIM).
     PreciseQualityMatch,
-    /// Like `PreciseQualityMatch` but also ensures the output is smaller than the input.
+    /// Like `PreciseQualityMatch` but also ensures the output is smaller than
+    /// the input.
     PreciseQualityMatchWithCompression,
-    /// Search for the highest CRF that still produces a smaller file; no quality checks.
+    /// Search for the highest CRF that still produces a smaller file; no
+    /// quality checks.
     CompressOnly,
     /// Search for compression that also maintains a minimum quality threshold.
     CompressWithQuality,
@@ -399,12 +426,14 @@ pub enum ExploreMode {
 
 /// Per-component confidence scores; `overall()` computes a weighted aggregate.
 ///
-/// Each field represents a different aspect of the exploration result's reliability.
+/// Each field represents a different aspect of the exploration result's
+/// reliability.
 #[derive(Debug, Clone, Default)]
 pub struct ConfidenceBreakdown {
     /// How well the CRF search space was sampled (0.0–1.0).
     pub sampling_coverage: Option<f64>,
-    /// How accurate the CRF predictions were compared to actual encodes (0.0–1.0).
+    /// How accurate the CRF predictions were compared to actual encodes
+    /// (0.0–1.0).
     pub prediction_accuracy: Option<f64>,
     /// How safe the resulting size/quality margins are (0.0–1.0).
     pub margin_safety: Option<f64>,
@@ -440,7 +469,8 @@ pub struct CalibrationPoint {
     pub reason: &'static str,
 }
 
-/// SSIM tier mapped to a unit confidence component (measurement-derived, not a fixed explore literal).
+/// SSIM tier mapped to a unit confidence component (measurement-derived, not a
+/// fixed explore literal).
 #[must_use]
 pub(crate) fn exploration_ssim_component(ssim: f64) -> Option<f64> {
     if !ssim.is_finite() {
@@ -476,8 +506,9 @@ pub(crate) fn exploration_margin_from_ssim(ssim: f64, min_ssim: f64) -> Option<f
     crate::algorithm_seal::exploration_unit_probability(((ssim - min_ssim) / denom).clamp(0.0, 1.0))
 }
 
-/// Size headroom vs metadata-adjusted compression target (measured output bytes only).
-/// Returns `None` when output is not below target — never fabricates `Some(0.0)`.
+/// Size headroom vs metadata-adjusted compression target (measured output bytes
+/// only). Returns `None` when output is not below target — never fabricates
+/// `Some(0.0)`.
 #[must_use]
 pub(crate) fn exploration_size_margin_from_output(
     input_size: u64,
@@ -492,7 +523,8 @@ pub(crate) fn exploration_size_margin_from_output(
     crate::algorithm_seal::exploration_unit_probability((margin / 0.05).min(1.0))
 }
 
-/// Build exploration confidence from measured evidence only (no `EXPLORE_CONFIDENCE_*` literals).
+/// Build exploration confidence from measured evidence only (no
+/// `EXPLORE_CONFIDENCE_*` literals).
 #[must_use]
 pub(crate) fn measured_exploration_confidence(
     ssim: Option<f64>,
@@ -550,7 +582,8 @@ pub(crate) fn measured_exploration_confidence_ultimate(
 }
 
 impl ConfidenceBreakdown {
-    /// Weighted aggregate over **available** components (renormalized; no fabricated fill-ins).
+    /// Weighted aggregate over **available** components (renormalized; no
+    /// fabricated fill-ins).
     #[must_use]
     pub fn overall(&self) -> Option<f64> {
         let mut weighted_sum = 0.0_f64;
@@ -652,7 +685,8 @@ impl ConfidenceBreakdown {
 
 /// The result of a CRF exploration.
 ///
-/// Contains the optimal CRF found, quality metrics, and metadata about the exploration process.
+/// Contains the optimal CRF found, quality metrics, and metadata about the
+/// exploration process.
 #[derive(Debug, Clone)]
 pub struct ExploreResult {
     /// The optimal CRF value found by the exploration.
@@ -669,24 +703,30 @@ pub struct ExploreResult {
     pub ms_ssim: Option<f64>,
     /// Whether the MS-SSIM / fusion quality check passed (standard mode only).
     pub ms_ssim_passed: CheckResult,
-    /// Whether the ultimate 3D gate passed (VMAF/CAMBI/PSNR-UV; ultimate mode only).
+    /// Whether the ultimate 3D gate passed (VMAF/CAMBI/PSNR-UV; ultimate mode
+    /// only).
     pub ultimate_quality_passed: CheckResult,
-    /// The actual MS-SSIM score achieved (may differ from `ms_ssim` in some modes).
+    /// The actual MS-SSIM score achieved (may differ from `ms_ssim` in some
+    /// modes).
     pub ms_ssim_score: Option<f64>,
-    /// Whether SSIM fallback was used instead of MS-SSIM (distinguishes MS-SSIM from SSIM fallback results).
+    /// Whether SSIM fallback was used instead of MS-SSIM (distinguishes MS-SSIM
+    /// from SSIM fallback results).
     pub used_fallback: bool,
     /// Number of encode iterations performed during exploration.
     pub iterations: u32,
-    /// Whether the file-size / compression target was met (independent of SSIM quality).
+    /// Whether the file-size / compression target was met (independent of SSIM
+    /// quality).
     pub size_target_met: CheckResult,
-    /// Whether the overall quality check passed (SSIM/PSNR/MS-SSIM per explore config).
+    /// Whether the overall quality check passed (SSIM/PSNR/MS-SSIM per explore
+    /// config).
     pub quality_passed: CheckResult,
-    /// When quality/size would pass but enhanced verification (duration/stream) failed;
-    /// used for accurate failure messaging.
+    /// When quality/size would pass but enhanced verification (duration/stream)
+    /// failed; used for accurate failure messaging.
     pub enhanced_verify_fail_reason: Option<String>,
     /// Human-readable log messages produced during exploration.
     pub log: Vec<String>,
-    /// Overall confidence score (0.0–1.0); `None` when the aggregate failed seal.
+    /// Overall confidence score (0.0–1.0); `None` when the aggregate failed
+    /// seal.
     pub confidence: Option<f64>,
     /// Detailed breakdown of confidence components.
     pub confidence_detail: ConfidenceBreakdown,
@@ -704,9 +744,11 @@ pub struct ExploreResult {
     pub cambi_score: Option<f64>,
     /// Ultimate mode 3D quality gate: (`PSNR_U`, `PSNR_V`) in dB.
     pub psnr_uv_score: Option<(f64, f64)>,
-    /// Whether an early insight triggered (quality plateau detected, skipped further exploration).
+    /// Whether an early insight triggered (quality plateau detected, skipped
+    /// further exploration).
     pub early_insight_triggered: bool,
-    /// Explore ran under ultimate mode: quality contract is VMAF/CAMBI/PSNR-UV, not SSIM.
+    /// Explore ran under ultimate mode: quality contract is VMAF/CAMBI/PSNR-UV,
+    /// not SSIM.
     pub ultimate_mode: bool,
 }
 
@@ -771,16 +813,17 @@ pub(crate) fn calc_change_pct_for_input_size(input_size: u64, output_size: u64) 
     ((ratio - Rational::from(1)) * Rational::from(100)).to_f64()
 }
 
-/// Internal explore paths must return through this helper so metrics are sealed even
-/// when `VideoExplorer::explore()` is not the immediate caller.
+/// Internal explore paths must return through this helper so metrics are sealed
+/// even when `VideoExplorer::explore()` is not the immediate caller.
 #[inline]
 fn ok_explore_result(result: ExploreResult) -> ExploreResult {
     result.sealed()
 }
 
 impl ExploreResult {
-    /// Sanitize exploration metrics before they drive encode decisions or user-visible summaries.
-    /// Consume and return a sealed exploration result (terminal algorithm contract).
+    /// Sanitize exploration metrics before they drive encode decisions or
+    /// user-visible summaries. Consume and return a sealed exploration
+    /// result (terminal algorithm contract).
     #[must_use]
     pub fn sealed(mut self) -> Self {
         self.seal_algorithm_outputs();
@@ -806,7 +849,8 @@ impl ExploreResult {
         Self::enforce_confidence_quality_gate(self);
     }
 
-    /// Phase 3 may set `ms_ssim_passed` / `ultimate_quality_passed` without updating `quality_passed`.
+    /// Phase 3 may set `ms_ssim_passed` / `ultimate_quality_passed` without
+    /// updating `quality_passed`.
     fn enforce_perceptual_quality_coherence(result: &mut Self) {
         if !result.quality_passed.is_passed() || !result.perceptual_quality_failed() {
             return;
@@ -834,7 +878,8 @@ impl ExploreResult {
         result.quality_passed = CheckResult::Failed(reason);
     }
 
-    /// Phase 3 sets VMAF/CAMBI/PSNR-UV on the result after CPU settle may leave `confidence` unset.
+    /// Phase 3 sets VMAF/CAMBI/PSNR-UV on the result after CPU settle may leave
+    /// `confidence` unset.
     fn backfill_ultimate_confidence_if_needed(result: &mut Self) {
         let min = crate::constants::MIN_EXPLORATION_CONFIDENCE;
         if result.confidence.is_some_and(|c| c.is_finite() && c >= min) {
@@ -859,16 +904,19 @@ impl ExploreResult {
         }
     }
 
-    /// Ultimate explore uses VMAF/CAMBI/PSNR-UV; SSIM is outside the quality contract.
+    /// Ultimate explore uses VMAF/CAMBI/PSNR-UV; SSIM is outside the quality
+    /// contract.
     ///
-    /// Metrics alone do not switch the contract (avoids stray VMAF fields on standard runs).
+    /// Metrics alone do not switch the contract (avoids stray VMAF fields on
+    /// standard runs).
     #[inline]
     #[must_use]
     pub const fn uses_ultimate_quality_contract(&self) -> bool {
         self.ultimate_mode
     }
 
-    /// Animated lossless (CRF=0) validates via integrity check; `ms_ssim_passed` replaces SSIM (M223).
+    /// Animated lossless (CRF=0) validates via integrity check;
+    /// `ms_ssim_passed` replaces SSIM (M223).
     #[inline]
     #[must_use]
     pub const fn uses_lossless_integrity_quality_contract(&self) -> bool {
@@ -877,7 +925,8 @@ impl ExploreResult {
             && self.ms_ssim_passed.is_passed()
     }
 
-    /// MS-SSIM / SSIM fusion must not remain authoritative after ultimate 3D metrics exist.
+    /// MS-SSIM / SSIM fusion must not remain authoritative after ultimate 3D
+    /// metrics exist.
     fn neutralize_standard_ssim_contract_for_ultimate(result: &mut Self) {
         if !result.uses_ultimate_quality_contract() {
             return;
@@ -887,7 +936,8 @@ impl ExploreResult {
         }
     }
 
-    /// Perceptual gate for the active contract (3D in ultimate, MS-SSIM/SSIM fusion otherwise).
+    /// Perceptual gate for the active contract (3D in ultimate, MS-SSIM/SSIM
+    /// fusion otherwise).
     #[must_use]
     pub const fn perceptual_quality_failed(&self) -> bool {
         if self.uses_ultimate_quality_contract() {
@@ -925,7 +975,8 @@ impl ExploreResult {
         )
     }
 
-    /// Strict delivery: a passed 3D gate must carry VMAF-Y, CAMBI, and PSNR-UV (not partial telemetry).
+    /// Strict delivery: a passed 3D gate must carry VMAF-Y, CAMBI, and PSNR-UV
+    /// (not partial telemetry).
     fn enforce_ultimate_metrics_presence_quality_gate(result: &mut Self) {
         if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled()
             || !result.uses_ultimate_quality_contract()
@@ -951,7 +1002,8 @@ impl ExploreResult {
         );
     }
 
-    /// Reject incoherent ultimate passes that slip through without sane metric values.
+    /// Reject incoherent ultimate passes that slip through without sane metric
+    /// values.
     fn enforce_ultimate_metrics_sanity_quality_gate(result: &mut Self) {
         if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled()
             || !result.uses_ultimate_quality_contract()
@@ -1044,7 +1096,8 @@ impl ExploreResult {
         if result.ultimate_mode {
             return;
         }
-        // Animated GIF/WebP CRF=0: integrity gate promotes ms_ssim_passed without SSIM (M223).
+        // Animated GIF/WebP CRF=0: integrity gate promotes ms_ssim_passed without SSIM
+        // (M223).
         if result.uses_lossless_integrity_quality_contract() {
             return;
         }
@@ -1214,7 +1267,8 @@ impl ExploreResult {
             .is_some_and(|s| crate::float_compare::ssim_meets_threshold(s, threshold))
     }
 
-    /// Partial 3D telemetry (logging / summaries). Strict delivery uses [`Self::has_complete_ultimate_quality_metrics`].
+    /// Partial 3D telemetry (logging / summaries). Strict delivery uses
+    /// [`Self::has_complete_ultimate_quality_metrics`].
     #[inline]
     #[must_use]
     pub const fn has_ultimate_quality_metrics(&self) -> bool {
@@ -1328,7 +1382,8 @@ impl BoundarySearchState {
         let variance = Self::calc_window_variance(&self.size_history, input_size);
         if variance < VARIANCE_THRESHOLD && self.size_history.len() >= WINDOW_SIZE {
             return Some(format!(
-                "   {} Early exit: variance converged {variance:.2e} < {VARIANCE_THRESHOLD:.2e} (after {iterations} iterations)",
+                "   {} Early exit: variance converged {variance:.2e} < {VARIANCE_THRESHOLD:.2e} \
+                 (after {iterations} iterations)",
                 crate::media_conversion_gate::ui_icon_pick("⚡", "[FAST]")
             ));
         }
@@ -1337,7 +1392,8 @@ impl BoundarySearchState {
             let change_rate = Self::calc_change_rate(prev, curr);
             if change_rate < CHANGE_RATE_THRESHOLD {
                 return Some(format!(
-                    "   {} Early exit: change rate negligible {:.4}% < {:.4}% (after {} iterations)",
+                    "   {} Early exit: change rate negligible {:.4}% < {:.4}% (after {} \
+                     iterations)",
                     crate::media_conversion_gate::ui_icon_pick("⚡", "[FAST]"),
                     change_rate * 100.0_f64,
                     CHANGE_RATE_THRESHOLD * 100.0_f64,
@@ -1541,7 +1597,8 @@ impl<'a> PreciseCompressionSession<'a> {
         crate::log_stat!(
             crate::infra::static_logs::messages::LABEL_DONE,
             format!(
-                "Result: CRF {:.1} | SSIM {:.4} ({}) | Size {:+.1}% | Saved: {:.2} MB | Iter: {} | Time: {:.1}s",
+                "Result: CRF {:.1} | SSIM {:.4} ({}) | Size {:+.1}% | Saved: {:.2} MB | Iter: {} \
+                 | Time: {:.1}s",
                 verified.crf,
                 verified.ssim,
                 status,
@@ -1729,7 +1786,8 @@ impl<'a> PreciseCompressionSession<'a> {
                 "explore_boundary",
                 &self.explorer.input_path,
                 format!(
-                    "Boundary CRF {boundary_crf:.1} missing from size cache before SSIM verification"
+                    "Boundary CRF {boundary_crf:.1} missing from size cache before SSIM \
+                     verification"
                 ),
             );
             return Err(anyhow::anyhow!(
@@ -1838,9 +1896,10 @@ impl<'a> PreciseCompressionSession<'a> {
         }
 
         self.pb.set_message(message);
-        // Must bypass the size cache: a cache hit would skip the re-encode and leave the
-        // last-probed CRF's file on disk, so the subsequent SSIM verification would measure
-        // a different encode than the one attributed to `crf`.
+        // Must bypass the size cache: a cache hit would skip the re-encode and leave
+        // the last-probed CRF's file on disk, so the subsequent SSIM
+        // verification would measure a different encode than the one attributed
+        // to `crf`.
         let size = self.explorer.encode(crf)?;
         self.size_cache.insert(crf, size);
         self.last_encoded_crf = Some(crf);
@@ -1957,7 +2016,8 @@ pub struct ExploreConfig {
     pub quality_thresholds: QualityThresholds,
     /// Maximum number of encode iterations before giving up.
     pub max_iterations: u32,
-    /// Whether to use ultimate mode (stricter quality gates, more thorough search).
+    /// Whether to use ultimate mode (stricter quality gates, more thorough
+    /// search).
     pub ultimate_mode: bool,
     /// Legacy toggle retained for API compatibility.
     /// Compression success is determined by total output file size.
@@ -2005,7 +2065,8 @@ impl ExploreConfig {
         }
     }
 
-    /// Creates a config for quality-match mode (single encode at predicted CRF).
+    /// Creates a config for quality-match mode (single encode at predicted
+    /// CRF).
     #[must_use]
     pub fn quality_match(predicted_crf: f32) -> Self {
         Self {
@@ -2053,7 +2114,8 @@ impl ExploreConfig {
         }
     }
 
-    /// Creates a config for precise quality match that also requires compression.
+    /// Creates a config for precise quality match that also requires
+    /// compression.
     #[must_use]
     pub fn precise_quality_match_with_compression(
         initial_crf: f32,
@@ -2106,7 +2168,8 @@ impl ExploreConfig {
         }
     }
 
-    /// Creates a config for compression that also enforces a minimum SSIM threshold.
+    /// Creates a config for compression that also enforces a minimum SSIM
+    /// threshold.
     #[must_use]
     pub fn compress_with_quality(initial_crf: f32, max_crf: f32) -> Self {
         Self {
@@ -2156,8 +2219,8 @@ impl From<VideoEncoder> for crate::ffmpeg_builder::VideoCodec {
 }
 
 impl VideoEncoder {
-    /// Returns the `FFmpeg` encoder name, with automatic fallback to hardware encoders
-    /// if the software encoder is not available.
+    /// Returns the `FFmpeg` encoder name, with automatic fallback to hardware
+    /// encoders if the software encoder is not available.
     #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
@@ -2232,8 +2295,8 @@ impl VideoEncoder {
         )
     }
 
-    /// Returns extra `FFmpeg` arguments for this encoder with a specific preset and optional
-    /// HDR x265 parameters.
+    /// Returns extra `FFmpeg` arguments for this encoder with a specific preset
+    /// and optional HDR x265 parameters.
     #[must_use]
     pub fn extra_args_with_preset(
         &self,
@@ -2360,8 +2423,8 @@ impl IterationMetrics {
 
 /// A transparency report that logs all iterations of the CRF search process.
 ///
-/// Provides a detailed, human-readable view of every step taken during exploration,
-/// useful for debugging and auditing.
+/// Provides a detailed, human-readable view of every step taken during
+/// exploration, useful for debugging and auditing.
 #[derive(Debug, Clone, Default)]
 pub struct TransparencyReport {
     /// All iteration metrics recorded during the search.
@@ -2418,7 +2481,8 @@ impl TransparencyReport {
         );
     }
 
-    /// Prints the footer and summary statistics (iterations, time, final CRF/SSIM/PSNR).
+    /// Prints the footer and summary statistics (iterations, time, final
+    /// CRF/SSIM/PSNR).
     pub fn print_summary(&self) {
         crate::log_detail!(
             "└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘"
@@ -2461,7 +2525,8 @@ impl TransparencyReport {
 
 /// The main video exploration engine.
 ///
-/// Manages encoding, quality measurement, and CRF search for a given input/output pair.
+/// Manages encoding, quality measurement, and CRF search for a given
+/// input/output pair.
 pub struct VideoExplorer {
     /// Configuration controlling the exploration behavior.
     config: ExploreConfig,
@@ -2726,7 +2791,8 @@ fn summarize_ffmpeg_failure(stderr_content: &str) -> String {
 }
 
 impl VideoExplorer {
-    /// Internal builder that validates paths, detects GPU availability, and initializes state.
+    /// Internal builder that validates paths, detects GPU availability, and
+    /// initializes state.
     fn build(args: VideoExplorerBuildArgs<'_>) -> Result<Self> {
         Self::validate_paths(args.input, args.output)?;
 
@@ -2902,8 +2968,9 @@ impl VideoExplorer {
     pub fn explore(&self) -> Result<ExploreResult> {
         if self.config.ultimate_mode {
             bail!(
-                "ultimate mode requires GPU coarse-search explore (explore_hevc_with_gpu / explore_av1_with_gpu); \
-                 CPU VideoExplorer does not implement the 3D quality contract"
+                "ultimate mode requires GPU coarse-search explore (explore_hevc_with_gpu / \
+                 explore_av1_with_gpu); CPU VideoExplorer does not implement the 3D quality \
+                 contract"
             );
         }
         let result = match self.config.mode {
@@ -2919,14 +2986,16 @@ impl VideoExplorer {
         Ok(result.sealed())
     }
 
-    /// Runs the quality exploration using the strategy pattern (delegates to `explore_strategy`).
+    /// Runs the quality exploration using the strategy pattern (delegates to
+    /// `explore_strategy`).
     ///
     /// # Errors
     /// Returns an error if exploration fails.
     pub fn explore_with_strategy(&self) -> Result<ExploreResult> {
         if self.config.ultimate_mode {
             bail!(
-                "ultimate mode is incompatible with explore_strategy; use GPU coarse-search explore"
+                "ultimate mode is incompatible with explore_strategy; use GPU coarse-search \
+                 explore"
             );
         }
         let mut ctx = ExploreContext::new(crate::explore_strategy::ExploreContextArgs {
@@ -3013,7 +3082,8 @@ impl VideoExplorer {
             });
         }
         progress_done();
-        // SSIM is computed from self.output_path; must match the encode just above (max_crf).
+        // SSIM is computed from self.output_path; must match the encode just above
+        // (max_crf).
 
         let size_change_pct = self.calc_change_pct(best_size);
         let elapsed = start_time.elapsed();
@@ -3138,7 +3208,9 @@ impl VideoExplorer {
         }))
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<u64> = CrfCache::new();
@@ -3253,7 +3325,8 @@ impl VideoExplorer {
             let compress_icon =
                 crate::modern_ui::symbols::ok_fail_icon(self.can_compress_with_margin(size));
             progress_line(format!(
-                "Binary Search | CRF {mid:.1} | {size_pct:+.1}% {compress_icon} | Best: {best_crf_so_far:.1}"
+                "Binary Search | CRF {mid:.1} | {size_pct:+.1}% {compress_icon} | Best: \
+                 {best_crf_so_far:.1}"
             ));
 
             if self.can_compress_with_margin(size) {
@@ -3294,14 +3367,15 @@ impl VideoExplorer {
             crate::media_conversion_gate::ui_icon_pick("📊", "[STATS]")
         ));
 
-        // Use the re-encode's actual on-disk size: the deliverable is this fresh encode,
-        // not the earlier probe whose size was cached as `final_size`.
+        // Use the re-encode's actual on-disk size: the deliverable is this fresh
+        // encode, not the earlier probe whose size was cached as `final_size`.
         let actual_size = self.encode(final_crf)?;
         if actual_size != final_size {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "explore_final_reencode_size",
                 format!(
-                    "Re-encode at CRF {final_crf:.1} produced {actual_size} bytes vs cached probe {final_size}; reporting actual"
+                    "Re-encode at CRF {final_crf:.1} produced {actual_size} bytes vs cached probe \
+                     {final_size}; reporting actual"
                 ),
             );
         }
@@ -3330,7 +3404,9 @@ impl VideoExplorer {
         }))
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let log = Vec::new();
         let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
@@ -3524,7 +3600,9 @@ impl VideoExplorer {
         }))
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let log = Vec::new();
         let mut cache: CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))> = CrfCache::new();
@@ -3659,14 +3737,16 @@ impl VideoExplorer {
             best_ssim = max_ssim;
         } else {
             // Phase 2: single-point golden-ratio search (mid = low + (high - low) * PHI).
-            // Assumption: CRF–SSIM curve is monotonic (higher CRF → lower SSIM). If the curve
-            // were non-monotonic, this could converge slowly or to a suboptimal point.
+            // Assumption: CRF–SSIM curve is monotonic (higher CRF → lower SSIM). If the
+            // curve were non-monotonic, this could converge slowly or to a
+            // suboptimal point.
             //
-            // Why not full golden-section search? Full GSS keeps two interior points and reuses
-            // one when shrinking the interval, so it also does 1 eval per iteration (after 2
-            // initial evals) and minimizes total evals. We use a single probe from the low end
-            // each time for simplicity: no tracking of which point to keep, and the same 1
-            // encode per iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
+            // Why not full golden-section search? Full GSS keeps two interior points and
+            // reuses one when shrinking the interval, so it also does 1 eval
+            // per iteration (after 2 initial evals) and minimizes total evals.
+            // We use a single probe from the low end each time for simplicity:
+            // no tracking of which point to keep, and the same 1 encode per
+            // iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
             // full GSS; the tradeoff is lower code complexity and easier maintenance.
             crate::log_stat!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
@@ -3920,7 +4000,9 @@ impl VideoExplorer {
         }))
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         PreciseCompressionSession::new(self).run()
     }
@@ -3998,9 +4080,10 @@ impl VideoExplorer {
 
         // Add extra encoder-specific args.
         // Note: for HEVC we deliberately skip -x265-params here because the CPU branch
-        // below emits them via `extra_args_with_preset`; duplicating -x265-params causes
-        // ffmpeg to keep only the last copy (silently dropping the first), and on the
-        // GPU path the encoder is hevc_videotoolbox which rejects -x265-params entirely.
+        // below emits them via `extra_args_with_preset`; duplicating -x265-params
+        // causes ffmpeg to keep only the last copy (silently dropping the
+        // first), and on the GPU path the encoder is hevc_videotoolbox which
+        // rejects -x265-params entirely.
         if self.encoder == VideoEncoder::Av1 {
             let preset = self.preset.sanitize_av1();
             builder.arg("-svtav1-params").arg(format!(
@@ -4231,7 +4314,8 @@ impl VideoExplorer {
             if should_skip {
                 let threshold_min = ms_ssim_skip_threshold_secs / 60.0_f64;
                 crate::log_detail!(&format!(
-                    "   {} Quality verification: long video ({:.1}min > {:.0}min), MS-SSIM skipped.",
+                    "   {} Quality verification: long video ({:.1}min > {:.0}min), MS-SSIM \
+                     skipped.",
                     crate::modern_ui::symbols::styled_warning_icon(),
                     duration / 60.0_f64,
                     threshold_min
@@ -4275,8 +4359,8 @@ impl VideoExplorer {
         );
         let _ = std::io::stderr().flush();
 
-        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
-                      [ref][1:v]ssim;[ref][1:v]psnr";
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim;\
+                      [ref][1:v]psnr";
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
             .input(&self.input_path)
@@ -4331,7 +4415,8 @@ impl VideoExplorer {
 
         let filters = [
             "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:\
+             trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
             "ssim",
         ];
 
@@ -4382,7 +4467,8 @@ impl VideoExplorer {
         }
 
         crate::log_detail!(
-            "\r      ⚠️  SSIM calculation failed (all {} methods tried; pixel format/resolution/corruption possible)",
+            "\r      ⚠️  SSIM calculation failed (all {} methods tried; pixel \
+             format/resolution/corruption possible)",
             filters.len()
         );
 
@@ -4421,7 +4507,8 @@ impl VideoExplorer {
     }
 
     fn calculate_psnr(&self) -> Result<Option<f64>> {
-        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:\
+                      v]psnr=stats_file=-";
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
             .input(&self.input_path)
@@ -4479,9 +4566,10 @@ impl VideoExplorer {
                     pct_label
                 );
                 format!(
-                    "[0:v]select='lt(t\\,{start_end:.1})+between(t\\,{mid_start:.1}\\,{mid_end:.1})+gte(t\\,{tail_start:.1})',\
-                     scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
-                     [1:v]select='lt(t\\,{start_end:.1})+between(t\\,{mid_start:.1}\\,{mid_end:.1})+gte(t\\,{tail_start:.1})'[dist];\
+                    "[0:v]select='lt(t\\,{start_end:.1})+between(t\\,{mid_start:.1}\\,{mid_end:.\
+                     1})+gte(t\\,{tail_start:.1})',scale='iw-mod(iw,2)':'ih-mod(ih,2)':\
+                     flags=bicubic[ref];[1:v]select='lt(t\\,{start_end:.1})+between(t\\,\
+                     {mid_start:.1}\\,{mid_end:.1})+gte(t\\,{tail_start:.1})'[dist];\
                      [ref][dist]libvmaf"
                 )
             }
@@ -4595,7 +4683,8 @@ impl VideoExplorer {
     }
 }
 
-/// Explores size-only mode: finds a CRF that produces a smaller file without quality checks.
+/// Explores size-only mode: finds a CRF that produces a smaller file without
+/// quality checks.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -4624,7 +4713,8 @@ pub fn explore_size_only(
     .explore()
 }
 
-/// Explores quality-match mode: encodes at a predicted CRF and validates quality.
+/// Explores quality-match mode: encodes at a predicted CRF and validates
+/// quality.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -4652,7 +4742,8 @@ pub fn explore_quality_match(
     .explore()
 }
 
-/// Explores precise quality-match mode: iteratively searches for the best SSIM within a CRF range.
+/// Explores precise quality-match mode: iteratively searches for the best SSIM
+/// within a CRF range.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -4682,7 +4773,8 @@ pub fn explore_precise_quality_match(
     .explore()
 }
 
-/// Explores precise quality match while also ensuring the output is smaller than the input.
+/// Explores precise quality match while also ensuring the output is smaller
+/// than the input.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -4713,7 +4805,8 @@ pub fn explore_precise_quality_match_with_compression(
     .explore()
 }
 
-/// Explores compression-only mode: searches for the highest CRF that still produces a smaller file.
+/// Explores compression-only mode: searches for the highest CRF that still
+/// produces a smaller file.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -4959,9 +5052,11 @@ pub fn explore_quality_match_gpu(
     .explore()
 }
 
-/// Calculates adaptive CRF range and minimum SSIM threshold based on the encoder and initial CRF.
+/// Calculates adaptive CRF range and minimum SSIM threshold based on the
+/// encoder and initial CRF.
 ///
-/// Returns `(max_crf, min_ssim)` tuned for the specific encoder's characteristics.
+/// Returns `(max_crf, min_ssim)` tuned for the specific encoder's
+/// characteristics.
 #[must_use]
 pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
     let (crf_scale, max_crf_cap) = match encoder {
@@ -5242,7 +5337,8 @@ pub fn explore_av1_compress_with_quality(
     )
 }
 
-/// Precision constants and utilities for CRF search (step sizes, SSIM thresholds, etc.).
+/// Precision constants and utilities for CRF search (step sizes, SSIM
+/// thresholds, etc.).
 pub mod precision;
 
 /// Pre-check utilities for validating inputs before exploration.
@@ -5347,7 +5443,8 @@ mod tests {
         .unwrap_or_else(|| {
             crate::media_conversion_gate::explore_gpu_coarse_batch_audit(
                 "explore_iteration_overflow",
-                "Video Explorer: Failed to calculate coarse iterations (possible overflow); defaulting to 0 (search will skip coarse phase)",
+                "Video Explorer: Failed to calculate coarse iterations (possible overflow); \
+                 defaulting to 0 (search will skip coarse phase)",
             );
             0
         });
@@ -5358,7 +5455,8 @@ mod tests {
         .unwrap_or_else(|| {
             crate::media_conversion_gate::explore_gpu_coarse_batch_audit(
                 "explore_iteration_overflow",
-                "Video Explorer: Failed to calculate fine iterations (possible overflow); defaulting to 0 (search will skip fine phase)",
+                "Video Explorer: Failed to calculate fine iterations (possible overflow); \
+                 defaulting to 0 (search will skip fine phase)",
             );
             0
         });
@@ -5366,7 +5464,8 @@ mod tests {
 
         assert!(
             total <= 15,
-            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations (got {total})"
+            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations (got \
+             {total})"
         );
         assert!(
             coarse_iterations <= 9,
@@ -5641,7 +5740,8 @@ mod tests {
 
             assert!(
                 error <= 0.25,
-                "Target {target} should be within ±0.25 of nearest step {nearest}, got error {error}"
+                "Target {target} should be within ±0.25 of nearest step {nearest}, got error \
+                 {error}"
             );
         }
     }
@@ -5805,12 +5905,14 @@ mod tests {
             if crf > 10_i32 {
                 assert!(
                     max_crf >= prev_max_crf - 0.5,
-                    "max_crf should be monotonically increasing: {prev_max_crf} -> {max_crf} at CRF {crf}"
+                    "max_crf should be monotonically increasing: {prev_max_crf} -> {max_crf} at \
+                     CRF {crf}"
                 );
 
                 assert!(
                     min_ssim <= prev_min_ssim + 0.01_f64,
-                    "min_ssim should be monotonically decreasing: {prev_min_ssim} -> {min_ssim} at CRF {crf}"
+                    "min_ssim should be monotonically decreasing: {prev_min_ssim} -> {min_ssim} \
+                     at CRF {crf}"
                 );
             }
 
@@ -6395,7 +6497,8 @@ mod tests {
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
 
-        // ultimate_mode: base 100, crf_range 15 -> factor 0.75, scaled = 100 * 0.75 = 75
+        // ultimate_mode: base 100, crf_range 15 -> factor 0.75, scaled = 100 * 0.75 =
+        // 75
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 15.0, true).unwrap(),
             75
@@ -6424,7 +6527,8 @@ mod tests {
     #[test]
 
     fn test_zero_gains_long_video_override() {
-        // Long video uses LONG_VIDEO_REQUIRED_ZERO_GAINS as base, but ultimate_mode still enforces min 15
+        // Long video uses LONG_VIDEO_REQUIRED_ZERO_GAINS as base, but ultimate_mode
+        // still enforces min 15
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(300.0, 41.0, true).unwrap(),
             15

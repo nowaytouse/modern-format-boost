@@ -38,7 +38,8 @@ impl NavKey {
     }
 }
 
-/// Read one navigation key from TTY (blocking). Falls back to line-based read when not a TTY.
+/// Read one navigation key from TTY (blocking). Falls back to line-based read
+/// when not a TTY.
 pub fn read_nav_key() -> Result<NavKey> {
     if !io::stdin().is_terminal() {
         let mut line = String::new();
@@ -137,7 +138,8 @@ pub fn unescape_path(path_str: &str) -> String {
     path_str.to_string()
 }
 
-/// Validate drag/drop target path (mirrors Python `get_target_directory` guards).
+/// Validate drag/drop target path (mirrors Python `get_target_directory`
+/// guards).
 pub fn validate_drag_drop_path(raw: &str) -> Result<PathBuf> {
     if raw.contains('\n') || raw.contains('\r') {
         anyhow::bail!("path contains unsupported control characters");
@@ -161,7 +163,8 @@ pub fn resize_terminal_for_gui(rows: u16, cols: u16) {
     }
 }
 
-/// Flush stdin to prevent accidental menu triggers (mirrors Python `drain_stdin`).
+/// Flush stdin to prevent accidental menu triggers (mirrors Python
+/// `drain_stdin`).
 #[cfg(unix)]
 pub fn drain_stdin() {
     use std::os::unix::io::AsRawFd;

@@ -1,18 +1,21 @@
 //! Loop Intent Identification System
 //!
-//! A modern, explainable judgment tree for identifying media looping intent (memes, stickers, loops).
-//! Implements the 7-layer hierarchical decision tree defined in `docs/decision_tree.md`.
+//! A modern, explainable judgment tree for identifying media looping intent
+//! (memes, stickers, loops). Implements the 7-layer hierarchical decision tree
+//! defined in `docs/decision_tree.md`.
 //!
 //! Architecture:
 //! - Layer 1: Hard constraints + veto-gated hard passes
 //! - Layer 2: Explicit declarations → direct exits
-//! - Layer 3 & 4: Structural/content signals → `WeightedScore` accumulation with checkpoints
+//! - Layer 3 & 4: Structural/content signals → `WeightedScore` accumulation
+//!   with checkpoints
 //! - Layer 5: Weak contextual corrections
 //! - Layer 6: KNN + `WeightedScore` fusion
 //! - Layer 7: Conservative fallback
 //!
-//! Note: This module heavily utilizes Nightly-only features (intrinsics, `try_blocks`, SIMD)
-//! enabled via #![feature(...)] in lib.rs for forensic-grade performance.
+//! Note: This module heavily utilizes Nightly-only features (intrinsics,
+//! `try_blocks`, SIMD) enabled via #![feature(...)] in lib.rs for
+//! forensic-grade performance.
 
 use crate::builder_base::ToolBuilder;
 use crate::constants::{
@@ -47,7 +50,8 @@ pub struct FilenameAnalysis {
     pub kind: FilenameKind,
 }
 
-// ── Output: Tri-state Output ──────────────────────────────────────────────────
+// ── Output: Tri-state Output
+// ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
@@ -55,7 +59,8 @@ pub enum Verdict {
     LoopStrong(String),
     /// Weak loop intent: Convert GIF → video / keep as video.
     LoopWeak(String),
-    /// Uncertain: insufficient signal, handled by conservative fallback (Layer 7).
+    /// Uncertain: insufficient signal, handled by conservative fallback (Layer
+    /// 7).
     Uncertain(String),
     /// Error: impossible or conflicting signals (e.g. 1 frame video).
     Error(String),
@@ -197,13 +202,15 @@ fn loop_color_flags_from_assessment(
 
 /// Unified signal bundle consumed by the 7-layer decision tree.
 ///
-/// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
-/// The tree itself is a pure function over this struct — no I/O, no side effects.
+/// Populated by constructors (`from_video_detection`, `from_ffprobe_result`,
+/// `from_gif_path`). The tree itself is a pure function over this struct — no
+/// I/O, no side effects.
 #[derive(Debug, Clone, Default)]
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: Option<f64>,
-    pub duration_tier: Option<DurationTier>, // Optional so we don't break Default, though constructor populates it
+    pub duration_tier: Option<DurationTier>, /* Optional so we don't break Default, though
+                                              * constructor populates it */
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub fps: Option<f64>,
@@ -217,29 +224,35 @@ pub struct LoopMeta {
 
     // ── Layer 1 signals (hard constraints) ──
     pub flags: LoopFlags,
-    /// Whether the audio track is silent (`mean_volume` < -70 dB or `n_samples` == 0).
-    /// `None` = not yet detected, `Some(true)` = silent, `Some(false)` = has audible content.
+    /// Whether the audio track is silent (`mean_volume` < -70 dB or `n_samples`
+    /// == 0). `None` = not yet detected, `Some(true)` = silent,
+    /// `Some(false)` = has audible content.
     pub audio_is_silent: Option<bool>,
-    /// Whether transparency is actually used (not all opaque). Penetrating detection.
-    /// `None` = not yet verified, `Some(true)` = real transparency, `Some(false)` = fake/unused alpha.
+    /// Whether transparency is actually used (not all opaque). Penetrating
+    /// detection. `None` = not yet verified, `Some(true)` = real
+    /// transparency, `Some(false)` = fake/unused alpha.
     pub transparency_is_real: Option<bool>,
-    /// Actual decoded frame count (may differ from metadata claim). Penetrating detection.
+    /// Actual decoded frame count (may differ from metadata claim). Penetrating
+    /// detection.
     pub real_frame_count: Option<u64>,
 
     // ── Layer 2 signals (explicit declarations) ──
     /// 0 = infinite loop, 1 = play once, `None` = unknown.
     pub loop_count: Option<u16>,
-    /// e.g. [`GIPHY`, `NETSCAPE2.0`, ...] from `GIF` Application Extension block.
+    /// e.g. [`GIPHY`, `NETSCAPE2.0`, ...] from `GIF` Application Extension
+    /// block.
     pub app_extensions: Option<Vec<String>>,
     /// "webm", "mp4", "gif", etc.
     pub container: Option<String>,
-    /// Encoder software tags extracted from format/stream metadata (e.g., "Adobe Premiere", "Lavf", "Photoshop").
+    /// Encoder software tags extracted from format/stream metadata (e.g.,
+    /// "Adobe Premiere", "Lavf", "Photoshop").
     pub encoder_software: Option<String>,
     /// Whether the video is physically interlaced (from penetration testing).
     pub is_interlaced: Option<bool>,
 
     // ── Layer 3 signals (self-referential structure) ──
-    /// `frame_payload_variation`: coefficient of variation of frame packet sizes (`pkt_sizes` CV)
+    /// `frame_payload_variation`: coefficient of variation of frame packet
+    /// sizes (`pkt_sizes` CV)
     pub frame_payload_variation: Option<f64>,
     /// `frame_delay_variation`: CV of presentation timestamps deltas
     pub frame_delay_variation: Option<f64>,
@@ -250,8 +263,9 @@ pub struct LoopMeta {
 
     // ── Layer 4 signals (content features) ──
     pub palette_size: Option<u32>,
-    /// `WebP` compression ratio proxy: `raw_size` / `webp_size` for a sampled frame.
-    /// Constructors populate this on a best-effort basis for image-like sources.
+    /// `WebP` compression ratio proxy: `raw_size` / `webp_size` for a sampled
+    /// frame. Constructors populate this on a best-effort basis for
+    /// image-like sources.
     pub webp_compression_ratio: Option<f64>,
     pub palette_depth: Option<f64>,
     pub motion_gini: Option<f64>,
@@ -290,7 +304,9 @@ fn loop_meta_duration_tier_or_from_secs(
 }
 
 impl LoopMeta {
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     /// Build `LoopMeta` from a full `Detection`.
     #[must_use]
     pub fn from_video_detection(detection: &Detection) -> Self {
@@ -426,8 +442,11 @@ impl LoopMeta {
         meta
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
+    /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full
+    /// detection).
     #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
         let color_assessment = probe.color_assessment();
@@ -567,11 +586,13 @@ impl LoopMeta {
         meta
     }
 
-    /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
+    /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no
+    /// `ffprobe`).
     #[must_use]
     /// # Panics
     ///
-    /// Panics if the GIF file is corrupted or contains malformed header data that violates the `GIF89a` specification.
+    /// Panics if the GIF file is corrupted or contains malformed header data
+    /// that violates the `GIF89a` specification.
     pub fn from_gif_path(path: &Path) -> Option<Self> {
         let scan = match crate::media_meta_utils::scan_gif_headers(path) {
             Ok(s) => s,
@@ -595,7 +616,8 @@ impl LoopMeta {
                     "delivery_intent",
                     path,
                     format!(
-                        "Forensic: Failed to extract loop metadata for {path_display}; using conservative fallback: {e}",
+                        "Forensic: Failed to extract loop metadata for {path_display}; using \
+                         conservative fallback: {e}",
                         path_display = path.display(),
                     ),
                 );
@@ -740,7 +762,8 @@ impl LoopMeta {
                                                 "loop_intent_webp_ratio_failed",
                                                 path,
                                                 format!(
-                                                    "failed to compute sampled WebP compression ratio: {err}"
+                                                    "failed to compute sampled WebP compression \
+                                                     ratio: {err}"
                                                 ),
                                             );
                                         }
@@ -791,9 +814,10 @@ impl LoopMeta {
 
     /// Force empirical WebP-ratio measurement for training ingest.
     ///
-    /// The regular constructor path samples this feature only when the source is large
-    /// enough to justify best-effort runtime work. Training vectors require the field,
-    /// so ingestion must measure it or fail closed before writing a DB row.
+    /// The regular constructor path samples this feature only when the source
+    /// is large enough to justify best-effort runtime work. Training
+    /// vectors require the field, so ingestion must measure it or fail
+    /// closed before writing a DB row.
     pub fn ensure_webp_compression_ratio_from_path(&mut self, path: &Path) -> anyhow::Result<()> {
         if let Some(ratio) = self.webp_compression_ratio {
             if ratio.is_finite() && ratio > 0.0 {
@@ -866,7 +890,8 @@ impl LoopMeta {
         self.filename_loop_intent_score = analyze_filename(self.file_name.as_deref(), keywords).raw;
     }
 
-    /// Returns the duration tier, falling back to calculation if the cached field is None.
+    /// Returns the duration tier, falling back to calculation if the cached
+    /// field is None.
     #[must_use]
     pub fn tier(&self) -> Option<DurationTier> {
         loop_meta_duration_tier_or_from_secs(self.duration_tier, self.duration_secs)
@@ -1004,11 +1029,12 @@ struct SignalFlags {
 struct DerivedLoopSignals {
     flags: SignalFlags,
     zero_motion_ratio: f64,
-    /// Ratio of I-frames to total frames. GIF→MP4 transcodes produce all-I-frame streams
-    /// (ratio ≈ 1.0); real video with GOP structure has ratio ≈ 0.03–0.10.
+    /// Ratio of I-frames to total frames. GIF→MP4 transcodes produce
+    /// all-I-frame streams (ratio ≈ 1.0); real video with GOP structure has
+    /// ratio ≈ 0.03–0.10.
     iframe_ratio: f64,
-    /// Average bytes per frame. GIF-class content typically has low `bytes_per_frame`
-    /// compared to real video content.
+    /// Average bytes per frame. GIF-class content typically has low
+    /// `bytes_per_frame` compared to real video content.
     bytes_per_frame: f64,
 }
 
@@ -1075,12 +1101,14 @@ struct LoopThresholds {
 }
 
 impl LoopThresholds {
-    /// DB-backed thresholds only; returns `None` when profile missing or incomplete.
+    /// DB-backed thresholds only; returns `None` when profile missing or
+    /// incomplete.
     fn for_evaluation(reference_profile: Option<&LoopReferenceProfile>) -> Option<Self> {
         reference_profile.and_then(Self::from_reference_profile)
     }
 
-    /// Build thresholds from a DB-backed profile; returns `None` when empirical percentiles are incomplete.
+    /// Build thresholds from a DB-backed profile; returns `None` when empirical
+    /// percentiles are incomplete.
     fn from_reference_profile(reference: &LoopReferenceProfile) -> Option<Self> {
         let duration_percentiles_available = reference.duration_has_empirical_percentiles;
         if duration_percentiles_available
@@ -1093,7 +1121,8 @@ impl LoopThresholds {
         {
             crate::media_conversion_gate::delivery_intent_batch_audit(
                 "loop_thresholds_incomplete",
-                "LoopThresholds: duration histogram present but p25/p10 missing; refusing fabricated percentile",
+                "LoopThresholds: duration histogram present but p25/p10 missing; refusing \
+                 fabricated percentile",
             );
             return None;
         }
@@ -1157,7 +1186,8 @@ impl LoopThresholds {
             crate::media_conversion_gate::delivery_intent_batch_audit(
                 "loop_thresholds_invalid",
                 format!(
-                    "LoopThresholds: duration_override_secs {duration_override_secs:.3} leaves no room below loop-intent max duration {:.3}; refusing inverted short-clip clamp",
+                    "LoopThresholds: duration_override_secs {duration_override_secs:.3} leaves no \
+                     room below loop-intent max duration {:.3}; refusing inverted short-clip clamp",
                     crate::constants::LOOP_INTENT_MAX_DURATION
                 ),
             );
@@ -1235,7 +1265,8 @@ impl LoopThresholds {
                 crate::media_conversion_gate::delivery_intent_batch_audit(
                     "delivery_io",
                     format!(
-                        "FEATURE WEIGHT ANOMALY: Unknown feature key '{key}' encountered in reference profile | Refusing to forge data"
+                        "FEATURE WEIGHT ANOMALY: Unknown feature key '{key}' encountered in \
+                         reference profile | Refusing to forge data"
                     ),
                 );
                 None
@@ -1294,9 +1325,11 @@ impl LoopThresholds {
 #[derive(Debug, Clone)]
 pub struct TreeEvaluation {
     pub verdict: Verdict,
-    /// Sealed unit probability when the tree produced one (`None` = non-finite / unavailable).
+    /// Sealed unit probability when the tree produced one (`None` = non-finite
+    /// / unavailable).
     pub tree_probability: Option<f64>,
-    /// Finite log-odds accumulator when available (`None` = overflow or non-finite).
+    /// Finite log-odds accumulator when available (`None` = overflow or
+    /// non-finite).
     pub log_odds_value: Option<f64>,
     /// Set when the tree exits before Layer 6 (Layer 0 veto, checkpoint, etc.).
     pub resolution_path: Option<String>,
@@ -1404,7 +1437,8 @@ fn checkpoint_verdict(
     verdict
 }
 
-/// Stable audit tag for tree checkpoint early exits (layer tag is also in verdict text).
+/// Stable audit tag for tree checkpoint early exits (layer tag is also in
+/// verdict text).
 fn tree_checkpoint_resolution_path(layer_tag: &str) -> &'static str {
     if layer_tag.contains("Layer 3") {
         if layer_tag.contains("Image") {
@@ -2042,19 +2076,19 @@ impl<'a> WeakHeuristicScorer<'a> {
 
     fn apply_container_and_short_asset_biases(&mut self) {
         if self.media_family.is_video() {
-            let has_verified_transparency = if let Some(is_real) =
-                self.meta.real_transparency_state()
-            {
-                is_real
-            } else {
-                if self.meta.flags.streams.has_transparency {
-                    crate::log_debug!(
-                        crate::infra::static_logs::messages::LABEL_INTENT,
-                        "SIGNAL VOID: Missing 'transparency_is_real' flag; refusing to assume video transparency is real"
-                    );
-                }
-                false
-            };
+            let has_verified_transparency =
+                if let Some(is_real) = self.meta.real_transparency_state() {
+                    is_real
+                } else {
+                    if self.meta.flags.streams.has_transparency {
+                        crate::log_debug!(
+                            crate::infra::static_logs::messages::LABEL_INTENT,
+                            "SIGNAL VOID: Missing 'transparency_is_real' flag; refusing to assume \
+                             video transparency is real"
+                        );
+                    }
+                    false
+                };
             if has_verified_transparency {
                 self.log_odds
                     .add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
@@ -2076,7 +2110,8 @@ impl<'a> WeakHeuristicScorer<'a> {
         let Some(duration) = self.meta.duration_secs else {
             crate::media_conversion_gate::delivery_intent_batch_audit(
                 "delivery_intent",
-                "HEURISTIC AUDIT: Video duration is missing | Forensic: Field is None; skipping short-clip heuristics to prevent score forgery",
+                "HEURISTIC AUDIT: Video duration is missing | Forensic: Field is None; skipping \
+                 short-clip heuristics to prevent score forgery",
             );
             return;
         };
@@ -2361,7 +2396,9 @@ impl<'a> WeakHeuristicScorer<'a> {
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn apply_structural_signals(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -2373,7 +2410,9 @@ fn apply_structural_signals(
     StructuralSignalScorer::new(meta, derived, thresholds, log_odds, is_image, is_video).apply();
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn apply_weak_heuristics(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -2408,7 +2447,6 @@ fn developer_layer1_override_enabled(name: &str) -> bool {
 }
 
 /// Converts a `Verdict` + accumulated `LogOdds` into a `TreeEvaluation`.
-///
 fn finalize_with_path(
     verdict: Verdict,
     lo: LogOdds,
@@ -2487,8 +2525,8 @@ fn evaluate_loop_tree_without_reference_profile(meta: &LoopMeta) -> Option<TreeE
         );
         return Some(finalize_with_path(
             Verdict::LoopStrong(format!(
-                "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — \
-                 definitively animated image regardless of all other signals",
+                "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — definitively \
+                 animated image regardless of all other signals",
                 dur_str,
                 crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
             )),
@@ -2507,8 +2545,8 @@ fn evaluate_loop_tree_without_reference_profile(meta: &LoopMeta) -> Option<TreeE
         );
         return Some(finalize_with_path(
             Verdict::LoopWeak(format!(
-                "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — \
-                 definitively video regardless of all other signals",
+                "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — definitively video \
+                 regardless of all other signals",
                 dur_str,
                 crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
             )),
@@ -2521,7 +2559,9 @@ fn evaluate_loop_tree_without_reference_profile(meta: &LoopMeta) -> Option<TreeE
 }
 
 #[must_use]
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -2549,10 +2589,11 @@ pub fn evaluate_loop_tree(
         );
     };
 
-    // ── Layer 0: Degenerate Input Guard (Veto/Uncertain) ──────────────────────────
-    // Sequential Validation Rule:
+    // ── Layer 0: Degenerate Input Guard (Veto/Uncertain)
+    // ────────────────────────── Sequential Validation Rule:
     // 1. Physically impossible assets (1-frame) → Immediate Error.
-    // 2. Assets missing core metadata (None) → Uncertain (Unverifiable, let L7 fallback).
+    // 2. Assets missing core metadata (None) → Uncertain (Unverifiable, let L7
+    //    fallback).
     // 3. Degenerate duration (video only) → Immediate Error.
 
     if let Some(fc) = meta.frame_count
@@ -2602,12 +2643,14 @@ pub fn evaluate_loop_tree(
     // absolute veto power without going through the log-odds pipeline.
     //
     // Boundaries (by design, not by heuristic):
-    //   • ≤ 6.0s silent: covers all real-world stickers, reactions, and looping memes.
-    //     No file size, resolution, or metadata signal overrides this.
-    //   • ≥ 15.0s: exceeds the practical upper bound for any real-world animated image.
-    //     No loop_count, transparency, or platform marker overrides this.
+    //   • ≤ 6.0s silent: covers all real-world stickers, reactions, and looping
+    // memes.     No file size, resolution, or metadata signal overrides this.
+    //   • ≥ 15.0s: exceeds the practical upper bound for any real-world animated
+    // image.     No loop_count, transparency, or platform marker overrides
+    // this.
 
-    // Audio signal is now in `derived.flags.content.has_audible_audio` (computed once, used everywhere).
+    // Audio signal is now in `derived.flags.content.has_audible_audio` (computed
+    // once, used everywhere).
     let has_audible_audio_global = derived.flags.content.has_audible_audio;
 
     // Hard veto: Extreme short (≤ 6.0s, silent)
@@ -2622,8 +2665,8 @@ pub fn evaluate_loop_tree(
         );
         return finalize_with_path(
             Verdict::LoopStrong(format!(
-                "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — \
-                 definitively animated image regardless of all other signals",
+                "Layer 0-EX (Hard Veto): extreme-short duration {} ≤ {:.1}s — definitively \
+                 animated image regardless of all other signals",
                 dur_str,
                 crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
             )),
@@ -2643,8 +2686,8 @@ pub fn evaluate_loop_tree(
         );
         return finalize_with_path(
             Verdict::LoopWeak(format!(
-                "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — \
-                 definitively video regardless of all other signals",
+                "Layer 0-EX (Hard Veto): extreme-long duration {} ≥ {:.1}s — definitively video \
+                 regardless of all other signals",
                 dur_str,
                 crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
             )),
@@ -2655,18 +2698,20 @@ pub fn evaluate_loop_tree(
 
     // ── Layer 0: Duration Dispatcher (Bias + Anti-Cliff Proximity Ramp) ──────────
     // Assets in the gray zone (6–15s) receive:
-    //   1. A tier-proportional base bias (UltraShort → +crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH … DefinitivelyLong → -3.0)
-    //   2. A linearly-decaying proximity bonus/penalty for assets near a veto boundary.
-    //      This prevents the "behavioral cliff" where 5.9s and 6.1s are treated radically
-    //      differently despite being only 0.2s apart.
+    //   1. A tier-proportional base bias (UltraShort →
+    //      +crate::constants::LOOP_INTENT_Z_SCORE_STRENGTH … DefinitivelyLong →
+    //      -3.0)
+    //   2. A linearly-decaying proximity bonus/penalty for assets near a veto
+    //      boundary. This prevents the "behavioral cliff" where 5.9s and 6.1s are
+    //      treated radically differently despite being only 0.2s apart.
     //
     // Proximity ramp (short side, silent only):
-    //   At 6.0s + ε → proximity ≈ 1.0 → full +2.5 bonus (nearly as strong as the veto)
-    //   At 8.0s     → proximity = 0.0 → no additional bonus
+    //   At 6.0s + ε → proximity ≈ 1.0 → full +2.5 bonus (nearly as strong as the
+    // veto)   At 8.0s     → proximity = 0.0 → no additional bonus
     //
     // Proximity ramp (long side):
-    //   At 15.0s - ε → proximity ≈ 1.0 → full -2.5 penalty (nearly as strong as the veto)
-    //   At 13.0s     → proximity = 0.0 → no additional penalty
+    //   At 15.0s - ε → proximity ≈ 1.0 → full -2.5 penalty (nearly as strong as the
+    // veto)   At 13.0s     → proximity = 0.0 → no additional penalty
 
     let is_short_tier = matches!(
         tier,
@@ -2734,18 +2779,21 @@ pub fn evaluate_loop_tree(
     }
 
     // ── Stage 1: Specialized Tree Dispatch ─────────────────────────────────────
-    // Extreme-zone assets have already exited. All remaining assets (6–15s gray zone)
-    // proceed to the specialized tree for further weighted evidence accumulation.
+    // Extreme-zone assets have already exited. All remaining assets (6–15s gray
+    // zone) proceed to the specialized tree for further weighted evidence
+    // accumulation.
     //
-    // Container-Aware Metadata Trust: replaces the former duration-proportional decay.
-    // The old approach assumed "longer → less trustworthy metadata", which has no causal
-    // basis. MP4 loop_count is unreliable at ANY duration (no standard loop field).
-    // GIF NETSCAPE2.0 is authoritative at ANY duration.
+    // Container-Aware Metadata Trust: replaces the former duration-proportional
+    // decay. The old approach assumed "longer → less trustworthy metadata",
+    // which has no causal basis. MP4 loop_count is unreliable at ANY duration
+    // (no standard loop field). GIF NETSCAPE2.0 is authoritative at ANY
+    // duration.
     //
     // Trust levels:
-    //   1.0: GIF (NETSCAPE2.0 extension), WebP (ANIM chunk loop field), APNG (acTL loop)
-    //   0.6: Modern animated containers where loop semantics exist but are less standardized
-    //   0.2: MP4/MKV/AVI — no authoritative loop field; loop_count is typically inferred
+    //   1.0: GIF (NETSCAPE2.0 extension), WebP (ANIM chunk loop field), APNG (acTL
+    // loop)   0.6: Modern animated containers where loop semantics exist but
+    // are less standardized   0.2: MP4/MKV/AVI — no authoritative loop field;
+    // loop_count is typically inferred
     let metadata_trust = {
         let ext = crate::media_conversion_gate::meta_extension_lowercase_or_empty(
             meta.source_extension.as_deref(),
@@ -2775,7 +2823,8 @@ pub fn evaluate_loop_tree(
 
         // ── Deep Penetration: Creator Software Validation ──
         // If we know the software that generated this file, we can override trust.
-        // This solves the "Adobe Premiere exporting WebP with a loop marker" forgery risk.
+        // This solves the "Adobe Premiere exporting WebP with a loop marker" forgery
+        // risk.
         if let Some(encoder) = &meta.encoder_software {
             let lower = encoder.to_lowercase();
             // NLE (Non-Linear Editors) exporting to WebP/GIF rarely intend for short loops.
@@ -2840,8 +2889,9 @@ pub fn evaluate_loop_tree(
             {
                 base_trust = base_trust.max(crate::constants::METADATA_TRUST_AUTHORITATIVE); // Absolute trust
             }
-            // Slightly penalize generic FFmpeg wrappers, basic encoders, and mobile fast-editors
-            // This is now independent of the initial trust assignment to ensure it accumulates.
+            // Slightly penalize generic FFmpeg wrappers, basic encoders, and mobile
+            // fast-editors This is now independent of the initial trust
+            // assignment to ensure it accumulates.
             if lower.contains(crate::constants::SOFTWARE_LAVF)
                 || lower.contains(crate::constants::SOFTWARE_HANDBRAKE)
                 || lower.contains(crate::constants::SOFTWARE_SHANA)
@@ -2892,14 +2942,16 @@ fn evaluate_image_tree(
 
     // Layer 2: Explicit declarations — attenuated by metadata_trust.
     // Soft metadata signals (loop_count, platform markers) decay toward zero as
-    // duration approaches the long-veto boundary. Physical signals are NOT affected.
+    // duration approaches the long-veto boundary. Physical signals are NOT
+    // affected.
     if meta.loop_count == Some(0) {
         let bonus = loop_count_zero_bonus(meta, thresholds);
         if bonus.is_finite() {
             log_odds.add(bonus * metadata_trust);
         }
     } else if meta.loop_count == Some(1) {
-        // play-once is a negative signal — apply full weight regardless (safe direction)
+        // play-once is a negative signal — apply full weight regardless (safe
+        // direction)
         log_odds.add(PLAY_ONCE_NEGATIVE_LOG_ODDS);
     }
 
@@ -3011,7 +3063,8 @@ fn evaluate_video_tree(
     // Layer 1-A: Audio is a very strong anti-loop signal, but not an absolute veto.
     // An ultra-short video with a single click sound is still plausibly a loop.
     // Duration-tier interaction modulates the penalty.
-    // Use the centralized audio signal from DerivedLoopSignals (no duplicate computation).
+    // Use the centralized audio signal from DerivedLoopSignals (no duplicate
+    // computation).
     if derived.flags.content.has_audible_audio {
         let audio_penalty = match tier {
             DurationTier::UltraShort => crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS * 0.6_f64,
@@ -3065,8 +3118,9 @@ fn evaluate_video_tree(
         log_odds.add(crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS);
     }
 
-    // Layer 1-B3: Dimensional Sticker — dimensions are metadata, use as weighted bonus.
-    // UltraShort duration is the real anchor; dimensions just add confidence.
+    // Layer 1-B3: Dimensional Sticker — dimensions are metadata, use as weighted
+    // bonus. UltraShort duration is the real anchor; dimensions just add
+    // confidence.
     if tier == DurationTier::UltraShort
         && let (Some(w), Some(h)) = (meta.width, meta.height)
         && w > 0
@@ -3191,9 +3245,11 @@ struct Layer6Fusion {
     final_score: f64,
 }
 
-/// Fuses KNN results with the decision tree output using a Logistic Regression model.
+/// Fuses KNN results with the decision tree output using a Logistic Regression
+/// model.
 ///
-/// Formula: P(keep) = `sigmoid`(`w_knn`*knn + `w_tree`*tree + `w_density`*log(n) + bias)
+/// Formula: P(keep) = `sigmoid`(`w_knn`*knn + `w_tree`*tree +
+/// `w_density`*log(n) + bias)
 fn logistic_regression_fusion(
     knn_prob: f64,
     tree_prob: f64,
@@ -3207,12 +3263,13 @@ fn logistic_regression_fusion(
     // neighbor_count is log-scaled to normalized density signal
     let density_signal = crate::numeric_cast::usize_to_f64(neighbor_count).ln_1p();
 
-    // MATH FIX: Convert probabilities to log-odds (logit) before linear combination.
-    // Previously, raw probabilities were weighted and then passed through sigmoid,
-    // which is mathematically incorrect: sigmoid(p1*w1 + p2*w2) ≠ proper probability fusion.
-    // The correct form is: sigmoid(logit(p1)*w1 + logit(p2)*w2 + bias)
-    // This ensures high-confidence inputs (p ≈ 0 or p ≈ 1) are properly preserved
-    // through the fusion, instead of being compressed toward 0.5.
+    // MATH FIX: Convert probabilities to log-odds (logit) before linear
+    // combination. Previously, raw probabilities were weighted and then passed
+    // through sigmoid, which is mathematically incorrect: sigmoid(p1*w1 +
+    // p2*w2) ≠ proper probability fusion. The correct form is:
+    // sigmoid(logit(p1)*w1 + logit(p2)*w2 + bias) This ensures high-confidence
+    // inputs (p ≈ 0 or p ≈ 1) are properly preserved through the fusion,
+    // instead of being compressed toward 0.5.
     let logit = |p: f64| -> f64 {
         let clamped = p.clamp(
             crate::constants::FUSED_PROB_CLAMP_LOWER,
@@ -3781,11 +3838,13 @@ impl<'a> Layer6DirectionalArbitrator<'a> {
 
         let verdict = if keep_wins {
             Verdict::LoopStrong(format!(
-                "Layer 6-B: arbitration resolved KEEP (from {upstream_layer}; keep={keep_score:.2}, convert={convert_score:.2}{neighbor_suffix}; {trace})"
+                "Layer 6-B: arbitration resolved KEEP (from {upstream_layer}; \
+                 keep={keep_score:.2}, convert={convert_score:.2}{neighbor_suffix}; {trace})"
             ))
         } else {
             Verdict::LoopWeak(format!(
-                "Layer 6-B: arbitration resolved CONVERT (from {upstream_layer}; keep={keep_score:.2}, convert={convert_score:.2}{neighbor_suffix}; {trace})"
+                "Layer 6-B: arbitration resolved CONVERT (from {upstream_layer}; \
+                 keep={keep_score:.2}, convert={convert_score:.2}{neighbor_suffix}; {trace})"
             ))
         };
         (
@@ -3798,7 +3857,9 @@ impl<'a> Layer6DirectionalArbitrator<'a> {
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn layer6_directional_arbitration(
     meta: &LoopMeta,
     thresholds: &LoopThresholds,
@@ -3835,13 +3896,15 @@ pub fn assess(detection: &Detection) -> Verdict {
 
 /// Apply Apple compatibility delivery policy to a loop-intent verdict.
 ///
-/// This keeps the "what should we deliver on Apple?" rule centralized in `foundation`,
-/// while callers (e.g. `vid`) remain orchestration-only.
+/// This keeps the "what should we deliver on Apple?" rule centralized in
+/// `foundation`, while callers (e.g. `vid`) remain orchestration-only.
 ///
 /// Policy summary (modern animated image formats only):
 /// - Short, silent animated-image assets should be delivered as GIF.
-/// - Long animations must NOT be forced into GIF (keep eligible for HEVC delivery).
-/// - Uncertain verdicts are forced to GIF in Apple mode to maximize compatibility.
+/// - Long animations must NOT be forced into GIF (keep eligible for HEVC
+///   delivery).
+/// - Uncertain verdicts are forced to GIF in Apple mode to maximize
+///   compatibility.
 #[must_use]
 pub fn apply_apple_compat_modern_animation_policy(
     verdict: Verdict,
@@ -3886,29 +3949,34 @@ pub fn apply_apple_compat_modern_animation_policy(
         && dur <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
     {
         return Verdict::LoopStrong(format!(
-            "Apple compat policy: modern animated format ({ext_lower}) \u{2192} force GIF (duration={:.2}s, frames={}, audible_audio={})",
+            "Apple compat policy: modern animated format ({ext_lower}) \u{2192} force GIF \
+             (duration={:.2}s, frames={}, audible_audio={})",
             dur,
             frame_count,
             meta.has_confirmed_audible_audio()
         ));
     }
 
-    // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
-    // animation is clearly not video-like (small-ish frame count, silent).
+    // Degenerate duration fallback: only treat as "short" for apple-compat forcing
+    // when the animation is clearly not video-like (small-ish frame count,
+    // silent).
     if meta.duration_secs.is_some_and(|d| d <= 0.0_f64)
         && meta.frame_count.is_none_or(|fc| fc <= 300)
     {
         return Verdict::LoopStrong(format!(
-            "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audible_audio={})",
+            "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate \
+             duration, frames={}, audible_audio={})",
             frame_count,
             meta.has_confirmed_audible_audio()
         ));
     }
 
-    // Compatibility fallback: modern animated formats with uncertain intent are delivered as GIF.
+    // Compatibility fallback: modern animated formats with uncertain intent are
+    // delivered as GIF.
     if matches!(verdict, Verdict::Uncertain(_)) {
         return Verdict::LoopStrong(format!(
-            "Apple compat policy: modern animated format ({ext_lower}) with uncertain intent → force GIF",
+            "Apple compat policy: modern animated format ({ext_lower}) with uncertain intent → \
+             force GIF",
         ));
     }
 
@@ -3945,13 +4013,15 @@ struct InferenceTracking {
     resolution_path: Option<String>,
     knn_lookup_succeeded: Option<bool>,
     hnsw_lookup_branch: Option<String>,
-    /// Corpus-health probe when the tree exited before Layer 6; never affects verdict or decision-path KNN fields.
+    /// Corpus-health probe when the tree exited before Layer 6; never affects
+    /// verdict or decision-path KNN fields.
     knn_telemetry_lookup_succeeded: Option<bool>,
     knn_telemetry_branch: Option<String>,
     knn_telemetry_neighbor_count: Option<usize>,
 }
 
-/// True when the final verdict came from Layer 7 format-preservation policy (not tree/KNN posteriors).
+/// True when the final verdict came from Layer 7 format-preservation policy
+/// (not tree/KNN posteriors).
 fn inference_used_layer7_policy(tracking: &InferenceTracking) -> bool {
     tracking.layer7_upstream.is_some()
         || tracking.resolution_path.as_deref() == Some("layer7_fallback")
@@ -4163,7 +4233,8 @@ impl<'a> LoopAssessmentSession<'a> {
             crate::media_penetration::PenetrationResult::Failed => {
                 crate::media_conversion_gate::delivery_intent_batch_audit(
                     "delivery_intent",
-                    "Frame count penetration failed; invalidating suspicious frame-count metadata rather than trusting it",
+                    "Frame count penetration failed; invalidating suspicious frame-count metadata \
+                     rather than trusting it",
                 );
                 self.mutable_meta.frame_count = None;
                 self.mutable_meta.real_frame_count = None;
@@ -4177,8 +4248,9 @@ impl<'a> LoopAssessmentSession<'a> {
         self.tracking.tree_log_odds = tree.log_odds_value;
     }
 
-    /// Run HNSW lookup for corpus-health telemetry when the tree exited before Layer 6 KNN
-    /// (e.g. Layer 0-EX hard veto). Does not change verdict, session meta, or decision-path KNN audit fields.
+    /// Run HNSW lookup for corpus-health telemetry when the tree exited before
+    /// Layer 6 KNN (e.g. Layer 0-EX hard veto). Does not change verdict,
+    /// session meta, or decision-path KNN audit fields.
     fn run_supplementary_knn_telemetry(&mut self) {
         if self.tracking.knn_telemetry_lookup_succeeded.is_some() {
             return;
@@ -4267,7 +4339,8 @@ impl<'a> LoopAssessmentSession<'a> {
     fn resolve_legacy_mode(&mut self, tree: &TreeEvaluation) -> Verdict {
         crate::media_conversion_gate::delivery_intent_batch_audit(
             "delivery_intent",
-            "Loop DB unavailable or disabled — running tree without KNN and refusing fabricated priors",
+            "Loop DB unavailable or disabled — running tree without KNN and refusing fabricated \
+             priors",
         );
         self.capture_tree_context(tree);
         match &tree.verdict {
@@ -4348,7 +4421,8 @@ impl<'a> LoopAssessmentSession<'a> {
                     "🔭",
                     symbols::plain::TREE_UNCERTAIN,
                     format!(
-                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — falling back to Layer 6 KNN..."
+                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — falling back \
+                         to Layer 6 KNN..."
                     ),
                 );
 
@@ -4398,7 +4472,8 @@ impl<'a> LoopAssessmentSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_INTENT,
             &format!(
-                "KNN similarity match unavailable (tree_prob={}) — attempting Layer 6-B arbitration",
+                "KNN similarity match unavailable (tree_prob={}) — attempting Layer 6-B \
+                 arbitration",
                 format_optional_probability(tree_probability)
             )
         );
@@ -4481,7 +4556,8 @@ impl<'a> LoopAssessmentSession<'a> {
             symbols::WARNING,
             symbols::plain::WARNING,
             format!(
-                "   KNN match missing keep-probability (conf={:.2}, n={}) — attempting Layer 6-B arbitration",
+                "   KNN match missing keep-probability (conf={:.2}, n={}) — attempting Layer 6-B \
+                 arbitration",
                 sample_match.confidence, sample_match.neighbor_count
             ),
         );
@@ -4689,7 +4765,8 @@ impl<'a> LoopAssessmentSession<'a> {
                 "Layer 6 fusion accepted LoopStrong"
             );
             let verdict = Verdict::LoopStrong(format!(
-                "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
+                "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={}×{:.2}, nudge={:+.2}, \
+                 conf={:.2}, n={})",
                 final_score,
                 keep_prob,
                 fusion.knn_weight,
@@ -4711,7 +4788,8 @@ impl<'a> LoopAssessmentSession<'a> {
             && final_score <= crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
         {
             let verdict = Verdict::LoopWeak(format!(
-                "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
+                "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={}×{:.2}, nudge={:+.2}, \
+                 conf={:.2}, n={})",
                 final_score,
                 keep_prob,
                 fusion.knn_weight,
@@ -4732,7 +4810,8 @@ impl<'a> LoopAssessmentSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_INTENT,
             &format!(
-                "KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — attempting Layer 6-B arbitration"
+                "KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — \
+                 attempting Layer 6-B arbitration"
             )
         );
         if let Some(arbitrated) = self.try_layer6b_arbitration(
@@ -4872,16 +4951,21 @@ impl<'a> LoopAssessmentSession<'a> {
     }
 }
 
-/// Persists an `inference_log` row when loop inference logging and DB feedback are enabled.
+/// Persists an `inference_log` row when loop inference logging and DB feedback
+/// are enabled.
 ///
-/// Logging defaults on (`MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_LOG=1` to skip).
-/// Inference log defaults to audit-only (`MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_AUDIT_ONLY=1` for runtime verdict column).
+/// Logging defaults on (`MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_LOG=1` to
+/// skip). Inference log defaults to audit-only
+/// (`MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_AUDIT_ONLY=1` for runtime
+/// verdict column).
 ///
 /// # Errors
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error during visual sampling.
 #[must_use]
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
     LoopAssessmentSession::new(meta, path).run()
 }
@@ -4889,7 +4973,8 @@ pub fn assess_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Verdict {
 /// Layer 7: Conservative fallback with minimum-loss default.
 ///
 /// BUG FIX: Removed sticker safe zone logic. "Uncertain" means we don't know,
-/// so we preserve the original format routing without making additional guesses.
+/// so we preserve the original format routing without making additional
+/// guesses.
 fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> Verdict {
     tracing::trace!(
         target: "mfb.algorithm",
@@ -4924,7 +5009,8 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> Verdict {
     }
 }
 
-/// Extract the layer tag (e.g. "Layer 1-A", "Layer 6", "Layer 7") from a verdict reason string.
+/// Extract the layer tag (e.g. "Layer 1-A", "Layer 6", "Layer 7") from a
+/// verdict reason string.
 fn extract_layer_tag(reason: &str) -> String {
     crate::media_conversion_gate::loop_layer_tag_from_reason_or_unknown(
         reason,
@@ -4932,7 +5018,8 @@ fn extract_layer_tag(reason: &str) -> String {
     )
 }
 
-// ── Safety & Exploration Helpers ──────────────────────────────────────────────
+// ── Safety & Exploration Helpers
+// ──────────────────────────────────────────────
 
 /// Dynamic safety-guard for CRF 0.00 (lossless) exploration.
 #[must_use]
@@ -4961,7 +5048,8 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
             symbols::WARNING,
             symbols::plain::WARNING,
             format!(
-                "   Lossless-first (CRF 0.00) skip: duration {dur_str} exceeds limit {threshold:.1}s ({keep_prob_label})",
+                "   Lossless-first (CRF 0.00) skip: duration {dur_str} exceeds limit \
+                 {threshold:.1}s ({keep_prob_label})",
             ),
         );
     }
@@ -4984,7 +5072,8 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     }
 }
 
-// ── Signal Scorers ────────────────────────────────────────────────────────────
+// ── Signal Scorers
+// ────────────────────────────────────────────────────────────
 
 fn calculate_cv(values: &[u64]) -> Option<f64> {
     if values.is_empty() {
@@ -5028,10 +5117,12 @@ pub(crate) fn ensure_block_skew(meta: &mut LoopMeta) {
     }
 }
 
-/// Fill `frame_delay_variation` when ffprobe omits per-frame PTS but container FPS is known.
+/// Fill `frame_delay_variation` when ffprobe omits per-frame PTS but container
+/// FPS is known.
 ///
-/// Constant-FPS without per-frame `pkt_pts_time` yields CV=0.0 only inside live `LoopMeta`
-/// from ffprobe/header probe — never via `Default` or repair-time column backfill.
+/// Constant-FPS without per-frame `pkt_pts_time` yields CV=0.0 only inside live
+/// `LoopMeta` from ffprobe/header probe — never via `Default` or repair-time
+/// column backfill.
 pub(crate) fn ensure_frame_delay_variation(meta: &mut LoopMeta) {
     if meta.frame_delay_variation.is_some() {
         return;
@@ -5136,7 +5227,8 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
 }
 
 fn fps_anomaly_score(fps: f64) -> f64 {
-    // Returns high score when fps is far from standard rates → atypical → possible loop artifact
+    // Returns high score when fps is far from standard rates → atypical → possible
+    // loop artifact
     let std_rates = [24.0_f64, 25.0_f64, 30.0_f64, 60.0_f64, 120.0_f64];
     let min_delta = std_rates
         .iter()
@@ -5174,7 +5266,8 @@ fn get_meme_keywords() -> &'static [String] {
 /// Returns `0.5` if no parts are provided.
 ///
 /// # Errors
-/// This function does not typically return `Result`, but uses `0.5` as a neutral score.
+/// This function does not typically return `Result`, but uses `0.5` as a
+/// neutral score.
 #[must_use]
 pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) -> f64 {
     let Some(parts) = parts else {
@@ -5197,7 +5290,8 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
 /// Returns `0.5` (Ambiguous) if no name is provided.
 ///
 /// # Errors
-/// This function does not typically return `Result`, but uses `0.5` as a neutral score.
+/// This function does not typically return `Result`, but uses `0.5` as a
+/// neutral score.
 #[must_use]
 pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnalysis {
     let Some(name) = name else {
@@ -5315,10 +5409,12 @@ pub fn score_sparse_cadence(duration_secs: Option<f64>, frame_count: Option<u64>
     crate::constants::LOOP_INTENT_NEUTRAL_PROB
 }
 
-// ── Layer 6: Auxiliary Micro-Nudges ───────────────────────────────────────────
+// ── Layer 6: Auxiliary Micro-Nudges
+// ───────────────────────────────────────────
 
 /// Auxiliary nudge accumulator for Layer 6 micro-adjustments.
-/// Total nudge score is clamped to [-0.15, +0.15] to ensure it only acts as a tie-breaker.
+/// Total nudge score is clamped to [-0.15, +0.15] to ensure it only acts as a
+/// tie-breaker.
 #[derive(Debug, Default)]
 struct AuxiliaryNudge {
     score: f64,
@@ -5332,7 +5428,8 @@ impl AuxiliaryNudge {
     }
 }
 
-/// Calculate Tier 1 (zero-cost metadata) and Tier 2 (low-cost bitstream) nudges.
+/// Calculate Tier 1 (zero-cost metadata) and Tier 2 (low-cost bitstream)
+/// nudges.
 fn calculate_micro_nudges(meta: &LoopMeta) -> AuxiliaryNudge {
     let mut nudge = AuxiliaryNudge::default();
 
@@ -5396,7 +5493,8 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     let inner = match pkt_sizes.get(1..pkt_sizes.len().saturating_sub(1)) {
         Some(v) => v,
         None => unreachable!(
-            "CRITICAL: len() >= 5 guarantees 1..len-1 is a valid sub-slice in detect_scene_cut (len={})",
+            "CRITICAL: len() >= 5 guarantees 1..len-1 is a valid sub-slice in detect_scene_cut \
+             (len={})",
             pkt_sizes.len()
         ),
     };
@@ -5555,7 +5653,8 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
     edge_ratio > crate::constants::LOOP_INTENT_TEXT_DENSITY_THRESHOLD
 }
 
-// ── Unit Tests ────────────────────────────────────────────────────────────────
+// ── Unit Tests
+// ────────────────────────────────────────────────────────────────
 
 fn sampled_webp_compression_ratio_from_image(
     img: &image::DynamicImage,
@@ -5593,10 +5692,11 @@ fn sampled_webp_compression_ratio_from_image(
     //
     // Bug fix: resized.as_bytes() returns channel-native bytes (RGB8 = 3 bytes/px,
     // RGBA8 = 4 bytes/px, etc.), but the encoder was unconditionally told the data
-    // is ExtendedColorType::Rgba8 (4 bytes/px). When the source image is RGB (no alpha
-    // channel), the byte length is w*h*3 while the encoder expects w*h*4, causing an
-    // assertion panic inside the WebP encoder. Forcing to_rgba8() guarantees the buffer
-    // is always exactly w*h*4 bytes regardless of the original pixel format.
+    // is ExtendedColorType::Rgba8 (4 bytes/px). When the source image is RGB (no
+    // alpha channel), the byte length is w*h*3 while the encoder expects w*h*4,
+    // causing an assertion panic inside the WebP encoder. Forcing to_rgba8()
+    // guarantees the buffer is always exactly w*h*4 bytes regardless of the
+    // original pixel format.
     let rgba = resized.to_rgba8();
     let raw_size = f64::from(rgba.width() * rgba.height() * 4);
 
@@ -5619,7 +5719,8 @@ fn sampled_webp_compression_ratio_from_image(
     Ok(Some(raw_size / webp_size))
 }
 
-/// Check if a file path should use the `GIF` fast-path (`from_gif_path`) instead of `ffprobe`.
+/// Check if a file path should use the `GIF` fast-path (`from_gif_path`)
+/// instead of `ffprobe`.
 #[must_use]
 pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
     matches!(
@@ -5630,13 +5731,15 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
     )
 }
 
-/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg` benchmarks.
+/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
+/// benchmarks.
 ///
 /// # Errors
-/// Returns an error if the `FFmpeg` command fails or the output cannot be parsed.
-/// # Panics
+/// Returns an error if the `FFmpeg` command fails or the output cannot be
+/// parsed. # Panics
 ///
-/// Panics if the `FFmpeg` output contains malformed UTF-8 or if internal signal statistics parsing fails unexpectedly.
+/// Panics if the `FFmpeg` output contains malformed UTF-8 or if internal signal
+/// statistics parsing fails unexpectedly.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -5711,7 +5814,8 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         meta.palette_depth = Some(palette_depth_score(quantized.len()));
 
         // 3. Extract Real Physics (225-dimensional 15x15 luminance grid)
-        // Reuse the already decoded 64x64 raw RGB buffer to avoid extra FFmpeg/Decoding overhead
+        // Reuse the already decoded 64x64 raw RGB buffer to avoid extra FFmpeg/Decoding
+        // overhead
         if let Some(img_buf) =
             image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(64, 64, thumb_output.stdout)
         {
@@ -5722,7 +5826,8 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     Ok(())
 }
 
-/// Skewness of per-frame luma-difference (`YDIF`) samples — empirical block-skew proxy.
+/// Skewness of per-frame luma-difference (`YDIF`) samples — empirical
+/// block-skew proxy.
 fn block_skew_score_from_signal(values: &[f64]) -> Option<f64> {
     let n = values.len();
     if n < 3 {
@@ -5797,11 +5902,13 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
     }
 
     // Normalized autocorrelation at lag = half sequence length.
-    // A looping sequence has high self-similarity between its first and second half.
+    // A looping sequence has high self-similarity between its first and second
+    // half.
     let lag = n / 2;
     let autocorr: f64 = (0..n.saturating_sub(lag))
         .map(|i| {
-            // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+            // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent
+            // fallback forgery.
             let v1 = vals[i];
             let v2 = vals[i + lag];
             (v1 - mean) * (v2 - mean)
@@ -5844,7 +5951,8 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         .map(|&lag| {
             let r: f64 = (0..n.saturating_sub(lag))
                 .map(|i| {
-                    // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+                    // i < n-lag, so both indexes are in-bounds; direct indexing avoids silent
+                    // fallback forgery.
                     let v1 = mv_magnitudes[i];
                     let v2 = mv_magnitudes[i + lag];
                     (v1 - mean) * (v2 - mean)
@@ -5888,7 +5996,8 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     // A looping animation has consistent, self-similar inter-frame timing.
     let lag1: f64 = (0..n.saturating_sub(1))
         .map(|i| {
-            // i < n-1, so both indexes are in-bounds; direct indexing avoids silent fallback forgery.
+            // i < n-1, so both indexes are in-bounds; direct indexing avoids silent
+            // fallback forgery.
             let v1 = pts_deltas[i];
             let v2 = pts_deltas[i + 1];
             (v1 - mean) * (v2 - mean)
@@ -5947,7 +6056,8 @@ const fn unit_test_distribution_stats(
 /// Shaped like a corpus-backed profile for **unit/integration tests only**.
 ///
 /// Use with [`evaluate_loop_tree`] when `PostgreSQL` is unavailable (e.g. CI).
-/// Production [`assess_from_meta`] still requires a DB-backed reference profile.
+/// Production [`assess_from_meta`] still requires a DB-backed reference
+/// profile.
 #[must_use]
 pub fn unit_test_loop_reference_profile() -> LoopReferenceProfile {
     let collection = crate::database::GlobalCollectionStats {
@@ -6171,7 +6281,8 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Ensure developer intercepts are disabled for profile-based tests.
-        // SAFETY: test-only; these tests must not run in parallel with other env-var tests.
+        // SAFETY: test-only; these tests must not run in parallel with other env-var
+        // tests.
         unsafe { std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0") };
         evaluate_loop_tree(meta, Some(profile)).verdict
     }
@@ -6188,7 +6299,8 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
         // Duration bias (UltraShort) should dominate despite extreme resolution/size.
-        // File size is NOT decisive — only duration matters for the final verdict direction.
+        // File size is NOT decisive — only duration matters for the final verdict
+        // direction.
         assert!(
             matches!(verdict, Verdict::LoopStrong(_)),
             "short duration should dominate over large file size, got: {verdict:?}"
@@ -6199,7 +6311,8 @@ mod tests {
     fn layer_0_short_audio_media_is_immediate_loopweak() {
         let profile = base_profile();
         let mut meta = base_meta();
-        // Use 12.0s Long tier where audio penalty is -LOG_ODDS_BIAS_DEFINITIVELY_LONG (-3.0).
+        // Use 12.0s Long tier where audio penalty is -LOG_ODDS_BIAS_DEFINITIVELY_LONG
+        // (-3.0).
         meta.duration_secs = Some(12.0_f64);
         meta.flags.streams.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
@@ -6595,8 +6708,9 @@ mod tests {
 
         let verdict = verdict_with_profile(&meta, &profile);
 
-        // REVERTED: The review noted that with these strong signals, LoopStrong is also valid.
-        // We accept either Uncertain (borderline) or LoopStrong (if signals push it over).
+        // REVERTED: The review noted that with these strong signals, LoopStrong is also
+        // valid. We accept either Uncertain (borderline) or LoopStrong (if
+        // signals push it over).
         assert!(
             matches!(verdict, Verdict::Uncertain(_) | Verdict::LoopStrong(_)),
             "expected uncertain or loop-strong for balanced case, got {verdict:?}"
@@ -6978,12 +7092,14 @@ mod tests {
         let _guard = LOOP_INTENT_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // SAFETY: test-only; these tests must not run in parallel with other env-var tests.
+        // SAFETY: test-only; these tests must not run in parallel with other env-var
+        // tests.
         unsafe { std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "1") };
         let dev_long_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
         unsafe { std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT) };
         // The developer override injects -LOG_ODDS_BIAS_DEFINITIVELY_LONG, which should
-        // push the verdict away from LoopStrong. We verify it doesn't end up LoopStrong.
+        // push the verdict away from LoopStrong. We verify it doesn't end up
+        // LoopStrong.
         assert!(
             !matches!(dev_long_verdict, Verdict::LoopStrong(_)),
             "developer override should suppress LoopStrong: {dev_long_verdict:?}"

@@ -15,14 +15,15 @@ pub enum PixelDiffResult {
     SkippedToolAbsent { tool: &'static str },
 }
 
-/// Explicit pixel-diff tolerance selected by output format and encoder guarantees.
+/// Explicit pixel-diff tolerance selected by output format and encoder
+/// guarantees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffTolerance {
     /// Exact rendered-pixel match.
     Exact,
     /// Lossless JXL orientation proof. Gate 1 separately proves JPEG bitstream
-    /// roundtrip with BLAKE3, so this check verifies geometry/structure only and
-    /// deliberately ignores decoder/color-management channel drift.
+    /// roundtrip with BLAKE3, so this check verifies geometry/structure only
+    /// and deliberately ignores decoder/color-management channel drift.
     JxlOrientation,
     /// Lossless AVIF — one LSB per channel is allowed.
     LsbAvif,
@@ -70,10 +71,12 @@ pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<Di
     }
 }
 
-/// Strip the residual `Orientation` EXIF tag from an output file (§Orientation, all formats).
+/// Strip the residual `Orientation` EXIF tag from an output file (§Orientation,
+/// all formats).
 ///
 /// Root cause: `cjxl` re-orients pixels correctly but retains the EXIF tag.
-/// Non-compliant viewers (Win Explorer, Win Photos) re-apply it → double-rotate.
+/// Non-compliant viewers (Win Explorer, Win Photos) re-apply it →
+/// double-rotate.
 ///
 /// # Errors
 /// Returns an error if exiftool is unavailable or exits non-zero.
@@ -125,7 +128,8 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
     builder.overwrite_original().input(path).build()
 }
 
-/// Verify that the encoded `output` already has orientation-1 pixels before tag strip.
+/// Verify that the encoded `output` already has orientation-1 pixels before tag
+/// strip.
 ///
 /// Algorithm:
 /// 1. Read `src_orient` from source EXIF.

@@ -41,9 +41,10 @@ impl Drop for DirLock {
 
 /// Initializes Ghost Mode (Zero Pollution) by setting up the MFB tmp layout.
 ///
-/// **Call exactly once at process startup** (`img`/`vid` `main` before `rayon` or thread pools).
-/// `TMPDIR` and `PATH` are mutated inside a [`std::sync::Once`] because [`std::env::set_var`] is
-/// unsafe under concurrent writers (Rust 2024).
+/// **Call exactly once at process startup** (`img`/`vid` `main` before `rayon`
+/// or thread pools). `TMPDIR` and `PATH` are mutated inside a
+/// [`std::sync::Once`] because [`std::env::set_var`] is unsafe under concurrent
+/// writers (Rust 2024).
 ///
 /// # Errors
 /// Returns an error if the MFB temporary directory cannot be created.
@@ -62,13 +63,14 @@ pub fn init_ghost_mode() -> Result<()> {
 /// Augment `PATH` with standard locations for external tools.
 ///
 /// When the binary is launched from a `.app` bundle (macOS Finder, Dock) or
-/// any non-interactive context, `PATH` inherits a minimal `/usr/bin:/bin:/usr/sbin:/sbin`
-/// and misses Homebrew's install roots. Commands like `ffprobe`, `magick`, `cjxl`,
-/// `exiftool` installed via Homebrew end up "missing" even when present.
+/// any non-interactive context, `PATH` inherits a minimal
+/// `/usr/bin:/bin:/usr/sbin:/sbin` and misses Homebrew's install roots.
+/// Commands like `ffprobe`, `magick`, `cjxl`, `exiftool` installed via Homebrew
+/// end up "missing" even when present.
 ///
-/// Prepends the well-known Homebrew and `MacPorts` bin directories if they exist
-/// and are not already on `PATH`. Harmless on other platforms (directories just
-/// don't exist and are skipped).
+/// Prepends the well-known Homebrew and `MacPorts` bin directories if they
+/// exist and are not already on `PATH`. Harmless on other platforms
+/// (directories just don't exist and are skipped).
 fn ensure_tool_path() {
     const KNOWN_DIRS: &[&str] = &[
         "/opt/homebrew/bin",  // Apple Silicon Homebrew
@@ -91,7 +93,8 @@ fn ensure_tool_path() {
         if entries.iter().any(|e| e == &p) {
             continue;
         }
-        // Prepend so Homebrew-installed tools win over any system stub (e.g. /usr/bin/ffprobe).
+        // Prepend so Homebrew-installed tools win over any system stub (e.g.
+        // /usr/bin/ffprobe).
         entries.insert(0, p);
         changed = true;
     }
@@ -99,7 +102,8 @@ fn ensure_tool_path() {
     if changed {
         match std::env::join_paths(&entries) {
             Ok(joined) => {
-                // SAFETY: Only invoked from [`init_ghost_mode`] inside [`INIT_GHOST_ENV`] `Once`.
+                // SAFETY: Only invoked from [`init_ghost_mode`] inside [`INIT_GHOST_ENV`]
+                // `Once`.
                 unsafe {
                     std::env::set_var("PATH", joined);
                 }
@@ -114,7 +118,8 @@ fn ensure_tool_path() {
     }
 }
 
-/// Returns the central home for MFB metadata and transient files (~/.`modern_format_boost`).
+/// Returns the central home for MFB metadata and transient files
+/// (~/.`modern_format_boost`).
 ///
 /// # Errors
 /// Returns an error if the home directory cannot be determined.
@@ -154,7 +159,8 @@ fn usable_mfb_root_or_fallback(root: PathBuf, context: &str, create_msg: &str) -
             let fallback = crate::media_conversion_gate::delivery_temp_mfb_root_ssot();
             ensure_mfb_root_usable(&fallback).with_context(|| {
                 format!(
-                    "{create_msg}; primary {} unavailable at {} ({primary_err}); fallback {} also unavailable",
+                    "{create_msg}; primary {} unavailable at {} ({primary_err}); fallback {} also \
+                     unavailable",
                     context,
                     root.display(),
                     fallback.display()
@@ -184,7 +190,8 @@ fn ensure_mfb_root_usable(root: &Path) -> Result<()> {
 /// Returns the central temporary storage for MFB, ensuring it exists.
 ///
 /// # Errors
-/// Returns an error if the MFB root cannot be determined or the temporary directory cannot be created.
+/// Returns an error if the MFB root cannot be determined or the temporary
+/// directory cannot be created.
 pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
     let tmp = get_mfb_root()?.join("tmp");
     fs::create_dir_all(&tmp).context("Failed to create MFB tmp directory")?;
@@ -208,11 +215,13 @@ pub fn hash_path_to_hex(path: &Path) -> Result<String> {
 
 /// Attempts to acquire an exclusive advisory lock for a specific directory.
 ///
-/// The lock file is stored in a central location (~/.`modern_format_boost/locks`/)
-/// hashed by the directory's absolute path to avoid polluting the user's data.
+/// The lock file is stored in a central location
+/// (~/.`modern_format_boost/locks`/) hashed by the directory's absolute path to
+/// avoid polluting the user's data.
 ///
 /// # Errors
-/// Returns an error if the lock file cannot be created or the lock is already held.
+/// Returns an error if the lock file cannot be created or the lock is already
+/// held.
 pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
     // 1. Get absolute, canonical path to ensure unique hashing
     let abs_path = fs::canonicalize(dir_path)
@@ -223,7 +232,8 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
         let mut held_locks = held_dir_locks_guard("process_lock_registry_acquire");
         if held_locks.contains(&abs_path) {
             return Err(anyhow!(
-                "This directory is already being processed by this Modern Format Boost instance.\nLocked path: {}",
+                "This directory is already being processed by this Modern Format Boost \
+                 instance.\nLocked path: {}",
                 abs_path.display()
             ));
         }
@@ -265,7 +275,8 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
         if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
             held_dir_locks_guard("process_lock_registry_flock_busy_rollback").remove(&abs_path);
             return Err(anyhow!(
-                "This directory is already being processed by another Modern Format Boost instance.\nLocked path: {}",
+                "This directory is already being processed by another Modern Format Boost \
+                 instance.\nLocked path: {}",
                 abs_path.display()
             ));
         }

@@ -1,4 +1,5 @@
-//! `tools` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `tools` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod tools;
 

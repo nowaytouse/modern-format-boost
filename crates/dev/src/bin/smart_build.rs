@@ -1,5 +1,6 @@
 //! Modern Format Boost - Smart Build System in Rust.
-//! Compiles img and vid release binaries incrementally based on source file modifications.
+//! Compiles img and vid release binaries incrementally based on source file
+//! modifications.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -88,9 +89,11 @@ impl Style {
     }
 }
 
-/// Smart Build — builds img / vid / verify (crates/dev) and optionally the Tauri GUI.
+/// Smart Build — builds img / vid / verify (crates/dev) and optionally the
+/// Tauri GUI.
 ///
-/// Default (no flags): build img + vid + verify if sources are newer than binaries.
+/// Default (no flags): build img + vid + verify if sources are newer than
+/// binaries.
 #[derive(Parser, Debug)]
 #[command(about = "Smart Build System — incremental Rust + Tauri builder")]
 struct Args {
@@ -1308,7 +1311,8 @@ mod tests {
     #[test]
     fn test_decide_build_action_force() {
         let tempdir = tempfile::tempdir().unwrap();
-        // Since we pass force = true, decide_build_action should always return ("rebuild", "force")
+        // Since we pass force = true, decide_build_action should always return
+        // ("rebuild", "force")
         let (action, reason) = decide_build_action(tempdir.path(), "crates/img", "img", true);
         assert_eq!(action, "rebuild");
         assert_eq!(reason, "force");
@@ -1317,7 +1321,8 @@ mod tests {
     #[test]
     fn test_decide_build_action_missing() {
         let tempdir = tempfile::tempdir().unwrap();
-        // The binary doesn't exist, so decide_build_action should return ("rebuild", "binary-missing")
+        // The binary doesn't exist, so decide_build_action should return ("rebuild",
+        // "binary-missing")
         let (action, reason) = decide_build_action(tempdir.path(), "crates/img", "img", false);
         assert_eq!(action, "rebuild");
         assert_eq!(reason, "binary-missing");

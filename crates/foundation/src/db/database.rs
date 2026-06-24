@@ -23,7 +23,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 use walkdir::WalkDir;
 
-/// Unix-socket `postgresql:///dbname` fails on macOS/Homebrew when libpq has no default host.
+/// Unix-socket `postgresql:///dbname` fails on macOS/Homebrew when libpq has no
+/// default host.
 pub const PG_DEFAULT_CONNSTR: &str = "postgresql://localhost/modern_format_boost";
 
 const LOOP_VECTOR_FEATURE_NAMES: [&str; 29] = [
@@ -89,7 +90,8 @@ impl FeatureStats {
     }
 }
 
-/// Offline HDBSCAN cluster centroid stored in `multi_scenario_metadata.feature_stats`.
+/// Offline HDBSCAN cluster centroid stored in
+/// `multi_scenario_metadata.feature_stats`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LoopHdbscanClusterCentroid {
     pub cluster_id: i32,
@@ -98,7 +100,8 @@ pub(crate) struct LoopHdbscanClusterCentroid {
     pub centroid: Vec<f64>,
 }
 
-/// Catalog of density clusters used to augment HNSW neighbor voting at inference.
+/// Catalog of density clusters used to augment HNSW neighbor voting at
+/// inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LoopHdbscanCatalog {
     #[serde(default = "loop_hdbscan_catalog_default_version")]
@@ -127,11 +130,13 @@ impl FeatureMap {
     }
 }
 
-/// Cold-start feature map for training ingest when `loop_samples` is empty (fresh DB).
+/// Cold-start feature map for training ingest when `loop_samples` is empty
+/// (fresh DB).
 pub(crate) fn cold_start_loop_training_feature_map() -> FeatureMap {
     crate::media_conversion_gate::delivery_db_batch_audit(
         "loop_feature_stats_cold_start",
-        "loop training ingest using cold-start feature_stats (zero loop_samples); percentile slots are not empirical until refresh",
+        "loop training ingest using cold-start feature_stats (zero loop_samples); percentile \
+         slots are not empirical until refresh",
     );
     let mut stats = std::collections::HashMap::new();
     for f in LOOP_VECTOR_FEATURE_NAMES {
@@ -159,7 +164,8 @@ fn loop_samples_table_count(conn: &mut Client) -> Result<i64> {
         .get(0))
 }
 
-/// Persist loop training `feature_stats` for ingest bootstrap (cold-start or corpus refresh).
+/// Persist loop training `feature_stats` for ingest bootstrap (cold-start or
+/// corpus refresh).
 pub(crate) fn persist_loop_training_feature_map(
     conn: &mut Client,
     feature_map: &FeatureMap,
@@ -178,13 +184,15 @@ pub(crate) fn persist_loop_training_feature_map(
     )?;
     if updated == 0 {
         anyhow::bail!(
-            "loop_intent multi_scenario_metadata row missing; cannot persist training feature_stats"
+            "loop_intent multi_scenario_metadata row missing; cannot persist training \
+             feature_stats"
         );
     }
     Ok(())
 }
 
-/// Cold-start collection stats when `loop_samples` is empty (baseline constants, not `{}`).
+/// Cold-start collection stats when `loop_samples` is empty (baseline
+/// constants, not `{}`).
 pub(crate) fn cold_start_loop_collection_stats() -> GlobalCollectionStats {
     crate::media_conversion_gate::delivery_db_batch_audit(
         "loop_collection_stats_cold_start",
@@ -212,7 +220,8 @@ pub(crate) fn persist_loop_collection_stats(
     )?;
     if updated == 0 {
         anyhow::bail!(
-            "loop_intent multi_scenario_metadata row missing; cannot persist training collection_stats"
+            "loop_intent multi_scenario_metadata row missing; cannot persist training \
+             collection_stats"
         );
     }
     Ok(())
@@ -272,7 +281,8 @@ impl DistributionStats {
     }
 }
 
-/// Clear duration percentile slots that must not drive thresholds without a DB histogram.
+/// Clear duration percentile slots that must not drive thresholds without a DB
+/// histogram.
 const fn strip_non_empirical_duration_percentiles(duration: &mut DistributionStats) {
     duration.p10 = None;
     duration.p25 = None;
@@ -300,9 +310,11 @@ impl From<&FeatureStats> for DistributionStats {
 /// Classification label for a sample's looping intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LabelStatus {
-    /// Manually verified / high confidence: looping intent (meme/sticker/video sticker).
+    /// Manually verified / high confidence: looping intent (meme/sticker/video
+    /// sticker).
     LoopStrong,
-    /// Manually verified / high confidence: non-looping intent (clip/record/long video).
+    /// Manually verified / high confidence: non-looping intent
+    /// (clip/record/long video).
     LoopWeak,
     /// Edge case / low confidence label.
     Uncertain,
@@ -313,13 +325,16 @@ pub enum LabelStatus {
 /// Result of a KNN similarity search against the training database.
 #[derive(Debug, Clone)]
 pub struct SampleMatch {
-    /// The label status matched (usually `NotLabeled`; use `keep_probability` for probability).
+    /// The label status matched (usually `NotLabeled`; use `keep_probability`
+    /// for probability).
     pub exact_label: LabelStatus,
-    /// Probability that this sample should be kept as a looping asset (None if no match).
+    /// Probability that this sample should be kept as a looping asset (None if
+    /// no match).
     pub keep_probability: Option<f64>,
     /// Confidence score in [0, 1]: how tightly clustered the KNN neighbors are.
-    /// confidence = 1.0 - (`std_dev_distance` / `mean_distance`), clamped to [0, 1].
-    /// High confidence (>0.75) means neighbors are homogeneous; safe to trust `keep_probability`.
+    /// confidence = 1.0 - (`std_dev_distance` / `mean_distance`), clamped to
+    /// [0, 1]. High confidence (>0.75) means neighbors are homogeneous;
+    /// safe to trust `keep_probability`.
     pub confidence: f64,
     /// Number of neighbors used in the computation.
     pub neighbor_count: usize,
@@ -335,16 +350,19 @@ pub struct SampleMatch {
     pub p75_distance: Option<f64>,
     /// Dynamic baseline: P90 duration of neighbors with high loss tolerance.
     pub p90_duration: Option<f64>,
-    /// HDBSCAN cluster id when catalog fusion was applied (`None` if unavailable).
+    /// HDBSCAN cluster id when catalog fusion was applied (`None` if
+    /// unavailable).
     pub hdbscan_cluster_id: Option<i32>,
     /// Loop-keep prior of the nearest HDBSCAN cluster.
     pub hdbscan_cluster_loop_prior: Option<f64>,
 }
 
-/// A single inference result logged to the `inference_log` table for feedback analysis.
+/// A single inference result logged to the `inference_log` table for feedback
+/// analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopInferenceRecord {
-    /// Probability output from the decision tree classifier (`None` for Layer 7 policy exits).
+    /// Probability output from the decision tree classifier (`None` for Layer 7
+    /// policy exits).
     pub tree_probability: Option<f64>,
     /// KNN-derived keep probability (None if KNN was not available).
     pub knn_keep_probability: Option<f64>,
@@ -352,7 +370,8 @@ pub struct LoopInferenceRecord {
     pub knn_confidence: Option<f64>,
     /// Number of KNN neighbors used (None if KNN was not available).
     pub knn_neighbor_count: Option<usize>,
-    /// Final blended probability after combining tree and KNN signals (`None` for Layer 7 policy exits).
+    /// Final blended probability after combining tree and KNN signals (`None`
+    /// for Layer 7 policy exits).
     pub final_probability: Option<f64>,
     /// The final verdict string (e.g., "`LoopStrong`", "`LoopWeak`").
     pub final_verdict: String,
@@ -380,7 +399,8 @@ impl LoopInferenceRecord {
     }
 }
 
-/// Measures how well a single feature separates `LoopStrong` from `LoopWeak` samples.
+/// Measures how well a single feature separates `LoopStrong` from `LoopWeak`
+/// samples.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopFeatureDiscriminativePower {
     /// Name of the feature being measured.
@@ -395,7 +415,8 @@ pub struct LoopFeatureDiscriminativePower {
     pub sample_count: i64,
 }
 
-/// Identifies regions in feature space where the inference system is most uncertain.
+/// Identifies regions in feature space where the inference system is most
+/// uncertain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceBlindSpot {
     /// Duration bucket boundary (seconds).
@@ -427,14 +448,17 @@ pub struct GlobalCollectionStats {
     pub duration_max: Option<f64>,
     /// 90th percentile duration in seconds.
     pub duration_p90: Option<f64>,
-    /// True when `duration_p90` was computed from training-sample durations (not feature-map fallback).
+    /// True when `duration_p90` was computed from training-sample durations
+    /// (not feature-map fallback).
     #[serde(default)]
     pub duration_p90_from_samples: bool,
-    /// True when min/avg/max duration came from training-sample durations (not feature-map fallback).
+    /// True when min/avg/max duration came from training-sample durations (not
+    /// feature-map fallback).
     #[serde(default)]
     pub duration_stats_from_samples: bool,
 
-    /// Minimum file size in bytes (from samples only; `None` when corpus empty).
+    /// Minimum file size in bytes (from samples only; `None` when corpus
+    /// empty).
     #[serde(default)]
     pub size_min: Option<f64>,
     /// Average file size in bytes.
@@ -523,10 +547,12 @@ pub struct LoopReferenceProfile {
     pub cadence: DistributionStats,
     /// Top discriminative keywords from filenames.
     pub top_keywords: Vec<String>,
-    /// True when `duration` percentiles in `feature_stats` were measured from a histogram (not inferred).
+    /// True when `duration` percentiles in `feature_stats` were measured from a
+    /// histogram (not inferred).
     #[serde(default)]
     pub duration_has_empirical_percentiles: bool,
-    /// True only for `#[cfg(test)]` KNN bootstrap (`LoopReferenceProfile` test `Default`); corpus builds must leave this false.
+    /// True only for `#[cfg(test)]` KNN bootstrap (`LoopReferenceProfile` test
+    /// `Default`); corpus builds must leave this false.
     #[serde(default)]
     pub is_knn_bootstrap_heuristic: bool,
 }
@@ -597,7 +623,9 @@ fn loop_reference_profile_corpus_shell(
 
 #[cfg(test)]
 impl Default for LoopReferenceProfile {
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn default() -> Self {
         const KNN_DEFAULT_CTX: &str = "KnnDistributionProfile::default";
         const COLLECTION_BASELINE_TRUSTED: bool = true;
@@ -911,7 +939,8 @@ struct LoopIntentTrainingSample {
     sample_row: SampleRow,
 }
 
-/// Row shape for GIF/video KNN features consumed by vectorization and similarity logic.
+/// Row shape for GIF/video KNN features consumed by vectorization and
+/// similarity logic.
 #[derive(Debug, Clone)]
 pub(crate) struct SampleRow {
     pub(crate) width: u32,
@@ -1005,7 +1034,8 @@ pub fn connect_pg_with_str(conn_str: &str) -> Result<Client> {
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_connect",
                     format!(
-                        "Database connectivity failed: {e}. Check if PostgreSQL service is running and accessible via {conn_str}"
+                        "Database connectivity failed: {e}. Check if PostgreSQL service is \
+                         running and accessible via {conn_str}"
                     ),
                 );
                 crate::log_info!(
@@ -1063,15 +1093,18 @@ pub fn reset_training_db(conn_str: &str) -> Result<()> {
     let mut total_deleted: usize = 0;
     for table in tables {
         let exists: bool = match client.query(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' \
+             AND table_name = $1)",
             &[table],
         ) {
-            Ok(rows) => if let Some(row) = rows.first() {
-                row.get(0)
-            } else {
-                eprintln!("[RESET-DB] table existence query returned no row for {table}");
-                continue;
-            },
+            Ok(rows) => {
+                if let Some(row) = rows.first() {
+                    row.get(0)
+                } else {
+                    eprintln!("[RESET-DB] table existence query returned no row for {table}");
+                    continue;
+                }
+            }
             Err(err) => {
                 eprintln!("[RESET-DB] table existence check failed for {table}: {err}");
                 continue;
@@ -1111,7 +1144,8 @@ pub fn reset_training_db(conn_str: &str) -> Result<()> {
     Ok(())
 }
 
-/// Prints a one-line status message indicating whether the database is reachable.
+/// Prints a one-line status message indicating whether the database is
+/// reachable.
 pub fn report_db_status() {
     match open_pg_client() {
         Ok(_conn) => {
@@ -1134,7 +1168,8 @@ pub fn report_db_status() {
 /// Returns a `SampleMatch` if enough labeled training data exists and
 /// similar neighbors are found. Returns `None` on DB error or if the
 /// database is too immature for reliable KNN.
-/// Outcome of a loop-intent HNSW similarity lookup, including the audit branch tag.
+/// Outcome of a loop-intent HNSW similarity lookup, including the audit branch
+/// tag.
 #[derive(Clone, Debug)]
 pub(crate) struct LoopSimilarityLookupResult {
     pub sample: Option<SampleMatch>,
@@ -1159,7 +1194,8 @@ pub(crate) fn lookup_similar_samples_detailed(
                     "delivery_db_knn",
                     asset_path,
                     format!(
-                        "KNN SIMILARITY AUDIT: Similar sample lookup failed for asset '{}' | Pipeline Error: {} | System will proceed with heuristic-only fallback",
+                        "KNN SIMILARITY AUDIT: Similar sample lookup failed for asset '{}' | \
+                         Pipeline Error: {} | System will proceed with heuristic-only fallback",
                         asset_path.display(),
                         e
                     ),
@@ -1168,7 +1204,8 @@ pub(crate) fn lookup_similar_samples_detailed(
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_knn",
                     format!(
-                        "KNN SIMILARITY AUDIT: Similar sample lookup failed for IN-MEMORY-BUFFER | Pipeline Error: {e} | System will proceed with heuristic-only fallback"
+                        "KNN SIMILARITY AUDIT: Similar sample lookup failed for IN-MEMORY-BUFFER \
+                         | Pipeline Error: {e} | System will proceed with heuristic-only fallback"
                     ),
                 );
             }
@@ -1180,7 +1217,8 @@ pub(crate) fn lookup_similar_samples_detailed(
 /// Retrieve aggregate collection statistics from the metadata table.
 ///
 /// # Errors
-/// Returns an error if the database query fails or corpus stats are missing without cold-start eligibility.
+/// Returns an error if the database query fails or corpus stats are missing
+/// without cold-start eligibility.
 pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollectionStats> {
     fetch_loop_collection_stats(conn)
 }
@@ -1200,7 +1238,8 @@ pub fn fetch_loop_reference_profile(conn: &mut Client) -> Result<LoopReferencePr
     }
     if feature_map.stats.is_empty() {
         anyhow::bail!(
-            "loop_intent feature_stats empty after refresh; refusing bootstrap defaults for reference profile"
+            "loop_intent feature_stats empty after refresh; refusing bootstrap defaults for \
+             reference profile"
         );
     }
     build_loop_reference_profile(collection, &feature_map)
@@ -1220,7 +1259,8 @@ fn fetch_loop_feature_map(conn: &mut Client) -> Result<FeatureMap> {
                 return Ok(map);
             }
             anyhow::bail!(
-                "loop_intent multi_scenario_metadata row missing; refusing empty FeatureMap default"
+                "loop_intent multi_scenario_metadata row missing; refusing empty FeatureMap \
+                 default"
             );
         }
         Some(row) => {
@@ -1239,7 +1279,8 @@ fn fetch_loop_feature_map(conn: &mut Client) -> Result<FeatureMap> {
                 }
                 let n = loop_samples_table_count(conn)?;
                 anyhow::bail!(
-                    "loop_intent feature_stats row is empty with {n} loop_samples rows; run refresh_loop_intent_feature_stats",
+                    "loop_intent feature_stats row is empty with {n} loop_samples rows; run \
+                     refresh_loop_intent_feature_stats",
                 );
             }
             match serde_json::from_str::<FeatureMap>(&value) {
@@ -1281,7 +1322,8 @@ fn fetch_loop_hdbscan_catalog_seed(conn: &mut Client) -> Result<Option<LoopHdbsc
     }
 }
 
-/// Drop or clear HDBSCAN catalogs that fail structural contract (wrong version, corrupt centroids).
+/// Drop or clear HDBSCAN catalogs that fail structural contract (wrong version,
+/// corrupt centroids).
 fn sanitize_hdbscan_catalog_on_load(feature_map: &mut FeatureMap) {
     let Some(catalog) = feature_map.hdbscan_catalog.as_ref() else {
         return;
@@ -1346,7 +1388,8 @@ fn loop_hdbscan_catalog_usable_in_map(feature_map: &FeatureMap) -> bool {
     loop_hdbscan_catalog_usable(feature_map.hdbscan_catalog.as_ref())
 }
 
-/// One-shot production alert: mature loop corpus + HDBSCAN fusion on + no usable catalog.
+/// One-shot production alert: mature loop corpus + HDBSCAN fusion on + no
+/// usable catalog.
 fn maybe_alert_production_hdbscan_catalog_gap(conn: &mut Client, reason: &'static str) {
     static ALERTED: OnceLock<()> = OnceLock::new();
     if !crate::algorithm_runtime::loop_hdbscan_fusion_enabled()
@@ -1416,7 +1459,8 @@ fn fetch_loop_collection_stats(conn: &mut Client) -> Result<GlobalCollectionStat
                     return Ok(stats);
                 }
                 anyhow::bail!(
-                    "loop collection_stats JSON empty with {} loop_samples rows; run refresh_loop_intent_feature_stats",
+                    "loop collection_stats JSON empty with {} loop_samples rows; run \
+                     refresh_loop_intent_feature_stats",
                     loop_samples_table_count(conn)?
                 );
             }
@@ -1517,7 +1561,8 @@ fn get_class_counts(conn: &mut Client) -> (i64, i64, i64) {
     (low_count, high_count.max(0), video_count.max(0))
 }
 
-/// High/low class counts for `image_quality_samples` (static quality training corpus).
+/// High/low class counts for `image_quality_samples` (static quality training
+/// corpus).
 fn get_static_quality_class_counts(conn: &mut Client) -> (i64, i64) {
     let Ok(rows) = conn.query(
         "SELECT
@@ -1548,7 +1593,8 @@ fn get_static_quality_class_counts(conn: &mut Client) -> (i64, i64) {
     (high.max(0), low.max(0))
 }
 
-/// Validates whether the `LoopIntent` database has enough diverse samples to merit KNN lookup.
+/// Validates whether the `LoopIntent` database has enough diverse samples to
+/// merit KNN lookup.
 fn check_loop_intent_db_maturity(conn: &mut Client) -> bool {
     let (low_count, high_count, video_count) = get_class_counts(conn);
     let total = low_count + high_count + video_count;
@@ -1583,7 +1629,8 @@ pub(crate) enum LoopIntentLookupBranch {
     AdaptiveNeighborCountFailed,
     HnswRadiusExcludedAllNeighbors,
     HnswInsufficientWeightedNeighbors,
-    /// HDBSCAN fusion enabled (default) but catalog missing, invalid, or unusable for fusion.
+    /// HDBSCAN fusion enabled (default) but catalog missing, invalid, or
+    /// unusable for fusion.
     HdbscanCatalogUnavailable,
     PosteriorNonFinite,
     InnerQueryError,
@@ -1629,7 +1676,9 @@ fn log_loop_lookup_branch(branch: LoopIntentLookupBranch) {
     );
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
     _path: Option<&Path>,
@@ -1640,12 +1689,15 @@ fn lookup_similar_samples_inner(
             crate::media_conversion_gate::delivery_db_batch_audit(
                 "delivery_db_knn",
                 format!(
-                    "DATABASE AUDIT: PostgreSQL connection failed (graceful fallback): {e} | Forensic: Connection string or service state issue; suggesting manual intervention to restore KNN capabilities"
+                    "DATABASE AUDIT: PostgreSQL connection failed (graceful fallback): {e} | \
+                     Forensic: Connection string or service state issue; suggesting manual \
+                     intervention to restore KNN capabilities"
                 ),
             );
             crate::log_hint!(
                 crate::infra::static_logs::messages::LABEL_DB,
-                "DATABASE SUGGESTION: Run 'cargo run --locked -p dev --bin database_manager' (option 1: Database Setup) to initialize and start the local database service."
+                "DATABASE SUGGESTION: Run 'cargo run --locked -p dev --bin database_manager' \
+                 (option 1: Database Setup) to initialize and start the local database service."
             );
             return Ok(lookup_branch_none(LoopIntentLookupBranch::DbUnavailable));
         }
@@ -1690,7 +1742,8 @@ fn lookup_similar_samples_inner(
     let Some((target_temporal_bpp, target_spatial_bpp)) = bpp_from_meta(meta) else {
         crate::media_conversion_gate::delivery_db_batch_audit(
             "delivery_db_knn",
-            "KNN AUDIT: Target LoopMeta missing width/height/frame_count for BPP; skipping KNN lookup | Forensic: refusing fabricated BPP denominator",
+            "KNN AUDIT: Target LoopMeta missing width/height/frame_count for BPP; skipping KNN \
+             lookup | Forensic: refusing fabricated BPP denominator",
         );
         return Ok(lookup_branch_none(
             LoopIntentLookupBranch::TargetMetaInsufficient,
@@ -1701,7 +1754,8 @@ fn lookup_similar_samples_inner(
     else {
         crate::media_conversion_gate::delivery_db_batch_audit(
             "delivery_db_knn",
-            "KNN AUDIT: Target LoopMeta missing critical width/height dimensions; skipping KNN lookup | Forensic: Insufficient metadata for feature vector computation",
+            "KNN AUDIT: Target LoopMeta missing critical width/height dimensions; skipping KNN \
+             lookup | Forensic: Insufficient metadata for feature vector computation",
         );
         return Ok(lookup_branch_none(
             LoopIntentLookupBranch::TargetMetaInsufficient,
@@ -1729,7 +1783,8 @@ fn lookup_similar_samples_inner(
     let target_vector_for_cluster = target_vector.clone();
     let target_pg_vector = pgvector::Vector::from(target_vector);
 
-    // Deep pgvector Integration: We let PostgreSQL use the HNSW index to rapidly return the closest labels
+    // Deep pgvector Integration: We let PostgreSQL use the HNSW index to rapidly
+    // return the closest labels
     let rows = conn.query(
         "SELECT
             label, duration_secs,
@@ -1830,8 +1885,8 @@ fn lookup_similar_samples_inner(
     let video_equivalent_count = video_count;
 
     // Class-balance reweighting with smoothing + damping.
-    // Compared with raw inverse-frequency scaling, this avoids unstable over-corrections
-    // when one class is heavily underrepresented.
+    // Compared with raw inverse-frequency scaling, this avoids unstable
+    // over-corrections when one class is heavily underrepresented.
     let w_quality = class_balance_weight(total_samples, quality_count);
     let w_video = class_balance_weight(total_samples, video_equivalent_count);
     let global_keep_prior = smoothed_keep_prior(quality_count, video_equivalent_count);
@@ -1877,7 +1932,9 @@ fn lookup_similar_samples_inner(
             crate::media_conversion_gate::delivery_db_batch_audit(
                 "delivery_db_knn",
                 format!(
-                    "NUMERIC ANOMALY: NaN/Inf distance ({distance}) encountered in KNN neighbor weights | Forensic: Corrupt distance calculation; skipping corrupt neighbor to prevent weight drift"
+                    "NUMERIC ANOMALY: NaN/Inf distance ({distance}) encountered in KNN neighbor \
+                     weights | Forensic: Corrupt distance calculation; skipping corrupt neighbor \
+                     to prevent weight drift"
                 ),
             );
             continue;
@@ -1892,7 +1949,8 @@ fn lookup_similar_samples_inner(
                     crate::media_conversion_gate::delivery_db_batch_audit(
                         "delivery_db_knn",
                         format!(
-                            "NUMERIC ANOMALY: non-finite class balance weight w_quality={w_quality}; skipping neighbor"
+                            "NUMERIC ANOMALY: non-finite class balance weight \
+                             w_quality={w_quality}; skipping neighbor"
                         ),
                     );
                     continue;
@@ -1906,7 +1964,8 @@ fn lookup_similar_samples_inner(
                     crate::media_conversion_gate::delivery_db_batch_audit(
                         "delivery_db_knn",
                         format!(
-                            "NUMERIC ANOMALY: non-finite class balance weight w_video={w_video}; skipping neighbor"
+                            "NUMERIC ANOMALY: non-finite class balance weight w_video={w_video}; \
+                             skipping neighbor"
                         ),
                     );
                     continue;
@@ -1917,7 +1976,8 @@ fn lookup_similar_samples_inner(
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_knn",
                     format!(
-                        "KNN DEFENSIVE SKIP: unlabeled neighbor reached class weighting after filter: {label:?}"
+                        "KNN DEFENSIVE SKIP: unlabeled neighbor reached class weighting after \
+                         filter: {label:?}"
                     ),
                 );
                 continue;
@@ -1933,7 +1993,8 @@ fn lookup_similar_samples_inner(
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_knn",
                     format!(
-                        "KNN DEFENSIVE SKIP: unlabeled neighbor reached probability mapping after filter: {label:?}"
+                        "KNN DEFENSIVE SKIP: unlabeled neighbor reached probability mapping after \
+                         filter: {label:?}"
                     ),
                 );
                 continue;
@@ -1986,7 +2047,8 @@ fn lookup_similar_samples_inner(
         ));
     }
     let eff_n = effective_sample_size(weight_squares_sum.to_f64(), total_weight.to_f64());
-    // With higher imbalance, require stronger local evidence before moving away from global prior.
+    // With higher imbalance, require stronger local evidence before moving away
+    // from global prior.
     let prior_strength = crate::constants::KNN_PRIOR_STRENGTH_SLOPE.mul_add(
         global_imbalance_ratio.ln_1p(),
         crate::constants::KNN_PRIOR_STRENGTH_BASE,
@@ -2033,7 +2095,8 @@ fn lookup_similar_samples_inner(
         // All neighbors at distance ≈0 → exact match level confidence
         1.0_f64
     };
-    // Penalize confidence under severe class imbalance and low effective sample size.
+    // Penalize confidence under severe class imbalance and low effective sample
+    // size.
     let balance_penalty = (1.0 / global_imbalance_ratio.sqrt())
         .clamp(crate::constants::KNN_BALANCE_PENALTY_FLOOR, 1.0);
     confidence *= balance_penalty;
@@ -2065,7 +2128,8 @@ fn lookup_similar_samples_inner(
                 (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
                 "p90_idx",
             ),
-            "NUMERIC ANOMALY: p90_idx overflow during duration percentile calculation | Forensic: Integer overflow in index mapping; refusing to forge data",
+            "NUMERIC ANOMALY: p90_idx overflow during duration percentile calculation | Forensic: \
+             Integer overflow in index mapping; refusing to forge data",
         )
         .ok_or_else(|| anyhow::anyhow!("p90_idx overflow"))?;
         Some(
@@ -2073,9 +2137,10 @@ fn lookup_similar_samples_inner(
                 .get(idx.min(loop_durations.len().saturating_sub(1)))
                 .ok_or_else(|| {
                     crate::media_conversion_gate::delivery_db_batch_audit(
-                "delivery_db_numeric",
-                "NUMERIC ANOMALY: Percentile index out of bounds in duration distribution | Forensic: Index resolution failure; refusing to forge duration data",
-            );
+                        "delivery_db_numeric",
+                        "NUMERIC ANOMALY: Percentile index out of bounds in duration distribution \
+                         | Forensic: Index resolution failure; refusing to forge duration data",
+                    );
                     anyhow::anyhow!("Percentile index out of bounds")
                 })?,
         )
@@ -2126,7 +2191,8 @@ fn l2_distance_f32_f64(query: &[f32], centroid: &[f64]) -> Option<f64> {
     Some(sum.sqrt())
 }
 
-/// Nearest HDBSCAN cluster centroid and a distance-based membership confidence in [0, 1].
+/// Nearest HDBSCAN cluster centroid and a distance-based membership confidence
+/// in [0, 1].
 fn nearest_hdbscan_cluster(query: &[f32], catalog: &LoopHdbscanCatalog) -> Option<(i32, f64, f64)> {
     let mut best: Option<(i32, f64, f64, f64)> = None;
     for cluster in &catalog.clusters {
@@ -2156,9 +2222,10 @@ fn nearest_hdbscan_cluster(query: &[f32], catalog: &LoopHdbscanCatalog) -> Optio
 
 /// Blend HNSW neighbor vote with the offline HDBSCAN cluster loop-prior.
 ///
-/// When HDBSCAN fusion is enabled (default unless `MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION=1`), a supported non-empty catalog and a
-/// resolvable cluster assignment are mandatory; missing catalog or unusable fusion rejects the
-/// whole lookup (no silent KNN-only fallback).
+/// When HDBSCAN fusion is enabled (default unless
+/// `MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION=1`), a supported non-empty
+/// catalog and a resolvable cluster assignment are mandatory; missing catalog
+/// or unusable fusion rejects the whole lookup (no silent KNN-only fallback).
 fn fuse_keep_probability_with_hdbscan_cluster(
     knn_keep_probability: f64,
     query_vector: &[f32],
@@ -2271,8 +2338,9 @@ fn fuse_keep_probability_with_hdbscan_cluster(
 /// Dynamic safety-guard for CRF 0.00 exploration.
 ///
 /// Uses the SQL KNN dataset to partition media into "Meme" vs "High Value".
-/// High-value art is strictly limited to 30s of lossless-first probing to avoid bloat.
-/// Low-value memes (low entropy) are permitted up to 120s as CRF 0.00 is efficient on them.
+/// High-value art is strictly limited to 30s of lossless-first probing to avoid
+/// bloat. Low-value memes (low entropy) are permitted up to 120s as CRF 0.00 is
+/// efficient on them.
 #[must_use]
 fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     use crate::constants::{HIGH_VALUE_LOSSLESS_DURATION_LIMIT, MEME_LOSSLESS_DURATION_LIMIT};
@@ -2312,7 +2380,9 @@ fn resolved_duration_secs(meta: &LoopMeta) -> Option<f64> {
                 // Refusing to forge a '12fps' baseline. Information invalidated.
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_metadata",
-                    "METADATA ANOMALY: Frame count present but duration/FPS missing for resolved_duration | Forensic: Insufficient timing data to calculate reliable duration; refusing to forge baseline",
+                    "METADATA ANOMALY: Frame count present but duration/FPS missing for \
+                     resolved_duration | Forensic: Insufficient timing data to calculate reliable \
+                     duration; refusing to forge baseline",
                 );
                 None
             }
@@ -2320,7 +2390,8 @@ fn resolved_duration_secs(meta: &LoopMeta) -> Option<f64> {
                 // Total metadata vacuum: neither duration nor frame count.
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_metadata",
-                    "METADATA ANOMALY: Both duration and frame_count missing for resolved_duration | Forensic: Total metadata vacuum; refusing to forge data",
+                    "METADATA ANOMALY: Both duration and frame_count missing for \
+                     resolved_duration | Forensic: Total metadata vacuum; refusing to forge data",
                 );
                 None
             }
@@ -2344,7 +2415,8 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
             "delivery_db_metadata",
             p,
             format!(
-                "METADATA AUDIT: Deep refinement failed for '{}' | Forensic: Error '{}'; refusing to mark asset safe for lossless exploration with partial metadata",
+                "METADATA AUDIT: Deep refinement failed for '{}' | Forensic: Error '{}'; refusing \
+                 to mark asset safe for lossless exploration with partial metadata",
                 p.display(),
                 e
             ),
@@ -2356,7 +2428,8 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     } else {
         crate::media_conversion_gate::delivery_db_batch_audit(
             "delivery_db_metadata",
-            "Lossless-first (CRF 0.00) exploration bypassed: Animation duration could not be determined from metadata or bitstream.",
+            "Lossless-first (CRF 0.00) exploration bypassed: Animation duration could not be \
+             determined from metadata or bitstream.",
         );
         return false;
     }
@@ -2386,7 +2459,8 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_INTENT,
             &format!(
-                "Lossless-first (CRF 0.00) exploration skip: Duration ({duration_str}) exceeds dynamic limit ({threshold:.1}s) for asset with Value Prob {keep_prob:.2}"
+                "Lossless-first (CRF 0.00) exploration skip: Duration ({duration_str}) exceeds \
+                 dynamic limit ({threshold:.1}s) for asset with Value Prob {keep_prob:.2}"
             )
         );
     }
@@ -2431,7 +2505,8 @@ fn prepare_loop_training_feature_map_inner(conn: &mut Client) -> Result<FeatureM
             return Ok(feature_map);
         }
         anyhow::bail!(
-            "LoopIntent training feature_stats remain empty after refresh with {loop_sample_count} loop_samples rows; refusing bootstrap histograms for ingest"
+            "LoopIntent training feature_stats remain empty after refresh with \
+             {loop_sample_count} loop_samples rows; refusing bootstrap histograms for ingest"
         );
     }
 
@@ -2453,7 +2528,9 @@ fn prepare_loop_training_feature_map_inner(conn: &mut Client) -> Result<FeatureM
 /// Intermediate representation of a sample's metadata ready for database
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
+// Rationale: This struct serves as a comprehensive configuration or state
+// container where individual boolean flags are the most idiomatic and explicit
+// way to represent discrete options.
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
     file_hash: String,
@@ -2486,9 +2563,11 @@ pub struct SampleInsert {
     temporal_bpp: f64,
     /// Spatial bits per pixel -- measures compression efficiency per frame.
     spatial_bpp: f64,
-    /// Classification label: "low" (high value), "high" (meme), "video", or "medium".
+    /// Classification label: "low" (high value), "high" (meme), "video", or
+    /// "medium".
     loss_tolerance: String,
-    /// Who or what labeled this sample (e.g., "`cli_ingest`", "`integrity_refresh`").
+    /// Who or what labeled this sample (e.g., "`cli_ingest`",
+    /// "`integrity_refresh`").
     labeled_by: String,
     /// Width/height ratio.
     aspect_ratio: Option<f64>,
@@ -2500,7 +2579,8 @@ pub struct SampleInsert {
     directory_loop_intent_score: f64,
     /// Depth of the color palette as a normalized score (0-1).
     palette_depth: Option<f64>,
-    /// Motion Gini coefficient -- measures how concentrated motion is across frames.
+    /// Motion Gini coefficient -- measures how concentrated motion is across
+    /// frames.
     motion_gini: Option<f64>,
     /// Block skew measurement -- detects geometric distortion.
     block_skew: Option<f64>,
@@ -2521,7 +2601,8 @@ pub struct SampleInsert {
     filename_numeric_density: f64,
     /// 15x15 luminance grid (225 dims) providing real structural energy data.
     pub physics_225: Option<Vec<f32>>,
-    /// Loop intent classification ("`LoopStrong`", "`LoopWeak`", or "`Uncertain`").
+    /// Loop intent classification ("`LoopStrong`", "`LoopWeak`", or
+    /// "`Uncertain`").
     loop_verdict: String,
 }
 
@@ -2626,7 +2707,8 @@ pub(crate) fn build_loop_intent_scenario_sample(
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: LoopIntent sample '{}' rejected for multi-scenario ingestion | Forensic: {}",
+                "TRAINING AUDIT: LoopIntent sample '{}' rejected for multi-scenario ingestion | \
+                 Forensic: {}",
                 path.display(),
                 e
             ),
@@ -2656,7 +2738,8 @@ pub(crate) fn build_loop_intent_scenario_sample(
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: LoopIntent vector dimension mismatch for '{}' | Forensic: expected 261, got {}",
+                "TRAINING AUDIT: LoopIntent vector dimension mismatch for '{}' | Forensic: \
+                 expected 261, got {}",
                 path.display(),
                 vec_data.len()
             ),
@@ -2672,7 +2755,8 @@ pub(crate) fn build_loop_intent_scenario_sample(
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: LoopIntent vector contains non-finite values for '{}' | Forensic: refusing to insert polluted embedding",
+                "TRAINING AUDIT: LoopIntent vector contains non-finite values for '{}' | \
+                 Forensic: refusing to insert polluted embedding",
                 path.display()
             ),
         );
@@ -2907,7 +2991,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
                 "delivery_db_intent",
                 path,
                 format!(
-                    "TRAINING AUDIT: Sample probe failed for '{}' | Forensic: FFprobe Error '{}'; skipping training sample to maintain dataset integrity",
+                    "TRAINING AUDIT: Sample probe failed for '{}' | Forensic: FFprobe Error '{}'; \
+                     skipping training sample to maintain dataset integrity",
                     path.display(),
                     e
                 ),
@@ -2945,7 +3030,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
                     "delivery_db_intent",
                     path,
                     format!(
-                        "TRAINING AUDIT: GIF/header scan failed: {err}; skipping training sample to maintain dataset integrity"
+                        "TRAINING AUDIT: GIF/header scan failed: {err}; skipping training sample \
+                         to maintain dataset integrity"
                     ),
                 );
                 anyhow::bail!("GIF/header scan failed for {}: {err}", path.display());
@@ -2956,7 +3042,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
             "delivery_db_metadata",
             path,
             format!(
-                "TRAINING AUDIT: skipping GIF/header scan for non-GIF container '{}'; using ffprobe-derived timing fields",
+                "TRAINING AUDIT: skipping GIF/header scan for non-GIF container '{}'; using \
+                 ffprobe-derived timing fields",
                 probe.format_name
             ),
         );
@@ -2974,7 +3061,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
             "delivery_db_metadata",
             path,
             format!(
-                "TRAINING AUDIT: Sample metadata refinement failed for '{}' | Forensic: Deep refinement Error '{}'; retaining ffprobe/header probe fields",
+                "TRAINING AUDIT: Sample metadata refinement failed for '{}' | Forensic: Deep \
+                 refinement Error '{}'; retaining ffprobe/header probe fields",
                 path.display(),
                 e
             ),
@@ -2993,7 +3081,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: Sample missing empirical loop_stats_webp_ratio for '{}' | Forensic: {err}; refusing to insert unverifiable loop training sample",
+                "TRAINING AUDIT: Sample missing empirical loop_stats_webp_ratio for '{}' | \
+                 Forensic: {err}; refusing to insert unverifiable loop training sample",
                 path.display()
             ),
         );
@@ -3012,7 +3101,8 @@ fn gather_sample_metadata(path: &Path) -> Result<LoopMeta> {
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: Sample missing empirical frame_delay_variation for '{}' | Forensic: refusing to insert unverifiable loop timing sample",
+                "TRAINING AUDIT: Sample missing empirical frame_delay_variation for '{}' | \
+                 Forensic: refusing to insert unverifiable loop timing sample",
                 path.display()
             ),
         );
@@ -3036,11 +3126,13 @@ fn parent_directories_from_path(path: &Path) -> Option<Vec<String>> {
     })
 }
 
-/// Heuristic loop-intent bucket for training balance (matches ingest auto-label path).
+/// Heuristic loop-intent bucket for training balance (matches ingest auto-label
+/// path).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LoopTrainingBalanceProbe {
     pub loss_tolerance: String,
-    /// `loop` = strong loop intent, `non_loop` = video-like, `uncertain` = other.
+    /// `loop` = strong loop intent, `non_loop` = video-like, `uncertain` =
+    /// other.
     pub loop_intent: String,
     /// Complexity proxy for pairing with static-image entropy balance.
     pub complexity: f64,
@@ -3048,10 +3140,12 @@ pub struct LoopTrainingBalanceProbe {
     pub temporal_bpp: f64,
 }
 
-/// Probe loop vs non-loop intent using the same `sample_from_path` heuristics as ingest.
+/// Probe loop vs non-loop intent using the same `sample_from_path` heuristics
+/// as ingest.
 ///
 /// # Errors
-/// Returns an error when metadata extraction fails or the asset is not a valid loop candidate.
+/// Returns an error when metadata extraction fails or the asset is not a valid
+/// loop candidate.
 pub fn probe_loop_training_balance(path: &Path) -> anyhow::Result<LoopTrainingBalanceProbe> {
     let sample = sample_from_path_result(path, "training_balance_probe", None)
         .with_context(|| format!("loop training balance probe failed: {}", path.display()))?;
@@ -3124,7 +3218,8 @@ fn sample_from_path_result(
             "delivery_db_intent",
             path,
             format!(
-                "TRAINING AUDIT: Sample missing critical width/height dimensions for '{}' | Forensic: DB requires NOT NULL for geometric features; skipping training sample",
+                "TRAINING AUDIT: Sample missing critical width/height dimensions for '{}' | \
+                 Forensic: DB requires NOT NULL for geometric features; skipping training sample",
                 path.display()
             ),
         );
@@ -3183,7 +3278,8 @@ fn sample_from_path_result(
                 "delivery_db_intent",
                 path,
                 format!(
-                    "TRAINING AUDIT: Sample hashing (BLAKE3) failed for '{}' | Forensic: Error '{}'; skipping training sample to prevent identity collisions",
+                    "TRAINING AUDIT: Sample hashing (BLAKE3) failed for '{}' | Forensic: Error \
+                     '{}'; skipping training sample to prevent identity collisions",
                     path.display(),
                     e
                 ),
@@ -3270,9 +3366,11 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Compute a 261-dimensional pgvector encoding for a sample using pre-calculated std deviations.
-/// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
-/// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
+/// Compute a 261-dimensional pgvector encoding for a sample using
+/// pre-calculated std deviations. This precisely bakes the weights and
+/// normalization terms from the old dynamically computed KNN
+/// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the
+/// heavy lifting!
 fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) -> Option<SampleRow> {
     let width = meta.width?;
     let height = meta.height?;
@@ -3408,8 +3506,8 @@ fn adaptive_neighbor_count(total: usize) -> Result<usize, String> {
 fn class_balance_weight(total: i64, class_count: i64) -> f64 {
     let total_f = crate::numeric_cast::i64_to_f64(total.max(1));
     let class_f = crate::numeric_cast::i64_to_f64(class_count.max(0) + 1);
-    // Smooth and dampen inverse-frequency weighting to avoid unstable over-correction
-    // when class counts are highly imbalanced.
+    // Smooth and dampen inverse-frequency weighting to avoid unstable
+    // over-correction when class counts are highly imbalanced.
     ((total_f + 2.0) / (2.0 * class_f)).sqrt().clamp(0.67, 1.50)
 }
 
@@ -3556,7 +3654,8 @@ fn loop_stats_required_f64(field: Option<f64>, name: &'static str) -> Result<f64
             crate::media_conversion_gate::delivery_db_batch_audit(
                 "delivery_db_vector",
                 format!(
-                    "LoopIntent feature vector rejected non-finite required field '{name}' value={value}"
+                    "LoopIntent feature vector rejected non-finite required field '{name}' \
+                     value={value}"
                 ),
             );
             anyhow::bail!("LoopIntent feature vector non-finite required field '{name}'")
@@ -3578,7 +3677,8 @@ fn loop_stats_required_finite(value: f64, name: &'static str) -> Result<f64> {
         crate::media_conversion_gate::delivery_db_batch_audit(
             "delivery_db_vector",
             format!(
-                "LoopIntent feature vector rejected non-finite required scalar '{name}' value={value}"
+                "LoopIntent feature vector rejected non-finite required scalar '{name}' \
+                 value={value}"
             ),
         );
         anyhow::bail!("LoopIntent feature vector non-finite required scalar '{name}'")
@@ -3592,7 +3692,8 @@ fn loop_stats_optional_sparse_f64(field: Option<f64>, name: &'static str) -> Res
             crate::media_conversion_gate::delivery_db_batch_audit(
                 "delivery_db_vector",
                 format!(
-                    "LoopIntent feature vector rejected non-finite optional field '{name}' value={value}"
+                    "LoopIntent feature vector rejected non-finite optional field '{name}' \
+                     value={value}"
                 ),
             );
             anyhow::bail!("LoopIntent feature vector non-finite optional field '{name}'")
@@ -3685,7 +3786,8 @@ fn build_loop_feature_map(samples: &[LoopIntentTrainingSample]) -> Result<Featur
     let top_keywords = extract_loop_training_keywords(samples);
     if samples.is_empty() {
         anyhow::bail!(
-            "cannot build loop feature map from empty training sample set; refusing bootstrap histogram"
+            "cannot build loop feature map from empty training sample set; refusing bootstrap \
+             histogram"
         );
     }
 
@@ -3965,7 +4067,8 @@ const LOOP_METADATA_AUDIT_PRESERVE_KEYS: &[&str] = &[
     "physics_225_nonzero",
 ];
 
-/// Keys that `verify-fabrication-stock` requires on `loop_samples.metadata` (JSON).
+/// Keys that `verify-fabrication-stock` requires on `loop_samples.metadata`
+/// (JSON).
 const LOOP_PROBE_METADATA_JSON_KEYS: &[&str] = &[
     "frame_delay_variation",
     "frame_payload_variation",
@@ -4089,16 +4192,18 @@ fn merge_loop_probe_metadata_json(
     Ok(merged)
 }
 
-/// Re-probe `loop_samples` rows whose stored metadata cannot build an empirical feature vector.
+/// Re-probe `loop_samples` rows whose stored metadata cannot build an empirical
+/// feature vector.
 ///
 /// Returns `(repaired, skipped_no_source_path, reprobe_failed)`.
 pub fn repair_loop_samples_missing_probe_fields(
     conn: &mut Client,
 ) -> Result<(usize, usize, usize)> {
-    // `verify-fabrication-stock` fails on null `frame_delay_variation`; other keys may be null
-    // (e.g. `block_skew` is not populated by ffprobe today) without blocking PROJECT_100.
-    let predicate = "(metadata->>'frame_delay_variation' IS NULL \
-        OR NOT (metadata ? 'frame_delay_variation'))";
+    // `verify-fabrication-stock` fails on null `frame_delay_variation`; other keys
+    // may be null (e.g. `block_skew` is not populated by ffprobe today) without
+    // blocking PROJECT_100.
+    let predicate =
+        "(metadata->>'frame_delay_variation' IS NULL OR NOT (metadata ? 'frame_delay_variation'))";
     let query = format!(
         "SELECT
             blake3, source_path, file_name, width, height, duration_secs, frame_count,
@@ -4136,7 +4241,8 @@ pub fn repair_loop_samples_missing_probe_fields(
                 crate::modern_ui::symbols::INFO,
                 crate::modern_ui::symbols::plain::INFO,
                 format!(
-                    "loop probe repair: {idx}/{total} repaired={repaired} reprobe_failed={reprobe_failed} skipped_no_path={skipped_no_path}"
+                    "loop probe repair: {idx}/{total} repaired={repaired} \
+                     reprobe_failed={reprobe_failed} skipped_no_path={skipped_no_path}"
                 ),
             );
         }
@@ -4396,22 +4502,21 @@ fn recompute_loop_intent_embeddings(
     let mut skipped_vectors = 0usize;
 
     for sample in samples {
-        let vec_data = match crate::database_vector::compute_sample_vector(
-            &sample.sample_row,
-            feature_map,
-        ) {
-            Ok(vector) => vector,
-            Err(err) => {
-                skipped_vectors += 1;
-                crate::media_conversion_gate::delivery_db_batch_audit(
-                    "delivery_db_vector",
-                    format!(
-                        "LoopIntent embedding recompute skip: vector unavailable | Forensic: {err}"
-                    ),
-                );
-                continue;
-            }
-        };
+        let vec_data =
+            match crate::database_vector::compute_sample_vector(&sample.sample_row, feature_map) {
+                Ok(vector) => vector,
+                Err(err) => {
+                    skipped_vectors += 1;
+                    crate::media_conversion_gate::delivery_db_batch_audit(
+                        "delivery_db_vector",
+                        format!(
+                            "LoopIntent embedding recompute skip: vector unavailable | Forensic: \
+                             {err}"
+                        ),
+                    );
+                    continue;
+                }
+            };
         let pg_vector = pgvector::Vector::from(vec_data);
         tx.execute(&stmt, &[&pg_vector, &sample.blake3])
             .context("LoopIntent embedding UPDATE execute failed")?;
@@ -4420,7 +4525,8 @@ fn recompute_loop_intent_embeddings(
 
     if skipped_vectors > 0 {
         anyhow::bail!(
-            "LoopIntent embedding recompute rejected: {skipped_vectors}/{total} samples could not be vectorized (refusing partial backfill)"
+            "LoopIntent embedding recompute rejected: {skipped_vectors}/{total} samples could not \
+             be vectorized (refusing partial backfill)"
         );
     }
 
@@ -4429,7 +4535,8 @@ fn recompute_loop_intent_embeddings(
     Ok(updated)
 }
 
-/// Recompute normalized `LoopIntent` feature statistics and backfill embeddings.
+/// Recompute normalized `LoopIntent` feature statistics and backfill
+/// embeddings.
 ///
 /// # Errors
 ///
@@ -4705,30 +4812,37 @@ fn is_supported_dynamic_training_extension(ext: &str) -> bool {
 
 // ── Level 4: Inference Logging ───────────────────────────────────────────────
 
-/// Optional Layer 6 / HDBSCAN telemetry merged into `signal_snapshot` (no extra DB columns).
+/// Optional Layer 6 / HDBSCAN telemetry merged into `signal_snapshot` (no extra
+/// DB columns).
 #[derive(Debug, Clone, Default)]
 pub struct LoopInferenceAudit {
     pub layer6_fusion_score: Option<f64>,
     pub hdbscan_cluster_id: Option<i32>,
     pub hdbscan_cluster_loop_prior: Option<f64>,
     pub micro_nudge_score: Option<f64>,
-    /// Layer 6-B directional arbitration scores (always logged when arbitration runs).
+    /// Layer 6-B directional arbitration scores (always logged when arbitration
+    /// runs).
     pub layer6b_keep_score: Option<f64>,
     pub layer6b_convert_score: Option<f64>,
     pub layer6b_margin: Option<f64>,
     pub layer6b_resolved: Option<bool>,
-    /// Decision tree exit layer tag (e.g. `Layer 3`, `Layer 5`) before KNN/fallback.
+    /// Decision tree exit layer tag (e.g. `Layer 3`, `Layer 5`) before
+    /// KNN/fallback.
     pub tree_layer_exit: Option<String>,
     pub tree_log_odds: Option<f64>,
     /// Upstream reason passed into Layer 7 when fallback runs.
     pub layer7_upstream: Option<String>,
-    /// Terminal resolution path: `tree_decisive`, `layer6_knn_fusion`, `layer6b_arbitration`, etc.
+    /// Terminal resolution path: `tree_decisive`, `layer6_knn_fusion`,
+    /// `layer6b_arbitration`, etc.
     pub resolution_path: Option<String>,
-    /// `Some(true/false)` when KNN was attempted after tree uncertainty; `None` if never reached.
+    /// `Some(true/false)` when KNN was attempted after tree uncertainty; `None`
+    /// if never reached.
     pub knn_lookup_succeeded: Option<bool>,
-    /// HNSW lookup branch tag (`hnsw_no_rows`, `corpus_immature`, `success`, …) when KNN ran.
+    /// HNSW lookup branch tag (`hnsw_no_rows`, `corpus_immature`, `success`, …)
+    /// when KNN ran.
     pub hnsw_lookup_branch: Option<String>,
-    /// Optional corpus probe when the tree was decisive before Layer 6 (telemetry only).
+    /// Optional corpus probe when the tree was decisive before Layer 6
+    /// (telemetry only).
     pub knn_telemetry_lookup_succeeded: Option<bool>,
     pub knn_telemetry_branch: Option<String>,
     pub knn_telemetry_neighbor_count: Option<usize>,
@@ -4887,7 +5001,8 @@ fn inference_log_file_hash_or_skip(path: Option<&Path>) -> InferenceLogHashDecis
                 "delivery_db_fallback",
                 path,
                 format!(
-                    "INFERENCE AUDIT: Failed to calculate file hash for '{}' | Forensic: BLAKE3 Error '{}'; skipped inference_log insert to avoid untraceable telemetry",
+                    "INFERENCE AUDIT: Failed to calculate file hash for '{}' | Forensic: BLAKE3 \
+                     Error '{}'; skipped inference_log insert to avoid untraceable telemetry",
                     path.display(),
                     err
                 ),
@@ -5032,7 +5147,8 @@ pub fn log_inference_record(
         crate::media_conversion_gate::delivery_db_batch_audit(
             "delivery_db_fallback",
             format!(
-                "INFERENCE AUDIT: Failed to write inference log (non-fatal): {e} | Forensic: DB Error during insertion (Exit Layer: {layer_exit}); telemetry loss occurred",
+                "INFERENCE AUDIT: Failed to write inference log (non-fatal): {e} | Forensic: DB \
+                 Error during insertion (Exit Layer: {layer_exit}); telemetry loss occurred",
             ),
         );
     }
@@ -5277,8 +5393,10 @@ pub fn query_inference_blind_spots(
 /// Read the runtime loop verdict from an inference-log JSON snapshot.
 ///
 /// When loop inference audit-only mode is on (`algorithm_runtime`), the SQL
-/// `final_verdict` column is [`crate::constants::LOOP_INFERENCE_TELEMETRY_ONLY_VERDICT`] only; use this helper
-/// (or `signal_snapshot->>'runtime_final_verdict'` in SQL) for analytics.
+/// `final_verdict` column is
+/// [`crate::constants::LOOP_INFERENCE_TELEMETRY_ONLY_VERDICT`] only; use this
+/// helper (or `signal_snapshot->>'runtime_final_verdict'` in SQL) for
+/// analytics.
 #[must_use]
 pub fn loop_inference_runtime_verdict_from_snapshot(snapshot: &serde_json::Value) -> Option<&str> {
     snapshot
@@ -5329,7 +5447,8 @@ pub fn query_inference_log_summary(conn: &mut Client) -> Result<InferenceLogSumm
     }
 
     let verdict_rows = conn.query(
-        "SELECT final_verdict, COUNT(*) FROM inference_log GROUP BY final_verdict ORDER BY COUNT(*) DESC",
+        "SELECT final_verdict, COUNT(*) FROM inference_log GROUP BY final_verdict ORDER BY \
+         COUNT(*) DESC",
         &[],
     )?;
     let verdict_counts: Vec<(String, i64)> =
@@ -5488,7 +5607,8 @@ pub fn check_database_health() -> Result<DbHealthReport> {
     }
 
     // 3. Data Integrity: NaN/Infinity Scan for pgvector columns
-    // We scan both the feature search vector columns which are critical for KNN stability.
+    // We scan both the feature search vector columns which are critical for KNN
+    // stability.
 
     // Check active multi-scenario tables
     match conn.query(
@@ -6111,7 +6231,8 @@ mod tests {
             std_dev: 2.0_f64,
             ..DistributionStats::default()
         };
-        // Collection aggregates are exposed via `GlobalCollectionStats`, not forged into p25/p50.
+        // Collection aggregates are exposed via `GlobalCollectionStats`, not forged
+        // into p25/p50.
         assert!(stats.p50.is_none());
         assert!(stats.p90.is_none());
         assert_eq!(collection.duration_avg, Some(5.0_f64));
@@ -6167,7 +6288,8 @@ mod tests {
         assert!(profile.duration.p50.is_none() && profile.duration.p90.is_none());
     }
 
-    /// Test-only: synthesize Gaussian quantiles from moments (never used in production KNN).
+    /// Test-only: synthesize Gaussian quantiles from moments (never used in
+    /// production KNN).
     fn fill_missing_percentiles_from_moments(stats: &mut DistributionStats) -> bool {
         if !stats.mean.is_finite() || stats.std_dev <= 1e-6 {
             return false;

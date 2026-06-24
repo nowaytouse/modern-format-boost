@@ -3,7 +3,8 @@
 //!
 //! ## Architectural Design
 //!
-//! Due to the lack of libx265 support in the system `FFmpeg`, a three-step encoding process is used:
+//! Due to the lack of libx265 support in the system `FFmpeg`, a three-step
+//! encoding process is used:
 //! 1. `FFmpeg Decoding` → Y4M (raw YUV)
 //! 2. x265 Encoding → HEVC bitstream
 //! 3. `FFmpeg Muxing` → MP4 Container
@@ -30,7 +31,8 @@ pub struct X265Config {
     pub container: String,
     pub sample_duration: Option<f32>,
     pub preserve_audio: bool,
-    /// Pixel format to use for the YUV pipe. Set to "yuv420p10le" for 10-bit HDR content.
+    /// Pixel format to use for the YUV pipe. Set to "yuv420p10le" for 10-bit
+    /// HDR content.
     pub pix_fmt: String,
     /// HDR colour primaries (e.g. "bt2020")
     pub color_primaries: Option<String>,
@@ -219,8 +221,9 @@ pub fn encode_with_x265(
     Ok(output_size)
 }
 
-/// Encode a .y4m file directly with x265 (no `FFmpeg` pipe). Avoids Broken pipe when
-/// the pipeline `FFmpeg` stdout → x265 stdin is used with low-fps or odd y4m streams.
+/// Encode a .y4m file directly with x265 (no `FFmpeg` pipe). Avoids Broken pipe
+/// when the pipeline `FFmpeg` stdout → x265 stdin is used with low-fps or odd
+/// y4m streams.
 fn encode_y4m_direct(
     input: &Path,
     hevc_output: &Path,
@@ -230,7 +233,8 @@ fn encode_y4m_direct(
     crate::log_debug!(
         crate::infra::static_logs::messages::LABEL_ENCODER,
         format!(
-            "Encoder Audit: Initiating direct encoding (crf={crf:.1}, preset={preset}, input={input_path})",
+            "Encoder Audit: Initiating direct encoding (crf={crf:.1}, preset={preset}, \
+             input={input_path})",
             crf = config.crf,
             preset = config.preset,
             input_path = input.display(),
@@ -253,7 +257,8 @@ fn encode_y4m_direct(
         crate::log_error!(
             crate::infra::static_logs::messages::LABEL_ENCODER,
             format!(
-                "Encoder Audit: Direct encoding failed (exit={exit:?}, elapsed={elapsed:.2}s): {err_msg}",
+                "Encoder Audit: Direct encoding failed (exit={exit:?}, elapsed={elapsed:.2}s): \
+                 {err_msg}",
                 exit = output.status.code(),
                 elapsed = duration.as_secs_f64(),
                 err_msg = format_ffmpeg_error(&stderr),
@@ -331,8 +336,9 @@ fn encode_to_hevc(
 ) -> Result<bool> {
     let start_time = std::time::Instant::now();
 
-    // When input is already .y4m (e.g. from dynamic_mapping temp), run x265 directly
-    // to avoid FFmpeg→pipe→x265 which can cause Broken pipe (x265 closing stdin early).
+    // When input is already .y4m (e.g. from dynamic_mapping temp), run x265
+    // directly to avoid FFmpeg→pipe→x265 which can cause Broken pipe (x265
+    // closing stdin early).
     let is_y4m = input
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("y4m"));
@@ -417,7 +423,8 @@ fn encode_to_hevc(
             crate::log_error!(
                 crate::infra::static_logs::messages::LABEL_ENCODER,
                 format!(
-                    "Encoder Audit: Decoder pipe failed (exit={exit:?}, elapsed={elapsed:.2}s, broken_pipe={is_broken_pipe})",
+                    "Encoder Audit: Decoder pipe failed (exit={exit:?}, elapsed={elapsed:.2}s, \
+                     broken_pipe={is_broken_pipe})",
                     exit = ffmpeg_status.code(),
                     elapsed = duration.as_secs_f64(),
                 )
@@ -425,7 +432,8 @@ fn encode_to_hevc(
             if is_broken_pipe {
                 crate::log_pipeline_broken!(
                     "FFmpeg Decoding",
-                    "Reader (x265) likely closed stdin first; x265 may have exited or rejected the stream"
+                    "Reader (x265) likely closed stdin first; x265 may have exited or rejected \
+                     the stream"
                 );
                 if !x265_stderr.is_empty() {
                     crate::media_conversion_gate::delivery_encode_batch_audit(
@@ -451,7 +459,8 @@ fn encode_to_hevc(
             crate::log_error!(
                 crate::infra::static_logs::messages::LABEL_ENCODER,
                 format!(
-                    "Encoder Audit: Pipe establishment failed (exit={exit:?}, elapsed={elapsed:.2}s, broken_pipe={is_broken_pipe})",
+                    "Encoder Audit: Pipe establishment failed (exit={exit:?}, \
+                     elapsed={elapsed:.2}s, broken_pipe={is_broken_pipe})",
                     exit = x265_status.code(),
                     elapsed = duration.as_secs_f64(),
                 )
@@ -572,7 +581,8 @@ fn mux_hevc_to_container(
 
     if config.preserve_audio && !input_is_image {
         mux_builder.input(original_input);
-        // Map: video from HEVC bitstream (input 0), all audio + subtitle from original (input 1)
+        // Map: video from HEVC bitstream (input 0), all audio + subtitle from original
+        // (input 1)
         mux_builder.arg("-map").arg("0:v:0");
         mux_builder.arg("-map").arg("1:a?");
         mux_builder.codec_video("copy");

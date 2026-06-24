@@ -1,6 +1,7 @@
 //! Modern Format Boost - Ephemeral Validation Sandbox in Rust.
 //! Never writes under the repo tree or user bundles. Creates temp fixtures,
-//! runs release vid/img binaries, greps logs for contract signals, and runs verify.
+//! runs release vid/img binaries, greps logs for contract signals, and runs
+//! verify.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -389,11 +390,9 @@ mod tests {
     #[test]
     fn test_grep_checks() {
         let sample_log = "\
-        [info] ultimate mode initialized\n\
-        [info] 3D Quality Gate: passed\n\
-        [info] ignore_class=vid_static_single_frame\n\
-        [info] ignore_class=img_animated_handoff\n\
-        ";
+        [info] ultimate mode initialized\n[info] 3D Quality Gate: passed\n[info] \
+                          ignore_class=vid_static_single_frame\n[info] \
+                          ignore_class=img_animated_handoff\n";
         let checks = grep_checks(sample_log);
         assert!(checks.gate_3d_passed);
         assert!(checks.no_ssim_enforce_reject);

@@ -1,9 +1,11 @@
 //! 🗄️ Image Analysis Cache - `PostgreSQL` Backend
 //!
-//! Hash-path SQL (M132): `algorithm_version FROM video_records` · (M133): `algorithm_version FROM quality_records`
+//! Hash-path SQL (M132): `algorithm_version FROM video_records` · (M133):
+//! `algorithm_version FROM quality_records`
 //!
-//! Provides a highly efficient, persistent cache for image analysis results using `PostgreSQL` and `MessagePack`.
-//! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
+//! Provides a highly efficient, persistent cache for image analysis results
+//! using `PostgreSQL` and `MessagePack`. This ensures that expensive operations
+//! like pixel-based entropy calculation, deep HEIC/AVIF parsing,
 //! and quantization detection are only performed once per file content.
 
 use crate::image_analyzer::ImageAnalysis;
@@ -529,7 +531,8 @@ impl AnalysisCache {
     /// Create a new analysis cache with default settings.
     ///
     /// # Errors
-    /// Returns an error if the database connection fails or the schema is invalid.
+    /// Returns an error if the database connection fails or the schema is
+    /// invalid.
     pub fn new() -> Result<Self> {
         let mut client = open_pg_client()?;
         Self::init_schema(&mut client)?;
@@ -575,7 +578,8 @@ impl AnalysisCache {
         crate::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
             "analysis_cache_schema_cutover_purge",
             format!(
-                "previous_schema_version={previous_schema_version}; new_schema_version={CACHE_SCHEMA_VERSION}"
+                "previous_schema_version={previous_schema_version}; \
+                 new_schema_version={CACHE_SCHEMA_VERSION}"
             ),
         );
         client
@@ -590,13 +594,15 @@ impl AnalysisCache {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_CACHE,
             &format!(
-                "Cleared cached analysis payloads due to schema cutover (v{previous_schema_version} -> v{CACHE_SCHEMA_VERSION})"
+                "Cleared cached analysis payloads due to schema cutover \
+                 (v{previous_schema_version} -> v{CACHE_SCHEMA_VERSION})"
             )
         );
         Ok(())
     }
 
-    /// Deletes entries that were created with an older version of the analysis algorithm.
+    /// Deletes entries that were created with an older version of the analysis
+    /// algorithm.
     fn invalidate_old_algorithm_entries(client: &mut Client) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated: i64 = 0;
@@ -647,7 +653,8 @@ impl AnalysisCache {
     /// Returns an error if the database query fails.
     /// # Panics
     ///
-    /// Panics if the database schema is corrupted or columns are missing from the `analysis_records` table.
+    /// Panics if the database schema is corrupted or columns are missing from
+    /// the `analysis_records` table.
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -655,7 +662,8 @@ impl AnalysisCache {
 
         // 1. Path Index
         let row = client.query_opt(
-            "SELECT r.analysis_data, r.algorithm_version, r.data_checksum, p.ctime, p.btime, p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
+            "SELECT r.analysis_data, r.algorithm_version, r.data_checksum, p.ctime, p.btime, \
+             p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
              JOIN analysis_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = $1 AND p.mtime = $2 AND p.file_size = $3",
             &[&path_str.to_string(), &sig.mtime, &sig.size],
@@ -698,7 +706,8 @@ impl AnalysisCache {
                 }
 
                 let data: Vec<u8> = row.get(0);
-                // Honest validation: If checksum is missing or invalid, treat as cache miss (None)
+                // Honest validation: If checksum is missing or invalid, treat as cache miss
+                // (None)
                 let stored_checksum_opt = row.get::<_, Option<i64>>(2);
                 let valid_checksum = stored_checksum_opt
                     .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "cache_checksum"));
@@ -775,7 +784,8 @@ impl AnalysisCache {
         // 2. Hash Index
         let content_hash = calculate_blake3(path)?;
         let row = client.query_opt(
-            "SELECT analysis_data, algorithm_version, data_checksum, content_fingerprint_hash, file_size FROM analysis_records WHERE content_hash = $1",
+            "SELECT analysis_data, algorithm_version, data_checksum, content_fingerprint_hash, \
+             file_size FROM analysis_records WHERE content_hash = $1",
             &[&content_hash.as_bytes().as_slice()],
         )?;
 
@@ -866,10 +876,21 @@ impl AnalysisCache {
 
             // Backfill path index
             client.execute(
-                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+                 btime) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
-                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-                &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime \
+                 = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime \
+                 = EXCLUDED.ctime, btime = EXCLUDED.btime",
+                &[
+                    &path_str.to_string(),
+                    &content_hash.as_bytes().as_slice(),
+                    &sig.mtime,
+                    &sig.size,
+                    &sig.atime,
+                    &sig.ctime,
+                    &sig.btime,
+                ],
             )?;
 
             crate::log_info!(
@@ -888,7 +909,8 @@ impl AnalysisCache {
     /// Returns an error if the database query fails.
     /// # Panics
     ///
-    /// Panics if the database schema is corrupted or columns are missing from the `quality_records` table.
+    /// Panics if the database schema is corrupted or columns are missing from
+    /// the `quality_records` table.
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -896,7 +918,8 @@ impl AnalysisCache {
 
         // 1. Path Index
         let row = client.query_opt(
-            "SELECT r.analysis_data, r.data_checksum, r.algorithm_version, p.ctime, p.btime, p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
+            "SELECT r.analysis_data, r.data_checksum, r.algorithm_version, p.ctime, p.btime, \
+             p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
              JOIN quality_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = $1 AND p.mtime = $2 AND p.file_size = $3",
             &[&path_str.to_string(), &sig.mtime, &sig.size],
@@ -1014,7 +1037,8 @@ impl AnalysisCache {
         // 2. Hash Index
         let content_hash = calculate_blake3(path)?;
         let row = client.query_opt(
-            "SELECT analysis_data, data_checksum, algorithm_version, content_fingerprint_hash, file_size FROM quality_records WHERE content_hash = $1",
+            "SELECT analysis_data, data_checksum, algorithm_version, content_fingerprint_hash, \
+             file_size FROM quality_records WHERE content_hash = $1",
             &[&content_hash.as_bytes().as_slice()],
         )?;
 
@@ -1112,10 +1136,21 @@ impl AnalysisCache {
 
             // Backfill path index
             client.execute(
-                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+                 btime) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
-                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-                &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime \
+                 = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime \
+                 = EXCLUDED.ctime, btime = EXCLUDED.btime",
+                &[
+                    &path_str.to_string(),
+                    &content_hash.as_bytes().as_slice(),
+                    &sig.mtime,
+                    &sig.size,
+                    &sig.atime,
+                    &sig.ctime,
+                    &sig.btime,
+                ],
             )?;
 
             crate::log_info!(
@@ -1149,16 +1184,39 @@ impl AnalysisCache {
 
         let mut tx = client.transaction()?;
         tx.execute(
-            "INSERT INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+            "INSERT INTO analysis_records (content_hash, file_size, analysis_data, created_at, \
+             algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, \
+             analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, \
+             algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = \
+             EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
+            &[
+                &content_hash.as_bytes().as_slice(),
+                &sig.size,
+                &packed_data,
+                &now,
+                &cache_algorithm(),
+                &content_fingerprint.as_slice(),
+                &(i64::from(checksum)),
+            ],
         )?;
         tx.execute(
-            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+             btime)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-            &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = \
+             EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = \
+             EXCLUDED.ctime, btime = EXCLUDED.btime",
+            &[
+                &path_str.to_string(),
+                &content_hash.as_bytes().as_slice(),
+                &sig.mtime,
+                &sig.size,
+                &sig.atime,
+                &sig.ctime,
+                &sig.btime,
+            ],
         )?;
         tx.commit()?;
 
@@ -1194,16 +1252,39 @@ impl AnalysisCache {
 
         let mut tx = client.transaction()?;
         tx.execute(
-            "INSERT INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+            "INSERT INTO quality_records (content_hash, file_size, analysis_data, created_at, \
+             algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, \
+             analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, \
+             algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = \
+             EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
+            &[
+                &content_hash.as_bytes().as_slice(),
+                &sig.size,
+                &packed_data,
+                &now,
+                &cache_algorithm(),
+                &content_fingerprint.as_slice(),
+                &(i64::from(checksum)),
+            ],
         )?;
         tx.execute(
-            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+             btime)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-            &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = \
+             EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = \
+             EXCLUDED.ctime, btime = EXCLUDED.btime",
+            &[
+                &path_str.to_string(),
+                &content_hash.as_bytes().as_slice(),
+                &sig.mtime,
+                &sig.size,
+                &sig.atime,
+                &sig.ctime,
+                &sig.btime,
+            ],
         )?;
         tx.commit()?;
 
@@ -1220,7 +1301,8 @@ impl AnalysisCache {
     /// Returns an error if the database query fails.
     /// # Panics
     ///
-    /// Panics if the database schema is corrupted or columns are missing from the `video_records` table.
+    /// Panics if the database schema is corrupted or columns are missing from
+    /// the `video_records` table.
     pub fn get_video_analysis(&self, path: &Path) -> Result<Option<Detection>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -1228,7 +1310,8 @@ impl AnalysisCache {
 
         // 1. Path Index
         let row = client.query_opt(
-            "SELECT r.analysis_data, r.data_checksum, r.algorithm_version, p.ctime, p.btime, p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
+            "SELECT r.analysis_data, r.data_checksum, r.algorithm_version, p.ctime, p.btime, \
+             p.content_hash, r.content_fingerprint_hash, r.file_size FROM path_index p 
              JOIN video_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = $1 AND p.mtime = $2 AND p.file_size = $3",
             &[&path_str.to_string(), &sig.mtime, &sig.size],
@@ -1343,7 +1426,8 @@ impl AnalysisCache {
         // 2. Hash Index
         let content_hash = calculate_blake3(path)?;
         let row = client.query_opt(
-            "SELECT analysis_data, data_checksum, algorithm_version, content_fingerprint_hash, file_size FROM video_records WHERE content_hash = $1",
+            "SELECT analysis_data, data_checksum, algorithm_version, content_fingerprint_hash, \
+             file_size FROM video_records WHERE content_hash = $1",
             &[&content_hash.as_bytes().as_slice()],
         )?;
 
@@ -1434,10 +1518,21 @@ impl AnalysisCache {
 
             // Backfill path index
             client.execute(
-                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+                 btime) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
-                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-                &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+                 ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime \
+                 = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime \
+                 = EXCLUDED.ctime, btime = EXCLUDED.btime",
+                &[
+                    &path_str.to_string(),
+                    &content_hash.as_bytes().as_slice(),
+                    &sig.mtime,
+                    &sig.size,
+                    &sig.atime,
+                    &sig.ctime,
+                    &sig.btime,
+                ],
             )?;
 
             return Ok(Some(analysis));
@@ -1467,16 +1562,39 @@ impl AnalysisCache {
 
         let mut tx = client.transaction()?;
         tx.execute(
-            "INSERT INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+            "INSERT INTO video_records (content_hash, file_size, analysis_data, created_at, \
+             algorithm_version, content_fingerprint_hash, data_checksum)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
-            &[&content_hash.as_bytes().as_slice(), &sig.size, &packed_data, &now, &cache_algorithm(), &content_fingerprint.as_slice(), &(i64::from(checksum))],
+             ON CONFLICT (content_hash) DO UPDATE SET file_size = EXCLUDED.file_size, \
+             analysis_data = EXCLUDED.analysis_data, created_at = EXCLUDED.created_at, \
+             algorithm_version = EXCLUDED.algorithm_version, content_fingerprint_hash = \
+             EXCLUDED.content_fingerprint_hash, data_checksum = EXCLUDED.data_checksum",
+            &[
+                &content_hash.as_bytes().as_slice(),
+                &sig.size,
+                &packed_data,
+                &now,
+                &cache_algorithm(),
+                &content_fingerprint.as_slice(),
+                &(i64::from(checksum)),
+            ],
         )?;
         tx.execute(
-            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+            "INSERT INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, \
+             btime)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = EXCLUDED.ctime, btime = EXCLUDED.btime",
-            &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
+             ON CONFLICT (file_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, mtime = \
+             EXCLUDED.mtime, file_size = EXCLUDED.file_size, atime = EXCLUDED.atime, ctime = \
+             EXCLUDED.ctime, btime = EXCLUDED.btime",
+            &[
+                &path_str.to_string(),
+                &content_hash.as_bytes().as_slice(),
+                &sig.mtime,
+                &sig.size,
+                &sig.atime,
+                &sig.ctime,
+                &sig.btime,
+            ],
         )?;
         tx.commit()?;
 
@@ -1511,7 +1629,8 @@ impl AnalysisCache {
                     crate::media_conversion_gate::delivery_api_batch_fallback_audit(
                         "analysis_cache_prune_count_invalid",
                         format!(
-                            "failed to parse cache pruning result for {table}: {e:?}; assuming 0 removed"
+                            "failed to parse cache pruning result for {table}: {e:?}; assuming 0 \
+                             removed"
                         ),
                     );
                     0
@@ -1536,7 +1655,8 @@ impl AnalysisCache {
     /// Returns an error if the database query fails.
     /// # Panics
     ///
-    /// Panics if the database schema is corrupted or mandatory metadata entries are missing.
+    /// Panics if the database schema is corrupted or mandatory metadata entries
+    /// are missing.
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
 
@@ -1593,9 +1713,9 @@ impl AnalysisCache {
     /// # Errors
     /// Returns an error if the database deletion fails.
     pub const fn enforce_size_limit(&self) -> Result<()> {
-        // Size enforcement in shared Postgres is handled differently (usually by policy or quota)
-        // or we can implement a row-count based pruning here if needed.
-        // For now, we rely on cleanup_old_records.
+        // Size enforcement in shared Postgres is handled differently (usually by policy
+        // or quota) or we can implement a row-count based pruning here if
+        // needed. For now, we rely on cleanup_old_records.
         Ok(())
     }
 }

@@ -29,7 +29,8 @@ fn main() {
             );
             foundation::log_hint!(
                 foundation::infra::static_logs::messages::LABEL_DATABASE,
-                "Ensure PostgreSQL service is active and 'modern_format_boost' database has been initialized."
+                "Ensure PostgreSQL service is active and 'modern_format_boost' database has been \
+                 initialized."
             );
             std::process::exit(foundation::constants::EXIT_CODE_ERROR);
         }
@@ -132,7 +133,8 @@ fn main() {
                 foundation::media_conversion_gate::delivery_db_batch_audit(
                     "verify_snapshot",
                     format!(
-                        "   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})"
+                        "   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: \
+                         {snapshot:?})"
                     ),
                 );
             }

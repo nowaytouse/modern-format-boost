@@ -1,7 +1,7 @@
 // Multi-Scenario Database Operations
 //
-// Provides unified interface for managing embeddings across different scenarios.
-// Strictly aligned with the 001_multi_scenario_embedding.sql schema.
+// Provides unified interface for managing embeddings across different
+// scenarios. Strictly aligned with the 001_multi_scenario_embedding.sql schema.
 
 use crate::scenario::ScenarioType;
 use anyhow::{Context, Result};
@@ -26,7 +26,8 @@ pub struct KnnRegressionFeatures {
 }
 
 impl KnnRegressionFeatures {
-    /// Returns `true` when every scalar is finite and at least one neighbor was aggregated.
+    /// Returns `true` when every scalar is finite and at least one neighbor was
+    /// aggregated.
     #[must_use]
     pub const fn is_usable_for_regression(&self) -> bool {
         self.neighbor_count > 0
@@ -38,7 +39,8 @@ impl KnnRegressionFeatures {
             && self.confidence.is_finite()
     }
 
-    /// Seal aggregated KNN scalars; reject the whole row when any field is non-contract.
+    /// Seal aggregated KNN scalars; reject the whole row when any field is
+    /// non-contract.
     #[must_use]
     pub fn seal_aggregates(self) -> Option<Self> {
         Some(Self {
@@ -428,7 +430,8 @@ fn require_quality_score(sample: &ScenarioSample) -> Result<f32> {
 fn ensure_quality_regression_scenario(scenario: ScenarioType) -> Result<()> {
     anyhow::ensure!(
         scenario.is_quality_regression(),
-        "knn_regression_lookup only supports quality regression scenarios; use loop_intent clustering via knn_lookup and the loop pipeline"
+        "knn_regression_lookup only supports quality regression scenarios; use loop_intent \
+         clustering via knn_lookup and the loop pipeline"
     );
     Ok(())
 }
@@ -575,7 +578,8 @@ fn ensure_embedding_column_dimension(
     };
     let Some(actual_dim) = parse_vector_dimension(&column_type) else {
         anyhow::bail!(
-            "Unsupported embedding column type for {table_name}: {column_type} (expected vector({expected_dim}))"
+            "Unsupported embedding column type for {table_name}: {column_type} (expected \
+             vector({expected_dim}))"
         );
     };
 
@@ -590,13 +594,15 @@ fn ensure_embedding_column_dimension(
             );
             conn.execute(&sql, &[]).with_context(|| {
                 format!(
-                    "Failed to tighten empty {table_name}.embedding from vector({actual_dim}) to vector({expected_dim})"
+                    "Failed to tighten empty {table_name}.embedding from vector({actual_dim}) to \
+                     vector({expected_dim})"
                 )
             })?;
             return Ok(());
         }
         anyhow::bail!(
-            "Embedding column for {table_name} has dimension {actual_dim}, cannot tighten to {expected_dim} without lossy truncation"
+            "Embedding column for {table_name} has dimension {actual_dim}, cannot tighten to \
+             {expected_dim} without lossy truncation"
         );
     }
 
@@ -614,12 +620,16 @@ fn ensure_embedding_column_dimension(
          END"
     );
     conn.execute(&sql, &[]).with_context(|| {
-        format!("Failed to migrate {table_name}.embedding from vector({actual_dim}) to vector({expected_dim})")
+        format!(
+            "Failed to migrate {table_name}.embedding from vector({actual_dim}) to \
+             vector({expected_dim})"
+        )
     })?;
     Ok(())
 }
 
-/// Legacy loop-intent feedback table (`inference_log`) plus first-class audit columns.
+/// Legacy loop-intent feedback table (`inference_log`) plus first-class audit
+/// columns.
 ///
 /// # Errors
 ///
@@ -660,7 +670,8 @@ fn ensure_loop_inference_log_schema(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
-/// Create all scenario-specific tables used by the multi-scenario embedding layer.
+/// Create all scenario-specific tables used by the multi-scenario embedding
+/// layer.
 ///
 /// This mirrors `migrations/001_multi_scenario_embedding.sql` and is
 /// intentionally idempotent so training binaries and the C API can run without
@@ -668,7 +679,8 @@ fn ensure_loop_inference_log_schema(conn: &mut Client) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if schema creation, index creation, or metadata refresh fails.
+/// Returns an error if schema creation, index creation, or metadata refresh
+/// fails.
 pub fn init_multi_scenario_schema(conn: &mut Client) -> Result<()> {
     init_multi_scenario_schema_locked(conn)
 }
@@ -733,7 +745,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE table_schema = 'public' AND table_name = 'gif_quality_samples'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: gif_quality_samples. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: gif_quality_samples. Remove or rename legacy \
+         animated-image schema objects before initializing the strict animated_image_quality \
+         schema.';
             END IF;
 
             IF EXISTS (
@@ -741,7 +755,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE table_schema = 'public' AND table_name = 'gif_quality_inference_log'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: gif_quality_inference_log. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: gif_quality_inference_log. Remove or rename \
+         legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -749,7 +765,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE relkind = 'S' AND relname = 'gif_quality_samples_id_seq'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: gif_quality_samples_id_seq. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: gif_quality_samples_id_seq. Remove or rename \
+         legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -757,7 +775,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE relkind = 'S' AND relname = 'gif_quality_inference_log_id_seq'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: gif_quality_inference_log_id_seq. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: gif_quality_inference_log_id_seq. Remove or \
+         rename legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -765,7 +785,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE relkind = 'i' AND relname = 'idx_gif_quality_blake3'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: idx_gif_quality_blake3. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: idx_gif_quality_blake3. Remove or rename \
+         legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -773,7 +795,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE relkind = 'i' AND relname = 'idx_gif_quality_hnsw'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: idx_gif_quality_hnsw. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: idx_gif_quality_hnsw. Remove or rename legacy \
+         animated-image schema objects before initializing the strict animated_image_quality \
+         schema.';
             END IF;
 
             IF EXISTS (
@@ -782,7 +806,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE conname = 'gif_quality_samples_quality_score_check'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: gif_quality_samples_quality_score_check. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: gif_quality_samples_quality_score_check. \
+         Remove or rename legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -790,7 +816,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE tgname = 'trg_sync_gif_quality_samples_metadata'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: trg_sync_gif_quality_samples_metadata. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: trg_sync_gif_quality_samples_metadata. Remove \
+         or rename legacy animated-image schema objects before initializing the strict \
+         animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -798,7 +826,9 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                 WHERE tgname = 'trg_sync_gif_quality_samples_metadata_truncate'
             ) THEN
                 RAISE EXCEPTION
-                    'Legacy schema object detected: trg_sync_gif_quality_samples_metadata_truncate. Remove or rename legacy animated-image schema objects before initializing the strict animated_image_quality schema.';
+                    'Legacy schema object detected: \
+         trg_sync_gif_quality_samples_metadata_truncate. Remove or rename legacy animated-image \
+         schema objects before initializing the strict animated_image_quality schema.';
             END IF;
 
             IF EXISTS (
@@ -810,7 +840,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
                     WHERE scenario = 'gif_quality'
                 ) THEN
                     RAISE EXCEPTION
-                        'Legacy metadata row detected: scenario=gif_quality. Remove legacy animated-image metadata before initializing the strict animated_image_quality schema.';
+                        'Legacy metadata row detected: scenario=gif_quality. Remove legacy \
+         animated-image metadata before initializing the strict animated_image_quality schema.';
                 END IF;
             END IF;
         END;
@@ -996,7 +1027,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE loop_samples ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE loop_samples ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL \
+         DEFAULT 0",
         &[],
     )?;
     conn.execute(
@@ -1036,48 +1068,63 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE multi_scenario_metadata ADD COLUMN IF NOT EXISTS feature_stats JSONB DEFAULT '{}'::jsonb",
+        "ALTER TABLE multi_scenario_metadata ADD COLUMN IF NOT EXISTS feature_stats JSONB DEFAULT \
+         '{}'::jsonb",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE multi_scenario_metadata ADD COLUMN IF NOT EXISTS collection_stats JSONB DEFAULT '{}'::jsonb",
-        &[],
-    )?;
-    conn.execute("ALTER TABLE image_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb", &[])?;
-    conn.execute(
-        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION",
+        "ALTER TABLE multi_scenario_metadata ADD COLUMN IF NOT EXISTS collection_stats JSONB \
+         DEFAULT '{}'::jsonb",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS heuristic_score DOUBLE PRECISION",
+        "ALTER TABLE image_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT \
+         '{}'::jsonb",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS regression_score DOUBLE PRECISION",
+        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score \
+         DOUBLE PRECISION",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS predictor_family TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS heuristic_score DOUBLE \
+         PRECISION",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE animated_image_quality_inference_log ADD COLUMN IF NOT EXISTS predictor_family TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS regression_score DOUBLE \
+         PRECISION",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_inference_log ADD COLUMN IF NOT EXISTS predictor_family TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS predictor_family TEXT \
+         NOT NULL DEFAULT 'unknown'",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS resolution_branch TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE animated_image_quality_inference_log ADD COLUMN IF NOT EXISTS \
+         predictor_family TEXT NOT NULL DEFAULT 'unknown'",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE animated_image_quality_inference_log ADD COLUMN IF NOT EXISTS resolution_branch TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE video_quality_inference_log ADD COLUMN IF NOT EXISTS predictor_family TEXT \
+         NOT NULL DEFAULT 'unknown'",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_inference_log ADD COLUMN IF NOT EXISTS resolution_branch TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE image_quality_inference_log ADD COLUMN IF NOT EXISTS resolution_branch TEXT \
+         NOT NULL DEFAULT 'unknown'",
+        &[],
+    )?;
+    conn.execute(
+        "ALTER TABLE animated_image_quality_inference_log ADD COLUMN IF NOT EXISTS \
+         resolution_branch TEXT NOT NULL DEFAULT 'unknown'",
+        &[],
+    )?;
+    conn.execute(
+        "ALTER TABLE video_quality_inference_log ADD COLUMN IF NOT EXISTS resolution_branch TEXT \
+         NOT NULL DEFAULT 'unknown'",
         &[],
     )?;
     for table in [
@@ -1087,7 +1134,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
     ] {
         conn.execute(
             &format!(
-                "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS inference_snapshot JSONB DEFAULT '{{}}'::jsonb"
+                "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS inference_snapshot JSONB DEFAULT \
+                 '{{}}'::jsonb"
             ),
             &[],
         )?;
@@ -1097,21 +1145,28 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         "ALTER TABLE animated_image_quality_samples ADD COLUMN IF NOT EXISTS quality_score REAL",
         &[],
     )?;
-    conn.execute("ALTER TABLE animated_image_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb", &[])?;
+    conn.execute(
+        "ALTER TABLE animated_image_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB \
+         DEFAULT '{}'::jsonb",
+        &[],
+    )?;
     conn.execute(
         "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS quality_score REAL",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS frame_count BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS frame_count BIGINT NOT NULL \
+         DEFAULT 0",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT \
+         NULL DEFAULT 0",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS codec TEXT NOT NULL DEFAULT 'unknown'",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS codec TEXT NOT NULL DEFAULT \
+         'unknown'",
         &[],
     )?;
     conn.execute(
@@ -1119,18 +1174,25 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS has_audio BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS has_audio BOOLEAN NOT NULL \
+         DEFAULT FALSE",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_variable_frame_rate BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_variable_frame_rate \
+         BOOLEAN NOT NULL DEFAULT FALSE",
         &[],
     )?;
     conn.execute(
-        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_hdr BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_hdr BOOLEAN NOT NULL \
+         DEFAULT FALSE",
         &[],
     )?;
-    conn.execute("ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb", &[])?;
+    conn.execute(
+        "ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT \
+         '{}'::jsonb",
+        &[],
+    )?;
 
     ensure_embedding_column_dimension(
         conn,
@@ -1193,7 +1255,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
             expected_score REAL;
             is_png_family BOOLEAN;
         BEGIN
-            IF TG_OP = 'UPDATE' AND OLD.quality_label IS NOT NULL AND NEW.quality_label IS NOT NULL THEN
+            IF TG_OP = 'UPDATE' AND OLD.quality_label IS NOT NULL AND NEW.quality_label IS NOT \
+         NULL THEN
                 IF LOWER(BTRIM(OLD.quality_label)) <> LOWER(BTRIM(NEW.quality_label)) THEN
                     RAISE EXCEPTION
                         'image_quality_samples.quality_label is immutable once set (old=%, new=%)',
@@ -1221,7 +1284,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
             ELSIF normalized_label IN ('modern-high', 'modern-low') THEN
                 IF is_png_family THEN
                     RAISE EXCEPTION
-                        'Modern quality labels are incompatible with PNG sources (label=%, format=%)',
+                        'Modern quality labels are incompatible with PNG sources (label=%, \
+         format=%)',
                         NEW.quality_label, NEW.format;
                 END IF;
             ELSE
@@ -1282,10 +1346,12 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         LANGUAGE plpgsql
         AS $$
         BEGIN
-            IF TG_OP = 'UPDATE' AND OLD.quality_score IS NOT NULL AND NEW.quality_score IS NOT NULL THEN
+            IF TG_OP = 'UPDATE' AND OLD.quality_score IS NOT NULL AND NEW.quality_score IS NOT \
+         NULL THEN
                 IF OLD.quality_score IS DISTINCT FROM NEW.quality_score THEN
                     RAISE EXCEPTION
-                        'animated_image_quality_samples.quality_score is immutable once set (old=%, new=%)',
+                        'animated_image_quality_samples.quality_score is immutable once set \
+         (old=%, new=%)',
                         OLD.quality_score, NEW.quality_score;
                 END IF;
             END IF;
@@ -1293,7 +1359,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         END;
         $$;
 
-        DROP TRIGGER IF EXISTS trg_enforce_animated_image_quality_score_immutable ON animated_image_quality_samples;
+        DROP TRIGGER IF EXISTS trg_enforce_animated_image_quality_score_immutable ON \
+         animated_image_quality_samples;
         CREATE TRIGGER trg_enforce_animated_image_quality_score_immutable
         BEFORE UPDATE ON animated_image_quality_samples
         FOR EACH ROW
@@ -1304,7 +1371,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         LANGUAGE plpgsql
         AS $$
         BEGIN
-            IF TG_OP = 'UPDATE' AND OLD.quality_score IS NOT NULL AND NEW.quality_score IS NOT NULL THEN
+            IF TG_OP = 'UPDATE' AND OLD.quality_score IS NOT NULL AND NEW.quality_score IS NOT \
+         NULL THEN
                 IF OLD.quality_score IS DISTINCT FROM NEW.quality_score THEN
                     RAISE EXCEPTION
                         'video_quality_samples.quality_score is immutable once set (old=%, new=%)',
@@ -1376,7 +1444,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         FOR EACH ROW
         EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count();
 
-        DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata ON animated_image_quality_samples;
+        DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata ON \
+         animated_image_quality_samples;
         CREATE TRIGGER trg_sync_animated_image_quality_samples_metadata
         AFTER INSERT OR UPDATE OR DELETE ON animated_image_quality_samples
         FOR EACH ROW
@@ -1394,19 +1463,22 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         FOR EACH STATEMENT
         EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
 
-        DROP TRIGGER IF EXISTS trg_sync_image_quality_samples_metadata_truncate ON image_quality_samples;
+        DROP TRIGGER IF EXISTS trg_sync_image_quality_samples_metadata_truncate ON \
+         image_quality_samples;
         CREATE TRIGGER trg_sync_image_quality_samples_metadata_truncate
         AFTER TRUNCATE ON image_quality_samples
         FOR EACH STATEMENT
         EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
 
-        DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata_truncate ON animated_image_quality_samples;
+        DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata_truncate ON \
+         animated_image_quality_samples;
         CREATE TRIGGER trg_sync_animated_image_quality_samples_metadata_truncate
         AFTER TRUNCATE ON animated_image_quality_samples
         FOR EACH STATEMENT
         EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
 
-        DROP TRIGGER IF EXISTS trg_sync_video_quality_samples_metadata_truncate ON video_quality_samples;
+        DROP TRIGGER IF EXISTS trg_sync_video_quality_samples_metadata_truncate ON \
+         video_quality_samples;
         CREATE TRIGGER trg_sync_video_quality_samples_metadata_truncate
         AFTER TRUNCATE ON video_quality_samples
         FOR EACH STATEMENT
@@ -1587,22 +1659,39 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_loop_samples_blake3 ON loop_samples(blake3)",
         &[],
     )?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_loop_samples_hnsw ON loop_samples USING hnsw (embedding vector_l2_ops)", &[])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_loop_samples_hnsw ON loop_samples USING hnsw (embedding \
+         vector_l2_ops)",
+        &[],
+    )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_image_quality_blake3 ON image_quality_samples(blake3)",
         &[],
     )?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_image_quality_hnsw ON image_quality_samples USING hnsw (embedding vector_l2_ops)", &[])?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_animated_image_quality_blake3 ON animated_image_quality_samples(blake3)",
+        "CREATE INDEX IF NOT EXISTS idx_image_quality_hnsw ON image_quality_samples USING hnsw \
+         (embedding vector_l2_ops)",
         &[],
     )?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_animated_image_quality_hnsw ON animated_image_quality_samples USING hnsw (embedding vector_l2_ops)", &[])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_animated_image_quality_blake3 ON \
+         animated_image_quality_samples(blake3)",
+        &[],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_animated_image_quality_hnsw ON \
+         animated_image_quality_samples USING hnsw (embedding vector_l2_ops)",
+        &[],
+    )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_video_quality_blake3 ON video_quality_samples(blake3)",
         &[],
     )?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_video_quality_hnsw ON video_quality_samples USING hnsw (embedding vector_l2_ops)", &[])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_video_quality_hnsw ON video_quality_samples USING hnsw \
+         (embedding vector_l2_ops)",
+        &[],
+    )?;
 
     for scenario in ScenarioType::all() {
         let scenario_name = scenario.to_string();
@@ -1631,7 +1720,8 @@ fn init_multi_scenario_schema_inner(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
-/// Analytics views: expose `runtime_final_verdict` when audit-only columns store `TelemetryOnly`.
+/// Analytics views: expose `runtime_final_verdict` when audit-only columns
+/// store `TelemetryOnly`.
 fn ensure_inference_runtime_verdict_views(conn: &mut Client) -> Result<()> {
     conn.batch_execute(
         "
@@ -1644,8 +1734,10 @@ fn ensure_inference_runtime_verdict_views(conn: &mut Client) -> Result<()> {
             END AS blake3,
             file_hash AS legacy_file_hash,
             source_path,
-            COALESCE(signal_snapshot->>'runtime_final_verdict', final_verdict) AS effective_final_verdict,
-            COALESCE(signal_snapshot->>'runtime_decision_reason', decision_reason) AS effective_decision_reason,
+            COALESCE(signal_snapshot->>'runtime_final_verdict', final_verdict) AS \
+         effective_final_verdict,
+            COALESCE(signal_snapshot->>'runtime_decision_reason', decision_reason) AS \
+         effective_decision_reason,
             COALESCE(
                 NULLIF(signal_snapshot->>'runtime_final_probability', '')::double precision,
                 final_probability
@@ -1674,8 +1766,10 @@ fn ensure_inference_runtime_verdict_views(conn: &mut Client) -> Result<()> {
         SELECT
             id,
             source_path,
-            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS effective_final_verdict,
-            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS effective_resolution_branch,
+            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS \
+         effective_final_verdict,
+            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS \
+         effective_resolution_branch,
             final_verdict AS stored_final_verdict,
             (final_verdict = 'TelemetryOnly') AS verdict_column_is_placeholder,
             resolution_branch,
@@ -1687,8 +1781,10 @@ fn ensure_inference_runtime_verdict_views(conn: &mut Client) -> Result<()> {
         SELECT
             id,
             source_path,
-            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS effective_final_verdict,
-            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS effective_resolution_branch,
+            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS \
+         effective_final_verdict,
+            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS \
+         effective_resolution_branch,
             final_verdict AS stored_final_verdict,
             (final_verdict = 'TelemetryOnly') AS verdict_column_is_placeholder,
             resolution_branch,
@@ -1700,8 +1796,10 @@ fn ensure_inference_runtime_verdict_views(conn: &mut Client) -> Result<()> {
         SELECT
             id,
             source_path,
-            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS effective_final_verdict,
-            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS effective_resolution_branch,
+            COALESCE(inference_snapshot->>'runtime_final_verdict', final_verdict) AS \
+         effective_final_verdict,
+            COALESCE(inference_snapshot->>'runtime_resolution_branch', resolution_branch) AS \
+         effective_resolution_branch,
             final_verdict AS stored_final_verdict,
             (final_verdict = 'TelemetryOnly') AS verdict_column_is_placeholder,
             resolution_branch,
@@ -1722,7 +1820,8 @@ fn blake3_hex(b: &[u8]) -> String {
     s
 }
 
-/// Explicit pre-check so CLI/C-API callers surface `LABEL_CONFLICT:` without relying only on DB triggers.
+/// Explicit pre-check so CLI/C-API callers surface `LABEL_CONFLICT:` without
+/// relying only on DB triggers.
 fn ensure_no_image_quality_label_conflict(
     conn: &mut Client,
     blake3: &[u8],
@@ -1759,7 +1858,8 @@ fn ensure_no_animated_quality_score_conflict(
         let existing: f32 = row.get(0);
         if (existing - incoming).abs() > 1e-4 {
             anyhow::bail!(
-                "LABEL_CONFLICT: animated_image_quality blake3={} existing_quality_score={} incoming_quality_score={}",
+                "LABEL_CONFLICT: animated_image_quality blake3={} existing_quality_score={} \
+                 incoming_quality_score={}",
                 blake3_hex(blake3),
                 existing,
                 incoming
@@ -1782,7 +1882,8 @@ fn ensure_no_video_quality_score_conflict(
         let existing: f32 = row.get(0);
         if (existing - incoming).abs() > 1e-4 {
             anyhow::bail!(
-                "LABEL_CONFLICT: video_quality blake3={} existing_quality_score={} incoming_quality_score={}",
+                "LABEL_CONFLICT: video_quality blake3={} existing_quality_score={} \
+                 incoming_quality_score={}",
                 blake3_hex(blake3),
                 existing,
                 incoming
@@ -1866,7 +1967,8 @@ pub fn ingest_image_quality_sample(conn: &mut Client, sample: &ScenarioSample) -
     conn.execute(
         "INSERT INTO image_quality_samples (
             blake3, source_path, width, height, file_size_bytes, format, total_pixels,
-            entropy, compression_ratio, spatial_bpp, is_lossless, embedding, quality_label, quality_score, metadata
+            entropy, compression_ratio, spatial_bpp, is_lossless, embedding, quality_label, \
+         quality_score, metadata
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (blake3) DO UPDATE SET
             source_path = EXCLUDED.source_path,
@@ -1905,7 +2007,8 @@ pub fn ingest_image_quality_sample(conn: &mut Client, sample: &ScenarioSample) -
     Ok(())
 }
 
-/// Ingest into `animated_image_quality_samples` for `animated_image_quality` (`256D`).
+/// Ingest into `animated_image_quality_samples` for `animated_image_quality`
+/// (`256D`).
 ///
 /// # Errors
 /// Returns an error if the sample is missing required embedding, geometry, or
@@ -2291,7 +2394,8 @@ pub fn knn_regression_lookup(
     let std = variance.max(0.0).sqrt();
     let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
 
-    // 🛡️ ORDER INDEPENDENT: Find true nearest distance in case HNSW result set order is fuzzy
+    // 🛡️ ORDER INDEPENDENT: Find true nearest distance in case HNSW result set
+    // order is fuzzy
     let dist_to_nearest = dists.iter().copied().fold(f64::INFINITY, f64::min);
 
     let mut weight_sum = 0.0;
@@ -2501,7 +2605,9 @@ mod tests {
             .with_quality_score(1.0);
 
         assert_eq!(
-            resolve_image_quality_label(&sample, 1.0).unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            resolve_image_quality_label(&sample, 1.0).unwrap(), /* audited: db module unit-test
+                                                                 * fixture assertion; not
+                                                                 * production DB runtime path */
             crate::scenario::ImageQualityLabel::PngHigh
         );
     }
@@ -2628,7 +2734,8 @@ mod tests {
                 .matches(&format!("PERFORM pg_advisory_xact_lock({expected_lock});"))
                 .count(),
             2,
-            "sample-count and truncate metadata triggers must both serialize metadata row updates with the Rust advisory key"
+            "sample-count and truncate metadata triggers must both serialize metadata row updates \
+             with the Rust advisory key"
         );
     }
 

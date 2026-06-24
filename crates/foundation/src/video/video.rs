@@ -22,7 +22,8 @@ pub const fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool)
     (corrected_width, corrected_height, needs_correction)
 }
 
-/// Even dimensions by padding (no pixel loss). For odd width/height, pad to next even.
+/// Even dimensions by padding (no pixel loss). For odd width/height, pad to
+/// next even.
 #[must_use]
 pub const fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
     let w = width.saturating_add(width % 2);
@@ -43,8 +44,8 @@ pub fn get_dimension_correction_filter(width: u32, height: u32) -> Option<String
     }
 }
 
-/// Pad to even dimensions (preserves full frame; use when encoder requires even size).
-/// `FFmpeg`: pad=width:height:0:0 with width/height rounded up to even.
+/// Pad to even dimensions (preserves full frame; use when encoder requires even
+/// size). `FFmpeg`: pad=width:height:0:0 with width/height rounded up to even.
 #[must_use]
 pub fn get_dimension_pad_even_filter(width: u32, height: u32) -> Option<String> {
     let (padded_w, padded_h, needs) = ensure_even_dimensions_pad(width, height);
@@ -62,11 +63,13 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
     if has_alpha {
         // Composite on black background: premultiply multiplies RGB by alpha (R*A/255),
         // which is equivalent to compositing on black since black contributes 0.
-        // This avoids exposing garbage RGB data in transparent pixels (common in PNG/WebP).
+        // This avoids exposing garbage RGB data in transparent pixels (common in
+        // PNG/WebP).
         filters.push("format=rgba,premultiply=inplace=1,format=rgb24".to_string());
     }
 
-    // Prefer pad over crop so we never lose pixels (e.g. x265 "picture height multiple of chroma").
+    // Prefer pad over crop so we never lose pixels (e.g. x265 "picture height
+    // multiple of chroma").
     if let Some(pad_filter) = get_dimension_pad_even_filter(width, height) {
         filters.push(pad_filter);
     } else if let Some(crop_filter) = get_dimension_correction_filter(width, height) {

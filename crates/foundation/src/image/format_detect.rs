@@ -1,4 +1,5 @@
-//! GAP-1: §`DetectionUniversal` — content-based format detection via magic bytes.
+//! GAP-1: §`DetectionUniversal` — content-based format detection via magic
+//! bytes.
 //!
 //! ⛔ No existing detection code touched (D7 preserved).
 //! Reads at most 32 bytes for fixed signatures. Ambiguous `mif1`/`msf1`
@@ -8,7 +9,8 @@ use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
 
 /// Format identified from magic bytes only — never from file extension.
-// @ANCHOR:format-magic-only — detect_true_format reads magic bytes only; file extension never used as format signal
+// @ANCHOR:format-magic-only — detect_true_format reads magic bytes only; file extension never used
+// as format signal
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatKind {
     Jpeg,

@@ -1,7 +1,8 @@
 //! v0.11.3: Progress Mode - controls progress bar display
 //!
 //! Avoids progress output clutter when processing in parallel.
-//! Stderr output is routed through tracing when a subscriber is set (`init_logging`).
+//! Stderr output is routed through tracing when a subscriber is set
+//! (`init_logging`).
 
 use crate::modern_ui::{colors, symbols};
 use std::cell::RefCell;
@@ -16,8 +17,8 @@ use tracing;
 use tracing::Level;
 
 // ── Per-thread log context (file name or ID) for concurrent processing ───────
-// When set, every log_eprintln! / verbose_eprintln! line is prefixed so interleaved
-// output from multiple files can be attributed correctly.
+// When set, every log_eprintln! / verbose_eprintln! line is prefixed so
+// interleaved output from multiple files can be attributed correctly.
 
 thread_local! {
     static LOG_PREFIX: RefCell<String> = const { RefCell::new(String::new()) };
@@ -83,7 +84,8 @@ pub fn format_duration_compact(duration: Duration) -> String {
 
     // Milliseconds: only show when there are no seconds-or-larger components
     // (i.e., sub-second precision is useful), or when ms is non-zero and
-    // there are no minutes-or-larger components (show "5s372ms" but not "30s000ms").
+    // there are no minutes-or-larger components (show "5s372ms" but not
+    // "30s000ms").
     let has_large_unit =
         minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
     if !has_large_unit && millis > 0 {
@@ -141,7 +143,8 @@ pub fn format_duration_compact(duration: Duration) -> String {
 const LOG_TAG_WIDTH: usize = crate::constants::LOG_TAG_WIDTH_DEFAULT;
 
 /// Max visible chars for the filename displayed inside \[brackets\].
-/// With `LOG_TAG_WIDTH=28`, tag=\[prefix\] uses prefix+2 bytes, max prefix = 25.
+/// With `LOG_TAG_WIDTH=28`, tag=\[prefix\] uses prefix+2 bytes, max prefix =
+/// 25.
 const LOG_PREFIX_MAX_DISPLAY: usize = crate::constants::LOG_PREFIX_MAX_DISPLAY;
 
 /// Prefix for periodic statistics lines — emoji instead of \[Info\] to avoid
@@ -165,8 +168,9 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Pad a file-context tag (e.g. `[file.jpeg]`) to `LOG_TAG_WIDTH` chars for aligned message body.
-/// Always produces exactly `LOG_TAG_WIDTH` chars, or tag + one space if tag is already wide.
+/// Pad a file-context tag (e.g. `[file.jpeg]`) to `LOG_TAG_WIDTH` chars for
+/// aligned message body. Always produces exactly `LOG_TAG_WIDTH` chars, or tag
+/// + one space if tag is already wide.
 fn pad_tag(tag: &str) -> String {
     if tag.len() >= LOG_TAG_WIDTH {
         format!("{tag} ")
@@ -180,10 +184,11 @@ fn fmt_stats_line_final(msg: &str) -> String {
     format!("    {} {}", stats_line_prefix(), msg)
 }
 
-/// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of `LogContextGuard`.
+/// Set the current thread's log prefix (e.g. file name or short ID). Cleared on
+/// drop of `LogContextGuard`.
 ///
-/// Truncates long names to `LOG_PREFIX_MAX_DISPLAY` chars, preserving the file extension:
-///   "`Image_103999006594198.jpeg`" → "`Image_103999006…jpeg`"
+/// Truncates long names to `LOG_PREFIX_MAX_DISPLAY` chars, preserving the file
+/// extension:   "`Image_103999006594198.jpeg`" → "`Image_103999006…jpeg`"
 ///   "`Cache_4ac28036da7d11be.jpg`" → "`Cache_4ac28036da7…jpg`"
 pub fn set_log_context(prefix: &str) {
     let s = if prefix.chars().count() > LOG_PREFIX_MAX_DISPLAY {
@@ -221,8 +226,9 @@ fn file_type_emoji(filename: &str) -> String {
     crate::media_conversion_gate::ui_log_file_type_icon_prefix(filename)
 }
 
-/// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.
-/// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎞️ GIF / 🎬 video).
+/// Format a log line with optional tag, emoji prefix, and padded indent so
+/// message bodies align. When a filename prefix is set, prepends a file-type
+/// emoji (🖼️ image / 🎞️ GIF / 🎬 video).
 #[must_use]
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
@@ -236,7 +242,8 @@ pub fn format_log_line(line: &str) -> String {
     })
 }
 
-/// Guard that clears log context when dropped. Use at the start of per-file processing.
+/// Guard that clears log context when dropped. Use at the start of per-file
+/// processing.
 pub struct LogContextGuard;
 
 impl Drop for LogContextGuard {
@@ -245,17 +252,19 @@ impl Drop for LogContextGuard {
     }
 }
 
-// ── File log writer ────────────────────────────────────────────────────────────
-// When a log file path is configured, ALL messages (both regular and verbose) are
-// written to it in full detail, regardless of the terminal verbose setting.
+// ── File log writer
+// ──────────────────────────────────────────────────────────── When a log file
+// path is configured, ALL messages (both regular and verbose) are written to it
+// in full detail, regardless of the terminal verbose setting.
 //
-// **If the log file is renamed/moved while the process is running:** on Unix we keep
-// writing to the same open file descriptor (same inode). Data is not lost, but the
-// content keeps going to the renamed file; the original path may show a new empty
-// file if one was recreated. So avoid renaming the run log file until the process exits.
+// **If the log file is renamed/moved while the process is running:** on Unix we
+// keep writing to the same open file descriptor (same inode). Data is not lost,
+// but the content keeps going to the renamed file; the original path may show a
+// new empty file if one was recreated. So avoid renaming the run log file until
+// the process exits.
 //
-// **File lock:** we take an advisory exclusive lock (flock LOCK_EX) on open so other
-// processes that respect the lock cannot truncate or overwrite the log.
+// **File lock:** we take an advisory exclusive lock (flock LOCK_EX) on open so
+// other processes that respect the lock cannot truncate or overwrite the log.
 
 #[cfg(unix)]
 fn flock_log_exclusive(file: &File) -> std::io::Result<()> {
@@ -388,10 +397,11 @@ fn lock_log_writer() -> std::sync::MutexGuard<'static, Option<RunLogFileWriter>>
     )
 }
 
-/// Open (or create) the log file and take an advisory exclusive lock so it is not truncated by others.
+/// Open (or create) the log file and take an advisory exclusive lock so it is
+/// not truncated by others.
 ///
-/// Call once at startup. Registers a forwarder so tracing events are also written to this run log.
-/// Set the log file for the current process.
+/// Call once at startup. Registers a forwarder so tracing events are also
+/// written to this run log. Set the log file for the current process.
 ///
 /// # Errors
 /// Returns an I/O error if the file cannot be created.
@@ -410,12 +420,13 @@ pub fn has_log_file() -> bool {
     return lock_log_writer().is_some();
 }
 
-/// If no log file is configured, open a default run log under the unified log directory.
+/// If no log file is configured, open a default run log under the unified log
+/// directory.
 ///
 /// Timestamped filename ensures each run gets a unique file
 /// (e.g. `~/.modern_format_boost/logs/img_run_20260526_143000.log`).
-/// Call at Run startup so quality and progress are always written without requiring `--log-file`.
-/// Set the default log file for the current process.
+/// Call at Run startup so quality and progress are always written without
+/// requiring `--log-file`. Set the default log file for the current process.
 ///
 /// # Errors
 /// Returns an I/O error if the file cannot be created.
@@ -439,10 +450,13 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write a session header line to the run log so the file clearly records that full output is being captured.
+/// Write a session header line to the run log so the file clearly records that
+/// full output is being captured.
 ///
-/// Call after `set_log_file` (or from `set_default_run_log_file`). If `init_logging` already emitted a line, it is written here so the run log has it too.
-/// Respects log level (INFO): only written when level is INFO or more verbose.
+/// Call after `set_log_file` (or from `set_default_run_log_file`). If
+/// `init_logging` already emitted a line, it is written here so the run log has
+/// it too. Respects log level (INFO): only written when level is INFO or more
+/// verbose.
 pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path::Path) {
     if let Some(ref init_line) = crate::logging::take_init_message_for_run_log() {
         tracing::info!("{}", init_line);
@@ -454,9 +468,11 @@ pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path
     );
 }
 
-/// Write one progress line to the run log so the log has the same "Running: HH:MM:SS  N/total  message" as the terminal.
+/// Write one progress line to the run log so the log has the same "Running:
+/// HH:MM:SS  N/total  message" as the terminal.
 ///
-/// Written only when `MFB_LOG_PROGRESS=1` (see [`crate::logging::log_file_includes_progress`]).
+/// Written only when `MFB_LOG_PROGRESS=1` (see
+/// [`crate::logging::log_file_includes_progress`]).
 pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u64, message: &str) {
     if !crate::logging::log_file_includes_progress() {
         return;
@@ -473,11 +489,12 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
 
 /// Write a line to the log file (no-op if no log file is configured).
 ///
-/// Does NOT write to stderr — use `log_eprintln`! or `verbose_eprintln`! for dual output.
-/// Strips ANSI escape codes so file logs are plain text.
+/// Does NOT write to stderr — use `log_eprintln`! or `verbose_eprintln`! for
+/// dual output. Strips ANSI escape codes so file logs are plain text.
 /// Flushes after each write so log output is immediate (no loss on crash/kill).
 pub fn write_to_log(line: &str) {
-    // Ensure every line written to the run log has milestone stats appended (unless it already does)
+    // Ensure every line written to the run log has milestone stats appended (unless
+    // it already does)
     let line_with_stats = append_stats_to_line(line);
     let plain = crate::logging::strip_ansi_str(&line_with_stats);
     match LOG_FILE_WRITER.lock() {
@@ -498,10 +515,12 @@ pub fn write_to_log(line: &str) {
     }
 }
 
-/// Write conversion failure to the run log file immediately (so failures are in the log, not only stderr).
+/// Write conversion failure to the run log file immediately (so failures are in
+/// the log, not only stderr).
 ///
-/// Call this whenever a single-file conversion returns Err, so the log file has the full error for later inspection.
-/// Uses `Level::Error` so it is always written when level is WARN or ERROR (and any level includes errors).
+/// Call this whenever a single-file conversion returns Err, so the log file has
+/// the full error for later inspection. Uses `Level::Error` so it is always
+/// written when level is WARN or ERROR (and any level includes errors).
 pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
     tracing::error!(
         file = %path.display(),
@@ -513,8 +532,9 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Returns true when stderr is connected to a real terminal (TTY) OR if `FORCE_COLOR` is set.
-/// Cached after the first call — TTY state does not change during a run.
+/// Returns true when stderr is connected to a real terminal (TTY) OR if
+/// `FORCE_COLOR` is set. Cached after the first call — TTY state does not
+/// change during a run.
 #[inline]
 fn stderr_is_tty() -> bool {
     use std::sync::OnceLock;
@@ -530,7 +550,9 @@ fn stderr_is_tty() -> bool {
     })
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 /// Emit a line to stderr (and to run log when configured).
 ///
 /// * When stderr **is a TTY**: ANSI colour codes are forwarded as-is.
@@ -709,15 +731,17 @@ macro_rules! quiet_eprintln {
 }
 
 // ── Verbose mode (single source of truth for process-wide verbose logging) ───
-// Default ON: full stderr detail for forensic sessions; disable with --no-verbose if added.
-// CLI calls `set_verbose_mode` from `--verbose` (default true on img/vid run).
-// All verbose output uses `is_verbose_mode()` / `verbose_eprintln!` — no per-config flag.
+// Default ON: full stderr detail for forensic sessions; disable with
+// --no-verbose if added. CLI calls `set_verbose_mode` from `--verbose` (default
+// true on img/vid run). All verbose output uses `is_verbose_mode()` /
+// `verbose_eprintln!` — no per-config flag.
 
 static VERBOSE_MODE: AtomicBool = AtomicBool::new(true);
 
 static PLAIN_MODE: AtomicBool = AtomicBool::new(false);
 
-/// Returns true when the process should avoid emoji and decorative ANSI on stderr.
+/// Returns true when the process should avoid emoji and decorative ANSI on
+/// stderr.
 #[must_use]
 pub fn is_plain_mode() -> bool {
     PLAIN_MODE.load(Ordering::Relaxed)
@@ -727,7 +751,8 @@ pub fn set_plain_mode(v: bool) {
     PLAIN_MODE.store(v, Ordering::Relaxed);
 }
 
-/// Apply CLI `--plain` plus `MODERN_FORMAT_PLAIN_UI` / `NO_COLOR` before any UI output.
+/// Apply CLI `--plain` plus `MODERN_FORMAT_PLAIN_UI` / `NO_COLOR` before any UI
+/// output.
 pub fn configure_terminal_ux(cli_plain: bool) {
     let env_plain = match std::env::var(crate::constants::ENV_PLAIN_UI) {
         Ok(value) => matches!(value.as_str(), "1" | "true" | "yes" | "on"),
@@ -775,8 +800,9 @@ pub fn is_verbose_mode() -> bool {
 
 /// Print to stderr only when verbose mode is enabled.
 ///
-/// Run log gets the line only when level allows (DEBUG: written at DEBUG/TRACE).
-/// When set via `set_log_context()`, the line is prefixed with `[prefix]` for concurrent file processing.
+/// Run log gets the line only when level allows (DEBUG: written at
+/// DEBUG/TRACE). When set via `set_log_context()`, the line is prefixed with
+/// `[prefix]` for concurrent file processing.
 #[macro_export]
 macro_rules! verbose_eprintln {
     () => {{
@@ -795,8 +821,9 @@ macro_rules! verbose_eprintln {
     }};
 }
 
-/// Print to both stderr and the run log file (if configured). Run log gets full TRACE-level detail.
-/// When set via `set_log_context()`, the line is prefixed with `[prefix]` for concurrent file processing.
+/// Print to both stderr and the run log file (if configured). Run log gets full
+/// TRACE-level detail. When set via `set_log_context()`, the line is prefixed
+/// with `[prefix]` for concurrent file processing.
 #[macro_export]
 macro_rules! log_eprintln {
     () => {{
@@ -812,7 +839,8 @@ macro_rules! log_eprintln {
 }
 
 // ── XMP merge + JXL + Images live counter ────────────────────────────────────
-// Tracks XMP sidecar merge, JXL success, and image conversion success/failure; same line.
+// Tracks XMP sidecar merge, JXL success, and image conversion success/failure;
+// same line.
 
 static XMP_ATTEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 static XMP_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -827,7 +855,8 @@ static PREPROCESSING_COUNT: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Resets all global session statistics to zero.
-/// Use this when starting a new batch or session to ensure progress counters are accurate.
+/// Use this when starting a new batch or session to ensure progress counters
+/// are accurate.
 pub fn reset_session_stats() {
     XMP_ATTEMPT_COUNT.store(0, Ordering::Relaxed);
     XMP_SUCCESS_COUNT.store(0, Ordering::Relaxed);
@@ -842,23 +871,27 @@ pub fn reset_session_stats() {
     FALLBACK_SUCCESS_COUNT.store(0, Ordering::Relaxed);
 }
 
-/// Call when a pre-processing step completes successfully (e.g. GIF→FFmpeg static frame). No per-line log; count is shown in the combined status line.
+/// Call when a pre-processing step completes successfully (e.g. GIF→FFmpeg
+/// static frame). No per-line log; count is shown in the combined status line.
 pub fn preprocessing_success() {
     PREPROCESSING_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call when a fallback pipeline completes successfully (e.g. ImageMagick→cjxl, FFmpeg→cjxl). No per-line log; count is shown in the combined status line.
+/// Call when a fallback pipeline completes successfully (e.g. ImageMagick→cjxl,
+/// FFmpeg→cjxl). No per-line log; count is shown in the combined status line.
 pub fn fallback_success() {
     FALLBACK_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call when a JXL conversion completes successfully (e.g. from `finalize_task`).
+/// Call when a JXL conversion completes successfully (e.g. from
+/// `finalize_task`).
 pub fn jxl_success() {
     JXL_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call on successful image conversion. Prints milestone line on EVERY success (persistent display).
-/// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
+/// Call on successful image conversion. Prints milestone line on EVERY success
+/// (persistent display). Same line shows XMP count and Images OK/failed (JXL
+/// merged into Images) when non-zero.
 pub fn image_processed_success() {
     let img_ok = IMAGE_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
@@ -899,8 +932,9 @@ pub fn image_skipped(path: &std::path::Path, reason: &str) {
     );
 }
 
-/// Call when an image is completely ignored (e.g. animated media in static-only tool).
-/// Writes structured ignore record to the log file and a prominent stderr line.
+/// Call when an image is completely ignored (e.g. animated media in static-only
+/// tool). Writes structured ignore record to the log file and a prominent
+/// stderr line.
 pub fn image_ignored(path: &std::path::Path, reason: &str, ignore_class: Option<&str>) {
     crate::infra::static_logs::log_ignore_at_with_pipeline(
         &format!(
@@ -961,7 +995,8 @@ pub fn video_skipped(path: &std::path::Path, reason: &str) {
     log_eprintln!("{}", line);
 }
 
-/// Call when a video asset is ignored by the video pipeline (e.g. static single-frame).
+/// Call when a video asset is ignored by the video pipeline (e.g. static
+/// single-frame).
 pub fn video_ignored(path: &std::path::Path, reason: &str, ignore_class: Option<&str>) {
     crate::infra::static_logs::log_ignore_at_with_pipeline(
         &format!(
@@ -985,8 +1020,8 @@ pub fn video_ignored(path: &std::path::Path, reason: &str, ignore_class: Option<
     log_eprintln!("{}", line);
 }
 
-/// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
-/// Skips if the line already contains stats or is empty.
+/// Helper that appends milestone stats (XMP, Img, etc.) to a log line with
+/// aligned padding. Skips if the line already contains stats or is empty.
 #[must_use]
 pub fn append_stats_to_line(line: &str) -> String {
     let mut trimmed = line.trim_end_matches(['\n', '\r']);
@@ -1004,9 +1039,10 @@ pub fn append_stats_to_line(line: &str) -> String {
         return trimmed.to_string();
     }
 
-    // 🚀 Terminology/UI refinement: Only append stats if something has actually happened
-    // and the message is a "Result" line (e.g. marked with ✅, ❌, ⏭️) or a Progress Bar.
-    // This avoids cluttering initialization logs and general info messages.
+    // 🚀 Terminology/UI refinement: Only append stats if something has actually
+    // happened and the message is a "Result" line (e.g. marked with ✅, ❌, ⏭️)
+    // or a Progress Bar. This avoids cluttering initialization logs and general
+    // info messages.
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
     let img_skip = IMAGE_SKIP_COUNT.load(Ordering::Relaxed);
@@ -1028,9 +1064,10 @@ pub fn append_stats_to_line(line: &str) -> String {
         return trimmed.to_string();
     }
 
-    // Only append to "Result" lines that indicate failure/warning, or to the progress bar itself.
-    // Skip appending to success (✅) and skip (⏭️) lines in the terminal as they are redundant
-    // with the progress bar's live counter.
+    // Only append to "Result" lines that indicate failure/warning, or to the
+    // progress bar itself. Skip appending to success (✅) and skip (⏭️) lines
+    // in the terminal as they are redundant with the progress bar's live
+    // counter.
     let is_important_result = plain.contains("❌")
         || plain.contains("[ERR]")
         || plain.contains("[X]")
@@ -1217,7 +1254,8 @@ fn format_video_stats_line(
 }
 
 const fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
-    // Deprecated: UI now relies on inline stats via get_current_stats_string() in TaskResult
+    // Deprecated: UI now relies on inline stats via get_current_stats_string()
+    // in TaskResult
 }
 
 fn format_xmp_jxl_images_line(
@@ -1316,8 +1354,9 @@ pub fn xmp_merge_attempt() {
     XMP_ATTEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call on successful merge. Prints milestone line on EVERY merge (persistent display).
-/// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
+/// Call on successful merge. Prints milestone line on EVERY merge (persistent
+/// display). Same line shows XMP count and Images OK/failed (JXL merged into
+/// Images) when non-zero.
 pub fn xmp_merge_success() {
     let _success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     // Always emit status line on every XMP merge for persistent display
@@ -1326,7 +1365,8 @@ pub fn xmp_merge_success() {
     emit_combined_status_line(img_ok, img_fail);
 }
 
-/// Format a statistics status line with the 📊 emoji prefix (for run log alignment).
+/// Format a statistics status line with the 📊 emoji prefix (for run log
+/// alignment).
 #[must_use]
 pub fn format_status_line(msg: &str) -> String {
     fmt_stats_line_final(msg)
@@ -1343,7 +1383,8 @@ pub fn xmp_merge_failure(msg: &str) {
 }
 
 /// Call after all processing is done to print the final summary.
-/// Same line shows XMP summary, Images OK/failed, and Pre-processing count when non-zero.
+/// Same line shows XMP summary, Images OK/failed, and Pre-processing count when
+/// non-zero.
 pub fn xmp_merge_finalize() {
     let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
     let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);

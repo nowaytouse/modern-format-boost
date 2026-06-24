@@ -28,7 +28,8 @@ fn video_file(name: &str) -> PathBuf {
     if path.exists() {
         return path;
     }
-    // ponytail: generate minimal fixture via ffmpeg if missing to keep tests hermetic
+    // ponytail: generate minimal fixture via ffmpeg if missing to keep tests
+    // hermetic
     let duration = if name.contains("10s") {
         "10"
     } else if name.contains("8s") {
@@ -326,7 +327,8 @@ fn assert_honest_hevc_ultimate_result(output: &ConversionOutput) -> Result<()> {
                 && !reason_lower.contains("quality validation failed")
             {
                 bail!(
-                    "expected ultimate HEVC skip to disclose quality-gate reason honestly: {output:?}"
+                    "expected ultimate HEVC skip to disclose quality-gate reason honestly: \
+                     {output:?}"
                 );
             }
             Ok(())
@@ -470,7 +472,8 @@ fn runtime_matrix_executes_generated_h264_across_supported_modes() -> Result<()>
             ExpectedOutcome::HevcUltimateHonest => {
                 assert_honest_hevc_ultimate_result(&output).with_context(|| {
                     format!(
-                        "runtime HEVC ultimate semantics failed for codec={:?} apple_compat={} ultimate={}",
+                        "runtime HEVC ultimate semantics failed for codec={:?} apple_compat={} \
+                         ultimate={}",
                         case.codec, case.apple_compat, case.ultimate
                     )
                 })?;

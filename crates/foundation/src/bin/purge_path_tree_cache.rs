@@ -1,4 +1,5 @@
-//! Purge path-tree scan snapshots (`PostgreSQL` + `SQLite` replica) — SSOT for `cache_cleaner`.
+//! Purge path-tree scan snapshots (`PostgreSQL` + `SQLite` replica) — SSOT for
+//! `cache_cleaner`.
 
 use anyhow::{Context, Result};
 use clap::Parser;

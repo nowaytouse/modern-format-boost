@@ -58,22 +58,28 @@ pub fn extract_hevc_bit_depths(hvcc_data: &[u8]) -> Result<(u8, u8)> {
 /// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
 ///
 /// Dimensions checked (in priority order):
-/// 1. **hvcC `profile_idc`**: Main(1)/Main10(2)/MainStillPicture(3) → definitely lossy (4:2:0 only)
+/// 1. **hvcC `profile_idc`**: Main(1)/Main10(2)/MainStillPicture(3) →
+///    definitely lossy (4:2:0 only)
 /// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check `chroma_format_idc`
 /// 3. **hvcC `chroma_format_idc`**: < 3 (not 4:4:4) → lossy; == 3 → lossless
-/// 4. **hvcC `general_profile_compatibility_flags`**: bit 4 set → `RExt` compatible → lossless
+/// 4. **hvcC `general_profile_compatibility_flags`**: bit 4 set → `RExt`
+///    compatible → lossless
 /// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
-/// 7. **SPS `transquant_bypass_enabled_flag`**: if 1 → mathematically lossless (100% certain)
+/// 7. **SPS `transquant_bypass_enabled_flag`**: if 1 → mathematically lossless
+///    (100% certain)
 ///
 /// Detect if an HEIC file is lossless (using libheif).
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or libheif fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
-    // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
+    // This handles cases where boxes are inside full boxes (e.g. meta box with
+    // version/flags)
     let hvcc_from_recursive = find_box_data_recursive(data, *b"hvcC");
     let hvcc_from_magic = find_box_payload_by_magic(data, *b"hvcC");
 
@@ -114,7 +120,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
                         &format!(
-                            "hvcC box truncated at compatibility flags byte {i} (Forensic Recovery Failed)"
+                            "hvcC box truncated at compatibility flags byte {i} (Forensic \
+                             Recovery Failed)"
                         )
                     );
                     return Err(ImgQualityError::AnalysisError(
@@ -189,7 +196,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 };
                 let has_high_bitdepth = pixi_payload
                     .and_then(|pixi_data| {
-                        // pixi is a FullBox: version(1) + flags(3) + num_channels(1) + bits_per_channel(num_channels)
+                        // pixi is a FullBox: version(1) + flags(3) + num_channels(1) +
+                        // bits_per_channel(num_channels)
                         if pixi_data.len() < 5 {
                             None
                         } else {
@@ -235,7 +243,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 crate::media_conversion_gate::probe_image_format_batch_audit(
                     "probe_heic",
                     format!(
-                        "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} without 4:4:4 chroma for '{}'; precision detection is inconclusive",
+                        "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} without \
+                         4:4:4 chroma for '{}'; precision detection is inconclusive",
                         profile_idc,
                         path.display()
                     ),
@@ -258,13 +267,16 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     "probe_heic",
                     path,
                     format!(
-                        "HEIC AUDIT: RExt compatibility flag mismatch | Forensic: flag set but chroma {} is not 4:4:4 for '{}'; refusing to assume structural losslessness",
+                        "HEIC AUDIT: RExt compatibility flag mismatch | Forensic: flag set but \
+                         chroma {} is not 4:4:4 for '{}'; refusing to assume structural \
+                         losslessness",
                         chroma_format_idc,
                         path.display()
                     ),
                 );
                 return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot determine — {}",
+                    "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot \
+                     determine — {}",
                     chroma_format_idc,
                     path.display()
                 )));
@@ -283,7 +295,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 crate::log_debug!(
                     crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
                     &format!(
-                        "Forensic: Unknown profile IDC {profile_idc} detected; defaulting to lossy conversion logic for structural safety"
+                        "Forensic: Unknown profile IDC {profile_idc} detected; defaulting to \
+                         lossy conversion logic for structural safety"
                     )
                 );
             }
@@ -333,7 +346,8 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
                 &format!(
-                    "hvcC box truncated at NAL unit length high byte at position {} (Forensic Scan Aborted)",
+                    "hvcC box truncated at NAL unit length high byte at position {} (Forensic \
+                     Scan Aborted)",
                     pos + 1
                 )
             );
@@ -417,6 +431,7 @@ impl<'a> BitReader<'a> {
     pub const fn new(data: &'a [u8]) -> Self {
         BitReader { data, bit_pos: 0 }
     }
+
     pub fn read_bits(&mut self, n: usize) -> Option<u32> {
         if self.bit_pos + n > self.data.len() * 8 {
             return None;
@@ -433,6 +448,7 @@ impl<'a> BitReader<'a> {
         self.bit_pos += n;
         Some(value)
     }
+
     pub const fn skip_bits(&mut self, n: usize) -> Option<()> {
         if self.bit_pos + n > self.data.len() * 8 {
             return None;
@@ -460,6 +476,7 @@ impl<'a> BitReader<'a> {
         };
         Some((1u32.checked_shl(leading_zeros)?).saturating_sub(1) + info)
     }
+
     pub fn skip_profile_tier_level(
         &mut self,
         profile_present_flag: bool,
@@ -575,11 +592,14 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     Some(transquant_bypass == 1)
 }
 
-/// Multi-dimensional HEIC analysis (using both libheif and metadata inspection).
+/// Multi-dimensional HEIC analysis (using both libheif and metadata
+/// inspection).
 ///
 /// # Errors
 /// Returns an error if the file is corrupted or analysis fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 
@@ -593,7 +613,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         limits.set_max_total_memory(crate::constants::HEIC_MAX_MEMORY_LIMIT);
 
         // Increase ipco box child limit from default 100 to 50000
-        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
+        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded"
+        // errors
         limits.set_max_children_per_box(crate::constants::HEIC_MAX_CHILDREN_PER_BOX);
 
         // Increase other limits for complex HEIC files
@@ -619,7 +640,10 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         ctx.set_security_limits(&limits).map_err(|e| {
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_heic",
-                format!("HEIC AUDIT: Failed to set security limits | Forensic: {e} (Constraint Violation)"),
+                format!(
+                    "HEIC AUDIT: Failed to set security limits | Forensic: {e} (Constraint \
+                     Violation)"
+                ),
             );
             ImgQualityError::ImageReadError(format!("Failed to set security limits: {e}"))
         })?;
@@ -629,7 +653,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let read_res = match ctx.read_bytes(&data) {
         Ok(()) => Ok(()),
         Err(e) => {
-            // `final_err` is only reassigned under the v1_21 feature (security-limit retry).
+            // `final_err` is only reassigned under the v1_21 feature (security-limit
+            // retry).
             #[cfg_attr(not(feature = "v1_21"), expect(unused_mut))]
             let mut final_err = e;
             let error_msg = format!("{final_err}");
@@ -646,7 +671,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                         "probe_heic",
                         path,
                         format!(
-                            "Data truncated before 'ftyp' box at position {} for '{}' | Forensic: Unexpected EOF during recovery scan; refusing to forge context to prevent downstream crash",
+                            "Data truncated before 'ftyp' box at position {} for '{}' | Forensic: \
+                             Unexpected EOF during recovery scan; refusing to forge context to \
+                             prevent downstream crash",
                             pos,
                             path.display()
                         ),
@@ -693,7 +720,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                                 "probe_heic_context_new_failed",
                                 path,
                                 format!(
-                                    "failed to create fallback HEIF context during ftyp recovery: {ctx_err}"
+                                    "failed to create fallback HEIF context during ftyp recovery: \
+                                     {ctx_err}"
                                 ),
                             );
                         }
@@ -798,9 +826,10 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let planes = decoded_image.planes();
     let plane = planes.interleaved.ok_or_else(|| {
         crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_heic",
-                "HEIC AUDIT: Missing RGB plane | Forensic: planes.interleaved is None after decoding (Format Incompatibility)",
-            );
+            "probe_heic",
+            "HEIC AUDIT: Missing RGB plane | Forensic: planes.interleaved is None after decoding \
+             (Format Incompatibility)",
+        );
         ImgQualityError::ImageReadError("No RGB plane found".to_string())
     })?;
 
@@ -809,7 +838,10 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         .ok_or_else(|| {
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_heic",
-                format!("HEIC AUDIT: Pixel data integrity failure | Forensic: RgbImage::from_raw failed for {width}x{height} buffer (Corruption Detected)"),
+                format!(
+                    "HEIC AUDIT: Pixel data integrity failure | Forensic: RgbImage::from_raw \
+                     failed for {width}x{height} buffer (Corruption Detected)"
+                ),
             );
             ImgQualityError::ImageReadError("Failed to create RGB image".to_string())
         })?;
@@ -836,7 +868,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     crate::log_debug!(
         crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
         &format!(
-            "Analysis complete for '{}' | Forensic: {}x{}, bit_depth={}, lossless={}, hdr={}, dv={}",
+            "Analysis complete for '{}' | Forensic: {}x{}, bit_depth={}, lossless={}, hdr={}, \
+             dv={}",
             path.display(),
             width,
             height,
@@ -851,8 +884,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 }
 
 pub fn is_heic_file(path: &Path) -> std::io::Result<bool> {
-    // Rely strictly on magic bytes, NOT extensions, to avoid deep analysis failures (e.g. NoFtypBox)
-    // on files that just happen to have a .heic extension but contain different format data.
+    // Rely strictly on magic bytes, NOT extensions, to avoid deep analysis failures
+    // (e.g. NoFtypBox) on files that just happen to have a .heic extension but
+    // contain different format data.
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|err| {
         std::io::Error::new(
@@ -888,15 +922,17 @@ pub fn is_heic_file(path: &Path) -> std::io::Result<bool> {
 /// Extract XMP packet string from raw HEIC/HEIF binary data.
 ///
 /// HEIC files store XMP in an `xml ` item. This scanner looks for the canonical
-/// XMP packet header (`<?xpacket begin`) or the `<x:xmpmeta` root element directly
-/// in the raw bytes (they are always UTF-8 / ASCII-compatible).
+/// XMP packet header (`<?xpacket begin`) or the `<x:xmpmeta` root element
+/// directly in the raw bytes (they are always UTF-8 / ASCII-compatible).
 ///
 /// Returns `None` if no XMP data is found.
 /// # Panics
-/// Panics if the HEIC data is corrupted and XMP markers are found but the following data is inaccessible.
+/// Panics if the HEIC data is corrupted and XMP markers are found but the
+/// following data is inaccessible.
 #[must_use]
 pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
-    // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent timeouts
+    // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent
+    // timeouts
     if crate::numeric_cast::usize_to_u64(data.len()) > crate::constants::HEIC_MAX_XMP_SCAN_BYTES {
         return None;
     }
@@ -929,7 +965,9 @@ pub fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]
                 crate::log_corruption!(
                     crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
                     &format!(
-                        "HEIC CORRUPTION AUDIT: Truncated box size before type at position {pos} | Forensic: Mandatory length field missing; refusing to forge data to prevent out-of-bounds scan"
+                        "HEIC CORRUPTION AUDIT: Truncated box size before type at position {pos} \
+                         | Forensic: Mandatory length field missing; refusing to forge data to \
+                         prevent out-of-bounds scan"
                     )
                 );
                 return None;

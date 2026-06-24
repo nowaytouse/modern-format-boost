@@ -59,9 +59,10 @@ impl TrainingSessionRecorder {
 
         let recorder_arc = Arc::new(Mutex::new(recorder));
 
-        // Setup ctrl-c handler if possible, though we may only want one handler per process.
-        // We'll leave the actual ctrlc::set_handler to the binary that uses this,
-        // since setting it here could conflict with existing handlers.
+        // Setup ctrl-c handler if possible, though we may only want one handler per
+        // process. We'll leave the actual ctrlc::set_handler to the binary that
+        // uses this, since setting it here could conflict with existing
+        // handlers.
 
         Ok(recorder_arc)
     }

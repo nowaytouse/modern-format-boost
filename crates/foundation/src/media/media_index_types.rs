@@ -20,7 +20,8 @@ pub struct MediaIndexRow {
     pub has_alpha: bool,
     pub duration: f64,
 
-    /// Full JSON dump of original detection results (`DetectionResult` or `VideoDetectionResult`).
+    /// Full JSON dump of original detection results (`DetectionResult` or
+    /// `VideoDetectionResult`).
     pub raw_features_json: String,
 
     // Decision outcomes (Mutable during development/debugging)

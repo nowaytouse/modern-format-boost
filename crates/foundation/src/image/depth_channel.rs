@@ -275,7 +275,8 @@ fn parse_depth_metadata_from_xmp(xmp_data: &[u8]) -> Result<(Option<f32>, Option
 ///
 /// Note: Current `jpegxl-rs` API has limited extra channel support.
 /// This function encodes the main image. Depth map is saved separately
-/// as sidecar file since `jpegxl-rs` doesn't expose `JxlEncoderSetExtraChannelBuffer`.
+/// as sidecar file since `jpegxl-rs` doesn't expose
+/// `JxlEncoderSetExtraChannelBuffer`.
 ///
 /// # Errors
 ///
@@ -329,8 +330,9 @@ pub fn encode_jxl_with_depth(
     std::fs::write(output, encode_result.data).context("Failed to write JXL output")?;
 
     // Note: Extra channel embedding requires direct libjxl FFI (jpegxl-sys)
-    // Current jpegxl-rs high-level API doesn't expose JxlEncoderSetExtraChannelBuffer
-    // Depth map is available in depth_map.image for sidecar storage
+    // Current jpegxl-rs high-level API doesn't expose
+    // JxlEncoderSetExtraChannelBuffer Depth map is available in depth_map.image
+    // for sidecar storage
 
     Ok(())
 }

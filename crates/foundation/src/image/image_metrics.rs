@@ -3,7 +3,8 @@
 //! Provides precise PSNR and SSIM calculations between images.
 //! Uses standard algorithms:
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
-//! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
+//! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al.
+//!   2004)
 
 use crate::Rational;
 use crate::types::ssim::Ssim;
@@ -13,7 +14,8 @@ use rayon::prelude::*;
 const K1: f64 = crate::constants::SSIM_K1;
 const K2: f64 = crate::constants::SSIM_K2;
 const L: f64 = crate::constants::MAX_8BIT_VALUE_F64;
-/// Wang et al. SSIM stability constants: (`k_i` * L)^2 to avoid division-by-zero in low-contrast regions.
+/// Wang et al. SSIM stability constants: (`k_i` * L)^2 to avoid
+/// division-by-zero in low-contrast regions.
 const C1: f64 = (K1 * L) * (K1 * L);
 const C2: f64 = (K2 * L) * (K2 * L);
 
@@ -45,7 +47,8 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
 #[must_use]
 /// # Panics
 ///
-/// Panics if the MSE calculation encounters an invalid state (NaN/Inf) during rounding.
+/// Panics if the MSE calculation encounters an invalid state (NaN/Inf) during
+/// rounding.
 pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -115,7 +118,8 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
 #[must_use]
 /// # Panics
 ///
-/// Panics if the coordinate mapping or pixel accumulation results in a non-finite rational value.
+/// Panics if the coordinate mapping or pixel accumulation results in a
+/// non-finite rational value.
 pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -177,7 +181,8 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
+            // px and py are guaranteed to be within image bounds by the
+            // valid_width/valid_height calculation
             let pixel_x = match crate::numeric_cast::usize_to_u32_strict(px, "px") {
                 Some(v) => v,
                 None => unreachable!(
@@ -244,7 +249,8 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         return None;
     }
 
-    // Single-pass: compute sum_x, total_sum_y, sum_xx, sum_yy, products_sum_xy (no Vec allocation).
+    // Single-pass: compute sum_x, total_sum_y, sum_xx, sum_yy, products_sum_xy (no
+    // Vec allocation).
     let mut sum_x: u64 = 0;
     let mut total_sum_y: u64 = 0;
     let mut sum_xx: u64 = 0;
@@ -334,7 +340,8 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 #[must_use]
 /// # Panics
 ///
-/// Panics if internal image resizing fails or if the SSIM calculation encounters an invalid numeric state.
+/// Panics if internal image resizing fails or if the SSIM calculation
+/// encounters an invalid numeric state.
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [
@@ -392,7 +399,8 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
         }
     }
 
-    // Normalize by actual weight sum so result stays in [0, 1] when only a subset of scales run.
+    // Normalize by actual weight sum so result stays in [0, 1] when only a subset
+    // of scales run.
     if used_weight_sum < 1e-10_f64 {
         return None;
     }
@@ -544,7 +552,8 @@ mod tests {
         assert!(
             (ssim.unwrap_or_else(|| {
                 unreachable!(
-                    "CRITICAL: missing metric value (ssim) in test_ssim_small_image_uses_simple_path"
+                    "CRITICAL: missing metric value (ssim) in \
+                     test_ssim_small_image_uses_simple_path"
                 )
             }) - 1.0)
                 .abs()

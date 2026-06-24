@@ -17,7 +17,8 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
             ));
         };
 
-        // Link to the .tmp_lib directory which contains the libstdc++ -> libc++ workaround
+        // Link to the .tmp_lib directory which contains the libstdc++ -> libc++
+        // workaround
         let tmp_lib = workspace_root.join("crates/.modern_format_boost/.tmp_lib");
         if tmp_lib.exists() {
             println!("cargo:rustc-link-search=native={}", tmp_lib.display());

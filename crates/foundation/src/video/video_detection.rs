@@ -3,7 +3,8 @@
 //! Pure analysis layer - detects video properties using ffprobe.
 //! Determines codec type, compression level, and archival suitability.
 //!
-//! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate duplication.
+//! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate
+//! duplication.
 
 use crate::ffprobe::{FFprobeError, probe_video};
 use crate::media_index_types::MediaIndexRow;
@@ -36,14 +37,15 @@ pub struct VideoPrecisionMetadata {
     pub original_preset: Option<String>,
     pub original_encoder: Option<String>,
     pub original_max_b_frames: Option<u8>,
-    /// True when the detected bit depth came from `pix_fmt` inference rather than
-    /// an explicit ffprobe sample-depth field.
+    /// True when the detected bit depth came from `pix_fmt` inference rather
+    /// than an explicit ffprobe sample-depth field.
     pub bit_depth_inferred_from_pix_fmt: bool,
     pub is_lossless_deterministic: bool,
-    /// 🚀 Hint: The last successful CRF value found during exploration (stored in cache)
+    /// 🚀 Hint: The last successful CRF value found during exploration (stored
+    /// in cache)
     pub last_best_crf: Option<f32>,
-    /// 🚀 Hint: The last kept best-effort CRF value when exploration produced a usable
-    /// output but did not fully satisfy the quality target.
+    /// 🚀 Hint: The last kept best-effort CRF value when exploration produced a
+    /// usable output but did not fully satisfy the quality target.
     pub last_best_effort_crf: Option<f32>,
 }
 
@@ -323,7 +325,8 @@ pub struct Detection {
     pub bits_per_pixel: f64,
     /// `color_primaries` from ffprobe (e.g. "bt2020", "bt709")
     pub color_primaries: Option<String>,
-    /// `color_transfer` (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
+    /// `color_transfer` (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67",
+    /// "bt709")
     pub color_transfer: Option<String>,
     /// HDR10 mastering display metadata in ffmpeg format
     pub mastering_display: Option<String>,
@@ -379,7 +382,8 @@ impl Detection {
         )
     }
 
-    /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10,
+    /// HDR10+)
     #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.color_assessment().has_hdr_signaling()
@@ -511,7 +515,8 @@ pub fn calculate_quality_score(
 /// Analyzes a video file with optional `SQLite` caching.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read, ffprobe fails, or cache access errors.
+/// Returns an error if the file cannot be read, ffprobe fails, or cache access
+/// errors.
 pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -533,7 +538,8 @@ pub fn detect_video_with_cache(
                     "video_cache_refresh_format_detect_failed",
                     path,
                     format!(
-                        "cache refresh refused stale-metadata guess after format detection error: {err}"
+                        "cache refresh refused stale-metadata guess after format detection error: \
+                         {err}"
                     ),
                 );
                 return true;
@@ -551,21 +557,21 @@ pub fn detect_video_with_cache(
         ) {
             return false;
         }
-        let (is_animated, native_frames, _) = match crate::image_detection::detect_animation(
-            path, &format,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                crate::media_conversion_gate::probe_layer_audit(
-                    "video_cache_refresh_animation_detect_failed",
-                    path,
-                    format!(
-                        "cache refresh refused stale-metadata guess after animation detection error: {err}"
-                    ),
-                );
-                return true;
-            }
-        };
+        let (is_animated, native_frames, _) =
+            match crate::image_detection::detect_animation(path, &format) {
+                Ok(value) => value,
+                Err(err) => {
+                    crate::media_conversion_gate::probe_layer_audit(
+                        "video_cache_refresh_animation_detect_failed",
+                        path,
+                        format!(
+                            "cache refresh refused stale-metadata guess after animation detection \
+                             error: {err}"
+                        ),
+                    );
+                    return true;
+                }
+            };
         is_animated && native_frames.is_some_and(|nf| nf > 1)
     };
 
@@ -576,7 +582,8 @@ pub fn detect_video_with_cache(
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_DETECTION,
                         &format!(
-                            "Invalidating stale cached animation-capable frame metadata and re-running detection (path={})",
+                            "Invalidating stale cached animation-capable frame metadata and \
+                             re-running detection (path={})",
                             path.display()
                         )
                     );
@@ -618,7 +625,8 @@ pub fn detect_video_with_cache(
                                     "video_cache_bitstream_repair_failed",
                                     path,
                                     format!(
-                                        "cached detection bitstream repair failed; re-running detection: {err}"
+                                        "cached detection bitstream repair failed; re-running \
+                                         detection: {err}"
                                     ),
                                 );
                             }
@@ -628,7 +636,8 @@ pub fn detect_video_with_cache(
                         crate::media_conversion_gate::probe_layer_audit(
                             "video_cache_repair_incomplete",
                             path,
-                            "bitstream repair on cache hit did not yield multi-frame + valid canvas; re-running detection",
+                            "bitstream repair on cache hit did not yield multi-frame + valid \
+                             canvas; re-running detection",
                         );
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_DETECTION,
@@ -669,7 +678,8 @@ pub fn detect_video_with_cache(
     Ok(result)
 }
 
-/// True when cached detection may be stale ffprobe-only metadata for an animation-capable file (M128).
+/// True when cached detection may be stale ffprobe-only metadata for an
+/// animation-capable file (M128).
 fn cached_detection_needs_bitstream_repair(cached: &Detection, path: &Path) -> bool {
     let canvas_ok = cached.width.is_some_and(|w| w > 0) && cached.height.is_some_and(|h| h > 0);
     let frames_ok = cached.frame_count.is_some_and(|fc| fc > 1);
@@ -727,9 +737,11 @@ fn cached_detection_needs_bitstream_repair(cached: &Detection, path: &Path) -> b
     is_animated && (native_frames.is_some_and(|nf| nf > 1) || !canvas_ok || !frames_ok)
 }
 
-/// Promote structurally animated containers when ffprobe leaves `frame_count` empty (e.g. WebP 0×0).
+/// Promote structurally animated containers when ffprobe leaves `frame_count`
+/// empty (e.g. WebP 0×0).
 ///
-/// Returns `true` when `detection.frame_count` was raised above 1 so vid routes to animated transcode.
+/// Returns `true` when `detection.frame_count` was raised above 1 so vid routes
+/// to animated transcode.
 pub fn promote_animated_container_for_vid(
     path: &Path,
     detection: &mut Detection,
@@ -949,7 +961,8 @@ fn animated_header_timing_data(
     }
 }
 
-/// Build an [`FFprobeResult`] from PNG `acTL` / `fcTL` when structurally APNG (M125).
+/// Build an [`FFprobeResult`] from PNG `acTL` / `fcTL` when structurally APNG
+/// (M125).
 fn try_probe_from_animated_apng_header(
     path: &Path,
 ) -> std::result::Result<Option<crate::ffprobe::FFprobeResult>, crate::ffprobe::FFprobeError> {
@@ -1019,7 +1032,8 @@ fn try_probe_from_animated_apng_header(
     }))
 }
 
-/// Build an [`FFprobeResult`] from GIF logical screen + frame count when structurally animated (M124).
+/// Build an [`FFprobeResult`] from GIF logical screen + frame count when
+/// structurally animated (M124).
 fn try_probe_from_animated_gif_header(
     path: &Path,
 ) -> std::result::Result<Option<crate::ffprobe::FFprobeResult>, crate::ffprobe::FFprobeError> {
@@ -1108,9 +1122,11 @@ fn try_probe_from_animated_gif_header(
     }))
 }
 
-/// Build an [`FFprobeResult`] from RIFF/WebP headers when the file is structurally animated.
+/// Build an [`FFprobeResult`] from RIFF/WebP headers when the file is
+/// structurally animated.
 ///
-/// Avoids primary ffprobe on containers that often report 0×0 / empty `frame_count` (M123).
+/// Avoids primary ffprobe on containers that often report 0×0 / empty
+/// `frame_count` (M123).
 fn try_probe_from_animated_webp_header(
     path: &Path,
 ) -> std::result::Result<Option<crate::ffprobe::FFprobeResult>, crate::ffprobe::FFprobeError> {
@@ -1209,7 +1225,8 @@ fn read_webp_header_prefix(
     read_container_header_prefix(path, "webp", WEBP_HEADER_READ_CAP)
 }
 
-/// Backfill missing or 0×0 canvas from native headers (GIF/PNG/WebP/etc.) after ffprobe (M127).
+/// Backfill missing or 0×0 canvas from native headers (GIF/PNG/WebP/etc.) after
+/// ffprobe (M127).
 fn backfill_detection_canvas_from_bitstream_header(path: &Path, detection: &mut Detection) {
     let needs_width = detection.width.is_none_or(|v| v == 0);
     let needs_height = detection.height.is_none_or(|v| v == 0);
@@ -1248,7 +1265,8 @@ fn backfill_webp_canvas_from_header(path: &Path, detection: &mut Detection) {
     backfill_detection_canvas_from_bitstream_header(path, detection);
 }
 
-/// Trust native animated structure when ffprobe left `frame_count` empty or single-frame (M127).
+/// Trust native animated structure when ffprobe left `frame_count` empty or
+/// single-frame (M127).
 fn backfill_animated_frame_count_from_bitstream_header(
     path: &Path,
     detection: &mut Detection,
@@ -1380,7 +1398,8 @@ fn try_promote_animated_webp_from_header(
     Ok(true)
 }
 
-/// Detect video properties using ffprobe and fuse scenario DB quality when applicable.
+/// Detect video properties using ffprobe and fuse scenario DB quality when
+/// applicable.
 ///
 /// # Errors
 /// Returns `FFprobeError` if the file is invalid or ffprobe fails.
@@ -1445,7 +1464,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
             branch,
             path,
             format!(
-                "structurally animated {label}: header probe ({}x{}, frames={}) — skipping primary ffprobe",
+                "structurally animated {label}: header probe ({}x{}, frames={}) — skipping \
+                 primary ffprobe",
                 probe.width,
                 probe.height,
                 crate::media_conversion_gate::delivery_frame_count_label_u64(
@@ -1466,7 +1486,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
     let has_b_frames = probe.has_b_frames();
 
     // `bit_rate` is absent for image containers probed via ffprobe (e.g. WebP).
-    // Root fix: Derive bitrate from file size and duration if missing to ensure accurate BPP and compression detection.
+    // Root fix: Derive bitrate from file size and duration if missing to ensure
+    // accurate BPP and compression detection.
     let format_bit_rate = crate::media_conversion_gate::probe_ffprobe_bit_rate_or_derived_from_size(
         probe.bit_rate,
         probe.size,
@@ -1605,7 +1626,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
                 Ok((is_animated, native_frames, _)) => match (is_animated, native_frames) {
                     (false, Some(1)) => {
                         crate::progress_mode::emit_stderr(&format!(
-                            "{} [Detection] Static JXL with demux frame_count=1; vid ignore path: {}",
+                            "{} [Detection] Static JXL with demux frame_count=1; vid ignore path: \
+                             {}",
                             crate::media_conversion_gate::ui_icon_pick("⚙️", "[GEAR]"),
                             path.display()
                         ));
@@ -1624,7 +1646,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
                             "jxl_static_implausible_frames",
                             path,
                             format!(
-                                "animation probe: static with implausible frame count {other}; keeping ffprobe metadata"
+                                "animation probe: static with implausible frame count {other}; \
+                                 keeping ffprobe metadata"
                             ),
                         );
                     }
@@ -1633,7 +1656,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
                             "jxl_animated_implausible_frames",
                             path,
                             format!(
-                                "animation probe: animated with implausible frame count {}; keeping ffprobe metadata",
+                                "animation probe: animated with implausible frame count {}; \
+                                 keeping ffprobe metadata",
                                 crate::media_conversion_gate::delivery_frame_count_label_u64(
                                     native_frames.map(u64::from),
                                     &format!("jxl animation probe {}", path.display()),
@@ -1646,7 +1670,8 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
                         crate::media_conversion_gate::probe_layer_audit(
                             "jxl_animated_unknown_frames",
                             path,
-                            "animation probe: animated without frame count; keeping ffprobe metadata",
+                            "animation probe: animated without frame count; keeping ffprobe \
+                             metadata",
                         );
                     }
                 },
@@ -1717,8 +1742,9 @@ fn detect_video_impl(path: &Path) -> std::result::Result<Detection, FFprobeError
         result.frame_count = Some(real_count);
     }
 
-    // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
-    // where loop intent might be ambiguous, and only if it's not a native gif/webp.
+    // Interlace detection is expensive, so we only run it for "gray zone" assets
+    // (4s to 18s) where loop intent might be ambiguous, and only if it's not a
+    // native gif/webp.
     if result
         .duration_secs
         .is_some_and(|d| d >= crate::constants::INTERLACE_DETECTION_MIN_DURATION_SECS)
@@ -1747,7 +1773,8 @@ fn extract_video_precision(
         ..Default::default()
     };
 
-    // Prioritize explicit encoder_settings (x264-params/x265-params) over generic tags
+    // Prioritize explicit encoder_settings (x264-params/x265-params) over generic
+    // tags
     let search_string =
         crate::media_conversion_gate::probe_encoder_settings_search_string(encoder_settings, tags);
 
@@ -1824,7 +1851,8 @@ pub fn generate_video_recommendation(features: &Detection) -> VideoRecommendatio
     let mut is_archival_upgrade = false;
     let mut command_hint = String::new();
 
-    // Decision logic: if it's an archival candidate but not yet in a modern delivery format.
+    // Decision logic: if it's an archival candidate but not yet in a modern
+    // delivery format.
     let is_old_lossless = matches!(
         features.codec,
         DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG
@@ -1838,7 +1866,9 @@ pub fn generate_video_recommendation(features: &Detection) -> VideoRecommendatio
         recommended_codec = "AV1 (SVT-AV1)".to_string();
         is_archival_upgrade = true;
         reason = if is_old_lossless {
-            "Professional archival format detected; recommend AV1 for space efficiency with zero visual loss".to_string()
+            "Professional archival format detected; recommend AV1 for space efficiency with zero \
+             visual loss"
+                .to_string()
         } else {
             "High-bitrate H.264 detected; recommend AV1 for 50%+ size reduction".to_string()
         };

@@ -1,16 +1,18 @@
 //! Strategy Pattern for Video Explorer
 //!
-//! Refactors exploration modes into independent Strategy structs, unifying SSIM calculation and progress display interface.
+//! Refactors exploration modes into independent Strategy structs, unifying SSIM
+//! calculation and progress display interface.
 //!
 //! ## Design Goals
-//! 1. Fully independent logic for each explore mode, better maintainability and testability
+//! 1. Fully independent logic for each explore mode, better maintainability and
+//!    testability
 //! 2. Unified `ExploreContext` providing shared states and utility methods
 //! 3. Unified SSIM calculation logic (with caching and fallbacks)
 //! 4. Unified progress display interface
 //!
 //! ## Utility Methods Refactor
-//! Added `build_result()`, `binary_search_compress()`, `log_final_result()`, etc.,
-//! reducing boilerplate in 6 Strategy implementations by ~40%.
+//! Added `build_result()`, `binary_search_compress()`, `log_final_result()`,
+//! etc., reducing boilerplate in 6 Strategy implementations by ~40%.
 //!
 //! ## Unified Selection Philosophy
 //!
@@ -23,10 +25,12 @@
 //! 4. **Parameter**: CRF (prefer lower/more aggressive as tiebreaker)
 //! 5. **Preset**: Rank (prefer higher/slower)
 //!
-//! Video explore ranking only — HEVC/AV1 **delivery** routing is [`crate::delivery_codec_strategy`].
+//! Video explore ranking only — HEVC/AV1 **delivery** routing is
+//! [`crate::delivery_codec_strategy`].
 //!
 //! Observability SSOT: runtime audit/error paths in this strategy route through
-//! `crate::media_conversion_gate::*_audit` helpers, which own `tracing::` emission.
+//! `crate::media_conversion_gate::*_audit` helpers, which own `tracing::`
+//! emission.
 //!
 //! ## Usage Example
 //! ```rust
@@ -96,7 +100,8 @@ impl SsimResult {
     /// Returns the SSIM value as a type-safe `Ssim` wrapper.
     ///
     /// # Errors
-    /// Returns an error if the raw f64 value is NaN, infinite, or out of range [0, 1].
+    /// Returns an error if the raw f64 value is NaN, infinite, or out of range
+    /// [0, 1].
     pub fn value_typed(&self) -> Result<crate::types::Ssim, crate::types::ssim::Error> {
         crate::types::Ssim::new(self.value)
     }
@@ -108,7 +113,8 @@ impl SsimResult {
     }
 }
 
-/// M232 policy anchor: production refuses PSNR→SSIM synthesis; [`SsimResult::predicted`] is tests-only.
+/// M232 policy anchor: production refuses PSNR→SSIM synthesis;
+/// [`SsimResult::predicted`] is tests-only.
 #[expect(dead_code)]
 const M232_PREDICTED_SSMI_CONSTRUCTOR: fn(f64, f64) -> SsimResult = SsimResult::predicted;
 
@@ -241,8 +247,9 @@ pub struct ExploreContext {
     pub config: ExploreConfig,
     pub hdr_x265_params: Option<String>,
     pub apple_compat: bool,
-    /// Source codec name (e.g. "prores", "h264"), probed once at construction time.
-    /// Used to pick the x265 memory profile for archival codecs under the size threshold.
+    /// Source codec name (e.g. "prores", "h264"), probed once at construction
+    /// time. Used to pick the x265 memory profile for archival codecs under
+    /// the size threshold.
     source_codec_name: Option<String>,
 
     size_cache: CrfCache<u64>,
@@ -278,7 +285,8 @@ fn size_change_pct_for_input_size(input_size: u64, output_size: u64) -> f64 {
         * crate::constants::EXPLORATION_PERCENTAGE_MULTIPLIER
 }
 impl ExploreContext {
-    /// Construct context for strategy-based explore. Consider a builder if adding more optional params.
+    /// Construct context for strategy-based explore. Consider a builder if
+    /// adding more optional params.
     ///
     /// # Errors
     /// Returns an error if video probing fails.
@@ -298,7 +306,8 @@ impl ExploreContext {
         } = args;
         if config.ultimate_mode {
             anyhow::bail!(
-                "ultimate mode is incompatible with explore_strategy; use GPU coarse-search explore"
+                "ultimate mode is incompatible with explore_strategy; use GPU coarse-search \
+                 explore"
             );
         }
         let probe = crate::ffprobe::probe_video(&input_path)?;
@@ -435,7 +444,8 @@ impl ExploreContext {
         result.sealed()
     }
 
-    /// Returns `Some(crf, size, iterations)` when at least one CRF compresses; `None` when none do (caller must handle).
+    /// Returns `Some(crf, size, iterations)` when at least one CRF compresses;
+    /// `None` when none do (caller must handle).
     ///
     /// # Errors
     /// Returns error if encoding fails.
@@ -475,11 +485,13 @@ impl ExploreContext {
         }
     }
 
-    /// Binary search for the highest CRF that still meets `min_ssim` (best compression while meeting quality).
+    /// Binary search for the highest CRF that still meets `min_ssim` (best
+    /// compression while meeting quality).
     ///
-    /// Returns the genuinely measured SSIM at the returned CRF (`None` only when the
-    /// measurement source was not `Actual`); a below-gate measurement is returned as-is
-    /// rather than discarded — callers derive gate pass/fail from the value.
+    /// Returns the genuinely measured SSIM at the returned CRF (`None` only
+    /// when the measurement source was not `Actual`); a below-gate
+    /// measurement is returned as-is rather than discarded — callers derive
+    /// gate pass/fail from the value.
     ///
     /// # Errors
     /// Returns error if encoding fails.
@@ -639,7 +651,10 @@ impl ExploreContext {
         }
     }
 
-    /// SSIM is computed from current `input_path` vs `output_path` on disk. Cache key is CRF; value is valid only if output was produced by encode(crf) and not overwritten. Call `calculate_ssim` immediately after encode when using the same output path.
+    /// SSIM is computed from current `input_path` vs `output_path` on disk.
+    /// Cache key is CRF; value is valid only if output was produced by
+    /// encode(crf) and not overwritten. Call `calculate_ssim` immediately after
+    /// encode when using the same output path.
     fn do_calculate_ssim(&self) -> Result<SsimResult> {
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim";
 
@@ -811,6 +826,7 @@ impl ExploreStrategy for SizeOnlyStrategy {
     fn name(&self) -> &'static str {
         "SizeOnly"
     }
+
     fn description(&self) -> &'static str {
         "Minimize file size (no quality check)"
     }
@@ -863,6 +879,7 @@ impl ExploreStrategy for QualityMatchStrategy {
     fn name(&self) -> &'static str {
         "QualityMatch"
     }
+
     fn description(&self) -> &'static str {
         "Single encode at predicted CRF + SSIM check"
     }
@@ -910,6 +927,7 @@ impl ExploreStrategy for PreciseQualityMatchStrategy {
     fn name(&self) -> &'static str {
         "PreciseQualityMatch"
     }
+
     fn description(&self) -> &'static str {
         "Binary search for max CRF meeting min SSIM"
     }
@@ -995,6 +1013,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
     fn name(&self) -> &'static str {
         "PreciseQualityMatchWithCompression"
     }
+
     fn description(&self) -> &'static str {
         "Binary search for compression then quality search"
     }
@@ -1052,6 +1071,7 @@ impl ExploreStrategy for CompressOnlyStrategy {
     fn name(&self) -> &'static str {
         "CompressOnly"
     }
+
     fn description(&self) -> &'static str {
         "Maximize compression regardless of quality"
     }
@@ -1121,6 +1141,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
     fn name(&self) -> &'static str {
         "CompressWithQuality"
     }
+
     fn description(&self) -> &'static str {
         "Maximize compression with quality check"
     }
@@ -1191,7 +1212,8 @@ mod tests {
 
     #[test]
     fn test_parse_ssim() {
-        let stderr = "SSIM Y:0.998471 (28.156173) U:0.998533 (28.336496) V:0.999124 (30.575023) All:0.998634 (28.646541)";
+        let stderr = "SSIM Y:0.998471 (28.156173) U:0.998533 (28.336496) V:0.999124 (30.575023) \
+                      All:0.998634 (28.646541)";
         assert_eq!(
             ExploreContext::parse_ssim(stderr)
                 .unwrap_or_else(|err| panic!("SSIM parse failed: {err}")),

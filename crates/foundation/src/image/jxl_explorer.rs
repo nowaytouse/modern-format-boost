@@ -1,19 +1,24 @@
 //! JXL Distance Explorer for Ultimate Mode
 //!
-//! Two-phase screening algorithm to identify distance candidates for JXL e10 finalization:
+//! Two-phase screening algorithm to identify distance candidates for JXL e10
+//! finalization:
 //!
-//! **Phase 1 (Ladder)**: Test predefined distances, promote candidates based on quality/region.
-//! **Phase 2 (Binary Search)**: Refine promising regions with adaptive step sizing.
+//! **Phase 1 (Ladder)**: Test predefined distances, promote candidates based on
+//! quality/region. **Phase 2 (Binary Search)**: Refine promising regions with
+//! adaptive step sizing.
 //!
 //! ## Unified Selection Philosophy
 //!
-//! Finalist promotion uses consistent priorities (see `candidate_comparator` for theory):
+//! Finalist promotion uses consistent priorities (see `candidate_comparator`
+//! for theory):
 //!
 //! 1. **Quality Gates**: Output must compress (size < input)
 //! 2. **Quality Metrics**: Best compression (lowest size) preferred
 //! 3. **Boundary Detection**: Candidates near 95–105% of input size promoted
-//! 4. **Region Coverage**: Promotes one candidate per distance region for diversity
-//! 5. **Score-based Ranking**: Finalists ranked by promotion score, then size, then distance
+//! 4. **Region Coverage**: Promotes one candidate per distance region for
+//!    diversity
+//! 5. **Score-based Ranking**: Finalists ranked by promotion score, then size,
+//!    then distance
 //!
 //! Terminology (unified with HEVC/VideoExplorer):
 //! - **Screening**: Phase 1 ladder + Phase 2 binary search exploration
@@ -36,40 +41,45 @@ const JXL_REGION_BUCKET_COUNT: f64 = crate::constants::JXL_REGION_BUCKET_COUNT;
 
 // --- Perceptual Band Boundaries ---
 //
-// These boundaries partition the JXL distance space into perceptual quality tiers.
-// They are empirical constants derived from the JXL specification's distance semantics:
+// These boundaries partition the JXL distance space into perceptual quality
+// tiers. They are empirical constants derived from the JXL specification's
+// distance semantics:
 //
-//   d ≤ 0.01  → "plateau" — mathematically lossless or indistinguishable from it
-//   d ≤ 0.1   → "visually lossless" — no visible artifacts at normal viewing
+//   d ≤ 0.01  → "plateau" — mathematically lossless or indistinguishable from
+// it   d ≤ 0.1   → "visually lossless" — no visible artifacts at normal viewing
 //   d ≤ 0.3   → "balanced" — quality/size sweet spot for archival
 //   d > 0.3   → "ceiling sweep" — aggressive compression, visible trade-offs
 //
 // The interpolation strategy differs per tier:
-//   - MicroAdjust (plateau):  log10 interpolation + smoothstep — distances are so small
-//     that linear steps would collapse to a single float; log-space preserves resolution.
-//   - BoundaryPush/WidePush:  linear interpolation + smoothstep — in the perceptual
-//     range, equal ΔDistance ≈ equal ΔJND, so linear spacing tracks perception.
+//   - MicroAdjust (plateau):  log10 interpolation + smoothstep — distances are
+//     so small that linear steps would collapse to a single float; log-space
+//     preserves resolution.
+//   - BoundaryPush/WidePush:  linear interpolation + smoothstep — in the
+//     perceptual range, equal ΔDistance ≈ equal ΔJND, so linear spacing tracks
+//     perception.
 //   - CeilingSweep:           linear interpolation with diminishing returns via
 //     normalized excess pressure — prevents runaway distance growth.
 //
-// NOTE: These are manually calibrated partitions, not natural constants. If dataset
-// distribution changes significantly, recalibrate via telemetry-driven analysis of
-// (initial_ratio, pressure_stops, chosen_profile, target_distance, outcome_quality)
-// tuples logged by the screening pass.
+// NOTE: These are manually calibrated partitions, not natural constants. If
+// dataset distribution changes significantly, recalibrate via telemetry-driven
+// analysis of (initial_ratio, pressure_stops, chosen_profile, target_distance,
+// outcome_quality) tuples logged by the screening pass.
 const JXL_DISTANCE_CEILING_PLATEAU_MAX: f64 = crate::constants::JXL_DISTANCE_PLATEAU;
 const JXL_DISTANCE_VISUAL_LOSSLESS_MAX: f64 = crate::constants::JXL_DISTANCE_VISUAL_LOSSLESS_MAX;
 const JXL_DISTANCE_BALANCED_MAX: f64 = crate::constants::JXL_DISTANCE_BALANCED_MAX;
 
 // --- Pressure-Stop Boundaries ---
 //
-// Pressure stops = log2(initial_ratio) — how many doublings the initial JXL output
-// exceeds the input. Each boundary maps to a profile that governs search intensity
-// and distance range. Values are log2 of the ratio thresholds:
+// Pressure stops = log2(initial_ratio) — how many doublings the initial JXL
+// output exceeds the input. Each boundary maps to a profile that governs search
+// intensity and distance range. Values are log2 of the ratio thresholds:
 //
-//   ≤ 0.0704 stops (~1.05×) → MicroAdjust:   file nearly fits; fine-tune near d=0
-//   ≤ 0.5850 stops (~1.50×) → BoundaryPush:  moderate oversize; push to visual lossless
-//   ≤ 1.3219 stops (~2.50×) → WidePush:      significant oversize; explore balanced range
-//   > 1.3219 stops           → CeilingSweep:  extreme oversize; sweep toward ceiling
+//   ≤ 0.0704 stops (~1.05×) → MicroAdjust:   file nearly fits; fine-tune near
+// d=0   ≤ 0.5850 stops (~1.50×) → BoundaryPush:  moderate oversize; push to
+// visual lossless   ≤ 1.3219 stops (~2.50×) → WidePush:      significant
+// oversize; explore balanced range
+//   > 1.3219 stops           → CeilingSweep:  extreme oversize; sweep toward
+//   > ceiling
 const JXL_MICRO_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_MICRO_PRESSURE_LIMIT; // log2(1.05)
 const JXL_BOUNDARY_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_BOUNDARY_PRESSURE_STOPS_MAX; // log2(1.50)
 const JXL_WIDE_PRESSURE_STOPS_MAX: f64 = crate::constants::JXL_WIDE_PRESSURE_STOPS_MAX; // log2(2.50)
@@ -231,7 +241,8 @@ impl JxlExploreResult {
         }
     }
 
-    /// Strict delivery: non-zero output, finite sealed distance, at least one screening iteration.
+    /// Strict delivery: non-zero output, finite sealed distance, at least one
+    /// screening iteration.
     #[must_use]
     pub fn delivery_acceptable(&self) -> bool {
         if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled() {
@@ -456,7 +467,8 @@ fn candidate_region_key(distance: f32) -> i32 {
     ) {
         Some(v) => v,
         None => unreachable!(
-            "CRITICAL: region bucket ({}) is outside i32 range in jxl_explorer candidate_region_key (distance={})",
+            "CRITICAL: region bucket ({}) is outside i32 range in jxl_explorer \
+             candidate_region_key (distance={})",
             normalized * JXL_REGION_BUCKET_COUNT,
             distance
         ),
@@ -500,10 +512,10 @@ fn smoothstep01(value: f64) -> f64 {
 
 /// Interpolate in **log10-distance space** (plateau tier only).
 ///
-/// Used for the `MicroAdjust` profile where distances are sub-PLATEAU. In this range,
-/// linear steps would collapse to identical f32 values, so log-space preserves
-/// resolution across the near-lossless plateau. Smoothstep easing prevents
-/// clustering at band edges.
+/// Used for the `MicroAdjust` profile where distances are sub-PLATEAU. In this
+/// range, linear steps would collapse to identical f32 values, so log-space
+/// preserves resolution across the near-lossless plateau. Smoothstep easing
+/// prevents clustering at band edges.
 fn interpolate_plateau_distance(
     min_distance: f64,
     max_distance: f64,
@@ -517,10 +529,10 @@ fn interpolate_plateau_distance(
 
 /// Interpolate in **linear distance space** (perceptual tiers).
 ///
-/// Used for `BoundaryPush`, `WidePush`, and `CeilingSweep` profiles. In the d=PLATEAU..1.0
-/// range, equal Δdistance ≈ equal ΔJND, so linear spacing tracks perceptual
-/// quality steps. Smoothstep easing concentrates probes near the band center
-/// where the quality/size trade-off is steepest.
+/// Used for `BoundaryPush`, `WidePush`, and `CeilingSweep` profiles. In the
+/// d=PLATEAU..1.0 range, equal Δdistance ≈ equal ΔJND, so linear spacing tracks
+/// perceptual quality steps. Smoothstep easing concentrates probes near the
+/// band center where the quality/size trade-off is steepest.
 fn interpolate_perceptual_distance(
     min_distance: f64,
     max_distance: f64,
@@ -551,15 +563,16 @@ fn profile_distance_range(profile: JxlExplorationProfile) -> (f64, f64) {
 
 /// Fixed anchor distances for each profile tier.
 ///
-/// These are mandatory probe points during Phase 1 ladder construction. They ensure
-/// the search always samples at known perceptual boundaries, regardless of the
-/// adaptive interpolation budget.
+/// These are mandatory probe points during Phase 1 ladder construction. They
+/// ensure the search always samples at known perceptual boundaries, regardless
+/// of the adaptive interpolation budget.
 ///
-/// **Overfitting risk**: The anchors are hand-picked for typical photographic content.
-/// Image distributions that cluster heavily around specific compression ratios may
-/// "get stuck" in dense anchor regions. Monitor the telemetry fields (`initial_ratio`,
-/// `pressure_stops`, `profile`, `target_distance`) logged by the screening pass to
-/// detect anchor regions that consistently fail to produce break-even candidates.
+/// **Overfitting risk**: The anchors are hand-picked for typical photographic
+/// content. Image distributions that cluster heavily around specific
+/// compression ratios may "get stuck" in dense anchor regions. Monitor the
+/// telemetry fields (`initial_ratio`, `pressure_stops`, `profile`,
+/// `target_distance`) logged by the screening pass to detect anchor regions
+/// that consistently fail to produce break-even candidates.
 const fn profile_anchor_distances(profile: JxlExplorationProfile) -> &'static [f64] {
     match profile {
         JxlExplorationProfile::MicroAdjust => &[JXL_DISTANCE_CEILING_PLATEAU_MAX],
@@ -728,7 +741,8 @@ fn near_best_margin_f64(input_size: u64) -> Option<u64> {
             "jxl_margin",
         ),
         format!(
-            "NUMERIC ANOMALY: JXL near-best margin overflow/NaN (input_size={input_size}, ratio={JXL_NEAR_BEST_MARGIN_RATIO})"
+            "NUMERIC ANOMALY: JXL near-best margin overflow/NaN (input_size={input_size}, \
+             ratio={JXL_NEAR_BEST_MARGIN_RATIO})"
         ),
     )
 }
@@ -750,7 +764,8 @@ fn near_best_margin(input_size: u64) -> Option<u64> {
         crate::media_conversion_gate::delivery_jxl_margin_u64_or_one(
             crate::numeric_cast::f64_to_u64_strict(margin.to_f64(), "margin"),
             format!(
-                "NUMERIC ANOMALY: failed to convert JXL margin to u64 (input_size={input_size}, margin_f64={})",
+                "NUMERIC ANOMALY: failed to convert JXL margin to u64 (input_size={input_size}, \
+                 margin_f64={})",
                 margin.to_f64()
             ),
         )
@@ -792,7 +807,8 @@ fn add_reason(
 
     candidate.reasons.push(reason);
     log.push(format!(
-        "   ✓ JXL Shortlist promotion: distance d={} qualified as '{}' candidate for e10 finalization",
+        "   ✓ JXL Shortlist promotion: distance d={} qualified as '{}' candidate for e10 \
+         finalization",
         format_distance_for_log(candidate.distance),
         reason.label()
     ));
@@ -816,8 +832,9 @@ fn shortlist_finalists(
             .then_with(|| a.output_size.cmp(&b.output_size))
     });
 
-    // Tier 2: near-boundary oversize candidates (100–105% of input), sorted by ascending d.
-    // These sit just above break-even and may compress under e10 even if e7 called them oversize.
+    // Tier 2: near-boundary oversize candidates (100–105% of input), sorted by
+    // ascending d. These sit just above break-even and may compress under e10
+    // even if e7 called them oversize.
     let mut near_boundary_cands: Vec<_> = candidates
         .iter()
         .filter(|c| c.output_size >= input_size && near_boundary(c.output_size, input_size))
@@ -909,11 +926,13 @@ fn candidate_reason_summary(candidate: &JxlScreenedCandidate, input_size: u64) -
 
 /// Finalizes screening results by shortlisting top finalist candidates.
 ///
-/// Uses promotion scoring, boundary detection, and quality considerations to select finalists.
-/// The finalists are then re-evaluated with e10 parameters for ultimate mode.
+/// Uses promotion scoring, boundary detection, and quality considerations to
+/// select finalists. The finalists are then re-evaluated with e10 parameters
+/// for ultimate mode.
 ///
 /// Term definitions (see `candidate_comparator` for terminology):
-/// - **Finalists**: Selected subset from screened candidates for final evaluation
+/// - **Finalists**: Selected subset from screened candidates for final
+///   evaluation
 /// - **Promotion**: Reason(s) a candidate was included in finalist set
 fn finalize_screening_result(
     input_size: u64,
@@ -938,7 +957,8 @@ fn finalize_screening_result(
     ));
 
     // Structured telemetry for data-driven calibration.
-    // Collect these lines to fit band boundaries statistically rather than manually.
+    // Collect these lines to fit band boundaries statistically rather than
+    // manually.
     let Some(best) = candidates.get(best_idx) else {
         let _ = crate::media_conversion_gate::jxl_best_telemetry_optional(
             None,
@@ -946,7 +966,8 @@ fn finalize_screening_result(
             "jxl_explorer screening telemetry: missing best_idx",
         );
         log.push(format!(
-            "ERROR: best_idx {best_idx} out of range ({} candidates); refusing fabricated screening winner",
+            "ERROR: best_idx {best_idx} out of range ({} candidates); refusing fabricated \
+             screening winner",
             candidates.len()
         ));
         // Route through the same seal as the normal path so the NaN/u64::MAX sentinels
@@ -976,7 +997,9 @@ fn finalize_screening_result(
     }
 
     log.push(format!(
-        "TELEMETRY: initial_ratio={initial_ratio:.6} pressure_stops={pressure_stops:.4} profile={profile_label} target_distance={} best_distance={} best_pct={} iterations={iterations} finalists={}",
+        "TELEMETRY: initial_ratio={initial_ratio:.6} pressure_stops={pressure_stops:.4} \
+         profile={profile_label} target_distance={} best_distance={} best_pct={} \
+         iterations={iterations} finalists={}",
         format_distance_for_log(target_distance),
         if best_dist.is_finite() {
             format_distance_for_log(best_dist)
@@ -1202,19 +1225,26 @@ impl JxlScreeningSession {
     }
 }
 
-/// Screens JXL distance candidates to identify finalists for e10 ultimate finalization.
+/// Screens JXL distance candidates to identify finalists for e10 ultimate
+/// finalization.
 ///
 /// ## Terminology (unified with HEVC/other explorers)
-/// - **Screening phase**: Initial exploration of distance values (Phase 1 ladder, Phase 2 binary)
+/// - **Screening phase**: Initial exploration of distance values (Phase 1
+///   ladder, Phase 2 binary)
 /// - **Candidate**: A specific distance value with its output size
-/// - **Finalist shortlist**: Curated subset of candidates promoted for ultimate finalization
-/// - **Winner**: Chosen by the caller based on finalists (not this function's responsibility)
+/// - **Finalist shortlist**: Curated subset of candidates promoted for ultimate
+///   finalization
+/// - **Winner**: Chosen by the caller based on finalists (not this function's
+///   responsibility)
 ///
-/// See `candidate_comparator` module for unified ranking terminology and philosophy.
+/// See `candidate_comparator` module for unified ranking terminology and
+/// philosophy.
 ///
 /// # Errors
 /// Returns `Err` if the `try_candidate` closure fails for any tested distance.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,
@@ -1230,8 +1260,9 @@ where
     let initial_distance = clamp_explore_distance(JXL_EXPLORE_FLOOR);
     let mut session = JxlScreeningSession::new(input_size, initial_distance, initial_size);
 
-    // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size), stop exploring.
-    // Quality is already safe and beneficial, so further exploration cost is not worth it.
+    // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size),
+    // stop exploring. Quality is already safe and beneficial, so further
+    // exploration cost is not worth it.
     let ratio = size_ratio(initial_size, input_size);
     if ratio <= 1.0_f64 {
         session.log.push(format!(
@@ -1256,7 +1287,8 @@ where
     let pressure_stops = oversize_pressure_stops(ratio);
     let (band_min, band_max) = profile_distance_range(plan.profile);
     session.log.push(format!(
-        "Adaptive plan ({}, +{pressure_stops:.2} stops) for this file: baseline d={} is {:.1}% of input, phase 1 will probe {} perceptual-band distances in d={}..{} up to d={}",
+        "Adaptive plan ({}, +{pressure_stops:.2} stops) for this file: baseline d={} is {:.1}% of \
+         input, phase 1 will probe {} perceptual-band distances in d={}..{} up to d={}",
         plan.profile.label(),
         format_distance_for_log(initial_distance),
         size_ratio_pct(initial_size, input_size),
@@ -1311,7 +1343,8 @@ where
         };
 
         session.log.push(format!(
-            "Phase 1 adaptive probe {}/{}: d={} -> {:.1}% of input ({trend} {delta_pct:.1}%, {status})",
+            "Phase 1 adaptive probe {}/{}: d={} -> {:.1}% of input ({trend} {delta_pct:.1}%, \
+             {status})",
             probe_idx + 1,
             plan.ladder.len(),
             format_distance_for_log(candidate_distance),
@@ -1324,13 +1357,16 @@ where
 
     // --- Phase 2: Find break-even bracket, then binary search ---
     //
-    // Objective: find the lowest d where output < input (highest quality that still compresses).
+    // Objective: find the lowest d where output < input (highest quality that still
+    // compresses).
     //
-    // If Phase 1 left d_under unset (break-even is beyond target_distance), probe upward
-    // from d_over toward JXL_EXPLORE_CEILING until d_under is discovered, consuming budget.
-    // Once [lo=d_over, hi=d_under] is established, binary search narrows it to precision.
+    // If Phase 1 left d_under unset (break-even is beyond target_distance), probe
+    // upward from d_over toward JXL_EXPLORE_CEILING until d_under is
+    // discovered, consuming budget. Once [lo=d_over, hi=d_under] is
+    // established, binary search narrows it to precision.
     //
-    // If no d_under is ever found, return None (skip JXL — nothing compresses below source).
+    // If no d_under is ever found, return None (skip JXL — nothing compresses below
+    // source).
     if session.d_under.is_none()
         && let Some(start) = session.d_over
     {
@@ -1386,7 +1422,8 @@ where
         let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(f32::EPSILON);
 
         session.log.push(format!(
-            "   🔍 JXL Phase 2 Refinement: Initializing adaptive binary search bracket [lower={lo:.4}, upper={hi:.4}] with target precision {precision:.4}"
+            "   🔍 JXL Phase 2 Refinement: Initializing adaptive binary search bracket \
+             [lower={lo:.4}, upper={hi:.4}] with target precision {precision:.4}"
         ));
 
         while session.iterations < JXL_EXPLORE_MAX_ITERATIONS && hi - lo >= precision {
@@ -1412,7 +1449,8 @@ where
             };
 
             session.log.push(format!(
-                "      • Binary search iteration {}: probed d={} resulted in {:.1}% of source size ({status})",
+                "      • Binary search iteration {}: probed d={} resulted in {:.1}% of source \
+                 size ({status})",
                 session.iterations,
                 format_distance_for_log(mid),
                 size_ratio_pct(size, input_size)
@@ -1474,7 +1512,8 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.output_size == 90)
         );
-        // All finalists must be below source (no oversize candidates when below-source ones fill slots)
+        // All finalists must be below source (no oversize candidates when below-source
+        // ones fill slots)
         let all_below = result
             .finalists
             .iter()

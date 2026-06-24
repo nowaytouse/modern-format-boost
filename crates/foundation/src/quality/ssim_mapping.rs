@@ -1,11 +1,13 @@
 //! PSNR→SSIM Dynamic Mapping Module
 //!
-//! v5.74: Used for transparency data prediction and audited explore PSNR→SSIM fallback (`SsimSource::Predicted`).
+//! v5.74: Used for transparency data prediction and audited explore PSNR→SSIM
+//! fallback (`SsimSource::Predicted`).
 
 use serde::{Deserialize, Serialize};
 
-/// Uncalibrated PSNR→SSIM estimate used when no mapping/calibration is available.
-/// Single formula shared by `explore_strategy` and other fallbacks so quality decisions are consistent.
+/// Uncalibrated PSNR→SSIM estimate used when no mapping/calibration is
+/// available. Single formula shared by `explore_strategy` and other fallbacks
+/// so quality decisions are consistent.
 #[inline]
 #[must_use]
 pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
@@ -19,13 +21,13 @@ pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
     // distinguish quality levels during exploration fallback.
     //
     // At typical operating points:
-    //   PSNR 25 dB → 0.997  (high quality, slightly overestimates vs real SSIM ~0.93)
-    //   PSNR 30 dB → 0.999  (very high quality)
+    //   PSNR 25 dB → 0.997  (high quality, slightly overestimates vs real SSIM
+    // ~0.93)   PSNR 30 dB → 0.999  (very high quality)
     //   PSNR 40 dB → 0.9999 (near-transparent)
     //
     // The overestimate at lower PSNR is acceptable because this is only used as a
-    // fallback when actual SSIM measurement fails; the important property is monotonicity
-    // and separation between quality levels.
+    // fallback when actual SSIM measurement fails; the important property is
+    // monotonicity and separation between quality levels.
     (1.0 - 10_f64.powf(-psnr_db / 10.0)).clamp(0.0, crate::constants::SSIM_MAPPING_CLAMP_MAX)
 }
 

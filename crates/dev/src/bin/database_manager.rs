@@ -487,7 +487,10 @@ fn show_status() -> Result<()> {
     println!("PostgreSQL Status: {}RUNNING{}", c.green, c.reset);
     if check_db_exists() {
         println!("Database '{DB_NAME}': {}EXISTS{}\n", c.green, c.reset);
-        let query = "SELECT tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size FROM pg_tables WHERE schemaname = 'public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;";
+        let query = "SELECT tablename, \
+                     pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size \
+                     FROM pg_tables WHERE schemaname = 'public' ORDER BY \
+                     pg_total_relation_size(schemaname||'.'||tablename) DESC;";
         let out = run_cmd(&format!("psql -d \"{DB_NAME}\" -c \"{query}\" -t"))?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         if out.status.success() && !stdout.trim().is_empty() {
@@ -549,7 +552,8 @@ fn manage_indexes() -> Result<()> {
         "0" => {}
         "1" => {
             let out = run_cmd(&format!(
-                "psql -d \"{DB_NAME}\" -c \"SELECT indexname FROM pg_indexes WHERE schemaname = 'public';\" -t"
+                "psql -d \"{DB_NAME}\" -c \"SELECT indexname FROM pg_indexes WHERE schemaname = \
+                 'public';\" -t"
             ))?;
             let stdout = String::from_utf8_lossy(&out.stdout);
             if out.status.success() && !stdout.trim().is_empty() {

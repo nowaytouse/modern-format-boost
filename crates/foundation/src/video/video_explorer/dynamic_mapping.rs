@@ -96,7 +96,8 @@ impl DynamicCrfMapper {
             );
         }
 
-        // Multi-anchor interpolation (currently unused: quick_calibrate stops after first success).
+        // Multi-anchor interpolation (currently unused: quick_calibrate stops after
+        // first success).
         let [p1, p2, ..] = &self.anchors[..] else {
             return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
         };
@@ -601,7 +602,9 @@ impl<'a> CalibrationContext<'a> {
 ///
 /// # Panics
 /// Panics if the input file path is not a valid UTF-8 string.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn quick_calibrate(
     input: &Path,
     input_size: u64,
@@ -700,7 +703,8 @@ pub fn quick_calibrate(
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_DYNAMIC,
                 format!(
-                    "Calibration complete: GPU {gpu_size} → CPU {cpu_size} (ratio {ratio:.3}, offset +{offset:.1})"
+                    "Calibration complete: GPU {gpu_size} → CPU {cpu_size} (ratio {ratio:.3}, \
+                     offset +{offset:.1})"
                 )
             );
         }
@@ -772,7 +776,10 @@ mod tests {
             &vf_args,
             Some(120.0_f64),
             false,
-            &["pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string()],
+            &["pad=ceil(iw/2)*\
+                                                                                2:ceil(ih/2)*2:\
+                                                                                0:0"
+            .to_string()],
         );
 
         assert!(filter.starts_with("select='between(t,0.0,15.0)"));

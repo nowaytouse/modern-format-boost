@@ -150,7 +150,10 @@ fn main() -> Result<()> {
 
     let mut tx = client.transaction()?;
 
-    let stmt = tx.prepare("UPDATE loop_samples SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{directory_loop_intent_score}', $1::jsonb) WHERE blake3 = $2")?;
+    let stmt = tx.prepare(
+        "UPDATE loop_samples SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), \
+         '{directory_loop_intent_score}', $1::jsonb) WHERE blake3 = $2",
+    )?;
 
     println!("Writing updates to database...");
     for (i, (score, blake3)) in updates.iter().enumerate() {

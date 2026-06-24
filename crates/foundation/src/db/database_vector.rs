@@ -1,7 +1,9 @@
 //! KNN pgvector feature encoding for loop samples.
 //!
-//! Absent optional KNN dimensions use `media_conversion_gate::knn_absent_feature_component()` (L2
-//! sparse origin at 0.0 — **not** a measured quality score; never confuse with PSNR/SSIM/embed slots).
+//! Absent optional KNN dimensions use
+//! `media_conversion_gate::knn_absent_feature_component()` (L2 sparse origin at
+//! 0.0 — **not** a measured quality score; never confuse with PSNR/SSIM/embed
+//! slots).
 
 use anyhow::Result;
 
@@ -21,7 +23,8 @@ fn feature_weight(stats_map: &FeatureMap, feature: &str) -> f64 {
         "KNN vector feature_weight",
     ) {
         Some(weight) => weight,
-        // L2 sparse origin: inactive dimension, not `KNN_VECTOR_DEFAULT_FEATURE_WEIGHT` corpus stats.
+        // L2 sparse origin: inactive dimension, not `KNN_VECTOR_DEFAULT_FEATURE_WEIGHT` corpus
+        // stats.
         None => crate::media_conversion_gate::knn_absent_feature_component(),
     }
 }
@@ -75,9 +78,11 @@ pub(crate) fn sample_loop_affinity(sample: &SampleRow) -> f64 {
     }
 }
 
-/// Compute a 261-dimensional pgvector encoding for a sample using pre-calculated std deviations.
-/// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
-/// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
+/// Compute a 261-dimensional pgvector encoding for a sample using
+/// pre-calculated std deviations. This precisely bakes the weights and
+/// normalization terms from the old dynamically computed KNN
+/// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the
+/// heavy lifting!
 pub(crate) fn calculate_continuous_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
@@ -344,7 +349,8 @@ pub(crate) fn compute_sample_vector(
     let (v_pix, v_dur, v_frm, v_fsize, v_dens, v_gap, v_temporal_bpp, v_spatial_bpp) =
         calculate_continuous_features(sample, stats_map).ok_or_else(|| {
             anyhow::anyhow!(
-                "continuous features unavailable (frame_count/duration_secs missing or feature_std absent)"
+                "continuous features unavailable (frame_count/duration_secs missing or \
+                 feature_std absent)"
             )
         })?;
 

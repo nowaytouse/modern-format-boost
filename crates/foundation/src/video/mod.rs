@@ -1,4 +1,5 @@
-//! `video` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `video` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod video;
 

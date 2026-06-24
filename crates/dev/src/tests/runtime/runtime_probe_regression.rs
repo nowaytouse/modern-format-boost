@@ -197,7 +197,8 @@ fn static_jxl_detect_video_single_frame() {
             );
         }
         Err(_err) => {
-            // Header-only JXL may fail ffprobe dimension parse; static path covered by format probe.
+            // Header-only JXL may fail ffprobe dimension parse; static path
+            // covered by format probe.
         }
     }
 }
@@ -422,7 +423,8 @@ fn zero_tolerance_quality_embed_nan_slots_probe() {
     assert!(
         (no_depth_embed.as_slice()[QUALITY_EMBED_COLOR_DEPTH_SLOT] - sentinel).abs()
             <= f32::EPSILON,
-        "unknown bit depth must carry pgvector-safe sentinel {sentinel} in slot {QUALITY_EMBED_COLOR_DEPTH_SLOT}, not 0.0 or NaN"
+        "unknown bit depth must carry pgvector-safe sentinel {sentinel} in slot \
+         {QUALITY_EMBED_COLOR_DEPTH_SLOT}, not 0.0 or NaN"
     );
 }
 

@@ -1,4 +1,5 @@
-//! Type-safe builders for imaging tools (`ImageMagick`, `webpmux`, `gifski`, `avifenc`, `sips`, `exiftool`).
+//! Type-safe builders for imaging tools (`ImageMagick`, `webpmux`, `gifski`,
+//! `avifenc`, `sips`, `exiftool`).
 
 use crate::builder_base::ToolBuilder;
 use crate::constants;
@@ -599,6 +600,7 @@ impl SipsBuilder {
         self.format = Some(format.as_ref().to_string());
         self
     }
+
     /// Sets the output image quality (1-100).
     /// Values outside this range will be clamped to prevent sips errors.
     pub fn quality(&mut self, q: u32) -> &mut Self {
@@ -683,7 +685,8 @@ impl ExiftoolBuilder {
 
     pub fn tags_from_file<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.arg(constants::EXIFTOOL_ARG_TAGS_FROM_FILE);
-        // ExifTool format-interprets % in tagsfromfile argument, so we must double them.
+        // ExifTool format-interprets % in tagsfromfile argument, so we must double
+        // them.
         self.arg(crate::path_safety::property_safe_path(path.as_ref()));
         self
     }

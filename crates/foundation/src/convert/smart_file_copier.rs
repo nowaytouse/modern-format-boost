@@ -6,11 +6,16 @@
 //! - ✅ Automatically merges XMP sidecar files
 //! - ✅ Loud errors, fully transparent
 //!
-//! This module unifies file copy logic across all converters, avoiding code duplication.
+//! This module unifies file copy logic across all converters, avoiding code
+//! duplication.
 //!
 //! ## Extension Correction & Validation Order
-//! - `fix_extension_if_mismatch` corrects extension based on file magic bytes (prevents panics/misjudgment due to faked extensions).
-//! - Design convention: **Fix first, then branch by extension**. All entry points (`cli_runner`, img_*) call `fix_extension` before processing. All subsequent "extension-only" logic should be based on the fixed path. See `CODE_AUDIT.md` §36.
+//! - `fix_extension_if_mismatch` corrects extension based on file magic bytes
+//!   (prevents panics/misjudgment due to faked extensions).
+//! - Design convention: **Fix first, then branch by extension**. All entry
+//!   points (`cli_runner`, img_*) call `fix_extension` before processing. All
+//!   subsequent "extension-only" logic should be based on the fixed path. See
+//!   `CODE_AUDIT.md` §36.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -110,7 +115,8 @@ pub fn check_extension_mismatch_readonly(path: &std::path::Path) -> Result<PathB
             "delivery_runtime",
             path,
             format!(
-                "{} has .{} extension but content is .{} (source directory immutable, not renaming)",
+                "{} has .{} extension but content is .{} (source directory immutable, not \
+                 renaming)",
                 path.display(),
                 current_ext,
                 content_format
@@ -281,7 +287,8 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to .mp4.
+    /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to
+    /// .mp4.
     #[test]
     fn test_fix_extension_video_content_wrong_ext() {
         let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));

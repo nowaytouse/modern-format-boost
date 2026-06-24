@@ -38,7 +38,6 @@ pub struct Ssim(f64);
 
 impl Ssim {
     pub const PERFECT: Self = Self(1.0_f64);
-
     pub const ZERO: Self = Self(0.0_f64);
 
     /// Create a new SSIM value.

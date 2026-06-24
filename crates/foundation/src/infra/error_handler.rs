@@ -54,7 +54,8 @@ pub fn handle_error<E: std::error::Error + Send + Sync + 'static>(
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "delivery_runtime_error",
                 format!(
-                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   → Continuing with fallback behavior..."
+                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   \
+                     → Continuing with fallback behavior..."
                 ),
             );
             ErrorAction::Continue
@@ -63,7 +64,8 @@ pub fn handle_error<E: std::error::Error + Send + Sync + 'static>(
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "delivery_runtime_error",
                 format!(
-                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   → Operation aborted."
+                    "[{category}] {context}: {error}\n   → Suggested action: {suggestion_str}\n   \
+                     → Operation aborted."
                 ),
             );
             ErrorAction::Abort(anyhow::anyhow!("{context}: {error}"))
@@ -189,7 +191,8 @@ pub fn install_panic_handler() {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_runtime_error",
             format!(
-                "PANIC occurred!\n   Message: {message}\n   Location: {location}\n   This is a bug! Please report it."
+                "PANIC occurred!\n   Message: {message}\n   Location: {location}\n   This is a \
+                 bug! Please report it."
             ),
         );
 

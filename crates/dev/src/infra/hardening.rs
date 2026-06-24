@@ -64,7 +64,8 @@ pub fn parse_kb_token(line: &str) -> Option<u64> {
     }
 }
 
-/// Parse optional summary integer; logs and returns `default` when label is absent.
+/// Parse optional summary integer; logs and returns `default` when label is
+/// absent.
 #[must_use]
 pub fn summary_int_or_default(
     summary: &str,

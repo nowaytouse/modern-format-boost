@@ -1,4 +1,5 @@
-//! Unified local `SQLite` blob store (`rusqlite` 0.40) — offline cache SSOT (M214).
+//! Unified local `SQLite` blob store (`rusqlite` 0.40) — offline cache SSOT
+//! (M214).
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -73,7 +74,9 @@ fn init_schema(conn: &Connection) -> Result<()> {
         }
         Some(v) if v != STORE_SCHEMA_VERSION => {
             anyhow::bail!(
-                "mfb_store.sqlite schema version mismatch (db={v}, expected={STORE_SCHEMA_VERSION}); remove the store file or bump STORE_SCHEMA_VERSION"
+                "mfb_store.sqlite schema version mismatch (db={v}, \
+                 expected={STORE_SCHEMA_VERSION}); remove the store file or bump \
+                 STORE_SCHEMA_VERSION"
             );
         }
         Some(_) => {}
@@ -192,7 +195,8 @@ pub fn blob_put(
     let updated_at = now_unix_secs()?;
     with_conn(|conn| {
         conn.execute(
-            "INSERT INTO blob_store (namespace, cache_key, schema_version, root_path, payload, payload_crc32, updated_at)
+            "INSERT INTO blob_store (namespace, cache_key, schema_version, root_path, payload, \
+             payload_crc32, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(namespace, cache_key) DO UPDATE SET
                 schema_version = excluded.schema_version,
@@ -214,7 +218,8 @@ pub fn blob_put(
     })
 }
 
-/// Delete blobs under a namespace whose `root_path` equals or is prefixed by `target`.
+/// Delete blobs under a namespace whose `root_path` equals or is prefixed by
+/// `target`.
 ///
 /// # Errors
 /// Returns an error if the delete fails.
@@ -258,7 +263,8 @@ pub fn blob_delete_namespace(namespace: &str) -> Result<u64> {
     })
 }
 
-/// Expose a dedicated connection for structured tables (e.g. dev `media_index`).
+/// Expose a dedicated connection for structured tables (e.g. dev
+/// `media_index`).
 ///
 /// # Errors
 /// Returns an error if the store cannot be opened.

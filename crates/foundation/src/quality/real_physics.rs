@@ -1,8 +1,9 @@
 //! Advanced Computer Vision Feature Extraction Module
 //!
-//! Provides mathematically rigorous, scientifically valid feature extraction for CBIR
-//! (Content-Based Image Retrieval). This module replaces naive mathematical projections
-//! or simple pixel grids with robust, translation-resistant signal processing metrics.
+//! Provides mathematically rigorous, scientifically valid feature extraction
+//! for CBIR (Content-Based Image Retrieval). This module replaces naive
+//! mathematical projections or simple pixel grids with robust,
+//! translation-resistant signal processing metrics.
 //!
 //! # 225-Dimension Advanced Physical Features:
 //! - [0..24] Color Moments (Mean, Var, Skew, Kurtosis across R,G,B,Y,Cb,Cr)
@@ -10,7 +11,8 @@
 //! - [88..124] Edge / HOG (Histogram of Oriented Gradients, 36 bins)
 //! - [124..140] Spatial Grid Entropy (4x4 localized structural complexity)
 //! - [140..156] Block Texture Variances (GLCM approximation)
-//! - [156..215] Uniform Local Binary Patterns (LBP, 59 bins for texture analysis)
+//! - [156..215] Uniform Local Binary Patterns (LBP, 59 bins for texture
+//!   analysis)
 //! - [215..225] Luminance Decile Histogram (10 bins)
 #![allow(
     clippy::cast_lossless,
@@ -30,8 +32,9 @@ static UNIFORM_LBP_MAP: OnceLock<[usize; 256]> = OnceLock::new();
 pub(crate) const PHYSICS_225_DIMENSIONS: usize = 225;
 
 fn get_uniform_lbp_map() -> &'static [usize; 256] {
-    // 🛡️ Safe: This closure performs pure mathematical constant calculations and will never panic.
-    // OnceLock ensures the table is built exactly once across all threads.
+    // 🛡️ Safe: This closure performs pure mathematical constant calculations and
+    // will never panic. OnceLock ensures the table is built exactly once across
+    // all threads.
     UNIFORM_LBP_MAP.get_or_init(|| {
         let mut map = [58usize; 256];
         let mut current_bin = 0;
@@ -60,7 +63,8 @@ fn get_uniform_lbp_map() -> &'static [usize; 256] {
     })
 }
 
-/// Extracts exactly 225 dimensions of authentic computer vision physics features.
+/// Extracts exactly 225 dimensions of authentic computer vision physics
+/// features.
 ///
 /// # Panics
 /// Panics if the internal feature assembly ever stops producing exactly
@@ -344,7 +348,8 @@ fn compute_texture_features(luma: &GrayImage) -> Vec<f32> {
                     values.push(f32::from(luma.get_pixel(x, y)[0]) / 255.0);
                 }
             }
-            // 🛡️ Defensive guard: ensure cell is not empty to prevent division by zero (NaN)
+            // 🛡️ Defensive guard: ensure cell is not empty to prevent division by zero
+            // (NaN)
             if values.is_empty() {
                 continue;
             }
@@ -480,7 +485,8 @@ mod tests {
         let img3 = checkerboard_image(100, 10);
         let f3 = extract_image_physics_225(&img3);
 
-        // 1. Finiteness Check (Catch real division/normalization issues on complex images)
+        // 1. Finiteness Check (Catch real division/normalization issues on complex
+        //    images)
         assert!(
             f3.iter().all(|&v| v.is_finite()),
             "Checkerboard features contain NaN or Inf"

@@ -1,7 +1,7 @@
 //! Path Validation Module
 //!
-//! Provides path sanitization and validation to prevent command injection attacks.
-//! Path validation module to prevent command injection attacks.
+//! Provides path sanitization and validation to prevent command injection
+//! attacks. Path validation module to prevent command injection attacks.
 
 use std::fmt;
 use std::path::Path;

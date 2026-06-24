@@ -14,7 +14,8 @@ pub enum TargetVideoFormat {
     HevcLosslessMkv,
     HevcMov,
     HevcMp4,
-    /// Explicit semantic for assets outside the current tool's processing domain.
+    /// Explicit semantic for assets outside the current tool's processing
+    /// domain.
     Ignored,
     Skip,
 }
@@ -136,50 +137,62 @@ impl ConversionConfig {
     pub const fn force(&self) -> bool {
         self.flags.contains(ConfigFlags::FORCE)
     }
+
     #[must_use]
     pub const fn delete_original(&self) -> bool {
         self.flags.contains(ConfigFlags::DELETE_ORIGINAL)
     }
+
     #[must_use]
     pub const fn explore_smaller(&self) -> bool {
         self.flags.contains(ConfigFlags::EXPLORE_SMALLER)
     }
+
     #[must_use]
     pub const fn match_quality(&self) -> bool {
         self.flags.contains(ConfigFlags::MATCH_QUALITY)
     }
+
     #[must_use]
     pub const fn in_place(&self) -> bool {
         self.flags.contains(ConfigFlags::IN_PLACE)
     }
+
     #[must_use]
     pub const fn require_compression(&self) -> bool {
         self.flags.contains(ConfigFlags::REQUIRE_COMPRESSION)
     }
+
     #[must_use]
     pub const fn apple_compat(&self) -> bool {
         self.flags.contains(ConfigFlags::APPLE_COMPAT)
     }
+
     #[must_use]
     pub const fn use_gpu(&self) -> bool {
         self.flags.contains(ConfigFlags::USE_GPU)
     }
+
     #[must_use]
     pub const fn force_ms_ssim_long(&self) -> bool {
         self.flags.contains(ConfigFlags::FORCE_MS_SSIM_LONG)
     }
+
     #[must_use]
     pub const fn ultimate_mode(&self) -> bool {
         self.flags.contains(ConfigFlags::ULTIMATE_MODE)
     }
+
     #[must_use]
     pub const fn archive_mode(&self) -> bool {
         self.flags.contains(ConfigFlags::ARCHIVE_MODE)
     }
+
     #[must_use]
     pub const fn allow_size_tolerance(&self) -> bool {
         self.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE)
     }
+
     #[must_use]
     pub const fn allow_hdr10plus_static_fallback(&self) -> bool {
         self.flags
@@ -272,6 +285,7 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn input_path(&self) -> &str {
         &self.input_path
     }
+
     fn output_path(&self) -> Option<&str> {
         if self.output_path.is_empty() {
             None
@@ -279,9 +293,11 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
             Some(&self.output_path)
         }
     }
+
     fn input_size(&self) -> u64 {
         self.input_size
     }
+
     fn output_size(&self) -> Option<u64> {
         if self.output_size == 0 {
             None
@@ -289,9 +305,11 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
             Some(self.output_size)
         }
     }
+
     fn message(&self) -> &str {
         &self.message
     }
+
     fn blake3(&self) -> Option<&str> {
         self.blake3.as_deref()
     }

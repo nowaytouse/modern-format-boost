@@ -7,9 +7,11 @@
 pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = MB;
 /// Default allowed size-growth ratio.
 pub const DEFAULT_SIZE_TOLERANCE_RATIO: f64 = 0.01;
-/// Minimum output size for images to be considered valid for deletion of original.
+/// Minimum output size for images to be considered valid for deletion of
+/// original.
 pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = KB;
-/// Minimum output size for videos to be considered valid for deletion of original.
+/// Minimum output size for videos to be considered valid for deletion of
+/// original.
 pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 4 * KB;
 /// Maximum memory allocation for image decoding (2GB).
 pub const IMAGE_DECODE_MAX_ALLOC_BYTES: u64 = 2 * GB;
@@ -76,11 +78,12 @@ pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 pub const HEAVY_VIDEO_THRESHOLD_SECS: f32 = 1200.0;
 pub const VMAF_SKIP_THRESHOLD_SECS: f32 = 1800.0;
 pub const VMAF_SKIP_THRESHOLD_ULTIMATE_SECS: f32 = 3600.0;
-/// When MS-SSIM / VMAF-style metrics switch from a single full pass to three-segment sampling.
-/// Same band as GPU sample duration (60s).
+/// When MS-SSIM / VMAF-style metrics switch from a single full pass to
+/// three-segment sampling. Same band as GPU sample duration (60s).
 pub const MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS: f64 = 60.0;
-/// Animated image CPU CRF search: above this duration, exploration encodes use three-segment
-/// timeline sampling. Uses [`ANIMATION_CLIP_THRESHOLD_SECS`] (short vs long animation split).
+/// Animated image CPU CRF search: above this duration, exploration encodes use
+/// three-segment timeline sampling. Uses [`ANIMATION_CLIP_THRESHOLD_SECS`]
+/// (short vs long animation split).
 pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 =
     ANIMATION_CLIP_THRESHOLD_SECS;
 /// Minimum duration (seconds) for converting animated images to HEVC video.
@@ -89,7 +92,8 @@ pub const UI_SIZE_REDUCTION_THRESHOLD: f64 = 5.0;
 pub const UI_ITERATION_RATIO_OK: f64 = 0.5;
 pub const UI_ITERATION_RATIO_WARN: f64 = 0.8;
 
-/// Fraction of total duration per segment (start / mid / end) for animated exploration sampling.
+/// Fraction of total duration per segment (start / mid / end) for animated
+/// exploration sampling.
 pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION: f64 = 0.15;
 /// Ultimate mode: wider segments.
 pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE: f64 = 0.25;
@@ -107,26 +111,27 @@ pub const LOOP_KNN_P90_BIAS_THRESHOLD_MULTIPLIER: f64 = 1.5;
 pub const DEFAULT_LOOP_BASELINE_DURATION_SECS: f64 = 2.0;
 /// Cold-start baseline minimum loop duration (seconds).
 ///
-/// Used when the global collection has no observed `duration_min`. Named here (rather
-/// than inlined as a magic literal) so the fallback is auditable and cannot
-/// masquerade as real data.
+/// Used when the global collection has no observed `duration_min`. Named here
+/// (rather than inlined as a magic literal) so the fallback is auditable and
+/// cannot masquerade as real data.
 pub const DEFAULT_LOOP_BASELINE_DURATION_MIN_SECS: f64 = 0.1;
-/// Cold-start baseline maximum loop duration (seconds) used when the global collection
-/// has no observed `duration_max`.
+/// Cold-start baseline maximum loop duration (seconds) used when the global
+/// collection has no observed `duration_max`.
 pub const DEFAULT_LOOP_BASELINE_DURATION_MAX_SECS: f64 = 30.0;
-/// Cold-start baseline p90 loop duration (seconds) used when the global collection
-/// has no observed `duration_p90`. Also acts as the minimum clamp floor for
-/// downstream override resolution.
+/// Cold-start baseline p90 loop duration (seconds) used when the global
+/// collection has no observed `duration_p90`. Also acts as the minimum clamp
+/// floor for downstream override resolution.
 pub const DEFAULT_LOOP_BASELINE_DURATION_P90_SECS: f64 = 0.35;
 /// Max dimension (w or h) typically used for stickers/emojis.
 pub const STICKER_MAX_DIMENSION: u32 = 512;
 /// "Bottom-line" size control: assets below this size are likely stickers.
 pub const STICKER_MAX_SIZE_BYTES: u64 = 1_572_864; // 1.5 MB
-/// Maximum duration (seconds) for the dimension-agnostic micro-clip GIF interception.
+/// Maximum duration (seconds) for the dimension-agnostic micro-clip GIF
+/// interception.
 ///
-/// Silent videos at or below this duration are treated as animated images regardless
-/// of resolution or file size — screen captures, UI demos, and motion graphics
-/// typically fall into this window.
+/// Silent videos at or below this duration are treated as animated images
+/// regardless of resolution or file size — screen captures, UI demos, and
+/// motion graphics typically fall into this window.
 pub const MICRO_CLIP_CEILING_SECS: f64 = DURATION_TIER_ULTRA_SHORT_LIMIT;
 // --- Tiered Duration Classification (Loop Intent) ---
 pub const DURATION_TIER_ULTRA_SHORT_LIMIT: f64 = 2.0;
@@ -146,36 +151,47 @@ pub const KNN_KEEP_PROB_MEME_THRESHOLD: f64 = 0.7;
 pub const KNN_DISTANCE_WEIGHT_SCALE: f64 = 3.0;
 pub const KNN_PRIOR_STRENGTH_BASE: f64 = 3.35;
 pub const KNN_PRIOR_STRENGTH_SLOPE: f64 = 2.0;
-/// Max blend weight for HDBSCAN cluster loop-prior at inference (HNSW neighbor vote is primary).
+/// Max blend weight for HDBSCAN cluster loop-prior at inference (HNSW neighbor
+/// vote is primary).
 pub const HDBSCAN_CLUSTER_MAX_WEIGHT: f64 = 0.28;
 /// L2 distance scale for cluster membership confidence: `exp(-dist / scale)`.
 pub const HDBSCAN_CLUSTER_DISTANCE_SCALE: f64 = 2.5;
 
 // --- Static image quality regression (LightGBM + KNN guardrails) ---
-/// When `|model_score - knn_dist_weighted|` exceeds this, optionally fuse toward KNN.
+/// When `|model_score - knn_dist_weighted|` exceeds this, optionally fuse
+/// toward KNN.
 pub const QUALITY_LGBM_KNN_DISAGREE_THRESHOLD: f64 = 0.20;
-/// Upper cap on weight given to KNN score during disagreement fusion (rest remains model).
+/// Upper cap on weight given to KNN score during disagreement fusion (rest
+/// remains model).
 pub const QUALITY_LGBM_KNN_DISAGREE_BLEND_CAP: f64 = 0.55;
 /// Minimum KNN confidence required to activate disagreement fusion.
 pub const QUALITY_LGBM_KNN_GUARD_MIN_CONFIDENCE: f64 = 0.70;
 /// Minimum neighbor coverage (`neighbor_count / k`) required for the guard.
 pub const QUALITY_LGBM_KNN_GUARD_MIN_COVERAGE: f64 = 0.90;
-/// `confidence *= neighbor_coverage.powf(this)` — values >1 penalize partial neighbor sets more than `sqrt`.
+/// `confidence *= neighbor_coverage.powf(this)` — values >1 penalize partial
+/// neighbor sets more than `sqrt`.
 pub const QUALITY_MODEL_CONFIDENCE_COVERAGE_EXP: f64 = 1.28;
-/// Reject model JSON when score/confidence drift outside `[0,1]` by more than this slack (bad runtime).
+/// Reject model JSON when score/confidence drift outside `[0,1]` by more than
+/// this slack (bad runtime).
 pub const QUALITY_MODEL_PROBABILITY_SLACK: f64 = 1e-3;
-/// Hard wall-clock cap for one `LightGBM` Python inference (process is killed on expiry).
+/// Hard wall-clock cap for one `LightGBM` Python inference (process is killed
+/// on expiry).
 pub const IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS: u64 = 40;
-/// Hard wall-clock cap for one `ffprobe` analysis subprocess (process is killed on expiry).
+/// Hard wall-clock cap for one `ffprobe` analysis subprocess (process is killed
+/// on expiry).
 pub const FFPROBE_TIMEOUT_SECS: u64 = 45;
-/// Hard wall-clock cap for one `ffmpeg` conversion subprocess (process is killed on expiry).
+/// Hard wall-clock cap for one `ffmpeg` conversion subprocess (process is
+/// killed on expiry).
 pub const FFMPEG_TIMEOUT_SECS: u64 = 2 * 60 * 60;
-/// Max bytes accepted from the model child `stdout` / `stderr` (defense-in-depth).
+/// Max bytes accepted from the model child `stdout` / `stderr`
+/// (defense-in-depth).
 pub const IMAGE_QUALITY_MODEL_MAX_IO_BYTES: usize = 512 * 1024;
-/// `loop_intent` HDBSCAN JSON catalogs must match this `version` to be fused at runtime.
+/// `loop_intent` HDBSCAN JSON catalogs must match this `version` to be fused at
+/// runtime.
 pub const SUPPORTED_LOOP_HDBSCAN_CATALOG_VERSION: u32 = 1;
-/// Default minimum in-radius HNSW neighbors before emitting a loop keep posterior.
-/// Override via [`ENV_LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS`] (e.g. `1` to relax).
+/// Default minimum in-radius HNSW neighbors before emitting a loop keep
+/// posterior. Override via [`ENV_LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS`] (e.g. `1`
+/// to relax).
 pub const LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS: usize = 2;
 
 // --- Imaging & Color ---
@@ -265,14 +281,14 @@ pub const LOG_ODDS_BIAS_VERY_LONG: f64 = -2.0;
 pub const LOG_ODDS_BIAS_DEFINITIVELY_LONG: f64 = -3.0;
 // --- Extreme Duration Hard-Veto Boundaries ---
 //
-// These are the ONLY two conditions where duration alone has absolute veto power.
-// All other thresholds (Short, MediumLong, etc.) only inject log-odds bias.
-// Architecture rule: NO signal outside of these two zones can override the verdict
-// by itself — it must still win through log-odds accumulation.
+// These are the ONLY two conditions where duration alone has absolute veto
+// power. All other thresholds (Short, MediumLong, etc.) only inject log-odds
+// bias. Architecture rule: NO signal outside of these two zones can override
+// the verdict by itself — it must still win through log-odds accumulation.
 /// Assets at or below this duration (silent) are definitively animated images.
 ///
-/// 6.0s — empirically covers virtually all real-world stickers, reactions, and memes
-/// without misclassifying intentional short video clips.
+/// 6.0s — empirically covers virtually all real-world stickers, reactions, and
+/// memes without misclassifying intentional short video clips.
 pub const EXTREME_SHORT_ABSOLUTE_LIMIT_SECS: f64 = 6.0;
 /// Assets at or above this duration are definitively video, regardless of any
 /// metadata signal (`loop_count`, transparency, platform markers, etc.).
@@ -283,11 +299,11 @@ pub const EXTREME_LONG_ABSOLUTE_LIMIT_SECS: f64 = 15.0;
 // The hard veto boundaries create a potential behavioral cliff:
 //   5.9s → Hard Veto → LoopStrong (certain)
 //   6.1s → Tier bias only → much weaker prior
-// The proximity ramp smooths this discontinuity by injecting a linearly-decaying
-// additional bias for assets just outside the veto zone:
+// The proximity ramp smooths this discontinuity by injecting a
+// linearly-decaying additional bias for assets just outside the veto zone:
 //   At the veto edge (6.0s + ε): full MAX_BIAS applied
-//   At the buffer boundary (8.0s): zero additional bias (only tier bias remains)
-// Result: 5.9s and 6.1s have nearly identical effective priors.
+//   At the buffer boundary (8.0s): zero additional bias (only tier bias
+// remains) Result: 5.9s and 6.1s have nearly identical effective priors.
 /// Width (in seconds) of the anti-cliff proximity ramp above the short veto.
 /// Covers 6.0–8.0s. Beyond this, only the standard tier bias applies.
 pub const EXTREME_SHORT_PROXIMITY_BUFFER_SECS: f64 = 2.0;
@@ -297,18 +313,20 @@ pub const EXTREME_SHORT_PROXIMITY_MAX_BIAS: f64 = 2.5;
 /// Width (in seconds) of the anti-cliff proximity ramp below the long veto.
 /// Covers 13.0–15.0s. Below this, only the standard tier bias applies.
 pub const EXTREME_LONG_PROXIMITY_BUFFER_SECS: f64 = 2.0;
-/// Maximum additional log-odds penalty at the veto edge (decays linearly to 0 at
-/// `EXTREME_LONG_ABSOLUTE_LIMIT_SECS - EXTREME_LONG_PROXIMITY_BUFFER_SECS`).
+/// Maximum additional log-odds penalty at the veto edge (decays linearly to 0
+/// at `EXTREME_LONG_ABSOLUTE_LIMIT_SECS - EXTREME_LONG_PROXIMITY_BUFFER_SECS`).
 pub const EXTREME_LONG_PROXIMITY_MAX_BIAS: f64 = 2.5;
 /// Upper bound on `width * height` for **GIF** assets.
 ///
-/// Refers to [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as
-/// a strong loop/sticker prior (not a `vid` strategy bypass). Larger canvases stay in Layer 4 / KNN.
+/// Refers to [`crate::loop_intent::evaluate_loop_tree`]: a silent,
+/// sticker-class canvas is treated as a strong loop/sticker prior (not a `vid`
+/// strategy bypass). Larger canvases stay in Layer 4 / KNN.
 pub const STICKER_TIER_NATIVE_GIF_MAX_PIXELS: u64 = 200_000;
 // 3. Physical Intensity & Bitrate Analysis
 /// Threshold for "Physical Intensity" (Pixels per second normalized).
 pub const PHYSICAL_INTENSITY_PASS_STRENGTH: f64 = 1.5;
-/// WebP compression ratio below which an asset is considered "High Quality Master".
+/// WebP compression ratio below which an asset is considered "High Quality
+/// Master".
 pub const MODERN_FORMAT_HIGH_BITRATE_RATIO: f64 = 8.0;
 /// FPS below which an animation is considered "PPT-like" slow-playback.
 pub const MODERN_FORMAT_PPT_FPS_THRESHOLD: f64 = 5.0;
@@ -319,85 +337,106 @@ pub const MODERN_FORMAT_LOW_BITRATE_RATIO: f64 = 15.0;
 pub const MODERN_FORMAT_ULTRA_HIGH_BITRATE_RATIO: f64 = 5.0;
 // 4. Fallback & Force Rules
 /// Hidden Layer 1-C developer hard-pass threshold (seconds).
-/// The core tree also uses this as the upper bound for its short-asset soft prior.
+/// The core tree also uses this as the upper bound for its short-asset soft
+/// prior.
 pub const HARD_PASS_SHORT_GIF_THRESHOLD_SECS: f64 = 10.0;
 /// Hidden long-silent/video-bias threshold (seconds).
-/// The core tree also uses this as the lower bound for its long-silent soft penalty.
+/// The core tree also uses this as the lower bound for its long-silent soft
+/// penalty.
 pub const MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS: f64 = 15.0;
 // 5. Environment Variable Names
 /// Toggle for modern format conversion bias ("1" = on, "0" = off).
 pub const ENV_MODERN_FORMAT_CONVERT_BIAS: &str = "MODERN_FORMAT_CONVERT_BIAS";
-/// Hidden developer toggle for Layer 1-C short-asset hard-pass ("1" = enable, default off).
+/// Hidden developer toggle for Layer 1-C short-asset hard-pass ("1" = enable,
+/// default off).
 pub const ENV_FORCE_SHORT_GIFS: &str = "MODERN_FORMAT_FORCE_SHORT_GIFS";
-/// Hidden developer toggle for Layer 1-D long-silent interceptor ("1" = enable, default off).
+/// Hidden developer toggle for Layer 1-D long-silent interceptor ("1" = enable,
+/// default off).
 pub const ENV_INTERCEPT_LONG_SILENT: &str = "MODERN_FORMAT_INTERCEPT_LONG_SILENT";
 /// Override for the sticker duration safe-limit (seconds).
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
-/// Bypass for the entire database-driven feedback loop (Dynamic weights, KNN, Logging).
+/// Bypass for the entire database-driven feedback loop (Dynamic weights, KNN,
+/// Logging).
 pub const ENV_DISABLE_DB_FEEDBACK: &str = "MODERN_FORMAT_DISABLE_DB_FEEDBACK";
-/// Independent kill-switch for the static image quality DB (does not affect GIF/Video KNN).
+/// Independent kill-switch for the static image quality DB (does not affect
+/// GIF/Video KNN).
 pub const ENV_DISABLE_IMAGE_QUALITY_DB: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB";
 /// Independent kill-switch for the real static image quality regressor.
 pub const ENV_DISABLE_IMAGE_QUALITY_MODEL: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_MODEL";
 /// Developer override to force KNN database lookup for static quality testing.
 pub const ENV_FORCE_QUALITY_KNN: &str = "MODERN_FORMAT_FORCE_QUALITY_KNN";
-/// Legacy name only — runtime uses [`ENV_DISABLE_LOOP_HDBSCAN_FUSION`] (default **on**).
+/// Legacy name only — runtime uses [`ENV_DISABLE_LOOP_HDBSCAN_FUSION`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION=1 to relax"
 )]
 pub const ENV_ENABLE_LOOP_HDBSCAN_FUSION: &str = "MODERN_FORMAT_ENABLE_LOOP_HDBSCAN_FUSION";
-/// Kill-switch: skip HDBSCAN cluster fusion (pure HNSW vote when loop KNN otherwise succeeds).
+/// Kill-switch: skip HDBSCAN cluster fusion (pure HNSW vote when loop KNN
+/// otherwise succeeds).
 pub const ENV_DISABLE_LOOP_HDBSCAN_FUSION: &str = "MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION";
 /// Override [`LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS`] (positive integer, e.g. `2`).
 pub const ENV_LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS: &str =
     "MODERN_FORMAT_LOOP_HNSW_MIN_WEIGHTED_NEIGHBORS";
-/// Kill-switch for KNN disagreement fusion (default **on** for all quality pipelines).
+/// Kill-switch for KNN disagreement fusion (default **on** for all quality
+/// pipelines).
 pub const ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD: &str =
     "MODERN_FORMAT_DISABLE_QUALITY_KNN_DISAGREE_GUARD";
-/// Legacy name only — use [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_QUALITY_KNN_DISAGREE_GUARD=1 to relax"
 )]
 pub const ENV_ENABLE_STATIC_QUALITY_KNN_DISAGREE_GUARD: &str =
     "MODERN_FORMAT_ENABLE_STATIC_QUALITY_KNN_DISAGREE_GUARD";
-/// Legacy name only — use [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_QUALITY_KNN_DISAGREE_GUARD=1 to relax"
 )]
 pub const ENV_ENABLE_SCENARIO_QUALITY_KNN_DISAGREE_GUARD: &str =
     "MODERN_FORMAT_ENABLE_SCENARIO_QUALITY_KNN_DISAGREE_GUARD";
-/// Opt-in only: corrupt/empty `loop_intent` `feature_stats` may use bootstrap defaults (default **off**).
+/// Opt-in only: corrupt/empty `loop_intent` `feature_stats` may use bootstrap
+/// defaults (default **off**).
 pub const ENV_LOOP_FEATURE_STATS_FAIL_OPEN: &str = "MODERN_FORMAT_LOOP_FEATURE_STATS_FAIL_OPEN";
-/// Kill-switch: force fail-closed `feature_stats` even when [`ENV_LOOP_FEATURE_STATS_FAIL_OPEN`] is set.
+/// Kill-switch: force fail-closed `feature_stats` even when
+/// [`ENV_LOOP_FEATURE_STATS_FAIL_OPEN`] is set.
 pub const ENV_DISABLE_LOOP_FEATURE_STATS_FAIL_OPEN: &str =
     "MODERN_FORMAT_DISABLE_LOOP_FEATURE_STATS_FAIL_OPEN";
-/// Legacy name only — use [`ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS`]
+/// (default **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS=1 to relax"
 )]
 pub const ENV_ENABLE_QUALITY_INFERENCE_HEURISTIC_LOGS: &str =
     "MODERN_FORMAT_ENABLE_QUALITY_INFERENCE_HEURISTIC_LOGS";
-/// Kill-switch: skip `inference_log` inserts on immature/heuristic/fallback quality branches.
+/// Kill-switch: skip `inference_log` inserts on immature/heuristic/fallback
+/// quality branches.
 pub const ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS: &str =
     "MODERN_FORMAT_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS";
 /// Legacy redundant with default strict corpus; kept for compatibility.
 pub const ENV_STRICT_ALGORITHM_CORPUS: &str = "MODERN_FORMAT_STRICT_ALGORITHM_CORPUS";
-/// Kill-switch: relax loop/quality corpus maturity to base floors (50/15 loop, 40/15 quality).
+/// Kill-switch: relax loop/quality corpus maturity to base floors (50/15 loop,
+/// 40/15 quality).
 pub const ENV_DISABLE_STRICT_ALGORITHM_CORPUS: &str =
     "MODERN_FORMAT_DISABLE_STRICT_ALGORITHM_CORPUS";
-/// Optional override for loop KNN minimum total samples (must be ≥ active floor).
+/// Optional override for loop KNN minimum total samples (must be ≥ active
+/// floor).
 pub const ENV_MIN_GIF_SAMPLES_TOTAL: &str = "MODERN_FORMAT_MIN_GIF_SAMPLES_TOTAL";
-/// Optional override for loop KNN minimum per-class samples (must be ≥ active floor).
+/// Optional override for loop KNN minimum per-class samples (must be ≥ active
+/// floor).
 pub const ENV_MIN_GIF_SAMPLES_PER_CLASS: &str = "MODERN_FORMAT_MIN_GIF_SAMPLES_PER_CLASS";
-/// Optional override for static/scenario quality KNN minimum total samples (must be ≥ active floor).
+/// Optional override for static/scenario quality KNN minimum total samples
+/// (must be ≥ active floor).
 pub const ENV_MIN_QUALITY_SAMPLES_TOTAL: &str = "MODERN_FORMAT_MIN_QUALITY_SAMPLES_TOTAL";
-/// Optional override for static/scenario quality KNN minimum per-class samples (must be ≥ active floor).
+/// Optional override for static/scenario quality KNN minimum per-class samples
+/// (must be ≥ active floor).
 pub const ENV_MIN_QUALITY_SAMPLES_PER_CLASS: &str = "MODERN_FORMAT_MIN_QUALITY_SAMPLES_PER_CLASS";
-/// Legacy name only — use [`ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_FUSION=1 to relax"
@@ -407,7 +446,8 @@ pub const ENV_ENABLE_SCENARIO_QUALITY_DB_FUSION: &str =
 /// Kill-switch: scenario (animated/video) DB quality fusion at detection.
 pub const ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION: &str =
     "MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_FUSION";
-/// Legacy name only — use [`ENV_DISABLE_STATIC_QUALITY_DB_FUSION`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_STATIC_QUALITY_DB_FUSION`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_STATIC_QUALITY_DB_FUSION=1 to relax"
@@ -417,7 +457,8 @@ pub const ENV_ENABLE_STATIC_QUALITY_DB_FUSION: &str =
 /// Kill-switch: static-image DB quality fusion at detection.
 pub const ENV_DISABLE_STATIC_QUALITY_DB_FUSION: &str =
     "MODERN_FORMAT_DISABLE_STATIC_QUALITY_DB_FUSION";
-/// Legacy name only — use [`ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_STATIC_QUALITY_DB_LOOKUP=1 to relax"
@@ -427,7 +468,8 @@ pub const ENV_ENABLE_STATIC_QUALITY_DB_LOOKUP: &str =
 /// Kill-switch: static / `img` convert quality DB lookup.
 pub const ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP: &str =
     "MODERN_FORMAT_DISABLE_STATIC_QUALITY_DB_LOOKUP";
-/// Legacy name only — use [`ENV_DISABLE_SCENARIO_QUALITY_DB_LOOKUP`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_SCENARIO_QUALITY_DB_LOOKUP`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_LOOKUP=1 to relax"
@@ -437,17 +479,20 @@ pub const ENV_ENABLE_SCENARIO_QUALITY_DB_LOOKUP: &str =
 /// Kill-switch: animated/video scenario quality DB lookup.
 pub const ENV_DISABLE_SCENARIO_QUALITY_DB_LOOKUP: &str =
     "MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_LOOKUP";
-/// Legacy name only — use [`ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_EXPLORATION_ALGORITHM_SEAL=1 to relax"
 )]
 pub const ENV_ENABLE_EXPLORATION_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_ENABLE_EXPLORATION_ALGORITHM_SEAL";
-/// Kill-switch: skip exploration output sealing (unit clamp still applies in [`crate::algorithm_seal`]).
+/// Kill-switch: skip exploration output sealing (unit clamp still applies in
+/// [`crate::algorithm_seal`]).
 pub const ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_ALGORITHM_SEAL";
-/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_LAYER6_KNN`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_LAYER6_KNN`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN=1 to relax"
@@ -455,75 +500,93 @@ pub const ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL: &str =
 pub const ENV_ENABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_ENABLE_LOOP_INTENT_LAYER6_KNN";
 /// Kill-switch for Layer 6 HNSW when the decision tree is uncertain.
 pub const ENV_DISABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN";
-/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_INFERENCE_LOG`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_INFERENCE_LOG`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_LOG=1 to relax"
 )]
 pub const ENV_ENABLE_LOOP_INTENT_INFERENCE_LOG: &str =
     "MODERN_FORMAT_ENABLE_LOOP_INTENT_INFERENCE_LOG";
-/// Kill-switch: skip loop `inference_log` persistence (requires DB feedback on).
+/// Kill-switch: skip loop `inference_log` persistence (requires DB feedback
+/// on).
 pub const ENV_DISABLE_LOOP_INTENT_INFERENCE_LOG: &str =
     "MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_LOG";
 /// Legacy redundant with default audit-only; kept for compatibility.
 pub const ENV_LOOP_INTENT_INFERENCE_AUDIT_ONLY: &str =
     "MODERN_FORMAT_LOOP_INTENT_INFERENCE_AUDIT_ONLY";
-/// Kill-switch: persist runtime `final_verdict` in `inference_log` (default: audit-only placeholder).
+/// Kill-switch: persist runtime `final_verdict` in `inference_log` (default:
+/// audit-only placeholder).
 pub const ENV_DISABLE_LOOP_INTENT_INFERENCE_AUDIT_ONLY: &str =
     "MODERN_FORMAT_DISABLE_LOOP_INTENT_INFERENCE_AUDIT_ONLY";
-/// `inference_log.final_verdict` placeholder when audit-only telemetry mode is on.
+/// `inference_log.final_verdict` placeholder when audit-only telemetry mode is
+/// on.
 pub const INFERENCE_TELEMETRY_ONLY_VERDICT: &str = "TelemetryOnly";
 /// Loop-table alias for [`INFERENCE_TELEMETRY_ONLY_VERDICT`].
 pub const LOOP_INFERENCE_TELEMETRY_ONLY_VERDICT: &str = INFERENCE_TELEMETRY_ONLY_VERDICT;
-/// Kill-switch: persist runtime quality `final_verdict` in quality `inference_log` tables.
+/// Kill-switch: persist runtime quality `final_verdict` in quality
+/// `inference_log` tables.
 pub const ENV_DISABLE_QUALITY_INFERENCE_AUDIT_ONLY: &str =
     "MODERN_FORMAT_DISABLE_QUALITY_INFERENCE_AUDIT_ONLY";
-/// `FFmpeg` SSIM stderr reports `inf` for identical frames; maps to a perfect parse value.
+/// `FFmpeg` SSIM stderr reports `inf` for identical frames; maps to a perfect
+/// parse value.
 pub const FFMPEG_SSIM_PERFECT_PARSE_VALUE: f64 = 1.0;
-/// SSIM formula degenerate denominator (variance zero) — not a fabricated explore confidence.
+/// SSIM formula degenerate denominator (variance zero) — not a fabricated
+/// explore confidence.
 pub const SSIM_DEGENERATE_MATCH_VALUE: f64 = 1.0;
-/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_ALGORITHM_SEAL`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_ALGORITHM_SEAL`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_INTENT_ALGORITHM_SEAL=1 to relax"
 )]
 pub const ENV_ENABLE_LOOP_INTENT_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_ENABLE_LOOP_INTENT_ALGORITHM_SEAL";
-/// Kill-switch: skip loop inference record / audit field sealing (unit clamp still applies).
+/// Kill-switch: skip loop inference record / audit field sealing (unit clamp
+/// still applies).
 pub const ENV_DISABLE_LOOP_INTENT_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_DISABLE_LOOP_INTENT_ALGORITHM_SEAL";
-/// Legacy name only — use [`ENV_DISABLE_QUALITY_ALGORITHM_SEAL`] (default **on**).
+/// Legacy name only — use [`ENV_DISABLE_QUALITY_ALGORITHM_SEAL`] (default
+/// **on**).
 #[deprecated(
     since = "0.11.4",
     note = "Default-on gate; set MODERN_FORMAT_DISABLE_QUALITY_ALGORITHM_SEAL=1 to relax"
 )]
 pub const ENV_ENABLE_QUALITY_ALGORITHM_SEAL: &str = "MODERN_FORMAT_ENABLE_QUALITY_ALGORITHM_SEAL";
-/// Kill-switch: skip [`crate::image_quality_db::QualityScore::sealed`] mutation (unit clamp still applies).
+/// Kill-switch: skip [`crate::image_quality_db::QualityScore::sealed`] mutation
+/// (unit clamp still applies).
 pub const ENV_DISABLE_QUALITY_ALGORITHM_SEAL: &str = "MODERN_FORMAT_DISABLE_QUALITY_ALGORITHM_SEAL";
 // --- Database Maturity Thresholds ---
-/// Maximum allowed static image quality samples per quality label class (high/low) in the database.
+/// Maximum allowed static image quality samples per quality label class
+/// (high/low) in the database.
 pub const STATIC_QUALITY_DB_CAP_PER_CLASS: i64 = 4000;
 /// Maximum allowed loop intent samples per label class in the database.
 pub const LOOP_INTENT_DB_CAP_PER_CLASS: i64 = 2000;
 // KNN results are unreliable when training data is too sparse or non-diverse.
-// These thresholds gate both the GIF/Video KNN and the static image quality KNN.
-/// Minimum total labeled samples required for GIF/Video KNN to engage (relaxed floor).
+// These thresholds gate both the GIF/Video KNN and the static image quality
+// KNN.
+/// Minimum total labeled samples required for GIF/Video KNN to engage (relaxed
+/// floor).
 pub const MIN_GIF_SAMPLES_TOTAL: i64 = 50;
 /// Minimum samples per class (high/video) for GIF/Video KNN (relaxed floor).
 pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 15;
-/// Stricter loop corpus floor (default unless [`ENV_DISABLE_STRICT_ALGORITHM_CORPUS`]).
+/// Stricter loop corpus floor (default unless
+/// [`ENV_DISABLE_STRICT_ALGORITHM_CORPUS`]).
 pub const MIN_GIF_SAMPLES_TOTAL_STRICT: i64 = 150;
 /// Stricter loop per-class floor (default unless disable kill-switch).
 pub const MIN_GIF_SAMPLES_PER_CLASS_STRICT: i64 = 30;
-/// Minimum total labeled samples required for static image KNN to engage (relaxed floor).
+/// Minimum total labeled samples required for static image KNN to engage
+/// (relaxed floor).
 pub const MIN_QUALITY_SAMPLES_TOTAL: i64 = 40;
 /// Minimum samples per class (high/low) for static image KNN (relaxed floor).
 pub const MIN_QUALITY_SAMPLES_PER_CLASS: i64 = 15;
 /// Stricter static/scenario corpus total (default unless disable kill-switch).
 pub const MIN_QUALITY_SAMPLES_TOTAL_STRICT: i64 = 60;
-/// Stricter static/scenario per-class floor (default unless disable kill-switch).
+/// Stricter static/scenario per-class floor (default unless disable
+/// kill-switch).
 pub const MIN_QUALITY_SAMPLES_PER_CLASS_STRICT: i64 = 25;
-/// Kill-switch: allow `quality_passed` when `size_target_met` explicitly failed.
+/// Kill-switch: allow `quality_passed` when `size_target_met` explicitly
+/// failed.
 pub const ENV_DISABLE_EXPLORATION_SIZE_TARGET_GATE: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_SIZE_TARGET_GATE";
 // --- Formats & Extensions ---
@@ -548,7 +611,8 @@ pub const FFMPEG_PRESET_VERYSLOW: &str = "veryslow";
 pub const FFMPEG_ENCODER_X264: &str = "libx264";
 pub const FFMPEG_ENCODER_X265: &str = "libx265";
 pub const FFMPEG_ENCODER_SVTAV1: &str = "libsvtav1";
-/// Above this source size, enable the low-memory x265 profile even when the codec is unknown.
+/// Above this source size, enable the low-memory x265 profile even when the
+/// codec is unknown.
 pub const X265_LOW_MEMORY_SOURCE_SIZE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Low-memory x265 profile: serialize frame encoding to cap peak RAM.
 pub const X265_LOW_MEMORY_FRAME_THREADS: usize = 1;
@@ -556,19 +620,24 @@ pub const X265_LOW_MEMORY_FRAME_THREADS: usize = 1;
 pub const X265_LOW_MEMORY_LOOKAHEAD_THREADS: usize = 1;
 /// Low-memory x265 profile: avoid per-slice lookahead fan-out on huge masters.
 pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
-/// Low-memory x265 profile: cap worker pools aggressively to keep RAM spikes in check.
+/// Low-memory x265 profile: cap worker pools aggressively to keep RAM spikes in
+/// check.
 pub const X265_LOW_MEMORY_MAX_POOLS: usize = 2;
-/// Current HEVC preset policy (`medium`/`slow`/`slower`) must tolerate x265's `slower` preset.
+/// Current HEVC preset policy (`medium`/`slow`/`slower`) must tolerate x265's
+/// `slower` preset.
 ///
-/// That preset can use up to 8 consecutive B-frames, so `rc-lookahead` must stay strictly
-/// above that count or x265 rejects the encode at startup.
+/// That preset can use up to 8 consecutive B-frames, so `rc-lookahead` must
+/// stay strictly above that count or x265 rejects the encode at startup.
 pub const X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES: usize = 8;
-/// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames, while
-/// still satisfying x265's strict `rc-lookahead > bframes` requirement.
+/// Low-memory x265 profile: shorten the lookahead queue to reduce buffered
+/// frames, while still satisfying x265's strict `rc-lookahead > bframes`
+/// requirement.
 pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES + 1;
-/// Moderate-memory x265 profile: cap worker pools but still leave room to scale on healthy systems.
+/// Moderate-memory x265 profile: cap worker pools but still leave room to scale
+/// on healthy systems.
 pub const X265_MODERATE_MEMORY_MAX_POOLS: usize = 6;
-/// Moderate-memory x265 profile: allow limited parallelism for systems with adequate RAM.
+/// Moderate-memory x265 profile: allow limited parallelism for systems with
+/// adequate RAM.
 pub const X265_MODERATE_MEMORY_FRAME_THREADS: usize = 3;
 /// Moderate-memory x265 profile: allow limited lookahead parallelism.
 pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 3;
@@ -587,7 +656,8 @@ pub const X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB: u64 = 8 * 1024;
 pub const X265_DEFAULT_RAM_RATIO_THRESHOLD: f64 = 0.25;
 /// Minimum RAM (MB) required to avoid the aggressive low-memory profile.
 pub const X265_MODERATE_RAM_THRESHOLD_MB: u64 = 4 * 1024;
-/// Minimum free-memory ratio required to stay above the aggressive low-memory profile.
+/// Minimum free-memory ratio required to stay above the aggressive low-memory
+/// profile.
 pub const X265_MODERATE_RAM_RATIO_THRESHOLD: f64 = 0.15;
 // 4. Default Search Parameters
 /// Starting CRF for quality-matched exploration.
@@ -645,30 +715,34 @@ pub const EXTENDED_SHORT_ASSET_SQUARE_BONUS: f64 = 0.04;
 pub const EXTENDED_SHORT_ASSET_IMAGE_BONUS: f64 = 0.05;
 pub const EXTENDED_SHORT_ASSET_COMPACT_BONUS: f64 = 0.05;
 pub const FEATURE_WEIGHT_DELAY_VAR: f64 = 0.18;
-// Reduced from 0.34: loop_closure_score measures pkt_size autocorrelation (codec behavior),
-// not visual loop closure. Abrupt memes have intentionally different first/last frames.
-// Retained at low weight as a secondary correlation signal for short content only.
+// Reduced from 0.34: loop_closure_score measures pkt_size autocorrelation
+// (codec behavior), not visual loop closure. Abrupt memes have intentionally
+// different first/last frames. Retained at low weight as a secondary
+// correlation signal for short content only.
 pub const FEATURE_WEIGHT_LOOP_CLOSURE: f64 = 0.12;
 pub const FEATURE_WEIGHT_MOTION_PERIODICITY: f64 = 0.22;
 pub const FEATURE_WEIGHT_LOOP_FREQUENCY: f64 = 0.16;
 pub const FEATURE_WEIGHT_SPARSE_CADENCE: f64 = 0.12;
-// Reduced from 0.10: temporal_jitter unfairly penalizes abrupt memes with intentional
-// frame delay variation (dramatic pause before punchline).
+// Reduced from 0.10: temporal_jitter unfairly penalizes abrupt memes with
+// intentional frame delay variation (dramatic pause before punchline).
 pub const FEATURE_WEIGHT_TEMPORAL_JITTER: f64 = 0.06;
 pub const FEATURE_WEIGHT_WEBP_RATIO: f64 = 0.16;
 pub const FEATURE_WEIGHT_MOTION_GINI: f64 = 0.14;
 pub const FEATURE_WEIGHT_PALETTE_DEPTH: f64 = 0.12;
 pub const FEATURE_WEIGHT_TEMPORAL_FLATNESS: f64 = 0.10;
 // New zero-cost signals from existing LoopMeta data:
-// I-frame ratio: GIF→MP4 transcodes produce all-I-frame streams; real video has GOP structure.
+// I-frame ratio: GIF→MP4 transcodes produce all-I-frame streams; real video has
+// GOP structure.
 pub const FEATURE_WEIGHT_IFRAME_RATIO: f64 = 0.30;
-// Bytes per frame: GIF-class content has much lower bytes_per_frame than real video.
+// Bytes per frame: GIF-class content has much lower bytes_per_frame than real
+// video.
 pub const FEATURE_WEIGHT_BYTES_PER_FRAME: f64 = 0.18;
 pub const FRAME_COUNT_SHORT_BONUS: f64 = 0.05;
 pub const FRAME_COUNT_LONG_PENALTY: f64 = 0.10;
 pub const SQUARE_ASPECT_BONUS: f64 = 0.08;
 pub const WIDESCREEN_ASPECT_PENALTY: f64 = 0.10;
-// 9:16 portrait (TikTok/Reels/Shorts standard) is a strong video signal, symmetric with 16:9.
+// 9:16 portrait (TikTok/Reels/Shorts standard) is a strong video signal,
+// symmetric with 16:9.
 pub const PORTRAIT_ASPECT_PENALTY: f64 = 0.10;
 pub const FPS_ANOMALY_BONUS: f64 = 0.04;
 pub const LONG_SILENT_PENALTY_BASE: f64 = 0.22;
@@ -733,7 +807,8 @@ pub const HEURISTIC_LOSSLESS_COLOR_DIVERSITY_MAX: f64 = 0.45;
 pub const HEURISTIC_LOSSLESS_NOISE_LEVEL_MAX: f64 = 0.15;
 /// Minimum confidence required to accept a heuristic lossless verdict.
 pub const HEURISTIC_LOSSLESS_CONFIDENCE_MIN: f64 = 0.75;
-/// Content types that are highly credible for lossless detection (e.g. digital sources).
+/// Content types that are highly credible for lossless detection (e.g. digital
+/// sources).
 pub const HEURISTIC_LOSSLESS_CREDIBLE_TYPES: &[&str] = &[
     "SCREENSHOT",
     "MOBILE_SCREENSHOT",
@@ -790,7 +865,8 @@ pub const DENSITY_TO_CRF_LUT: &[(f64, u8)] = &[
 pub const CRF_TARGET_VISUALLY_LOSSLESS: f32 = 18.0;
 /// Target CRF for standard quality sources.
 pub const CRF_TARGET_STANDARD: f32 = 30.0;
-/// Minimum quality score (0-100) to be considered a high-quality master candidate.
+/// Minimum quality score (0-100) to be considered a high-quality master
+/// candidate.
 pub const QUALITY_SCORE_HIGH_THRESHOLD: u8 = 90;
 /// Expected size reduction (%) for JPEG to JXL lossless reconstruction.
 pub const EXPECTED_REDUCTION_JXL_LOSSLESS_JPEG: f32 = 15.0;
@@ -866,13 +942,15 @@ pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
 pub const STAGE_B_BIDIRECTIONAL_MAX_ITERATIONS: u32 = 18;
 pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 pub const GLOBAL_MAX_ITERATIONS: u32 = 500;
-/// SSIM delta below which the search is considered to have plateaued (converged).
+/// SSIM delta below which the search is considered to have plateaued
+/// (converged).
 pub const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
 /// The Golden Ratio (phi) used in search optimization.
 pub const PHI: f32 = 0.618;
 /// Minimum CRF change rate allowed before search deceleration triggers.
 pub const CHANGE_RATE_THRESHOLD: f64 = 0.005;
-/// Files below this size are considered "small" for compression verification (10MB).
+/// Files below this size are considered "small" for compression verification
+/// (10MB).
 pub const SMALL_FILE_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
 
 pub const MOV_OVERHEAD_PERCENT: f64 = 0.005;
@@ -883,7 +961,8 @@ pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 100;
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
 // --- Additional Quality & Duration Boundaries ---
-/// FPS below which an animation is considered "PPT-like" slow-playback. (Duplicated from loop intent section for visibility)
+/// FPS below which an animation is considered "PPT-like" slow-playback.
+/// (Duplicated from loop intent section for visibility)
 pub const PPT_FPS_THRESHOLD: f64 = 5.0;
 /// Negligible duration for effectively static images (seconds).
 pub const NEGLIGIBLE_DURATION_SECS: f64 = 0.01;
@@ -939,9 +1018,11 @@ pub const TOOL_OSASCRIPT: &str = "osascript";
 // --- SVT-AV1 Defaults ---
 /// Default preset for SVT-AV1 (6 = medium delivery window).
 pub const FFMPEG_SVTAV1_DEFAULT_PRESET: &str = "6";
-/// Slower delivery-window preset for SVT-AV1 (2 = matches `crate::types::Preset::Slower`).
+/// Slower delivery-window preset for SVT-AV1 (2 = matches
+/// `crate::types::Preset::Slower`).
 pub const FFMPEG_SVTAV1_SLOWER_PRESET: &str = "2";
-/// Slowest archive preset for SVT-AV1 (0 = matches `crate::types::Preset::Veryslow`).
+/// Slowest archive preset for SVT-AV1 (0 = matches
+/// `crate::types::Preset::Veryslow`).
 pub const FFMPEG_SVTAV1_SLOWEST_PRESET: &str = "0";
 // --- FFmpeg Command Flags & Arguments ---
 pub const FFMPEG_ARG_OVERWRITE: &str = "-y";
@@ -993,9 +1074,11 @@ pub const JXL_DEFAULT_EFFORT: u8 = 7;
 pub const JXL_DEEP_EFFORT: u8 = 8;
 /// Lossless-only experimental effort candidate.
 pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
-/// Disabled production effort due to the documented e9/e10 efficiency inversion.
+/// Disabled production effort due to the documented e9/e10 efficiency
+/// inversion.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
-/// Runtime JXL policy: default mode always emits `e7`, ultimate mode always emits `e10`.
+/// Runtime JXL policy: default mode always emits `e7`, ultimate mode always
+/// emits `e10`.
 #[must_use]
 pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
     if ultimate {
@@ -1004,7 +1087,8 @@ pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
         JXL_DEFAULT_EFFORT
     }
 }
-/// Runtime JXL policy: only production effort-search candidates are supported by default.
+/// Runtime JXL policy: only production effort-search candidates are supported
+/// by default.
 #[must_use]
 pub const fn is_supported_jxl_effort(effort: u8) -> bool {
     effort == JXL_DEFAULT_EFFORT || effort == JXL_DEEP_EFFORT || effort == JXL_ULTIMATE_EFFORT
@@ -1015,7 +1099,8 @@ pub const fn is_supported_jxl_effort_with_expert(effort: u8, allow_expert_option
     is_supported_jxl_effort(effort)
         || (allow_expert_options && effort == JXL_EXPERIMENTAL_LOSSLESS_EFFORT)
 }
-/// Runtime JXL policy: ultimate mode pins the distance to [`JXL_ULTIMATE_DISTANCE`].
+/// Runtime JXL policy: ultimate mode pins the distance to
+/// [`JXL_ULTIMATE_DISTANCE`].
 #[must_use]
 pub const fn jxl_distance_for_mode(requested_distance: f32, ultimate: bool) -> f32 {
     if ultimate {
@@ -1030,7 +1115,8 @@ pub const JXL_EXPLORE_FLOOR: f32 = JXL_ULTIMATE_DISTANCE;
 /// Hard ceiling — exploration MUST stay strictly below this value.
 pub const JXL_EXPLORE_CEILING: f32 = f32::from_bits(1.0f32.to_bits() - 1);
 /// Binary search convergence threshold: stop when hi − lo < this value.
-/// Set to floor/10 so that the narrowest bracket still resolves a meaningful distance delta.
+/// Set to floor/10 so that the narrowest bracket still resolves a meaningful
+/// distance delta.
 pub const JXL_EXPLORE_BINARY_SEARCH_PRECISION: f32 = JXL_EXPLORE_FLOOR / 10.0;
 /// Maximum total exploration iterations across both phases.
 pub const JXL_EXPLORE_MAX_ITERATIONS: u32 = 50;
@@ -1053,7 +1139,8 @@ pub const VAL_P4: &str = "p4";
 pub const VAL_HQ: &str = "hq";
 pub const VAL_VBR: &str = "vbr";
 // --- Prototypical Priors & Scoring Fallbacks ---
-/// Default probability/affinity prior when feature data is missing (0.5 = Neutral).
+/// Default probability/affinity prior when feature data is missing (0.5 =
+/// Neutral).
 pub const DEFAULT_SCORE_PRIOR: f64 = 0.5;
 /// Default aspect ratio fallback (1.0 = Square).
 pub const DEFAULT_ASPECT_RATIO: f64 = 1.0;
@@ -1063,11 +1150,13 @@ pub const DEFAULT_COMPRESSION_RATIO: f64 = 1.0;
 pub const DEFAULT_PALETTE_SIZE: f64 = 256.0;
 /// Default frame complexity/payload fallback.
 pub const DEFAULT_COMPLEXITY_PRIOR: f64 = 0.5;
-/// Default quality fallback for JPEG files when markers are unreadable (85 = Standard High).
+/// Default quality fallback for JPEG files when markers are unreadable (85 =
+/// Standard High).
 pub const FALLBACK_QUALITY_JPEG: u8 = 85;
 /// Default compression level for PNG files when unknown (6 = Medium).
 pub const FALLBACK_COMPRESSION_PNG: u8 = 6;
-/// Default CRF fallback for video when BPP-to-CRF LUT fails (35 = Safe Standard).
+/// Default CRF fallback for video when BPP-to-CRF LUT fails (35 = Safe
+/// Standard).
 pub const FALLBACK_CRF_VIDEO: f32 = 35.0;
 /// Default quality fallback for AVIF files (85).
 pub const FALLBACK_QUALITY_AVIF: u8 = 85;
@@ -1159,12 +1248,15 @@ pub const SHARPNESS_SAMPLING_STEP_NORMAL: usize = 1;
 pub const CONTRAST_SAMPLING_STEP_LARGE: usize = 20;
 pub const CONTRAST_SAMPLING_STEP_MEDIUM: usize = 10;
 pub const CONTRAST_SAMPLING_STEP_NORMAL: usize = 1;
-/// Plenty of RAM (low pressure): relaxed tier when ratio/avail above this (wider fast path).
+/// Plenty of RAM (low pressure): relaxed tier when ratio/avail above this
+/// (wider fast path).
 pub const MEMORY_PRESSURE_LOW_RATIO: f64 = 0.24;
 pub const MEMORY_PRESSURE_LOW_MIN_MB: u64 = 2560;
-/// Normal band floor: below this → `MemoryPressure::High` (sensitive tightening).
+/// Normal band floor: below this → `MemoryPressure::High` (sensitive
+/// tightening).
 pub const MEMORY_PRESSURE_NORMAL_RATIO: f64 = 0.26;
-/// Minimum duration for a video to be considered "long" for loop intent (0.05s).
+/// Minimum duration for a video to be considered "long" for loop intent
+/// (0.05s).
 pub const LOOP_INTENT_SHORT_DURATION_THRESHOLD: f64 = 0.05;
 /// Default baseline duration for loop inference (4.5s).
 pub const LOOP_INTENT_BASELINE_DURATION: f64 = 4.5;
@@ -1196,7 +1288,8 @@ pub const IMAGE_DETECTION_CONFIDENCE_BASE_HIGH: f64 = 0.9;
 pub const IMAGE_DETECTION_CONFIDENCE_BASE_LOW: f64 = 0.5;
 /// Bonus increment for each additional positive loop signal (0.06).
 pub const LOOP_INTENT_BONUS_INCREMENT: f64 = 0.06;
-/// Minimum |log-odds delta| for trace-level signal audit (`log_odds_signal_accumulated`).
+/// Minimum |log-odds delta| for trace-level signal audit
+/// (`log_odds_signal_accumulated`).
 pub const LOOP_INTENT_LOG_ODDS_SIGNAL_TRACE_MIN: f64 = 0.25;
 /// Default negative bias for loop intent when signals are weak (-0.08).
 pub const LOOP_INTENT_NEGATIVE_BIAS_DEFAULT: f64 = -0.08;
@@ -1276,11 +1369,14 @@ pub const KNN_VECTOR_FPS_MIN_LIMIT: f64 = 1e-3;
 pub const EXPLORATION_VMAF_Y_SANITY_FLOOR: f64 = 86.0;
 /// PSNR UV-channel sanity floor for high-quality exploration (30.0).
 pub const EXPLORATION_PSNR_UV_SANITY_FLOOR: f64 = 30.0;
-/// GPU coarse Phase-2 plateau hint: VMAF-Y already very high (log/heuristic only, not a gate floor).
+/// GPU coarse Phase-2 plateau hint: VMAF-Y already very high (log/heuristic
+/// only, not a gate floor).
 pub const EXPLORATION_GPU_QUALITY_PLATEAU_VMAF_HINT: f64 = 97.0;
-/// GPU coarse Phase-2 plateau hint: mean PSNR-UV already very high (log/heuristic only).
+/// GPU coarse Phase-2 plateau hint: mean PSNR-UV already very high
+/// (log/heuristic only).
 pub const EXPLORATION_GPU_QUALITY_PLATEAU_PSNR_UV_HINT: f64 = 47.0;
-/// Gain threshold for stopping exploration when improvement is negligible (0.00005).
+/// Gain threshold for stopping exploration when improvement is negligible
+/// (0.00005).
 pub const EXPLORATION_ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 /// Decay factor for step adjustments during binary search (0.4).
 pub const EXPLORATION_DECAY_FACTOR: f32 = 0.4;
@@ -1434,24 +1530,29 @@ pub const PNG_PALETTE_FACTOR_MIN: f64 = 0.1;
 pub const PNG_ENTROPY_RATIO_THRESHOLD_HIGH: f64 = 0.6;
 pub const PNG_ENTROPY_RATIO_THRESHOLD_LOW: f64 = 0.5;
 pub const PNG_COLORS_PER_MP_THRESHOLD: f64 = 50.0;
-/// Legacy fixed exploration confidence literals (do not use for new paths; use measured breakdown).
+/// Legacy fixed exploration confidence literals (do not use for new paths; use
+/// measured breakdown).
 pub const EXPLORE_CONFIDENCE_HIGH: f64 = 0.85;
 pub const EXPLORE_CONFIDENCE_NORMAL: f64 = 0.75;
 pub const EXPLORE_CONFIDENCE_MEDIUM: f64 = 0.7;
 pub const EXPLORE_CONFIDENCE_LOW: f64 = 0.6;
-/// Minimum sealed exploration confidence required when `quality_passed` (default gate on).
+/// Minimum sealed exploration confidence required when `quality_passed`
+/// (default gate on).
 pub const MIN_EXPLORATION_CONFIDENCE: f64 = 0.5;
-/// Kill-switch: allow `quality_passed` without meeting [`MIN_EXPLORATION_CONFIDENCE`].
-/// Kill-switch: relax static conversion gates and strict exploration delivery defaults.
+/// Kill-switch: allow `quality_passed` without meeting
+/// [`MIN_EXPLORATION_CONFIDENCE`]. Kill-switch: relax static conversion gates
+/// and strict exploration delivery defaults.
 pub const ENV_DISABLE_STRICT_MEDIA_CONVERSION: &str =
     "MODERN_FORMAT_DISABLE_STRICT_MEDIA_CONVERSION";
 
 pub const ENV_DISABLE_EXPLORATION_CONFIDENCE_GATE: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_CONFIDENCE_GATE";
-/// Kill-switch: allow `quality_passed` without a measured SSIM value on the explore result.
+/// Kill-switch: allow `quality_passed` without a measured SSIM value on the
+/// explore result.
 pub const ENV_DISABLE_EXPLORATION_SSIM_PRESENCE_GATE: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_SSIM_PRESENCE_GATE";
-/// Kill-switch: allow `quality_passed` when measured SSIM is below `actual_min_ssim`.
+/// Kill-switch: allow `quality_passed` when measured SSIM is below
+/// `actual_min_ssim`.
 pub const ENV_DISABLE_EXPLORATION_SSIM_THRESHOLD_GATE: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_SSIM_THRESHOLD_GATE";
 pub const EXPLORE_BINARY_SEARCH_PRECISION_SIZE: f32 = 0.5;
@@ -1586,7 +1687,8 @@ pub const JPEG_SSE_WEIGHTS: [[f64; 8]; 8] = [
 pub const MICROSECONDS_PER_SECOND: f64 = 1_000_000.0;
 pub const MSSSIM_PROGRESS_PRINT_STEP: u32 = 10;
 pub const DURATION_THRESHOLD_SUSPICIOUS: f32 = 0.25;
-/// Placeholder duration when cadence is degenerate (single-frame); not a measured value.
+/// Placeholder duration when cadence is degenerate (single-frame); not a
+/// measured value.
 pub const DURATION_UNKNOWN_PLACEHOLDER_SECS: f32 = 0.0;
 pub const DURATION_THRESHOLD_MIN: f32 = 0.01;
 pub const FALLBACK_FPS: f32 = 10.0;
@@ -1608,9 +1710,11 @@ pub const LOOP_INTENT_FRAME_COUNT_LONG_LIMIT: u64 = 500;
 pub const LOOP_INTENT_MOTION_ENVELOPE_REDUCTION: f64 = 0.70;
 /// I-frame ratio low-veto threshold for identifying real video (0.15).
 pub const LOOP_INTENT_IFRAME_RATIO_LOW_VETO: f64 = 0.15;
-/// I-frame ratio high-veto threshold for identifying transcoded animations (0.85).
+/// I-frame ratio high-veto threshold for identifying transcoded animations
+/// (0.85).
 pub const LOOP_INTENT_IFRAME_RATIO_HIGH_VETO: f64 = 0.85;
-/// Support relief multiplier for motion gini when loop/periodicity is strong (0.35).
+/// Support relief multiplier for motion gini when loop/periodicity is strong
+/// (0.35).
 pub const LOOP_INTENT_SUPPORT_RELIEF_STRONG: f64 = 0.35;
 /// Support relief multiplier for motion gini in short silent assets (0.55).
 pub const LOOP_INTENT_SUPPORT_RELIEF_WEAK: f64 = 0.55;
@@ -2519,7 +2623,8 @@ pub const JXL_BREAK_EVEN_RATIO_PCT: f64 = 105.0;
 // --- Common Video Resolutions (Wave 13) ---
 pub const RES_FHD_W: u32 = 1920;
 pub const RES_FHD_H: u32 = 1080;
-// Note: 1280x720 and 3840x2160 are already defined in Wave 10 as RES_HD_W/H and RES_4K_W/H.
+// Note: 1280x720 and 3840x2160 are already defined in Wave 10 as RES_HD_W/H and
+// RES_4K_W/H.
 
 // --- Exploration & Convergence (Wave 13) ---
 pub const EXPLORE_VARIANCE_THRESHOLD: f64 = 1e-6;
@@ -2534,17 +2639,22 @@ pub const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = 2;
 pub const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = 10;
 pub const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
-/// GPU coarse search: tolerate up to N consecutive compressions before phase transition.
+/// GPU coarse search: tolerate up to N consecutive compressions before phase
+/// transition.
 pub const GPU_COARSE_MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
-/// GPU coarse search: tolerate up to N consecutive encode failures before giving up on this phase.
+/// GPU coarse search: tolerate up to N consecutive encode failures before
+/// giving up on this phase.
 pub const GPU_COARSE_MAX_CONSECUTIVE_FAILURES: u32 = 2;
-/// GPU coarse search: bail when size stops improving for this many upward probes.
+/// GPU coarse search: bail when size stops improving for this many upward
+/// probes.
 pub const GPU_COARSE_UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
-/// GPU coarse search: hard cap on upward-direction switches before aborting the sweep.
+/// GPU coarse search: hard cap on upward-direction switches before aborting the
+/// sweep.
 pub const GPU_COARSE_UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
 
-/// Precheck FPS sanity ranges. Videos with FPS above `PRECHECK_FPS_THRESHOLD_INVALID`
-/// are treated as metadata corruption and rejected.
+/// Precheck FPS sanity ranges. Videos with FPS above
+/// `PRECHECK_FPS_THRESHOLD_INVALID` are treated as metadata corruption and
+/// rejected.
 pub const PRECHECK_FPS_RANGE_NORMAL: (f64, f64) = (1.0, 240.0);
 pub const PRECHECK_FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
 pub const PRECHECK_FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0);
@@ -2706,7 +2816,8 @@ pub const GIFSKI_ARG_HEIGHT: &str = "--height";
 pub const GIFSKI_ARG_REPEAT: &str = "--repeat";
 
 // --- Loop Intent Hierarchical Decision Tree (Wave 19) ---
-/// Metadata trust level for GIF (NETSCAPE2.0) and authoritative containers (1.0).
+/// Metadata trust level for GIF (NETSCAPE2.0) and authoritative containers
+/// (1.0).
 pub const METADATA_TRUST_AUTHORITATIVE: f64 = 1.0;
 /// Metadata trust level for modern animated containers (0.85).
 pub const METADATA_TRUST_MODERN_ANIMATED: f64 = 0.85;
@@ -2966,7 +3077,8 @@ pub const FFPROBE_ARG_SHOW_ENTRIES: &str = "-show_entries";
 pub const FFPROBE_ARG_SELECT_STREAMS: &str = "-select_streams";
 pub const FFPROBE_ARG_PRINT_FORMAT: &str = "-print_format";
 pub const FFPROBE_ARG_READ_INTERVALS: &str = "-read_intervals";
-/// CONTRACT: `run_ffprobe_json` frame entries — must include `side_data_list` for HDR10+.
+/// CONTRACT: `run_ffprobe_json` frame entries — must include `side_data_list`
+/// for HDR10+.
 pub const FFPROBE_FRAME_SHOW_ENTRIES: &str = "frame=pict_type,pkt_pts_time,pkt_size,side_data_list";
 pub const FFPROBE_ARG_COUNT_FRAMES: &str = "-count_frames";
 pub const FFPROBE_ARG_PATTERN_TYPE: &str = "-pattern_type";
@@ -3372,25 +3484,31 @@ pub const BRAND_BELKASOFT: &str = "belkasoft";
 pub const ENV_VERBOSE: &str = "IMGQUALITY_VERBOSE";
 pub const ENV_DEBUG: &str = "IMGQUALITY_DEBUG";
 pub const ENV_MFB_HOME_ROOT: &str = "MFB_HOME_ROOT";
-/// Default dot-directory under `$HOME` for persistent MFB state (logs, cache layout).
+/// Default dot-directory under `$HOME` for persistent MFB state (logs, cache
+/// layout).
 pub const MFB_DEFAULT_HOME_DIRNAME: &str = ".modern_format_boost";
 pub const ENV_MFB_PROGRESS_DIR: &str = "MFB_PROGRESS_DIR";
 pub const ENV_MFB_LOG_DIR: &str = "MFB_LOG_DIR";
-/// Include ``mfb::progress`` tracing and run-log progress lines in forensic log files (default off).
+/// Include ``mfb::progress`` tracing and run-log progress lines in forensic log
+/// files (default off).
 pub const ENV_MFB_LOG_PROGRESS: &str = "MFB_LOG_PROGRESS";
 pub const ENV_MFB_DEBUG_DIR: &str = "MFB_DEBUG_DIR";
 pub const ENV_MFB_SKIP_DISK_PRECHECK: &str = "MFB_SKIP_DISK_PRECHECK";
 pub const ENV_MFB_PG_CONNSTR: &str = "MFB_PG_CONNSTR";
 pub const ENV_MFB_LOW_MEMORY: &str = "MFB_LOW_MEMORY";
 pub const ENV_MFB_MULTI_INSTANCE: &str = "MFB_MULTI_INSTANCE";
-/// Force performance governor tier: `relaxed` | `balanced` | `tight` (aliases: wide/normal/strict).
+/// Force performance governor tier: `relaxed` | `balanced` | `tight` (aliases:
+/// wide/normal/strict).
 pub const ENV_MFB_PERF_TIER: &str = "MFB_PERF_TIER";
-/// Minimum seconds between live RAM/tier reprobes during long Python scans (default 6).
+/// Minimum seconds between live RAM/tier reprobes during long Python scans
+/// (default 6).
 pub const ENV_MFB_PERF_REPROBE_SECS: &str = "MFB_PERF_REPROBE_SECS";
-/// Set to `1` to allow multiple concurrent ``run_training.py`` (not recommended on one machine).
+/// Set to `1` to allow multiple concurrent ``run_training.py`` (not recommended
+/// on one machine).
 pub const ENV_MFB_TRAINING_ALLOW_PARALLEL: &str = "MFB_TRAINING_ALLOW_PARALLEL";
 pub const ENV_MFB_TRAINING_SOURCE_MAP: &str = "MFB_TRAINING_SOURCE_MAP";
-/// Training C-API ingest progress on stderr (`[INGEST-RUST]`). Default on; set `0`/`false` to disable.
+/// Training C-API ingest progress on stderr (`[INGEST-RUST]`). Default on; set
+/// `0`/`false` to disable.
 pub const ENV_MFB_TRAINING_INGEST_PROGRESS: &str = "MFB_TRAINING_INGEST_PROGRESS";
 pub const ENV_MFB_FFPROBE_TIMEOUT_SECS: &str = "MFB_FFPROBE_TIMEOUT_SECS";
 pub const ENV_MFB_FFMPEG_TIMEOUT_SECS: &str = "MFB_FFMPEG_TIMEOUT_SECS";
@@ -3401,7 +3519,8 @@ pub const ENV_MFB_QUALITY_MODEL_PYTHON: &str = "MFB_QUALITY_MODEL_PYTHON";
 pub const ENV_MFB_IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS: &str =
     "MFB_IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS";
 pub const ENV_FORCE_COLOR: &str = "FORCE_COLOR";
-/// Force ASCII symbols and strip decorative ANSI on stderr (also implied by `NO_COLOR`).
+/// Force ASCII symbols and strip decorative ANSI on stderr (also implied by
+/// `NO_COLOR`).
 pub const ENV_PLAIN_UI: &str = "MODERN_FORMAT_PLAIN_UI";
 pub const ENV_COLUMNS: &str = "COLUMNS";
 pub const ENV_APPLE_COMPAT: &str = "MODERN_FORMAT_BOOST_APPLE_COMPAT";

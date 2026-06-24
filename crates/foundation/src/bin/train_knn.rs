@@ -28,7 +28,8 @@ struct Cli {
 enum IntentLabel {
     /// Pure Loop (e.g. Meme stickers, simple animations, GIF/WebP loops)
     Loop,
-    /// Non-Looping dynamic content (e.g. Full animations, screen recordings, video clips)
+    /// Non-Looping dynamic content (e.g. Full animations, screen recordings,
+    /// video clips)
     NonLoop,
     /// Video-encapsulated Loop (e.g. Telegram Video Stickers, short MP4 loops)
     VideoLoop,

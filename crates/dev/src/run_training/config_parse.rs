@@ -491,7 +491,8 @@ pub fn load_rules(rules_file: &Path, local_rules_file: Option<&Path>) -> Result<
                 }
                 existing.sources.local_dirs = merged_dirs;
             }
-            // unknown keys in local are silently ignored (py: raises ValueError)
+            // unknown keys in local are silently ignored (py: raises
+            // ValueError)
         }
 
         let local_animated =

@@ -8,7 +8,8 @@
 //!
 //! Callers must not insert stages without updating this list and the tracing
 //! branch labels in `lookup_image_quality_with_path`:
-//! 1. Animated inputs with `Some(path)` → delegated to `scenario_quality_lookup`.
+//! 1. Animated inputs with `Some(path)` → delegated to
+//!    `scenario_quality_lookup`.
 //! 2. Animated inputs without path → `None` (caller must supply path).
 //! 3. DB disabled → heuristic only (no TCP).
 //! 3. `PostgreSQL` unavailable → heuristic only (no TCP).
@@ -16,9 +17,11 @@
 //! 5. Embedding extraction failed → refuse score.
 //! 6. KNN returned zero rows / unusable / query error → refuse score.
 //! 7. `LightGBM` subprocess when artifacts exist and model env not disabled.
-//! 8. `LightGBM` missing or error → **`None`** (no KNN-only / hybrid bootstrap decision scores).
+//! 8. `LightGBM` missing or error → **`None`** (no KNN-only / hybrid bootstrap
+//!    decision scores).
 //! 9. `ENV_FORCE_QUALITY_KNN` → refused (`force_knn_env_refused`).
-//! 10. Inference log on successful `LightGbm` branch only (no fabricated Phase-34 fallback).
+//! 10. Inference log on successful `LightGbm` branch only (no fabricated
+//!     Phase-34 fallback).
 //!
 //! Features:
 //! - 256D Physics-based Embedding (Color Moments, DCT, HOG, Entropy, BPP)
@@ -71,12 +74,14 @@ impl StaticQualityDbBranch {
         }
     }
 
-    /// Successful predictor branches that may write inference logs under tightened defaults.
+    /// Successful predictor branches that may write inference logs under
+    /// tightened defaults.
     const fn inference_log_on_success_path(self) -> bool {
         matches!(self, Self::LightGbm)
     }
 
-    /// Heuristic / immature paths must not write BPP scores into `knn_score` (non-KNN telemetry).
+    /// Heuristic / immature paths must not write BPP scores into `knn_score`
+    /// (non-KNN telemetry).
     const fn is_heuristic_only_branch(self) -> bool {
         matches!(
             self,
@@ -112,14 +117,16 @@ pub(crate) fn deliver_quality_prediction(
     )
 }
 
-/// Heuristic-only score for unit tests (production scenario lookup refuses heuristics).
+/// Heuristic-only score for unit tests (production scenario lookup refuses
+/// heuristics).
 #[cfg(test)]
 pub(crate) fn sealed_heuristic_quality_score(
     score: f64,
     reason: impl Into<String>,
 ) -> Option<QualityScore> {
     let score = crate::algorithm_seal::quality_unit_probability(score)?;
-    // Heuristic-only: confidence mirrors sealed score rank (never hard-coded 0.0 / 0.5).
+    // Heuristic-only: confidence mirrors sealed score rank (never hard-coded 0.0 /
+    // 0.5).
     let confidence = score;
     deliver_quality_prediction(ImageQualityPrediction {
         score,
@@ -135,7 +142,8 @@ pub(crate) fn sealed_heuristic_quality_score(
     })
 }
 
-/// Seal primary prediction; on seal failure return `None` (no bpp heuristic downgrade).
+/// Seal primary prediction; on seal failure return `None` (no bpp heuristic
+/// downgrade).
 fn deliver_with_heuristic_fallback(
     _analysis: &ImageAnalysis,
     prediction: ImageQualityPrediction,
@@ -191,14 +199,17 @@ pub struct QualityScore {
     pub confidence: f64,
     pub predictor_family: String,
     pub fallback_reason: Option<String>,
-    /// Neighbors aggregated for KNN/hybrid predictors (`None` for pure heuristic).
+    /// Neighbors aggregated for KNN/hybrid predictors (`None` for pure
+    /// heuristic).
     #[serde(default)]
     pub knn_neighbor_count: Option<usize>,
 }
 
-/// Blend heuristic Q (0–100) with a sealed DB quality prediction when the pipeline fusion gate is on.
+/// Blend heuristic Q (0–100) with a sealed DB quality prediction when the
+/// pipeline fusion gate is on.
 ///
-/// When fusion is disabled for `pipeline`, returns the sealed heuristic unchanged (no DB blend).
+/// When fusion is disabled for `pipeline`, returns the sealed heuristic
+/// unchanged (no DB blend).
 #[must_use]
 pub fn fuse_quality_regression_prediction_if_enabled(
     pipeline: &'static str,
@@ -259,7 +270,8 @@ pub fn fuse_quality_regression_prediction(
                 "quality regression fusion applied"
             );
             tracing::info!(
-                "{} Quality Regression Fusion [{}]: Heuristic Q={} blended with predicted Q={:.0} (Prob:{:.2}, weight: {:.2}) -> Final Q={}",
+                "{} Quality Regression Fusion [{}]: Heuristic Q={} blended with predicted Q={:.0} \
+                 (Prob:{:.2}, weight: {:.2}) -> Final Q={}",
                 crate::modern_ui::symbols::pick("🔬", "[AUDIT]"),
                 quality_prediction.predictor_family,
                 heuristic_q,
@@ -274,7 +286,8 @@ pub fn fuse_quality_regression_prediction(
         }
     } else if weight_knn > 0.3 {
         tracing::info!(
-            "{} Quality Regression Fallback [{}]: No heuristic available, using predicted Q={:.0} (Prob:{:.2}, confidence: {:.2})",
+            "{} Quality Regression Fallback [{}]: No heuristic available, using predicted Q={:.0} \
+             (Prob:{:.2}, confidence: {:.2})",
             crate::modern_ui::symbols::pick("🔬", "[AUDIT]"),
             quality_prediction.predictor_family,
             predicted_q,
@@ -289,7 +302,8 @@ pub fn fuse_quality_regression_prediction(
 }
 
 impl QualityScore {
-    /// Re-apply the terminal probability contract (safe after cache/serde round-trips).
+    /// Re-apply the terminal probability contract (safe after cache/serde
+    /// round-trips).
     #[must_use]
     pub fn sealed(mut self) -> Self {
         if let Some((score, confidence)) =
@@ -328,7 +342,8 @@ pub struct QualityInferenceRecord {
     pub regression_score: Option<f64>,
     pub predictor_family: String,
     pub final_verdict: String,
-    /// Audit-stable branch tag matching `StaticQualityDbBranch` / scenario quality branches.
+    /// Audit-stable branch tag matching `StaticQualityDbBranch` / scenario
+    /// quality branches.
     pub resolution_branch: String,
 }
 
@@ -447,7 +462,8 @@ fn log_static_inference(
     );
 }
 
-/// Deliver a sealed score, then write inference log with the effective audit branch.
+/// Deliver a sealed score, then write inference log with the effective audit
+/// branch.
 fn deliver_log_static_quality(
     conn: &mut Client,
     analysis: &ImageAnalysis,
@@ -500,9 +516,10 @@ fn deliver_log_static_quality(
 pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
     crate::multi_scenario_db::init_multi_scenario_schema(conn)?;
 
-    // 🛡️ DATA MIGRATION GUARD: Repair legacy quality_score drift from quality_label.
-    // This is a one-time operation during schema transition (V6.0+).
-    // Rationale: Ensures existing training data remains visible to KNN regression.
+    // 🛡️ DATA MIGRATION GUARD: Repair legacy quality_score drift from
+    // quality_label. This is a one-time operation during schema transition
+    // (V6.0+). Rationale: Ensures existing training data remains visible to KNN
+    // regression.
     conn.execute(
         "UPDATE image_quality_samples
          SET quality_score = CASE
@@ -531,7 +548,8 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
 /// JSONB payload persisted on `image_quality_samples.metadata` after ingest.
 ///
 /// Captures geometry, bitstream/precision hints, perception scalars, and raw
-/// EXIF-like key/value pairs from analysis — without dumping the 256D embedding.
+/// EXIF-like key/value pairs from analysis — without dumping the 256D
+/// embedding.
 ///
 /// # Errors
 ///
@@ -1015,7 +1033,8 @@ fn encode_optional_bit_depth_feature(bit_depth: Option<u8>) -> f32 {
     quality_embed_measured_dimension_f32(bit_depth.map(f64::from), 16.0)
 }
 
-/// Optional-measurement slot indices in the 256D image-quality embedding (M225/M246).
+/// Optional-measurement slot indices in the 256D image-quality embedding
+/// (M225/M246).
 ///
 /// All five slots may carry `QUALITY_EMBED_MISSING_MEASUREMENT` (-1.0) when the
 /// corresponding measurement was unavailable — pgvector-safe finite sentinel.
@@ -1027,9 +1046,9 @@ pub const QUALITY_EMBED_JPEG_CONFIDENCE_SLOT: usize = 20;
 
 /// Finite sentinel used for absent optional measurements in pgvector storage.
 ///
-/// pgvector rejects `NaN` values at insert time, so DB/KNN embeddings must remain
-/// finite. `LightGBM` payload construction still maps these sentinel slots to
-/// JSON null / NaN missing values.
+/// pgvector rejects `NaN` values at insert time, so DB/KNN embeddings must
+/// remain finite. `LightGBM` payload construction still maps these sentinel
+/// slots to JSON null / NaN missing values.
 pub const QUALITY_EMBED_MISSING_MEASUREMENT: f32 = -1.0;
 
 /// Rewrite stale DB sentinel `0.0` on measurement slots to the pgvector-safe
@@ -1044,7 +1063,8 @@ pub fn sanitize_stale_quality_measurement_embed_slots(vec: &mut [f32]) {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "quality_regression_stale_embed",
                 format!(
-                    "embedding slot {index} had stale 0.0 sentinel; rewritten to pgvector-safe missing sentinel"
+                    "embedding slot {index} had stale 0.0 sentinel; rewritten to pgvector-safe \
+                     missing sentinel"
                 ),
             );
         }
@@ -1074,7 +1094,8 @@ fn sanitized_quality_embedding_for_use(embedding: &pgvector::Vector) -> pgvector
     pgvector::Vector::from(vec)
 }
 
-/// Embed slots that may carry the DB-safe missing-measurement sentinel when unmeasured.
+/// Embed slots that may carry the DB-safe missing-measurement sentinel when
+/// unmeasured.
 #[must_use]
 pub const fn quality_embedding_slot_allows_non_finite(index: usize) -> bool {
     const _: () = assert!(QUALITY_EMBED_COLOR_DEPTH_SLOT == 12);
@@ -1098,7 +1119,8 @@ pub fn assert_quality_embedding_finite_policy(slice: &[f32]) -> Result<()> {
         }
     }) {
         anyhow::bail!(
-            "image_quality embedding slot {idx} is non-finite ({value}); pgvector storage requires finite values"
+            "image_quality embedding slot {idx} is non-finite ({value}); pgvector storage \
+             requires finite values"
         );
     }
     Ok(())
@@ -1111,7 +1133,8 @@ fn perception_unit_interval(value: f64, name: &str) -> Result<f32> {
     Ok(unit_interval_f32(f64_to_f32_feature(value)))
 }
 
-/// Measured scalar → unit interval; absent/non-finite → pgvector-safe missing sentinel.
+/// Measured scalar → unit interval; absent/non-finite → pgvector-safe missing
+/// sentinel.
 fn quality_embed_measured_dimension_f32(value: Option<f64>, scale: f64) -> f32 {
     match value.filter(|v| v.is_finite()) {
         Some(v) if scale.is_finite() && scale > 0.0 => {
@@ -1154,7 +1177,8 @@ fn bpp_heuristic_quality(
     Ok(ImageQualityPrediction {
         score: heuristic_score,
         // Heuristic fallbacks must not claim high confidence proportional to score.
-        // Confidence here is a conservative baseline; higher confidence requires measured/KNN evidence.
+        // Confidence here is a conservative baseline; higher confidence requires measured/KNN
+        // evidence.
         confidence: crate::constants::HEURISTIC_SAFETY_FLOOR,
         predictor_family: ImageQualityPredictorFamily::HeuristicOnly,
         fallback_reason: Some(reason.into()),
@@ -1193,7 +1217,8 @@ fn query_image_quality_knn_features(
     query_quality_knn_features(conn, crate::scenario::ScenarioType::ImageQuality, embedding)
 }
 
-/// Test-only: production must not emit KNN-only decision scores (B06 no-fabrication rule).
+/// Test-only: production must not emit KNN-only decision scores (B06
+/// no-fabrication rule).
 #[cfg(test)]
 pub(crate) fn knn_only_prediction(
     knn: &crate::multi_scenario_db::KnnRegressionFeatures,
@@ -1222,7 +1247,8 @@ pub(crate) fn knn_only_prediction(
     })
 }
 
-/// Pull `score` toward KNN when model/heuristic and neighbors disagree strongly.
+/// Pull `score` toward KNN when model/heuristic and neighbors disagree
+/// strongly.
 #[must_use]
 pub(crate) fn apply_knn_disagreement_guard(
     score: f64,
@@ -1267,7 +1293,8 @@ pub(crate) fn apply_knn_disagreement_guard(
     crate::algorithm_seal::quality_unit_probability(score)
 }
 
-/// Test-only: production must not emit hybrid-bootstrap decision scores (B06 no-fabrication rule).
+/// Test-only: production must not emit hybrid-bootstrap decision scores (B06
+/// no-fabrication rule).
 #[cfg(test)]
 pub(crate) fn hybrid_bootstrap_prediction(
     heuristic_score: f64,
@@ -1554,7 +1581,8 @@ fn lookup_static_image_quality(
     None
 }
 
-/// Read runtime quality verdict from an inference-log JSON snapshot (audit-only mode).
+/// Read runtime quality verdict from an inference-log JSON snapshot (audit-only
+/// mode).
 #[must_use]
 pub fn quality_inference_runtime_verdict_from_snapshot(
     snapshot: &serde_json::Value,

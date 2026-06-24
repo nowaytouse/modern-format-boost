@@ -2,37 +2,44 @@
 //!
 //! ## Problem Background
 //!
-//! When both stdout and stderr are piped but only stdout is read, if `FFmpeg` outputs a large amount of
-//! stderr logs (exceeding the 64KB buffer), a deadlock occurs:
+//! When both stdout and stderr are piped but only stdout is read, if `FFmpeg`
+//! outputs a large amount of stderr logs (exceeding the 64KB buffer), a
+//! deadlock occurs:
 //! - `FFmpeg` blocks due to a full stderr buffer
 //! - The Rust program blocks while waiting for stdout
 //! - Both wait for each other, and the program freezes
 //!
 //! ## Solution
 //!
-//! Use a separate thread to concurrently consume stderr, ensuring the buffer never fills up.
+//! Use a separate thread to concurrently consume stderr, ensuring the buffer
+//! never fills up.
 //!
 //! ## Usage Example
 //!
 //! ```rust
 //! use foundation::ffmpeg_process::FfmpegProcess;
-//! use std::process::Command;
 //! use std::path::Path;
+//! use std::process::Command;
 //!
 //! // Use a lightweight asset from the edge directory
 //! let input = Path::new("../../crates/dev/src/edge/videos/non_monotonic.mp4");
 //! if input.exists() {
 //!     let mut cmd = Command::new("ffmpeg");
 //!     cmd.arg("-y")
-//!        .arg("-i").arg(input)
-//!        .arg("-t").arg("0.1")
-//!        .arg("-f").arg("null")
-//!        .arg("-");
+//!         .arg("-i")
+//!         .arg(input)
+//!         .arg("-t")
+//!         .arg("0.1")
+//!         .arg("-f")
+//!         .arg("null")
+//!         .arg("-");
 //!
 //!     let mut process = FfmpegProcess::spawn(&mut cmd).expect("Failed to spawn ffmpeg");
 //!
 //!     // Wait for completion
-//!     let (status, stderr) = process.wait_with_output().expect("Failed to wait for ffmpeg");
+//!     let (status, stderr) = process
+//!         .wait_with_output()
+//!         .expect("Failed to wait for ffmpeg");
 //!     assert!(status.success());
 //! }
 //! ```
@@ -140,7 +147,8 @@ impl FfmpegProcess {
     /// Wait for `FFmpeg` process to complete and return its output.
     ///
     /// # Errors
-    /// Returns error if waiting for child process fails or output reader threads fail.
+    /// Returns error if waiting for child process fails or output reader
+    /// threads fail.
     pub fn wait_with_output(self) -> Result<(ExitStatus, String)> {
         self.wait_with_output_timeout(ffmpeg_timeout(), "ffmpeg process")
     }
@@ -148,13 +156,15 @@ impl FfmpegProcess {
     /// Wait for `FFmpeg` process to complete with a hard timeout.
     ///
     /// # Errors
-    /// Returns error if waiting fails, the timeout is exceeded, or output reader threads fail.
+    /// Returns error if waiting fails, the timeout is exceeded, or output
+    /// reader threads fail.
     pub fn wait_with_output_timeout(
         mut self,
         timeout: Duration,
         context: &str,
     ) -> Result<(ExitStatus, String)> {
-        // If caller never took stdout, drain it in background so FFmpeg does not block on write (pipe buffer full).
+        // If caller never took stdout, drain it in background so FFmpeg does not block
+        // on write (pipe buffer full).
         let stdout_drain = self.child.stdout.take().map(|stdout| {
             thread::spawn(move || {
                 use std::io::Read;

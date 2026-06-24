@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
 const SUB_SPINNER_TEMPLATE: &str = "  {spinner:.green} {prefix:.dim}: {msg}";
-const EXPLORE_BAR_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • {msg}";
+const EXPLORE_BAR_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ \
+                                    {percent:>3}% • {pos}/{len} • {msg}";
 const SIMPLE_SPINNER_TEMPLATE: &str = "{spinner:.green} {msg}";
 
 fn bar_progress_style(template: &str, with_ticks: bool) -> ProgressStyle {
@@ -760,7 +761,8 @@ impl DetailedCoarseProgressBar {
 
         let color = "\x1b[32m";
         let line = format!(
-            "{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
+            "{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • \
+             {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
             color = color,
             prefix = truncate_progress_message(&self.prefix, available_for_prefix),
             bar_left = progress_style::BAR_LEFT,
@@ -783,10 +785,12 @@ impl DetailedCoarseProgressBar {
         let _ = io::stderr().flush();
     }
 
-    /// Print a message to the terminal without interfering with the progress bar.
+    /// Print a message to the terminal without interfering with the progress
+    /// bar.
     ///
     /// # Panics
-    /// Panics if the internal clock is invalid (e.g. `ImageMagick`'s internal property interpretation).
+    /// Panics if the internal clock is invalid (e.g. `ImageMagick`'s internal
+    /// property interpretation).
     pub fn println(&self, msg: &str) {
         crate::progress_mode::emit_stderr(msg);
     }
@@ -832,7 +836,9 @@ impl DetailedCoarseProgressBar {
 
         // Visual progress bar (UX)
         eprint!(
-            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ {done_icon} 100% • CRF {final_crf:.1} • {size_pct:+.1}% {icon} • {ssim} • {iter} iterations • {clock} {elapsed:.1}s\x1b[0m\n",
+            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ {done_icon} 100% • CRF \
+             {final_crf:.1} • {size_pct:+.1}% {icon} • {ssim} • {iter} iterations • {clock} \
+             {elapsed:.1}s\x1b[0m\n",
             color = color,
             prefix = self.prefix,
             bar_left = progress_style::BAR_LEFT,
@@ -852,7 +858,8 @@ impl DetailedCoarseProgressBar {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_FINAL_REPORT,
             format!(
-                "Optimization Audit: Finalized CRF={final_crf:.1}, size={size_pct:+.1}%, SSIM={ssim_str}, iters={iter}, elapsed={elapsed_secs:.1}s"
+                "Optimization Audit: Finalized CRF={final_crf:.1}, size={size_pct:+.1}%, \
+                 SSIM={ssim_str}, iters={iter}, elapsed={elapsed_secs:.1}s"
             )
         );
 
@@ -916,7 +923,6 @@ pub struct FixedBottom {
 
 impl FixedBottom {
     /// Create a new fixed-bottom progress bar for batch processing.
-    ///
     #[must_use]
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
@@ -926,7 +932,8 @@ impl FixedBottom {
         bar.enable_steady_tick(Duration::from_millis(100)); // Lower frequency for better lock fairness
 
         // UX: Lower refresh rate to 10Hz to reduce terminal/PTY lock contention.
-        // This ensures Ctrl+C handlers can grab the lock even during high-frequency updates.
+        // This ensures Ctrl+C handlers can grab the lock even during high-frequency
+        // updates.
         bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(10));
 
         Self {
@@ -1228,7 +1235,9 @@ impl Explore {
         );
 
         let line = format!(
-            "{search} Explore: {stage} • CRF {crf_str} • SSIM {ssim_str} • Size {size_change_str} {compress_icon} • Iter {iter} • Best: CRF {best_crf_str} / SSIM {best_ssim_str} • {clock} {elapsed:.1}s",
+            "{search} Explore: {stage} • CRF {crf_str} • SSIM {ssim_str} • Size {size_change_str} \
+             {compress_icon} • Iter {iter} • Best: CRF {best_crf_str} / SSIM {best_ssim_str} • \
+             {clock} {elapsed:.1}s",
             elapsed = elapsed.as_secs_f64()
         );
 
@@ -1258,7 +1267,8 @@ impl Explore {
         let iter = self.iterations.load(Ordering::Relaxed);
 
         let log_msg = format!(
-            "Explore Done: CRF {result_crf:.1} • SSIM {result_ssim:.4} • Size {size_change:+.1}% • {iter} iter in {elapsed:.1}s",
+            "Explore Done: CRF {result_crf:.1} • SSIM {result_ssim:.4} • Size {size_change:+.1}% \
+             • {iter} iter in {elapsed:.1}s",
             elapsed = elapsed.as_secs_f64()
         );
 
@@ -1388,7 +1398,8 @@ impl ExploreLogger {
             "explore logger summary",
         );
         let log_msg = format!(
-            "Explore Summary: CRF {crf:.1} | {ssim_summary} | {change:+.1}% | Saved: {saved_str} | Iter: {iter}",
+            "Explore Summary: CRF {crf:.1} | {ssim_summary} | {change:+.1}% | Saved: {saved_str} \
+             | Iter: {iter}",
             crf = self.best_crf,
             change = size_change,
             saved_str = format_bytes(saved),
@@ -1437,7 +1448,6 @@ impl ExploreLogger {
 }
 
 /// Create a professional-looking spinner.
-///
 #[must_use]
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -1454,7 +1464,6 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
 }
 
 /// Create a standard progress bar.
-///
 #[must_use]
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1473,7 +1482,6 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
 }
 
 /// Create a detailed progress bar for batch operations.
-///
 #[must_use]
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1490,7 +1498,6 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
 }
 
 /// Create a compact progress bar.
-///
 #[must_use]
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1522,7 +1529,6 @@ pub struct SmartProgressBar {
 
 impl SmartProgressBar {
     /// Create a new `SmartProgressBar`.
-    ///
     #[must_use]
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
@@ -1606,7 +1612,6 @@ fn format_eta(seconds: f64) -> String {
 }
 
 /// Create a simple spinner with a message.
-///
 #[must_use]
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
@@ -1763,7 +1768,6 @@ impl GlobalProgressManager {
     }
 
     /// Create the main progress bar.
-    ///
     pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new(total));
 
@@ -1779,7 +1783,6 @@ impl GlobalProgressManager {
     }
 
     /// Create a sub-spinner.
-    ///
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
 

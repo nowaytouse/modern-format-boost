@@ -3,7 +3,8 @@
 use arbitrary::{Arbitrary, Unstructured};
 use image::{DynamicImage, GrayImage, RgbImage};
 use libfuzzer_sys::fuzz_target;
-// Import order is pinned for Linux CI rustfmt (split lines reorder differently on macOS).
+// Import order is pinned for Linux CI rustfmt (split lines reorder differently
+// on macOS).
 #[rustfmt::skip]
 use foundation::hdr::{synthesize, GainMapParams};
 

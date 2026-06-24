@@ -48,7 +48,8 @@ fn resolve_debug_root() -> PathBuf {
 fn manual_debug_jxl_explorer_uses_copies_only() {
     if std::env::var("MFB_RUN_JXL_DEBUG_EXPLORER").is_err() {
         log_detail!(
-            "Skipped manual JXL explorer debug test. To run set MFB_RUN_JXL_DEBUG_EXPLORER=1 and optionally MFB_DEBUG_DIR=debug",
+            "Skipped manual JXL explorer debug test. To run set MFB_RUN_JXL_DEBUG_EXPLORER=1 and \
+             optionally MFB_DEBUG_DIR=debug",
         );
         return;
     }

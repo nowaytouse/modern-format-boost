@@ -105,8 +105,9 @@ where
             }
         }
 
-        // Push in reverse order so we visit in alphabetical (or standard) order if sorted
-        // though `read_dir` order is arbitrary. The python script just appended them.
+        // Push in reverse order so we visit in alphabetical (or standard) order if
+        // sorted though `read_dir` order is arbitrary. The python script just
+        // appended them.
         for sd in subdirs.into_iter().rev() {
             stack.push(sd);
         }

@@ -819,8 +819,8 @@ pub fn run_training_isolated(all_samples: &[Sample], args: &Args) -> Result<(usi
     } else if args.finalize.finalize_image_quality_model {
         if !saw_image_quality {
             eprintln!(
-                "  [INFO] No new image_quality samples were routed in this run; \
-                 checking existing corpus state before finalize."
+                "  [INFO] No new image_quality samples were routed in this run; checking existing \
+                 corpus state before finalize."
             );
         }
         let code = finalize_image_quality_model(&conn_str, args.misc.install_missing_python_deps)?;

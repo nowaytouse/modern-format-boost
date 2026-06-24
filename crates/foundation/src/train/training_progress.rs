@@ -3,7 +3,8 @@
 use std::io::Write as _;
 use std::time::Duration;
 
-/// Whether [`crate::c_api::ingest_media_samples_batch`] emits `[INGEST-RUST]` progress.
+/// Whether [`crate::c_api::ingest_media_samples_batch`] emits `[INGEST-RUST]`
+/// progress.
 #[must_use]
 pub fn ingest_progress_enabled() -> bool {
     crate::media_conversion_gate::delivery_env_enabled_unless_opt_out(
@@ -11,7 +12,8 @@ pub fn ingest_progress_enabled() -> bool {
     )
 }
 
-/// Emit a progress line every N paths (always includes first and last when enabled).
+/// Emit a progress line every N paths (always includes first and last when
+/// enabled).
 #[must_use]
 pub const fn ingest_progress_step(total: usize) -> usize {
     if total <= 20 {

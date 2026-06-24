@@ -16,7 +16,8 @@ pub fn fill_runtime_assets(conn_str: &str, config: FillAssetsConfig) -> Result<i
 
     if include_image_quality && !config.state.saw_image_quality {
         eprintln!(
-            "  [INFO] No new image_quality samples routed; still checking/filling LightGBM when mature."
+            "  [INFO] No new image_quality samples routed; still checking/filling LightGBM when \
+             mature."
         );
     }
     if include_loop_intent && !config.state.saw_loop_samples {
@@ -67,7 +68,8 @@ pub fn fill_runtime_assets(conn_str: &str, config: FillAssetsConfig) -> Result<i
         }
         if multi_exit == 2 {
             eprintln!(
-                "  [INFO] After finalize passes, one or more runtime families still pending maturity."
+                "  [INFO] After finalize passes, one or more runtime families still pending \
+                 maturity."
             );
         }
     }

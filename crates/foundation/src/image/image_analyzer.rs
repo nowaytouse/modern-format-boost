@@ -66,12 +66,14 @@ macro_rules! info_detail {
 pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 =
     crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
 
-/// Opens an image reader with magic bytes detection to handle non-standard extensions.
-/// Falls back to extension-based detection if magic bytes detection fails.
+/// Opens an image reader with magic bytes detection to handle non-standard
+/// extensions. Falls back to extension-based detection if magic bytes detection
+/// fails.
 ///
 /// # Errors
-/// Returns `ImageError` if the file cannot be opened or format cannot be determined.
-/// The error message includes details about whether magic bytes detection or extension-based detection failed.
+/// Returns `ImageError` if the file cannot be opened or format cannot be
+/// determined. The error message includes details about whether magic bytes
+/// detection or extension-based detection failed.
 fn open_image_reader_with_magic_bytes(
     path: &Path,
 ) -> std::result::Result<image::ImageReader<'_>, image::ImageError> {
@@ -105,7 +107,8 @@ fn open_image_reader_with_magic_bytes(
         },
         Ok(None) => None, // No magic bytes detected, fall back to extension
         Err(e) => {
-            // Log the magic bytes detection failure but continue with extension-based detection
+            // Log the magic bytes detection failure but continue with extension-based
+            // detection
             probe_audit!(
                 "magic_bytes_identify_failed",
                 path,
@@ -118,8 +121,8 @@ fn open_image_reader_with_magic_bytes(
 
     let reader = image::ImageReader::open(path)?;
 
-    // Note: set_format and with_guessed_format are not available in new image crate API
-    // Format detection is now handled automatically during decode
+    // Note: set_format and with_guessed_format are not available in new image crate
+    // API Format detection is now handled automatically during decode
     Ok(reader)
 }
 
@@ -318,7 +321,8 @@ pub struct ImageAnalysis {
     /// Real physical features (225-dimensional 15x15 luminance sampling)
     pub physics_225: Option<Vec<f32>>,
 
-    /// ⚠️ Optional: Store error message if deep analysis failed but we fell back to basic info
+    /// ⚠️ Optional: Store error message if deep analysis failed but we fell
+    /// back to basic info
     pub analysis_error: Option<String>,
 }
 
@@ -356,13 +360,16 @@ impl Default for ImageAnalysis {
     }
 }
 
-/// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
+/// Analyzes an image file. Format detection order (by path/content): HEIC → JXL
+/// → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
 ///
-/// Quality is then derived via `detect_lossless` / `detect_compression` per format; no conversion is done here.
-/// Comprehensive image analysis: format, dimensions, quality, and compression.
+/// Quality is then derived via `detect_lossless` / `detect_compression` per
+/// format; no conversion is done here. Comprehensive image analysis: format,
+/// dimensions, quality, and compression.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read, format is unsupported, or analysis fails.
+/// Returns an error if the file cannot be read, format is unsupported, or
+/// analysis fails.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     analyze_image_with_cache(path, None)
 }
@@ -460,7 +467,9 @@ pub fn analyze_image_with_cache(
     Ok(analysis)
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     let span = tracing::info_span!("image_analysis", file = %path.display());
     let _enter = span.enter();
@@ -513,7 +522,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         return analyze_jxl_image(path, file_size);
     }
 
-    // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
+    // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back
+    // to ffprobe
     let detected_format = crate::image_detection::detect_format_from_bytes(path)?;
     let is_avif = detected_format == crate::image_detection::DetectedFormat::AVIF;
 
@@ -608,7 +618,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
             );
 
             apple_warning = format!(
-                "Apple Compatibility: Extension mismatch (.{ext_str} vs {format_str}) may cause playback issues",
+                "Apple Compatibility: Extension mismatch (.{ext_str} vs {format_str}) may cause \
+                 playback issues",
             );
         }
     }
@@ -662,7 +673,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let jxl_indicator = generate_jxl_indicator(format, is_lossless, jpeg_analysis.as_ref(), path);
 
-    // PSNR/SSIM only from reference-transcode measurement (explore pipeline). Never map JPEG Q→PSNR here.
+    // PSNR/SSIM only from reference-transcode measurement (explore pipeline). Never
+    // map JPEG Q→PSNR here.
     let (psnr, ssim) = (None, None);
 
     let mut metadata = extract_metadata(path);
@@ -758,7 +770,8 @@ impl ImageAnalysis {
         self.color_context.has_precision_or_hdr_hints()
     }
 
-    /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence", "Lossless").
+    /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence",
+    /// "Lossless").
     #[must_use]
     pub fn quality_summary(&self) -> String {
         if let Some(jpeg) = self.jpeg_analysis.as_ref() {
@@ -787,7 +800,9 @@ impl ImageAnalysis {
 
 /// # Errors
 /// Returns an error if HEIC analysis fails or file cannot be read.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     debug!("analyze_heic_image called for {}", path.display());
 
@@ -925,7 +940,8 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                                 err = err,
                             );
                             return Err(ImgQualityError::AnalysisError(format!(
-                                "HEIC fallback: no canvas dimensions after deep analysis failure ({error_msg}); probe_video also failed: {err}"
+                                "HEIC fallback: no canvas dimensions after deep analysis failure \
+                                 ({error_msg}); probe_video also failed: {err}"
                             )));
                         }
                     }
@@ -1229,12 +1245,16 @@ fn generate_jxl_indicator(
                     return JxlIndicator {
                         should_convert: true,
                         reason: format!(
-                            "Ultra HDR JPEG detected ({quality_info}); recommend gain-map HDR synthesis"
+                            "Ultra HDR JPEG detected ({quality_info}); recommend gain-map HDR \
+                             synthesis"
                         ),
                         command: format!(
-                            "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
+                            "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e \
+                             {default_effort}"
                         ),
-                        benefit: "Produces a single, true 32-bit HDR JXL file (OpenEXR via Gainmap mathematics)".to_string(),
+                        benefit: "Produces a single, true 32-bit HDR JXL file (OpenEXR via \
+                                  Gainmap mathematics)"
+                            .to_string(),
                     };
                 }
 
@@ -1244,9 +1264,9 @@ fn generate_jxl_indicator(
                     command: format!(
                         "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
                     ),
-                    benefit:
-                        "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction"
-                            .to_string(),
+                    benefit: "Keeps original JPEG DCT coefficients, reversible, ~20% size \
+                              reduction"
+                        .to_string(),
                 }
             } else {
                 JxlIndicator {
@@ -1637,7 +1657,8 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         // [Disagreement] Internal Deep Research
         if deep_research_gif_animation(&bytes, gce_hints) {
             crate::log_detail!(format!(
-                "Analyzer Audit: Initiating GIF deep frame research (structural={structural_count}, gce_hints={gce_hints}) for {path_display}",
+                "Analyzer Audit: Initiating GIF deep frame research \
+                 (structural={structural_count}, gce_hints={gce_hints}) for {path_display}",
                 path_display = path.display(),
             ));
             return Ok(true);
@@ -1645,8 +1666,9 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
     }
 
     // Stage 3: Penetrating decode fallback (ground-truth frame count)
-    // Some edge GIFs can bypass structural/GCE heuristics; use decode-based verification
-    // only when metadata is suspiciously static to keep cost bounded.
+    // Some edge GIFs can bypass structural/GCE heuristics; use decode-based
+    // verification only when metadata is suspiciously static to keep cost
+    // bounded.
     if structural_count <= 1
         && let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(
@@ -1656,7 +1678,8 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         && real_count > 1
     {
         crate::log_detail!(format!(
-            "Analyzer Audit: Deep GIF penetration testing active (structural={structural_count}, real={real_count}) for {path_display}",
+            "Analyzer Audit: Deep GIF penetration testing active (structural={structural_count}, \
+             real={real_count}) for {path_display}",
             path_display = path.display(),
         ));
         return Ok(true);
@@ -1669,7 +1692,8 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
 
     // Stage 1: RIFF-structural frame counting (spec-compliant chunk walking).
-    // This is the authoritative count — trust it for both positive and negative results.
+    // This is the authoritative count — trust it for both positive and negative
+    // results.
     let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes)?;
     if structural_count > 1 {
         return Ok(true);
@@ -1678,7 +1702,8 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     // Stage 2: Feature Scanning — look for ANIM/ANMF fourcc in the RIFF stream.
     // These are top-level RIFF chunks so a header-only scan is reliable here.
     // If the RIFF traversal already counted 0 ANMF but a top-level ANIM exists,
-    // the file has an animation header with no frame payload; use ffprobe to settle.
+    // the file has an animation header with no frame payload; use ffprobe to
+    // settle.
     let has_anim_chunk = bytes.windows(4).any(|w| w == b"ANIM");
     if has_anim_chunk && structural_count <= 1 {
         // Final fallback tie-breaker
@@ -1703,8 +1728,8 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
         return false;
     }
 
-    // Look for GCE patterns and verify if they are followed by valid block terminators
-    // GCE = [21 F9 04 ... 00]
+    // Look for GCE patterns and verify if they are followed by valid block
+    // terminators GCE = [21 F9 04 ... 00]
     let mut confirmed = 0_i32;
     let mut i = 0;
     while i + 7 < bytes.len() {
@@ -1732,8 +1757,9 @@ fn deep_research_png_animation(bytes: &[u8]) -> bool {
     confirmed_fctl > 0 // Even 1 fcTL usually means it's an APNG (the first frame might have it)
 }
 
-/// Public entry for retrying animation duration (e.g. from main when `analysis.duration_secs` is None).
-/// Tries ffprobe, `ImageMagick`, WebP native parse, and GIF frame-count estimate.
+/// Public entry for retrying animation duration (e.g. from main when
+/// `analysis.duration_secs` is None). Tries ffprobe, `ImageMagick`, WebP native
+/// parse, and GIF frame-count estimate.
 #[must_use]
 pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
     get_animation_duration(path)
@@ -1876,9 +1902,10 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     }
 
     if let Some(d) = final_duration {
-        // Enforce the single-frame static image check for ALL modern formats (WebP, AVIF, HEIC, etc.)
-        // If the duration is suspiciously short (e.g., < 0.25s) but not already 0, we run an exact packet count.
-        // A duration of 0.04s is exactly 1 frame at 25fps.
+        // Enforce the single-frame static image check for ALL modern formats (WebP,
+        // AVIF, HEIC, etc.) If the duration is suspiciously short (e.g., <
+        // 0.25s) but not already 0, we run an exact packet count. A duration of
+        // 0.04s is exactly 1 frame at 25fps.
         if d > 0.0 && d < crate::constants::DURATION_THRESHOLD_SUSPICIOUS {
             match try_get_frame_count(path) {
                 Ok(Some(frame_count)) if frame_count <= 1 => {
@@ -1915,7 +1942,8 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
                 probe_audit!(
                     "gif_duration_unavailable",
                     path,
-                    "animated GIF duration unavailable after probing (frames={frame_count}); leaving unknown",
+                    "animated GIF duration unavailable after probing (frames={frame_count}); \
+                     leaving unknown",
                     frame_count = frame_count,
                 );
                 return None;
@@ -1935,7 +1963,9 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     None
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn try_jxl_via_apng(path: &Path) -> Result<Option<f32>> {
     // Check if djxl is available
     if which::which("djxl").is_err() {
@@ -1997,8 +2027,8 @@ fn try_jxl_via_apng(path: &Path) -> Result<Option<f32>> {
         "JXL detected, converted to temporary APNG for duration detection"
     );
 
-    // APNG doesn't have duration in format metadata, we need to calculate from frames and fps
-    // Use ffprobe with -count_frames to get nb_read_frames
+    // APNG doesn't have duration in format metadata, we need to calculate from
+    // frames and fps Use ffprobe with -count_frames to get nb_read_frames
     let probe_output = crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(temp_apng_path)
         .loglevel(constants::FFMPEG_LOGLEVEL_ERROR)
@@ -2010,7 +2040,8 @@ fn try_jxl_via_apng(path: &Path) -> Result<Option<f32>> {
         .output()
         .map_err(|e| {
             crate::log_detail!(format!(
-                "Analyzer Audit: APNG deep research failed for {apng_path}; falling back to static assumptions: {e}",
+                "Analyzer Audit: APNG deep research failed for {apng_path}; falling back to \
+                 static assumptions: {e}",
                 apng_path = temp_apng_path.display(),
             ));
             ImgQualityError::AnalysisError(format!(
@@ -2033,15 +2064,17 @@ fn try_jxl_via_apng(path: &Path) -> Result<Option<f32>> {
                         crate::media_conversion_gate::probe_layer_audit(
                             "jxl_nb_read_frames_missing",
                             path,
-                            "nb_read_frames missing from ffprobe output; skipping duration calculation",
+                            "nb_read_frames missing from ffprobe output; skipping duration \
+                             calculation",
                         );
                         return Ok(None);
                     };
                     let nb_frames = nb_frames_raw.parse::<u64>().map_err(|err| {
-                    ImgQualityError::AnalysisError(format!(
-                        "failed to parse JXL temporary APNG frame count {nb_frames_raw:?}: {err}"
-                    ))
-                })?;
+                        ImgQualityError::AnalysisError(format!(
+                            "failed to parse JXL temporary APNG frame count {nb_frames_raw:?}: \
+                             {err}"
+                        ))
+                    })?;
 
                     let Some(r_frame_rate) = stream.get("r_frame_rate").and_then(|v| v.as_str())
                     else {
@@ -2064,7 +2097,8 @@ fn try_jxl_via_apng(path: &Path) -> Result<Option<f32>> {
                     {
                         let duration = crate::numeric_cast::u64_to_f64(nb_frames) / fps;
                         crate::log_detail!(format!(
-                            "Analyzer Audit: JPEG XL animation detected via codestream probe (frames={nb_frames}, fps={fps:.2}, duration={duration:.2}s)",
+                            "Analyzer Audit: JPEG XL animation detected via codestream probe \
+                             (frames={nb_frames}, fps={fps:.2}, duration={duration:.2}s)",
                         ));
                         return Ok(Some(crate::numeric_cast::f64_to_f32_lossy(duration)));
                     }
@@ -2221,10 +2255,12 @@ fn try_ffprobe_default(path: &Path) -> Result<Option<f32>> {
     }
 }
 
-/// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify -format "%T"`.
+/// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify
+/// -format "%T"`.
 ///
-/// Works for any format `ImageMagick` can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
-/// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
+/// Works for any format `ImageMagick` can read and that has per-frame delay
+/// (e.g. GIF, WebP, AVIF, JXL, APNG). Use as fallback when ffprobe has no
+/// stream/format duration. Emits a warning log when used.
 #[must_use]
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     warn_detail!(
@@ -2373,8 +2409,9 @@ fn try_get_frame_count(path: &Path) -> Result<Option<u32>> {
     })
 }
 
-/// Determines if the image is stored in a lossless way for conversion decisions.
-/// Uses `image_detection::detect_compression` for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
+/// Determines if the image is stored in a lossless way for conversion
+/// decisions. Uses `image_detection::detect_compression` for PNG, TIFF, WebP,
+/// AVIF (and HEIC/JXL in their own analyzers).
 fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
     use crate::image_detection::{
         CompressionType, DetectedFormat, detect_compression, detect_format_from_bytes,
@@ -2418,7 +2455,8 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
     Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
 }
 
-/// Pixel-level fallback for `is_lossless` when format-level detection returns Err or is unavailable.
+/// Pixel-level fallback for `is_lossless` when format-level detection returns
+/// Err or is unavailable.
 fn pixel_fallback_lossless(path: &Path) -> Result<bool> {
     warn_detail!(
         "[Lossless Fallback] Format-level detection failed; using pixel-level heuristic for {}",
@@ -2445,9 +2483,11 @@ fn pixel_fallback_lossless(path: &Path) -> Result<bool> {
         .is_some_and(|c| c >= crate::constants::HEURISTIC_LOSSLESS_CONFIDENCE_MIN);
     let adopted = is_confident && affinity >= crate::constants::AFFINITY_THRESHOLD_LOSSLESS;
 
-    // "Loud and Honest" Logging: Provide full transparency for the heuristic decision
+    // "Loud and Honest" Logging: Provide full transparency for the heuristic
+    // decision
     crate::log_detail!(
-        "[{}] Affinity: {:.3} (threshold: {}) │ Confident: {} │ Complexity: {} │ Edges: {} │ Color: {} │ Noise: {} │ Type: {}",
+        "[{}] Affinity: {:.3} (threshold: {}) │ Confident: {} │ Complexity: {} │ Edges: {} │ \
+         Color: {} │ Noise: {} │ Type: {}",
         crate::infra::static_logs::messages::LABEL_HEURISTIC,
         affinity,
         crate::constants::AFFINITY_THRESHOLD_LOSSLESS,
@@ -2593,9 +2633,9 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         precise_bit_depth,
     } = extract_precise_color_metadata(path);
 
-    // Detect animation via ffprobe/jxlinfo. If detection fails we record the failure
-    // in `analysis_error`; the compatibility bool stays false, but that is not a
-    // measured static verdict and duration_secs remains unknown.
+    // Detect animation via ffprobe/jxlinfo. If detection fails we record the
+    // failure in `analysis_error`; the compatibility bool stays false, but that
+    // is not a measured static verdict and duration_secs remains unknown.
     let (is_animated, animation_error) = match detect_animation(path, &DetectedFormat::JXL) {
         Ok((animated, _frame_count, _fps)) => (animated, None),
         Err(e) => {
@@ -2686,74 +2726,77 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     })
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{
         CompressionType, DetectedFormat, detect_animation, detect_compression,
     };
 
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
-    // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
-    // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
-    let (width, height, has_alpha, color_depth): (u32, u32, bool, Option<u8>) = match probe_video(
-        path,
-    ) {
-        Ok(probe) => {
-            let pix_fmt = probe.pix_fmt.to_lowercase();
-            let alpha = pix_fmt.contains("yuva")
-                || pix_fmt.contains("rgba")
-                || pix_fmt.contains("gbrap")
-                || pix_fmt.starts_with("p4");
-            if probe.confirmed_bit_depth().is_none() {
-                info_detail!(
-                    "ffprobe did not report explicit bit_depth for AVIF {}; recording color_depth as unknown (no forgery from pix_fmt inference)",
-                    path.display()
-                );
-            }
-            (
-                probe.width,
-                probe.height,
-                alpha,
-                probe.confirmed_bit_depth(),
-            )
-        }
-        Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
-            Ok(img) => {
-                warn_detail!(
-                    "ffprobe AVIF probe failed for {}; falling back to image decode: {}",
-                    path.display(),
-                    probe_err
-                );
-                let (w, h) = img.dimensions();
+    // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles
+    // them correctly and also provides pix_fmt for accurate alpha and bit-depth
+    // detection.
+    let (width, height, has_alpha, color_depth): (u32, u32, bool, Option<u8>) =
+        match probe_video(path) {
+            Ok(probe) => {
+                let pix_fmt = probe.pix_fmt.to_lowercase();
+                let alpha = pix_fmt.contains("yuva")
+                    || pix_fmt.contains("rgba")
+                    || pix_fmt.contains("gbrap")
+                    || pix_fmt.starts_with("p4");
+                if probe.confirmed_bit_depth().is_none() {
+                    info_detail!(
+                        "ffprobe did not report explicit bit_depth for AVIF {}; recording \
+                         color_depth as unknown (no forgery from pix_fmt inference)",
+                        path.display()
+                    );
+                }
                 (
-                    w,
-                    h,
-                    has_alpha_channel(&img),
-                    match crate::conversion::media_info_without_ffprobe(path) {
-                        Ok(info) => info.and_then(|info| info.bit_depth),
-                        Err(err) => {
-                            probe_audit!(
-                                "avif_media_info_fallback_failed",
-                                path,
-                                "AVIF media-info fallback failed after image decode: {err}",
-                                err = err,
-                            );
-                            None
-                        }
-                    },
+                    probe.width,
+                    probe.height,
+                    alpha,
+                    probe.confirmed_bit_depth(),
                 )
             }
-            Err(image_err) => {
-                warn_detail!(
-                    "Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
-                    path.display(),
-                    probe_err,
-                    image_err
-                );
-                (0u32, 0u32, false, None)
-            }
-        },
-    };
+            Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
+                Ok(img) => {
+                    warn_detail!(
+                        "ffprobe AVIF probe failed for {}; falling back to image decode: {}",
+                        path.display(),
+                        probe_err
+                    );
+                    let (w, h) = img.dimensions();
+                    (
+                        w,
+                        h,
+                        has_alpha_channel(&img),
+                        match crate::conversion::media_info_without_ffprobe(path) {
+                            Ok(info) => info.and_then(|info| info.bit_depth),
+                            Err(err) => {
+                                probe_audit!(
+                                    "avif_media_info_fallback_failed",
+                                    path,
+                                    "AVIF media-info fallback failed after image decode: {err}",
+                                    err = err,
+                                );
+                                None
+                            }
+                        },
+                    )
+                }
+                Err(image_err) => {
+                    warn_detail!(
+                        "Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
+                        path.display(),
+                        probe_err,
+                        image_err
+                    );
+                    (0u32, 0u32, false, None)
+                }
+            },
+        };
 
     let is_lossless = match detect_compression(&DetectedFormat::AVIF, path) {
         Ok(ct) => ct == CompressionType::Lossless,
@@ -3114,8 +3157,9 @@ fn format_recommendation(
     }
 }
 
-/// Build a `JxlIndicator` from indexed DB features, mirroring `generate_jxl_indicator`.
-/// This is the production code path used when the analyzer output is not in scope (DB-driven flow).
+/// Build a `JxlIndicator` from indexed DB features, mirroring
+/// `generate_jxl_indicator`. This is the production code path used when the
+/// analyzer output is not in scope (DB-driven flow).
 fn jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> JxlIndicator {
     let output_path = format!("{rel_path}.jxl");
     let is_lossless = features.compression == CompressionType::Lossless;

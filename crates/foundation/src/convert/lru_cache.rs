@@ -1,7 +1,8 @@
 //! LRU Cache Module - Least Recently Used cache with capacity limits
 //!
 //! ## Features
-//! - Capacity Limit: Automatically evicts oldest entries when the limit is exceeded
+//! - Capacity Limit: Automatically evicts oldest entries when the limit is
+//!   exceeded
 //! - LRU Tracking: Updates timestamps upon access
 //! - Serialization Support: Persistent storage to JSON files
 

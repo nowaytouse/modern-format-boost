@@ -128,7 +128,8 @@ impl ToolBuilder for CjxlBuilder {
             debug_assert!(
                 constants::is_supported_jxl_effort_with_expert(e, self.allow_expert_options)
                     || lossless_transcode_e11,
-                "unsupported cjxl effort {e}; runtime policy permits e7/e8/e10 by default, e11 for JPEG lossless transcode, and e11 for explicit expert options; e9 is disabled"
+                "unsupported cjxl effort {e}; runtime policy permits e7/e8/e10 by default, e11 \
+                 for JPEG lossless transcode, and e11 for explicit expert options; e9 is disabled"
             );
             if lossless_transcode_e11 || expert_e11 {
                 cmd.arg(constants::JXL_ARG_ALLOW_EXPERT_OPTIONS);
@@ -325,7 +326,8 @@ mod tests {
         assert!(args.contains(&"--allow_expert_options".to_string()));
     }
 
-    /// CONTRACT: `--compress_boxes=0` only when `apple_compat` is enabled (Brotli-safe JXL).
+    /// CONTRACT: `--compress_boxes=0` only when `apple_compat` is enabled
+    /// (Brotli-safe JXL).
     #[test]
     fn contract_cjxl_compress_boxes_gated_by_apple_compat() {
         let mut off = CjxlBuilder::new();
@@ -367,7 +369,17 @@ mod tests {
         builder.use_stdin(true).output(Path::new("out.jxl"));
 
         let cmd = builder.build();
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap_or_else(|| { unreachable!("CRITICAL: Command argument contains invalid UTF-8 in test_cjxl_builder_stdin") })).collect();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| {
+                a.to_str().unwrap_or_else(|| {
+                    unreachable!(
+                        "CRITICAL: Command argument contains invalid UTF-8 in \
+                         test_cjxl_builder_stdin"
+                    )
+                })
+            })
+            .collect();
 
         assert_eq!(args[0], "-");
         assert_eq!(args[1], "out.jxl");

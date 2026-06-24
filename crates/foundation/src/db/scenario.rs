@@ -155,7 +155,8 @@ impl QualityTier {
         let tier = Self::from_label(s);
         if tier == Self::Unknown {
             anyhow::bail!(
-                "Invalid quality label: {s}. Valid options: high, low, png-high, png-low, modern-high, modern-low."
+                "Invalid quality label: {s}. Valid options: high, low, png-high, png-low, \
+                 modern-high, modern-low."
             );
         }
         Ok(tier)
@@ -282,7 +283,8 @@ impl FromStr for ImageQualityLabel {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_label(s).ok_or_else(|| {
             anyhow::anyhow!(
-                "Invalid image quality label: {s}. Valid options: png-high, png-low, modern-high, modern-low."
+                "Invalid image quality label: {s}. Valid options: png-high, png-low, modern-high, \
+                 modern-low."
             )
         })
     }
@@ -356,47 +358,69 @@ mod tests {
     fn test_scenario_from_str() {
         // Test primary aliases
         assert_eq!(
-            "loop_intent".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "loop_intent".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                             * fixture assertion; not production
+                                                             * DB runtime path */
             ScenarioType::LoopIntent
         );
         assert_eq!(
-            "image_quality".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "image_quality".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                               * fixture assertion; not
+                                                               * production DB runtime path */
             ScenarioType::ImageQuality
         );
         assert_eq!(
-            "animated_image_quality".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "animated_image_quality".parse::<ScenarioType>().unwrap(), /* audited: db module
+                                                                        * unit-test fixture
+                                                                        * assertion; not
+                                                                        * production DB runtime
+                                                                        * path */
             ScenarioType::AnimatedImageQuality
         );
         assert_eq!(
-            "video_quality".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "video_quality".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                               * fixture assertion; not
+                                                               * production DB runtime path */
             ScenarioType::VideoQuality
         );
 
         // Test shorthand aliases
         assert_eq!(
-            "loop".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "loop".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test fixture
+                                                      * assertion; not production DB runtime
+                                                      * path */
             ScenarioType::LoopIntent
         );
         assert_eq!(
-            "image".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "image".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test fixture
+                                                       * assertion; not production DB runtime
+                                                       * path */
             ScenarioType::ImageQuality
         );
         assert_eq!(
-            "animated_image".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "animated_image".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                                * fixture assertion; not
+                                                                * production DB runtime path */
             ScenarioType::AnimatedImageQuality
         );
         assert_eq!(
-            "video".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "video".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test fixture
+                                                       * assertion; not production DB runtime
+                                                       * path */
             ScenarioType::VideoQuality
         );
 
         // Test case insensitivity
         assert_eq!(
-            "Animated_Image".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "Animated_Image".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                                * fixture assertion; not
+                                                                * production DB runtime path */
             ScenarioType::AnimatedImageQuality
         );
         assert_eq!(
-            "Loop_Intent".parse::<ScenarioType>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "Loop_Intent".parse::<ScenarioType>().unwrap(), /* audited: db module unit-test
+                                                             * fixture assertion; not production
+                                                             * DB runtime path */
             ScenarioType::LoopIntent
         );
 
@@ -442,7 +466,9 @@ mod tests {
         assert!("unknown".parse::<QualityTier>().is_err());
         assert!("high-speed".parse::<QualityTier>().is_err());
         assert_eq!(
-            "png-high".parse::<QualityTier>().unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            "png-high".parse::<QualityTier>().unwrap(), /* audited: db module unit-test fixture
+                                                         * assertion; not production DB runtime
+                                                         * path */
             QualityTier::High
         );
     }
@@ -450,15 +476,23 @@ mod tests {
     #[test]
     fn test_image_quality_label_resolution_tracks_format_family() {
         assert_eq!(
-            ImageQualityLabel::resolve_for_format("high", "PNG").unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            ImageQualityLabel::resolve_for_format("high", "PNG").unwrap(), /* audited: db module
+                                                                            * unit-test fixture
+                                                                            * assertion; not
+                                                                            * production DB
+                                                                            * runtime path */
             ImageQualityLabel::PngHigh
         );
         assert_eq!(
-            ImageQualityLabel::resolve_for_format("low", "webp").unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            ImageQualityLabel::resolve_for_format("low", "webp").unwrap(), /* audited: db module
+                                                                            * unit-test fixture
+                                                                            * assertion; not
+                                                                            * production DB
+                                                                            * runtime path */
             ImageQualityLabel::ModernLow
         );
         assert_eq!(
-            ImageQualityLabel::resolve_for_format("modern-high", "jpeg").unwrap(), // audited: db module unit-test fixture assertion; not production DB runtime path
+            ImageQualityLabel::resolve_for_format("modern-high", "jpeg").unwrap(), /* audited: db module unit-test fixture assertion; not production DB runtime path */
             ImageQualityLabel::ModernHigh
         );
         assert!(ImageQualityLabel::resolve_for_format("png-high", "webp").is_err());

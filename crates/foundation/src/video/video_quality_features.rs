@@ -2,7 +2,8 @@
 //
 // Extracts dense features for video quality assessment:
 // - [0-224]: Physical signal from representative center frame (Color, DCT, HOG)
-// - [225-255]: Dense video-specific metrics (codec, bitrate, cadence, perceptual evidence)
+// - [225-255]: Dense video-specific metrics (codec, bitrate, cadence,
+//   perceptual evidence)
 
 use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result};
@@ -62,11 +63,13 @@ impl VideoQualityFeatures {
             let (is_animated, _, _) = crate::image_detection::detect_animation(path, &format)?;
             if is_animated {
                 anyhow::bail!(
-                    "video_quality only accepts real video containers; animated images belong to animated_image_quality"
+                    "video_quality only accepts real video containers; animated images belong to \
+                     animated_image_quality"
                 );
             }
             anyhow::bail!(
-                "video_quality only accepts real video containers; static images belong to image_quality"
+                "video_quality only accepts real video containers; static images belong to \
+                 image_quality"
             );
         }
 
@@ -296,7 +299,8 @@ const fn u64_to_f32_feature(value: u64) -> f32 {
 
 fn extract_center_frame_physics(path: &Path, center_time: f64) -> Result<Vec<f32>> {
     // 🛡️ PERFORMANCE: Move -ss BEFORE input for fast input-seek
-    // Note: input-seek snaps to nearest keyframe; actual frame may differ from center_time
+    // Note: input-seek snaps to nearest keyframe; actual frame may differ from
+    // center_time
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
         .arg("-ss")
         .arg(format!("{center_time:.3}"))

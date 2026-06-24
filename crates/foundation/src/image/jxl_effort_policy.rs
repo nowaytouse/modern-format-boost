@@ -1,8 +1,8 @@
 //! Shared JPEG XL effort selection policy.
 //!
-//! The policy is intentionally centralized so JPEG bitstream transcode and direct
-//! JXL encode paths do not drift. Large inputs run measured candidate searches;
-//! small inputs stay fixed at e7 to avoid wasting encode time.
+//! The policy is intentionally centralized so JPEG bitstream transcode and
+//! direct JXL encode paths do not drift. Large inputs run measured candidate
+//! searches; small inputs stay fixed at e7 to avoid wasting encode time.
 
 use crate::constants;
 

@@ -1,9 +1,11 @@
 //! Static-image training tier rules — must stay aligned with
-//! `crates/dev/src/config/training_rules.json` → `static_image.{high,low}_quality}.rules`.
+//! `crates/dev/src/config/training_rules.json` →
+//! `static_image.{high,low}_quality}.rules`.
 //!
-//! Collection (`run_training.py`) and ingest (`analyze_image`) both use this module so
-//! entropy/geometry tier decisions match the values stored in `image_quality_samples`.
-//! Training C-API probes are gated by [`crate::training_entry_guard`].
+//! Collection (`run_training.py`) and ingest (`analyze_image`) both use this
+//! module so entropy/geometry tier decisions match the values stored in
+//! `image_quality_samples`. Training C-API probes are gated by
+//! [`crate::training_entry_guard`].
 
 use crate::image_analyzer::{ImageAnalysis, analyze_image};
 use anyhow::{Context, Result};
@@ -11,21 +13,27 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
-/// `high_quality` tier: logic **ANY** — `entropy_ge` **or** guarded `pixel_min_dim_ge` (social stills).
+/// `high_quality` tier: logic **ANY** — `entropy_ge` **or** guarded
+/// `pixel_min_dim_ge` (social stills).
 pub const HIGH_ENTROPY_GE: f64 = 7.7;
 pub const HIGH_PIXEL_MIN_DIM_GE: u32 = 1080;
-/// Corpus ingest ceiling: neither dimension may exceed 4K (training DB hard limit).
+/// Corpus ingest ceiling: neither dimension may exceed 4K (training DB hard
+/// limit).
 pub const STATIC_CORPUS_MAX_PIXEL_DIM: u32 = 4096;
-/// Short-side ≥1080 alone cannot mark high below this entropy (blocks flat plates in dead band).
+/// Short-side ≥1080 alone cannot mark high below this entropy (blocks flat
+/// plates in dead band).
 pub const HIGH_DIMENSION_ENTROPY_FLOOR: f64 = 5.5;
 
-/// `low_quality` tier: logic **ANY** — `entropy_le` **or** guarded `pixel_max_dim_le` (one hit enough).
+/// `low_quality` tier: logic **ANY** — `entropy_le` **or** guarded
+/// `pixel_max_dim_le` (one hit enough).
 pub const LOW_ENTROPY_LE: f64 = 2.8;
 pub const LOW_PIXEL_MAX_DIM_LE: u32 = 512;
-/// ≤512px alone cannot mark low above this entropy (blocks sharp midsize thumbs).
+/// ≤512px alone cannot mark low above this entropy (blocks sharp midsize
+/// thumbs).
 pub const LOW_DIMENSION_ENTROPY_CEIL: f64 = 5.5;
 
-/// Open interval `(DEAD_ZONE_LO, DEAD_ZONE_HI)`: no tier inside the band even if rules partially match.
+/// Open interval `(DEAD_ZONE_LO, DEAD_ZONE_HI)`: no tier inside the band even
+/// if rules partially match.
 pub const TIER_ENTROPY_DEAD_ZONE_LO: f64 = LOW_ENTROPY_LE;
 pub const TIER_ENTROPY_DEAD_ZONE_HI: f64 = HIGH_ENTROPY_GE;
 
@@ -58,12 +66,14 @@ impl TierRuleLogic {
     }
 }
 
-/// Committed combiners (must match `training_rules.json` `static_image.*.logic`).
+/// Committed combiners (must match `training_rules.json`
+/// `static_image.*.logic`).
 pub const HIGH_TIER_LOGIC: TierRuleLogic = TierRuleLogic::Any;
 pub const LOW_TIER_LOGIC: TierRuleLogic = TierRuleLogic::Any;
 
-/// Production collect/ingest/C-API policy — always **exclude**; not overridden by env.
-/// Python may set `MFB_TIER_AMBIGUOUS_POLICY` for documentation/audit only; Rust never reads it.
+/// Production collect/ingest/C-API policy — always **exclude**; not overridden
+/// by env. Python may set `MFB_TIER_AMBIGUOUS_POLICY` for documentation/audit
+/// only; Rust never reads it.
 pub const COMMITTED_TIER_AMBIGUOUS_POLICY: TierAmbiguousPolicy = TierAmbiguousPolicy::Exclude;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -167,7 +177,8 @@ pub fn evaluate_static_tier(entropy: f64, width: u32, height: u32) -> StaticTier
             }
         }
         TierRuleLogic::Any => {
-            // ANY: one rule hit qualifies; dead zone must not veto dimension-only lows (M157).
+            // ANY: one rule hit qualifies; dead zone must not veto dimension-only lows
+            // (M157).
             !low_rule_hits.is_empty()
         }
     };
@@ -184,7 +195,8 @@ pub fn evaluate_static_tier(entropy: f64, width: u32, height: u32) -> StaticTier
 ///
 /// # Errors
 ///
-/// Returns an error when format or animation detection fails, or the asset is animated.
+/// Returns an error when format or animation detection fails, or the asset is
+/// animated.
 pub fn assert_non_animated_static_asset(path: &Path) -> Result<()> {
     let format = crate::image_detection::detect_format_from_bytes(path)
         .with_context(|| format!("format detection failed: {}", path.display()))?;
@@ -199,10 +211,12 @@ pub fn assert_non_animated_static_asset(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Same analysis path as ingest: reject animated assets, use `analyze_image` entropy.
+/// Same analysis path as ingest: reject animated assets, use `analyze_image`
+/// entropy.
 ///
 /// # Errors
-/// Returns an error when the file is animated, unreadable, or entropy is missing/non-finite.
+/// Returns an error when the file is animated, unreadable, or entropy is
+/// missing/non-finite.
 pub fn probe_static_still_image(path: &Path) -> Result<StaticStillProbe> {
     assert_non_animated_static_asset(path)?;
 
@@ -230,7 +244,8 @@ pub fn probe_from_analysis(analysis: &ImageAnalysis) -> Result<StaticStillProbe>
     })
 }
 
-/// How to handle assets that match **both** high and low tier rules (ANY on each side).
+/// How to handle assets that match **both** high and low tier rules (ANY on
+/// each side).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TierAmbiguousPolicy {
     /// Strict contraction: drop from collect/ingest (no silent prefer-high).
@@ -283,13 +298,15 @@ pub const fn resolve_collect_tier_label(
     resolve_collect_tier_label_with_policy(tier, COMMITTED_TIER_AMBIGUOUS_POLICY)
 }
 
-/// Reject `image_quality` ingest when the assigned label disagrees with tier rules or dead zone.
+/// Reject `image_quality` ingest when the assigned label disagrees with tier
+/// rules or dead zone.
 ///
 /// # Errors
 ///
-/// Returns an error when the label is unknown, entropy is missing, no tier resolves, the
-/// label does not match the resolved tier, analysis recorded an error, or (when `path` is a
-/// regular file) animation detection flags the asset.
+/// Returns an error when the label is unknown, entropy is missing, no tier
+/// resolves, the label does not match the resolved tier, analysis recorded an
+/// error, or (when `path` is a regular file) animation detection flags the
+/// asset.
 pub fn verify_training_tier_for_ingest(
     analysis: &ImageAnalysis,
     training_label: &str,
@@ -310,8 +327,8 @@ pub fn verify_training_tier_for_ingest(
     let probe = probe_from_analysis(analysis)?;
     if !tier_label_matches_assignment(&probe.tier, assigned) {
         anyhow::bail!(
-            "training tier rules do not match assigned label '{training_label}' \
-             (entropy={}, {}x{}, high_tier={}, low_tier={})",
+            "training tier rules do not match assigned label '{training_label}' (entropy={}, \
+             {}x{}, high_tier={}, low_tier={})",
             probe.entropy,
             probe.width,
             probe.height,
@@ -323,8 +340,8 @@ pub fn verify_training_tier_for_ingest(
         resolve_collect_tier_label_with_policy(&probe.tier, COMMITTED_TIER_AMBIGUOUS_POLICY);
     let Some(resolved) = resolved else {
         anyhow::bail!(
-            "training tier unresolved in entropy dead zone or partial rule hits \
-             (entropy={}, {}x{}, label={training_label})",
+            "training tier unresolved in entropy dead zone or partial rule hits (entropy={}, \
+             {}x{}, label={training_label})",
             probe.entropy,
             probe.width,
             probe.height

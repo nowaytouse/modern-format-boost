@@ -732,16 +732,24 @@ fn run_fast_img_delivery_check(
     }
     integrity_failures += source_probe_errors.len() + optimized_probe_errors.len();
 
-    // Ponytail: explicit warning when nothing was produced because all sources were skipped/failed.
+    // Ponytail: explicit warning when nothing was produced because all sources were
+    // skipped/failed.
     if expected_delivery_count == 0
         && recorded_source_jpegs > 0
         && (!skipped_sources.is_empty() || !failed_sources.is_empty())
     {
-        // Surface a visible warning in the report while preserving the programmatic integrity outcome
-        // (some callers/tests expect zero integrity failures when all sources were intentionally skipped).
-        // Avoid modifying stats.has_warnings to keep existing programmatic behavior/tests stable.
-        report.push_str("\nWARNING: No optimized outputs produced because all recorded source JPEGs were skipped or failed.\n");
-        report.push_str("  Review per-file skip/failure reasons above; this often indicates bulk decode failures (truncated/CMYK) or missing helper tools.\n\n");
+        // Surface a visible warning in the report while preserving the programmatic
+        // integrity outcome (some callers/tests expect zero integrity failures
+        // when all sources were intentionally skipped). Avoid modifying
+        // stats.has_warnings to keep existing programmatic behavior/tests stable.
+        report.push_str(
+            "\nWARNING: No optimized outputs produced because all recorded source JPEGs were \
+             skipped or failed.\n",
+        );
+        report.push_str(
+            "  Review per-file skip/failure reasons above; this often indicates bulk decode \
+             failures (truncated/CMYK) or missing helper tools.\n\n",
+        );
     }
 
     let count_matches = integrity_failures == 0;
@@ -1181,7 +1189,8 @@ fn run_fast_img_restore_check(
             report.push_str("--- Content hash mismatches ---\n");
             for (_k, record, actual) in &hash_mismatched_restored_jpegs {
                 report.push_str(&format!(
-                    "  - Content hash mismatch for restored JPEG: {}\n      Expected (manifest): {}\n      Actual (file):     {}\n",
+                    "  - Content hash mismatch for restored JPEG: {}\n      Expected (manifest): \
+                     {}\n      Actual (file):     {}\n",
                     record["output_rel"], record["output_sha256"], actual
                 ));
             }
@@ -2191,9 +2200,8 @@ mod tests {
         fs::write(
             &log,
             format!(
-                "checking {media_str}\n\
-                 {media_str} → MOV (hevc) (transcode ok) ✅\n\
-                 Tree uncertain (low confidence) [prob=0.42] falling back to Layer 6 KNN\n"
+                "checking {media_str}\n{media_str} → MOV (hevc) (transcode ok) ✅\nTree uncertain \
+                 (low confidence) [prob=0.42] falling back to Layer 6 KNN\n"
             ),
         )
         .unwrap();
@@ -2569,8 +2577,9 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         let output_hash = actual_hash.unwrap();
 
         let manifest_content = format!(
-            "source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted\n\
-            6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\t{output_hash}\ttrue\n"
+            "source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted\\
+             n6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\\
+             tsource-blake3\t{output_hash}\ttrue\n"
         );
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2613,7 +2622,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
+                                toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2652,7 +2662,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
+                                toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2684,8 +2695,10 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
+                                toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
+                                toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),

@@ -1,7 +1,7 @@
 //! GPU coarse search and CPU fine-tuning for CRF exploration
 //!
-//! HEVC/AV1 ultimate mode: Search with an efficient preset, then render the final output once
-//! with the requested delivery preset.
+//! HEVC/AV1 ultimate mode: Search with an efficient preset, then render the
+//! final output once with the requested delivery preset.
 //!
 //! For HEVC ultimate `slower`, the pipeline now uses:
 //! - search/exploration: `slow`
@@ -9,10 +9,12 @@
 //!
 //! ## Unified Selection Philosophy
 //!
-//! Final output selection follows the same priorities as the rest of the explorers:
+//! Final output selection follows the same priorities as the rest of the
+//! explorers:
 //!
 //! 1. **Size Gate**: Output must be smaller than input
-//! 2. **Quality Gates**: standard → `ms_ssim_passed` / SSIM fusion; ultimate → `ultimate_quality_passed` (VMAF/CAMBI/PSNR-UV)
+//! 2. **Quality Gates**: standard → `ms_ssim_passed` / SSIM fusion; ultimate →
+//!    `ultimate_quality_passed` (VMAF/CAMBI/PSNR-UV)
 //! 3. **Quality Metrics**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
 //! 4. **Size**: Prefer smaller output (tiebreaker)
 //! 5. **CRF**: Prefer lower/more aggressive (tiebreaker)
@@ -52,7 +54,8 @@ const PHASE4_MAX_ATTEMPTS: u32 = crate::constants::PHASE4_MAX_ATTEMPTS;
 /// Maximum number of consecutive non-improving encodes Phase 5 may perform.
 /// This acts as a patience counter (lookahead) to find local minima.
 const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = crate::constants::PHASE5_MAX_CONSECUTIVE_FAILURES;
-/// Absolute cap to prevent an infinite march to CRF 0.0 for monotonically decreasing files.
+/// Absolute cap to prevent an infinite march to CRF 0.0 for monotonically
+/// decreasing files.
 const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = crate::constants::PHASE5_MAX_TOTAL_ATTEMPTS;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 =
     crate::constants::GPU_COARSE_UPWARD_SIZE_STAGNATION_THRESHOLD;
@@ -60,7 +63,8 @@ const UPWARD_DIRECTION_SWITCH_LIMIT: u32 =
     crate::constants::GPU_COARSE_UPWARD_DIRECTION_SWITCH_LIMIT;
 
 mod crf_ui {
-    /// Plain-aware glyphs for CRF probe / phase log lines (M58 — routed via delivery gate).
+    /// Plain-aware glyphs for CRF probe / phase log lines (M58 — routed via
+    /// delivery gate).
     #[inline]
     #[must_use]
     pub(super) fn pass_prefix() -> String {
@@ -233,16 +237,18 @@ struct NormalQualityMeasurement {
 struct NormalQualityEvaluation {
     /// Weighted fusion of available measurements; `None` when both are missing.
     fusion_score: Option<f64>,
-    /// The pass threshold: baseline-relative drop tolerance, bounded by config and sanity floors.
+    /// The pass threshold: baseline-relative drop tolerance, bounded by config
+    /// and sanity floors.
     fusion_floor: f64,
     passed: bool,
 }
 
 /// Construct a [`NormalQualityEvaluation`] from pre- and post-processing data.
 ///
-/// The pass threshold is derived from the search-phase SSIM baseline so the gate
-/// is "tailor-made" per file rather than relying solely on a global absolute floor.
-/// When no baseline is available the config floor (or sanity floor) is used instead.
+/// The pass threshold is derived from the search-phase SSIM baseline so the
+/// gate is "tailor-made" per file rather than relying solely on a global
+/// absolute floor. When no baseline is available the config floor (or sanity
+/// floor) is used instead.
 fn build_normal_quality_evaluation(
     baseline: NormalQualityBaseline,
     measurement: NormalQualityMeasurement,
@@ -292,13 +298,14 @@ fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<Str
     )
 }
 
-/// Return the correct pixel format for encoding: yuv420p10le when HDR metadata or
-/// high-bit-depth source precision should be preserved, otherwise yuv420p.
+/// Return the correct pixel format for encoding: yuv420p10le when HDR metadata
+/// or high-bit-depth source precision should be preserved, otherwise yuv420p.
 fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
     crate::hevc_yuv420_output_pix_fmt(probe)
 }
 
-/// Percentage change from input stream size (returns `NaN` when input size is unknown/zero).
+/// Percentage change from input stream size (returns `NaN` when input size is
+/// unknown/zero).
 #[inline]
 fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     super::calc_change_pct_for_input_size(input_size, output_size)
@@ -399,19 +406,27 @@ struct FineTuneArgs<'a> {
 /// Maintains best-found quality metrics across search phases.
 ///
 /// **Invariants**:
-/// - `best_vmaf`: Updated when a new lower CRF improves the search-time VMAF reference
-/// - `best_psnr_uv`: Updated when a new lower CRF improves the search-time chroma reference
-/// - Both fields are monotonically non-decreasing (once set to a value, never set to worse)
-/// - Used only during ultimate mode for baseline-aware gating decisions; not in normal mode
+/// - `best_vmaf`: Updated when a new lower CRF improves the search-time VMAF
+///   reference
+/// - `best_psnr_uv`: Updated when a new lower CRF improves the search-time
+///   chroma reference
+/// - Both fields are monotonically non-decreasing (once set to a value, never
+///   set to worse)
+/// - Used only during ultimate mode for baseline-aware gating decisions; not in
+///   normal mode
 #[derive(Debug, Default, Clone)]
 struct TrackingState {
     pub best_vmaf: Option<f64>,
     pub best_psnr_uv: Option<(f64, f64)>,
 }
 
-/// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
+/// Format the `QualityCheck` log line from result; used for logging and unit
+/// tests (regression: enhanced failure shows reason, not "total file not
+/// smaller").
 ///
-/// Diagnostic only — exploration accept/reject uses [`ExploreResult::pipeline_acceptable`](crate::ExploreResult::pipeline_acceptable), not this formatter.
+/// Diagnostic only — exploration accept/reject uses
+/// [`ExploreResult::pipeline_acceptable`](crate::ExploreResult::pipeline_acceptable),
+/// not this formatter.
 pub(crate) fn format_quality_check_line(
     result: &ExploreResult,
     quality_verification_skipped_for_format: bool,
@@ -454,7 +469,8 @@ pub(crate) fn format_quality_check_line(
             Some(reason) => format!("   QualityCheck: FAILED ({reason})"),
             None => match result.enhanced_verify_fail_reason.as_deref() {
                 Some(reason) => format!(
-                    "   QualityCheck: FAILED (quality met but enhanced verification failed: {reason})"
+                    "   QualityCheck: FAILED (quality met but enhanced verification failed: \
+                     {reason})"
                 ),
                 None => crate::media_conversion_gate::explore_quality_check_failed_line(
                     None,
@@ -857,7 +873,8 @@ impl<'a> ExploreSession<'a> {
 
         let gpu_crf = gpu_result.gpu_boundary_crf.ok_or_else(|| {
             anyhow::anyhow!(
-                "Inconsistent GPU result: boundary found but boundary CRF missing in post-processing"
+                "Inconsistent GPU result: boundary found but boundary CRF missing in \
+                 post-processing"
             )
         })?;
         let gpu_size = gpu_result.gpu_best_size.ok_or_else(|| {
@@ -867,7 +884,8 @@ impl<'a> ExploreSession<'a> {
         })?;
         let gpu_encoder = self.selected_gpu_encoder().ok_or_else(|| {
             anyhow::anyhow!(
-                "GPU encoder became unavailable during calibration; refusing CPU-only fabrication fallback"
+                "GPU encoder became unavailable during calibration; refusing CPU-only fabrication \
+                 fallback"
             )
         })?;
 
@@ -974,7 +992,8 @@ impl<'a> ExploreSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_GPU,
                     &format!(
-                        "GPU Boundary = Quality Ceiling: CRF {gpu_crf:.2} (GPU reached quality limit, no bloat beyond this point)"
+                        "GPU Boundary = Quality Ceiling: CRF {gpu_crf:.2} (GPU reached quality \
+                         limit, no bloat beyond this point)"
                     )
                 );
             } else {
@@ -1010,7 +1029,8 @@ impl<'a> ExploreSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_GPU_QUALITY,
                 &format!(
-                    "CRF {ceiling_crf:.2}, PSNR {ceiling_psnr:.2}dB (GPU PSNR plateau, CPU can still break through)"
+                    "CRF {ceiling_crf:.2}, PSNR {ceiling_psnr:.2}dB (GPU PSNR plateau, CPU can \
+                     still break through)"
                 )
             );
         }
@@ -1203,7 +1223,8 @@ impl<'a> ExploreSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                 &format!(
-                    "PSNR-UV: U={u:.2} dB {u_icon}, V={v:.2} dB {v_icon} (sanity floor ≥ {floor:.1} dB)",
+                    "PSNR-UV: U={u:.2} dB {u_icon}, V={v:.2} dB {v_icon} (sanity floor ≥ \
+                     {floor:.1} dB)",
                     u_icon = crate::modern_ui::symbols::ok_fail_icon(u_pass),
                     v_icon = crate::modern_ui::symbols::ok_fail_icon(v_pass),
                     floor = crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR
@@ -1354,7 +1375,8 @@ impl ExploreQualityVerifier<'_> {
     fn verify_animated_lossless(&self, result: &mut ExploreResult) {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_3,
-            "ANIMATED CRF=0 (lossless): skipping perceptual metrics — running integrity check instead (CRF=0 guarantees YUV bit-exact reproduction)"
+            "ANIMATED CRF=0 (lossless): skipping perceptual metrics — running integrity check \
+             instead (CRF=0 guarantees YUV bit-exact reproduction)"
         );
         let integrity_ok = match super::stream_analysis::check_lossless_integrity(
             self.input,
@@ -1442,7 +1464,8 @@ impl ExploreQualityVerifier<'_> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!(
-                    "Ultimate gate sampling: 1/{sample_rate} frames (lightweight final verification)"
+                    "Ultimate gate sampling: 1/{sample_rate} frames (lightweight final \
+                     verification)"
                 )
             );
         } else {
@@ -1530,7 +1553,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "VMAF-Y measured {v:.2} but adaptive floor refused (search baseline absent) {}",
+                        "VMAF-Y measured {v:.2} but adaptive floor refused (search baseline \
+                         absent) {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1545,7 +1569,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "VMAF-Y gate incomplete: adaptive floor present but search baseline absent {}",
+                        "VMAF-Y gate incomplete: adaptive floor present but search baseline \
+                         absent {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1557,7 +1582,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "CAMBI:  {c:6.2} ≤ {ceiling:.1} {} (source baseline: {base:.2}, lower=better)",
+                        "CAMBI:  {c:6.2} ≤ {ceiling:.1} {} (source baseline: {base:.2}, \
+                         lower=better)",
                         crate::modern_ui::symbols::ok_fail_icon(evaluation.cambi_ok),
                     )
                 );
@@ -1566,7 +1592,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_crf",
                     format!(
-                        "CAMBI measured {c:.2} but adaptive ceiling refused (source baseline absent) {}",
+                        "CAMBI measured {c:.2} but adaptive ceiling refused (source baseline \
+                         absent) {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1581,7 +1608,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_crf",
                     format!(
-                        "CAMBI gate incomplete: adaptive ceiling present but source baseline absent {}",
+                        "CAMBI gate incomplete: adaptive ceiling present but source baseline \
+                         absent {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1595,7 +1623,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "PSNR-UV: U={pu:.2} dB {}, V={pv:.2} dB {} (floors ≥ {f1:.1}/{f2:.1} dB, search baseline: {bu:.1}/{bv:.1})",
+                        "PSNR-UV: U={pu:.2} dB {}, V={pv:.2} dB {} (floors ≥ {f1:.1}/{f2:.1} dB, \
+                         search baseline: {bu:.1}/{bv:.1})",
                         crate::modern_ui::symbols::ok_fail_icon(u_pass),
                         crate::modern_ui::symbols::ok_fail_icon(v_pass),
                     )
@@ -1605,7 +1634,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "PSNR-UV measured U={pu:.2}/V={pv:.2} dB but adaptive floors refused (search baseline absent) {}",
+                        "PSNR-UV measured U={pu:.2}/V={pv:.2} dB but adaptive floors refused \
+                         (search baseline absent) {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1620,7 +1650,8 @@ impl ExploreQualityVerifier<'_> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "PSNR-UV gate incomplete: adaptive floors present but search baseline absent {}",
+                        "PSNR-UV gate incomplete: adaptive floors present but search baseline \
+                         absent {}",
                         crf_fail_tag()
                     ),
                 );
@@ -1681,7 +1712,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED VMAF-Y {v:.2} < {floor:.1} (fell below adaptive floor from search baseline)"
+                            "FAILED VMAF-Y {v:.2} < {floor:.1} (fell below adaptive floor from \
+                             search baseline)"
                         ),
                     );
                 }
@@ -1689,7 +1721,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED VMAF-Y gate: measured {v:.2} but adaptive floor refused (search baseline absent)"
+                            "FAILED VMAF-Y gate: measured {v:.2} but adaptive floor refused \
+                             (search baseline absent)"
                         ),
                     );
                 }
@@ -1708,7 +1741,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_coarse",
                         format!(
-                            "FAILED CAMBI {c:.2} > {ceiling:.1} (above adaptive ceiling from source baseline)"
+                            "FAILED CAMBI {c:.2} > {ceiling:.1} (above adaptive ceiling from \
+                             source baseline)"
                         ),
                     );
                 }
@@ -1716,7 +1750,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_coarse",
                         format!(
-                            "FAILED CAMBI gate: measured {c:.2} but adaptive ceiling refused (source baseline absent)"
+                            "FAILED CAMBI gate: measured {c:.2} but adaptive ceiling refused \
+                             (source baseline absent)"
                         ),
                     );
                 }
@@ -1735,7 +1770,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED PSNR-UV U={u:.2}/V={v:.2} dB below adaptive floors {f1:.1}/{f2:.1} dB"
+                            "FAILED PSNR-UV U={u:.2}/V={v:.2} dB below adaptive floors \
+                             {f1:.1}/{f2:.1} dB"
                         ),
                     );
                 }
@@ -1743,7 +1779,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED PSNR-UV gate: measured U={u:.2}/V={v:.2} dB but adaptive floors refused (search baseline absent)"
+                            "FAILED PSNR-UV gate: measured U={u:.2}/V={v:.2} dB but adaptive \
+                             floors refused (search baseline absent)"
                         ),
                     );
                 }
@@ -1814,7 +1851,8 @@ impl ExploreQualityVerifier<'_> {
             false
         } else {
             result.log.push(format!(
-                "{} SSIM verification failed (Animated format) - accepting based on size compression only",
+                "{} SSIM verification failed (Animated format) - accepting based on size \
+                 compression only",
                 crate::media_conversion_gate::ui_icon_pick(
                     crate::modern_ui::symbols::WARNING,
                     crate::modern_ui::symbols::plain::WARNING,
@@ -1837,15 +1875,17 @@ impl ExploreQualityVerifier<'_> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!(
-                    "Quality verification: long video (>{limit:.0}min), MS-SSIM skipped. Using SSIM-All verification only.",
+                    "Quality verification: long video (>{limit:.0}min), MS-SSIM skipped. Using \
+                     SSIM-All verification only.",
                     limit = threshold_secs / 60.0_f64
                 )
             );
             self.verify_ssim_all_only(
                 result,
                 &format!(
-                    "{} ERROR: SSIM All calculation failed (long-video path). Refusing to mark as passed.",
-crf_fail_tag()
+                    "{} ERROR: SSIM All calculation failed (long-video path). Refusing to mark as \
+                     passed.",
+                    crf_fail_tag()
                 ),
             );
             return false;
@@ -1858,8 +1898,9 @@ crf_fail_tag()
         self.verify_ssim_all_only(
             result,
             &format!(
-                "{} ERROR: SSIM All calculation failed (no duration path). Refusing to mark as passed.",
-crf_fail_tag()
+                "{} ERROR: SSIM All calculation failed (no duration path). Refusing to mark as \
+                 passed.",
+                crf_fail_tag()
             ),
         );
         false
@@ -1877,7 +1918,8 @@ crf_fail_tag()
         if self.flags.features.ultimate_mode {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
-                "Ultimate mode: skipping MS-SSIM/SSIM fusion (3D quality gate owns perceptual validation)"
+                "Ultimate mode: skipping MS-SSIM/SSIM fusion (3D quality gate owns perceptual \
+                 validation)"
             );
             return;
         }
@@ -1885,7 +1927,8 @@ crf_fail_tag()
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_3,
             &format!(
-                "Video within limit (≤{threshold_min:.0}min), enabling fusion quality verification (MS-SSIM + SSIM)"
+                "Video within limit (≤{threshold_min:.0}min), enabling fusion quality \
+                 verification (MS-SSIM + SSIM)"
             )
         );
 
@@ -1971,7 +2014,8 @@ crf_fail_tag()
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "FUSION SCORE: {score_str} ({w1:.1}×MS-SSIM + {w2:.1}×SSIM_All = {w1:.1}×{ms:.4} + {w2:.1}×{ss:.4})",
+                        "FUSION SCORE: {score_str} ({w1:.1}×MS-SSIM + {w2:.1}×SSIM_All = \
+                         {w1:.1}×{ms:.4} + {w2:.1}×{ss:.4})",
                         w1 = crate::constants::EXPLORATION_MS_SSIM_WEIGHT,
                         w2 = crate::constants::EXPLORATION_SSIM_ALL_WEIGHT
                     )
@@ -1989,7 +2033,8 @@ crf_fail_tag()
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "SCORE (SSIM All only): {ss:.4} (MS-SSIM unavailable, using SSIM All alone)"
+                        "SCORE (SSIM All only): {ss:.4} (MS-SSIM unavailable, using SSIM All \
+                         alone)"
                     )
                 );
             }
@@ -2020,7 +2065,8 @@ crf_fail_tag()
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!(
-                    "Grade: {quality_grade} (floor: ≥{floor:.4}, pre-processing ref: {baseline_note})",
+                    "Grade: {quality_grade} (floor: ≥{floor:.4}, pre-processing ref: \
+                     {baseline_note})",
                     floor = evaluation.fusion_floor
                 )
             );
@@ -2046,7 +2092,8 @@ crf_fail_tag()
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_size",
                     format!(
-                        "{err} FUSION SCORE BELOW TARGET! {score:.4} < {floor:.4} (Quality does not meet threshold!)",
+                        "{err} FUSION SCORE BELOW TARGET! {score:.4} < {floor:.4} (Quality does \
+                         not meet threshold!)",
                         floor = evaluation.fusion_floor
                     ),
                 );
@@ -2063,7 +2110,8 @@ crf_fail_tag()
         crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
             "explore_gpu_quality",
             format!(
-                "{} ERROR: Fusion verification incomplete (MS-SSIM + SSIM All failed). Refusing to mark as passed.",
+                "{} ERROR: Fusion verification incomplete (MS-SSIM + SSIM All failed). Refusing \
+                 to mark as passed.",
                 crate::media_conversion_gate::ui_icon_pick(
                     crate::modern_ui::symbols::ERROR,
                     crate::modern_ui::symbols::plain::ERROR,
@@ -2078,7 +2126,8 @@ crf_fail_tag()
         if self.flags.features.ultimate_mode {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
-                "Ultimate mode: skipping SSIM-All verification (3D quality gate owns perceptual validation)"
+                "Ultimate mode: skipping SSIM-All verification (3D quality gate owns perceptual \
+                 validation)"
             );
             return;
         }
@@ -2127,7 +2176,8 @@ crf_fail_tag()
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "{ok} SSIM ALL TARGET MET: {all:.4} ≥ {floor:.4} (pre-processing ref: {baseline_note})",
+                        "{ok} SSIM ALL TARGET MET: {all:.4} ≥ {floor:.4} (pre-processing ref: \
+                         {baseline_note})",
                         floor = evaluation.fusion_floor
                     )
                 );
@@ -2136,7 +2186,8 @@ crf_fail_tag()
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "{err} SSIM ALL BELOW TARGET! {all:.4} < {floor:.4} (pre-processing ref: {baseline_note})",
+                        "{err} SSIM ALL BELOW TARGET! {all:.4} < {floor:.4} (pre-processing ref: \
+                         {baseline_note})",
                         floor = evaluation.fusion_floor
                     ),
                 );
@@ -2159,7 +2210,8 @@ crf_fail_tag()
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or business logic where
+// further fragmentation would hinder readability and maintainability.
 /// # Panics
 /// Panics if the output path cannot be derived from input path.
 pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
@@ -2203,7 +2255,8 @@ fn is_animated_image_like_input(
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AnimatedExplorationEncodeMode {
-    /// CRF search iterations: three-segment timeline sampling when enabled for long animated sources.
+    /// CRF search iterations: three-segment timeline sampling when enabled for
+    /// long animated sources.
     ExplorationSample,
     /// One full-length encode at the chosen CRF (deliverable timeline).
     FullTimeline,
@@ -2639,7 +2692,8 @@ impl FineTuneEncoder<'_> {
         if progress_duration_secs > 0.0_f64 {
             let pct = (current_secs / progress_duration_secs * 100.0).min(100.0);
             let stage = format!(
-                "CRF {crf:.1} | {pct:.1}% | {current_secs:.1}s/{progress_duration_secs:.1}s | {last_fps:.0}fps | {last_speed}"
+                "CRF {crf:.1} | {pct:.1}% | {current_secs:.1}s/{progress_duration_secs:.1}s | \
+                 {last_fps:.0}fps | {last_speed}"
             );
             if let Some(progress_host) = &self.progress_host {
                 progress_host.set_message(&stage);
@@ -2655,7 +2709,8 @@ impl FineTuneEncoder<'_> {
             progress_host.set_message("");
         } else {
             eprint!(
-                "\r                                                                              \r"
+                "\r                                                                              \
+                 \r"
             );
         }
     }
@@ -2753,7 +2808,8 @@ impl FineTuneEncoder<'_> {
     }
 }
 
-/// `FFmpeg` `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+/// `FFmpeg` `-vf` prefix: keep frames in three windows (start / mid / end) and
+/// reset PTS for encode.
 #[must_use]
 fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -> String {
     let segment_pct = if ultimate_mode {
@@ -2766,11 +2822,13 @@ fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -
     let mid_end = dur * (0.5_f64 + segment_pct / 2.0_f64);
     let tail_start = dur * (1.0_f64 - segment_pct);
     format!(
-        "select='lt(t\\,{start_end:.3})+between(t\\,{mid_start:.3}\\,{mid_end:.3})+gte(t\\,{tail_start:.3})',setpts=N/FRAME_RATE/TB"
+        "select='lt(t\\,{start_end:.3})+between(t\\,{mid_start:.3}\\,{mid_end:.3})+gte(t\\,\
+         {tail_start:.3})',setpts=N/FRAME_RATE/TB"
     )
 }
 
-/// Prepends `prefix` to the filter chain after `-vf`, or builds `-vf prefix` when no `-vf` pair exists.
+/// Prepends `prefix` to the filter chain after `-vf`, or builds `-vf prefix`
+/// when no `-vf` pair exists.
 #[must_use]
 fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -> Vec<String> {
     if vf_args.len() >= 2 && vf_args.first().is_some_and(|s| s == "-vf") {
@@ -2929,7 +2987,10 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_STRATEGY,
                 &format!(
-                    "Long animated source ({duration:.1}s > {ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS:.1}s): CPU CRF search uses 3-segment timeline sampling; one full-length encode follows before quality checks."
+                    "Long animated source ({duration:.1}s > \
+                     {ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS:.1}s): CPU CRF search \
+                     uses 3-segment timeline sampling; one full-length encode follows before \
+                     quality checks."
                 )
             );
         }
@@ -2937,7 +2998,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "Input video stream: {stream_size} (total file: {total_size}, overhead: {overhead:.1}%)",
+                "Input video stream: {stream_size} (total file: {total_size}, overhead: \
+                 {overhead:.1}%)",
                 stream_size = crate::modern_ui::format_size(input_video_stream_size),
                 total_size = crate::modern_ui::format_size(input_size),
                 overhead = input_stream_info.container_overhead_percent()
@@ -3014,7 +3076,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_2,
             &format!(
-                "{cpu_fine_tune_title} ({encoder:?}) | Input: {input_sz} ({input_size} bytes) | {search_goal}",
+                "{cpu_fine_tune_title} ({encoder:?}) | Input: {input_sz} ({input_size} bytes) | \
+                 {search_goal}",
                 input_sz = crate::modern_ui::format_size(input_size)
             )
         );
@@ -3028,7 +3091,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_2,
             &format!(
-                "Step: {step:.2} | GPU boundary: CRF {gpu_boundary_crf:.2} | Strategy: Marginal benefit analysis",
+                "Step: {step:.2} | GPU boundary: CRF {gpu_boundary_crf:.2} | Strategy: Marginal \
+                 benefit analysis",
                 step = Self::STEP_UPWARD
             )
         );
@@ -3160,7 +3224,8 @@ impl<'a> CpuFineTuneSession<'a> {
 
         let filters = [
             "[0:v]scale=\"iw-mod(iw,2)\":\"ih-mod(ih,2)\":flags=bicubic[ref];[ref][1:v]ssim",
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:\
+             trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
             "ssim",
         ];
 
@@ -3331,6 +3396,7 @@ impl<'a> CpuFineTuneSession<'a> {
 
         Ok(BoundaryOutcome::Compressed { gpu_size, gpu_ssim })
     }
+
     fn search_compressed_path(&mut self, gpu_size: u64, gpu_ssim: Option<f64>) -> Result<()> {
         let gpu_boundary_crf = self.gpu_boundary_crf;
         let search_floor = if self.ultimate_mode {
@@ -3375,20 +3441,23 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                 &format!(
-                    "3D plateau patience: {required_zero_gains} consecutive fine-step non-improvements"
+                    "3D plateau patience: {required_zero_gains} consecutive fine-step \
+                     non-improvements"
                 )
             );
         } else {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                 &format!(
-                    "CRF range: {crf_range:.1} → Initial step: {initial_step:.1} (v6.2 curve model)"
+                    "CRF range: {crf_range:.1} → Initial step: {initial_step:.1} (v6.2 curve \
+                     model)"
                 )
             );
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                 &format!(
-                    "Strategy: Aggressive curve decay (step × 0.4 per wall hit, max {max_wall_hits} hits)"
+                    "Strategy: Aggressive curve decay (step × 0.4 per wall hit, max \
+                     {max_wall_hits} hits)"
                 )
             );
         }
@@ -3441,7 +3510,8 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                 &format!(
-                    "Fallback limit: {max_iterations_for_video} (emergency only), Max walls: {max_wall_hits}, Zero-gains: {required_zero_gains}"
+                    "Fallback limit: {max_iterations_for_video} (emergency only), Max walls: \
+                     {max_wall_hits}, Zero-gains: {required_zero_gains}"
                 )
             );
         }
@@ -3490,7 +3560,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_STRATEGY,
                     &format!(
-                        "Heavy video ({min:.1} min): skipping CRF 0.00 probe as no high-quality success (< 5.0) confirmed yet",
+                        "Heavy video ({min:.1} min): skipping CRF 0.00 probe as no high-quality \
+                         success (< 5.0) confirmed yet",
                         min = self.duration / 60.0
                     )
                 );
@@ -3556,7 +3627,8 @@ impl<'a> CpuFineTuneSession<'a> {
                             if failure_credibility >= 3.0_f64 {
                                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                                     "explore_gpu_coarse",
-                                    "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 insights. Stopping.",
+                                    "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 \
+                                     insights. Stopping.",
                                 );
                                 self.early_insight_triggered = true;
                                 break;
@@ -3611,24 +3683,27 @@ impl<'a> CpuFineTuneSession<'a> {
                             crate::media_conversion_gate::explore_adaptive_psnr_uv_floor_optional(
                                 self.tracking.best_psnr_uv,
                             );
-                        let not_credible = if let (Some(vf), Some((uf, vf2))) =
-                            (vmaf_floor, psnr_floor)
-                        {
-                            vmaf_metric < vf || psnr_uv_min_channel < uf.min(vf2)
-                        } else {
-                            crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
-                                "explore_gpu_quality",
-                                format!(
-                                    "QUALITY WALL: VMAF:{vmaf_metric:.2} UV:{psnr_uv_min_channel:.2} but search baseline absent; refusing sanity-floor credibility check"
-                                ),
-                            );
-                            false
-                        };
+                        let not_credible =
+                            if let (Some(vf), Some((uf, vf2))) = (vmaf_floor, psnr_floor) {
+                                vmaf_metric < vf || psnr_uv_min_channel < uf.min(vf2)
+                            } else {
+                                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                                    "explore_gpu_quality",
+                                    format!(
+                                        "QUALITY WALL: VMAF:{vmaf_metric:.2} \
+                                         UV:{psnr_uv_min_channel:.2} but search baseline absent; \
+                                         refusing sanity-floor credibility check"
+                                    ),
+                                );
+                                false
+                            };
                         if not_credible {
                             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                                 "explore_gpu_quality",
                                 format!(
-                                    "QUALITY CEILING HIT (NOT CREDIBLE): Saturated at VMAF:{vmaf_metric:.2}, UV:{psnr_uv_min_channel:.2}. Below adaptive floor from search baseline. Aborting."
+                                    "QUALITY CEILING HIT (NOT CREDIBLE): Saturated at \
+                                     VMAF:{vmaf_metric:.2}, UV:{psnr_uv_min_channel:.2}. Below \
+                                     adaptive floor from search baseline. Aborting."
                                 ),
                             );
                             quality_wall_hit = true;
@@ -3639,7 +3714,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% {metrics_display}{sat_status}",
+                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% \
+                             {metrics_display}{sat_status}",
                             crf_pass_prefix(),
                             metrics_display = if ultimate_metrics_str.is_empty() {
                                 "N/A"
@@ -3691,7 +3767,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}{sat_status}",
+                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ \
+                             SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}{sat_status}",
                             crf_pass_prefix(),
                             sat_status = if consecutive_zero_gains > 0
                                 && current_step <= crate::constants::EXPLORATION_MIN_STEP + 0.01
@@ -3711,7 +3788,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ SSIM:{current_ssim:.4}",
+                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ \
+                             SSIM:{current_ssim:.4}",
                             crf_pass_prefix()
                         )
                     );
@@ -3732,7 +3810,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         domain_wall_hit = true;
                         let msg = if consecutive_zero_gains >= required_zero_gains {
                             format!(
-                                "3D quality plateau after {consecutive_zero_gains} consecutive fine-step non-improvements"
+                                "3D quality plateau after {consecutive_zero_gains} consecutive \
+                                 fine-step non-improvements"
                             )
                         } else {
                             "VMAF(Y) + PSNR(UV) absolute quality ceiling reached".to_string()
@@ -3745,14 +3824,16 @@ impl<'a> CpuFineTuneSession<'a> {
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_PHASE_2,
                             &format!(
-                                "[CPU] QUALITY WALL HIT: SSIM saturated after {consecutive_zero_gains} consecutive zero-gains"
+                                "[CPU] QUALITY WALL HIT: SSIM saturated after \
+                                 {consecutive_zero_gains} consecutive zero-gains"
                             )
                         );
                     }
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "Final: CRF {test_crf:.2}, compression {total_size_pct:+.1}%, iterations {iter}",
+                            "Final: CRF {test_crf:.2}, compression {total_size_pct:+.1}%, \
+                             iterations {iter}",
                             iter = self.iterations
                         )
                     );
@@ -3776,7 +3857,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_2,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ {} WALL HIT #{wall_hits} (Backtrack: {current_step:.2} → {new_step:.2} {phase_info})",
+                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ {} WALL HIT \
+                         #{wall_hits} (Backtrack: {current_step:.2} → {new_step:.2} {phase_info})",
                         crf_fail_prefix(),
                         crf_fail_tag(),
                         phase_info = if wall_hits == 1 {
@@ -3795,13 +3877,15 @@ impl<'a> CpuFineTuneSession<'a> {
                     if self.ultimate_mode {
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_PHASE_2,
-                            "[CPU] 🧱 Size wall hit at 0.01 minimum granularity. Oscillation locked down, handing off to Phase 4."
+                            "[CPU] 🧱 Size wall hit at 0.01 minimum granularity. Oscillation \
+                             locked down, handing off to Phase 4."
                         );
                         break;
                     }
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
-                        "[CPU] 🧱 Minimum step reached and hit capacity wall. Stopping exploration."
+                        "[CPU] 🧱 Minimum step reached and hit capacity wall. Stopping \
+                         exploration."
                     );
                     break;
                 }
@@ -3810,7 +3894,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "[CPU] Adaptive wall limit ({max_wall_hits}) reached. Stopping at best CRF {last_good_crf:.2}"
+                            "[CPU] Adaptive wall limit ({max_wall_hits}) reached. Stopping at \
+                             best CRF {last_good_crf:.2}"
                         )
                     );
                     break;
@@ -3882,13 +3967,15 @@ impl<'a> CpuFineTuneSession<'a> {
             upward_iteration_count: 0,
         };
 
-        // Bi-directional Pivot / Reverse Exploration: when the initial probe failed by a
-        // wide margin, orbit to the ceiling first to see if compression is possible at all.
+        // Bi-directional Pivot / Reverse Exploration: when the initial probe failed by
+        // a wide margin, orbit to the ceiling first to see if compression is
+        // possible at all.
         if gpu_boundary_crf < 5.0 && gpu_pct > 3.0_f64 {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_STRATEGY,
                 &format!(
-                    "Bi-directional Pivot: CRF {gpu_boundary_crf:.2} too large ({gpu_pct:.1}%), probing ceiling CRF {max_crf:.2}..."
+                    "Bi-directional Pivot: CRF {gpu_boundary_crf:.2} too large ({gpu_pct:.1}%), \
+                     probing ceiling CRF {max_crf:.2}..."
                 )
             );
 
@@ -3900,7 +3987,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_crf",
                     format!(
-                        "Media is incompressible even at max quality (CRF {max_crf:.1}). Bailing out."
+                        "Media is incompressible even at max quality (CRF {max_crf:.1}). Bailing \
+                         out."
                     ),
                 );
                 self.best_crf = Some(max_crf);
@@ -3910,7 +3998,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_2,
                     &format!(
-                        "Ceiling hit! Space [0.0, {max_crf:.2}] is compressible. Starting search from mid-point..."
+                        "Ceiling hit! Space [0.0, {max_crf:.2}] is compressible. Starting search \
+                         from mid-point..."
                     )
                 );
                 // Mid-Jump Pivot: record the ceiling as a fallback, then jump to a more useful
@@ -3949,7 +4038,8 @@ impl<'a> CpuFineTuneSession<'a> {
             let size_delta = (total_size_pct - last_size_pct).abs();
 
             // Unified Direction Switch Logic: size stagnation past the lossless deadzone or
-            // sustained upward iteration without finding compression flips us to a downward sweep.
+            // sustained upward iteration without finding compression flips us to a downward
+            // sweep.
             if size_delta < 0.5_f64 {
                 if test_crf > 12.0 {
                     feedback.size_stagnation_count += 1;
@@ -3972,7 +4062,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_STRATEGY,
                     &format!(
-                        "Search Direction Switch: {trigger_reason} reached. Switching to downward search for efficiency."
+                        "Search Direction Switch: {trigger_reason} reached. Switching to downward \
+                         search for efficiency."
                     )
                 );
 
@@ -3990,7 +4081,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_STRATEGY,
                             &format!(
-                                "Deadzone Burst: jumping {jump_step:.1} units to escape the lossless plateau..."
+                                "Deadzone Burst: jumping {jump_step:.1} units to escape the \
+                                 lossless plateau..."
                             )
                         );
                         current_step = jump_step;
@@ -4028,7 +4120,8 @@ impl<'a> CpuFineTuneSession<'a> {
                             crate::log_info!(
                                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                                 &format!(
-                                    "Search Decelerating (slope Δ{size_delta:.1} detected, step: {current_step:.2} → {jog_step:.2}, entering jog)"
+                                    "Search Decelerating (slope Δ{size_delta:.1} detected, step: \
+                                     {current_step:.2} → {jog_step:.2}, entering jog)"
                                 )
                             );
                             current_step = jog_step;
@@ -4037,7 +4130,8 @@ impl<'a> CpuFineTuneSession<'a> {
                             crate::log_info!(
                                 crate::infra::static_logs::messages::LABEL_PHASE_2,
                                 &format!(
-                                    "Search Decelerating (slope Δ{size_delta:.1} detected, step: {current_step:.2} → {step_up:.2}, entering pause)",
+                                    "Search Decelerating (slope Δ{size_delta:.1} detected, step: \
+                                     {current_step:.2} → {step_up:.2}, entering pause)",
                                     step_up = Self::STEP_UPWARD
                                 )
                             );
@@ -4059,7 +4153,8 @@ impl<'a> CpuFineTuneSession<'a> {
             let is_effectively_compressed = size < self.input_size;
 
             // Ultimate Mode: Insight-Based Credibility Check (Sticky). Only run expensive
-            // VMAF/PSNR when we are somewhat close to compression to avoid process exhaustion.
+            // VMAF/PSNR when we are somewhat close to compression to avoid process
+            // exhaustion.
             if self.ultimate_mode
                 && !is_effectively_compressed
                 && (total_size_pct < 120.0_f64 || self.iterations < 2)
@@ -4087,7 +4182,9 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.1}/3.0 {improvement_indicator})",
+                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ VMAF:{v:.2} \
+                             UV:{chroma_avg:.2} ({failure_credibility:.1}/3.0 \
+                             {improvement_indicator})",
                             crf_fail_prefix(),
                         )
                     );
@@ -4104,7 +4201,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         if failure_credibility >= 3.0_f64 {
                             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                                 "explore_gpu_coarse",
-                                "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 insights. Stopping.",
+                                "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 \
+                                 insights. Stopping.",
                             );
                             if self.best_crf.is_none() {
                                 self.best_crf = Some(best_tested_crf);
@@ -4129,7 +4227,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_STRATEGY,
                         &format!(
-                            "Overshot boundary ({total_size_pct:.1}%): backtracking for precision... (retry {retry}/2)",
+                            "Overshot boundary ({total_size_pct:.1}%): backtracking for \
+                             precision... (retry {retry}/2)",
                             retry = backtrack_count + 1
                         )
                     );
@@ -4169,7 +4268,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "Search Jogging complete (step: {current_step:.2} → {step_up:.2}); pausing adaptive changes",
+                            "Search Jogging complete (step: {current_step:.2} → {step_up:.2}); \
+                             pausing adaptive changes",
                             step_up = Self::STEP_UPWARD
                         )
                     );
@@ -4180,7 +4280,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "Search Paused at boundary pace ({current_step:.2}); resuming normal iteration next step"
+                            "Search Paused at boundary pace ({current_step:.2}); resuming normal \
+                             iteration next step"
                         )
                     );
                     search_cadence = UpwardSearchCadence::Normal;
@@ -4196,7 +4297,9 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "explore_gpu_crf",
                 format!(
-                    "FAILED: No compression point found below input size (up to max CRF {max_crf:.2}). File may be already optimally compressed. Aborting fine-tuning."
+                    "FAILED: No compression point found below input size (up to max CRF \
+                     {max_crf:.2}). File may be already optimally compressed. Aborting \
+                     fine-tuning."
                 ),
             );
             if self.best_crf.is_none() {
@@ -4225,7 +4328,8 @@ impl<'a> CpuFineTuneSession<'a> {
         let compress_size = self.best_size.ok_or_else(|| {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "explore_gpu_crf",
-                "GPU Coarse Search: best_crf exists but best_size is missing; refusing to infer source-sized baseline",
+                "GPU Coarse Search: best_crf exists but best_size is missing; refusing to infer \
+                 source-sized baseline",
             );
             anyhow::anyhow!("GPU Coarse Search: best_size not found")
         })?;
@@ -4326,7 +4430,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     if let (Some(v), Some((u, v_score))) = (vmaf_opt, psnr_uv_opt) {
                         let chroma_avg = f64::midpoint(u, v_score);
                         format!(
-                            " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 {improvement_indicator})"
+                            " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 \
+                             {improvement_indicator})"
                         )
                     } else {
                         String::new()
@@ -4340,7 +4445,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} (step {current_step:.2}) {}",
+                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} (step \
+                         {current_step:.2}) {}",
                         crf_pass_prefix(),
                         crf_pass_tag(),
                     )
@@ -4350,7 +4456,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
                         &format!(
-                            "Efficiency limit reached: {MAX_CONSECUTIVE_COMPRESSIONS} consecutive compressions found. Stopping."
+                            "Efficiency limit reached: {MAX_CONSECUTIVE_COMPRESSIONS} consecutive \
+                             compressions found. Stopping."
                         )
                     );
                     break;
@@ -4362,7 +4469,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         if failure_credibility >= 3.0_f64 {
                             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                                 "explore_gpu_coarse",
-                                "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 insights. Stopping.",
+                                "QUALITY PLATEAU REACHED (3/3): No integer improvement over 3 \
+                                 insights. Stopping.",
                             );
                             break;
                         }
@@ -4395,7 +4503,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
                         &format!(
-                            "Search Decelerating (slope Δ{size_delta:.1} detected, step reset: {old_step:.2} → {current_step:.2})"
+                            "Search Decelerating (slope Δ{size_delta:.1} detected, step reset: \
+                             {old_step:.2} → {current_step:.2})"
                         )
                     );
                 } else if boundary_nearing
@@ -4408,7 +4517,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
                         &format!(
-                            "Smart deceleration: step {old_step:.2} → {current_step:.2} (approaching floor {search_floor:.2})"
+                            "Smart deceleration: step {old_step:.2} → {current_step:.2} \
+                             (approaching floor {search_floor:.2})"
                         )
                     );
                 } else {
@@ -4444,7 +4554,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} {} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})",
+                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} {} (fail \
+                         {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})",
                         crf_fail_prefix(),
                         crf_fail_tag(),
                     )
@@ -4461,7 +4572,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_STRATEGY,
                         &format!(
-                            "Backtracking for precision (retry {backtrack_count}/2): {old_step:.2} → {current_step:.2}"
+                            "Backtracking for precision (retry {backtrack_count}/2): \
+                             {old_step:.2} → {current_step:.2}"
                         )
                     );
                     test_crf = crate::media_conversion_gate::explore_best_crf_or_backtrack_anchor(
@@ -4492,7 +4604,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         if failure_credibility >= 3.0_f64 {
                             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                                 "explore_gpu_coarse",
-                                "FAILURE CREDIBILITY REACHED (3/3): Sustained quality collapse. Stopping.",
+                                "FAILURE CREDIBILITY REACHED (3/3): Sustained quality collapse. \
+                                 Stopping.",
                             );
                             self.early_insight_triggered = true;
                             break;
@@ -4532,7 +4645,8 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::media_conversion_gate::explore_gpu_coarse_audit(
                 "explore_gpu_crf",
                 self.input,
-                "Skipping ultimate fine-tune because best_crf exists without best_size; refusing to forge an infinite size ratio",
+                "Skipping ultimate fine-tune because best_crf exists without best_size; refusing \
+                 to forge an infinite size ratio",
             );
             return Ok(());
         }
@@ -4553,7 +4667,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_4,
             &format!(
-                "Starting from 0.1 optimum (CRF {best:.2}) with adaptive step (0.01 → {max_sprint_step:.2} sprint)"
+                "Starting from 0.1 optimum (CRF {best:.2}) with adaptive step (0.01 → \
+                 {max_sprint_step:.2} sprint)"
             )
         );
 
@@ -4561,7 +4676,8 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::media_conversion_gate::explore_gpu_coarse_audit(
                 "explore_gpu_crf",
                 self.input,
-                "Skipping ultimate fine-tune because best_crf exists without best_size; refusing to continue with forged state",
+                "Skipping ultimate fine-tune because best_crf exists without best_size; refusing \
+                 to continue with forged state",
             );
             return Ok(());
         };
@@ -4621,7 +4737,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_4,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_info} │ {step_info}",
+                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_info} │ \
+                         {step_info}",
                         crf_pass_prefix(),
                         step_info = if current_step > base_step + 0.001 {
                             format!("SPRINT step {current_step:.2}")
@@ -4650,7 +4767,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_4,
                         &format!(
-                            "Search Decelerating (slope Δ{size_delta:.1} detected, step reset: {old_step:.3} → {current_step:.3})"
+                            "Search Decelerating (slope Δ{size_delta:.1} detected, step reset: \
+                             {old_step:.3} → {current_step:.3})"
                         )
                     );
                 } else if boundary_nearing && current_step > base_step + 0.001 {
@@ -4660,7 +4778,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_4,
                         &format!(
-                            "Smart deceleration: step {old_step:.3} → {current_step:.3} (floor in {distance_to_floor:.2})"
+                            "Smart deceleration: step {old_step:.3} → {current_step:.3} (floor in \
+                             {distance_to_floor:.2})"
                         )
                     );
                 } else if consecutive_successes >= 2_i32 && current_step < max_sprint_step {
@@ -4681,7 +4800,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_4,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ CAPACITY EXCEEDED ({fine_failures}/{max_fine_failures})",
+                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ CAPACITY EXCEEDED \
+                         ({fine_failures}/{max_fine_failures})",
                         crf_fail_prefix(),
                     )
                 );
@@ -4697,7 +4817,9 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_STRATEGY,
                         &format!(
-                            "Backtracking for extreme precision (retry {backtrack_count}/{PHASE4_MAX_BACKTRACK_RETRIES}): {old_step:.3} → {current_step:.3}"
+                            "Backtracking for extreme precision (retry \
+                             {backtrack_count}/{PHASE4_MAX_BACKTRACK_RETRIES}): {old_step:.3} → \
+                             {current_step:.3}"
                         )
                     );
                     continue;
@@ -4792,9 +4914,9 @@ impl<'a> CpuFineTuneSession<'a> {
     }
 
     /// Reconcile the search outcome into a concrete (CRF, output size) pair.
-    /// Promotes `best_crf` to a final value (or falls back to `max_crf` when search
-    /// never produced one), runs the optional preset upgrade encode, and reports whether
-    /// Phase 5 should follow.
+    /// Promotes `best_crf` to a final value (or falls back to `max_crf` when
+    /// search never produced one), runs the optional preset upgrade encode,
+    /// and reports whether Phase 5 should follow.
     fn prepare_final_settlement(&mut self) -> Result<(f32, u64, bool)> {
         let size_tolerance = if self.allow_size_tolerance {
             crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
@@ -4825,7 +4947,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 if self.early_insight_triggered {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        "Skipping final settlement: early insight already proved further compression is futile."
+                        "Skipping final settlement: early insight already proved further \
+                         compression is futile."
                     );
                     let fallback_crf = self.max_crf;
                     let size = self.input_size + 1;
@@ -4860,8 +4983,9 @@ impl<'a> CpuFineTuneSession<'a> {
             }
         };
 
-        // Final-render gate: an explicit preset upgrade (e.g. search=slow → final=slower) needs a
-        // last full-quality render, and segmented sampling needs a full-timeline encode regardless.
+        // Final-render gate: an explicit preset upgrade (e.g. search=slow →
+        // final=slower) needs a last full-quality render, and segmented
+        // sampling needs a full-timeline encode regardless.
         let needs_final_preset_render = self.final_output_preset != self.preset;
         let mut run_phase5 = false;
 
@@ -4869,7 +4993,8 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!(
-                    "Full-timeline encode at CRF {final_crf:.2} with preset {preset} (replacing segmented exploration output)",
+                    "Full-timeline encode at CRF {final_crf:.2} with preset {preset} (replacing \
+                     segmented exploration output)",
                     preset = self
                         .final_output_preset
                         .hevc_name_for_archive(self.archive_mode)
@@ -4881,7 +5006,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 self.final_output_preset,
             )?;
             self.iterations += 1;
-            // Preset upgraded mid-pipeline: follow up with Phase 5 to squeeze further gains.
+            // Preset upgraded mid-pipeline: follow up with Phase 5 to squeeze further
+            // gains.
             if needs_final_preset_render && final_crf < self.max_crf {
                 run_phase5 = true;
             }
@@ -4931,7 +5057,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_5,
             &format!(
-                "Starting from Phase 4 bound (CRF {final_crf:.2}). Stopping after {PHASE5_MAX_CONSECUTIVE_FAILURES} non-improving attempts."
+                "Starting from Phase 4 bound (CRF {final_crf:.2}). Stopping after \
+                 {PHASE5_MAX_CONSECUTIVE_FAILURES} non-improving attempts."
             )
         );
 
@@ -4951,7 +5078,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_5,
                     &format!(
-                        "Adaptive lookahead cap ({PHASE5_MAX_CONSECUTIVE_FAILURES} non-improvements) reached. Stopping Phase 5."
+                        "Adaptive lookahead cap ({PHASE5_MAX_CONSECUTIVE_FAILURES} \
+                         non-improvements) reached. Stopping Phase 5."
                     )
                 );
                 break;
@@ -4960,7 +5088,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_5,
                     &format!(
-                        "Absolute Phase 5 safety cap ({PHASE5_MAX_TOTAL_ATTEMPTS} total attempts) reached. Stopping."
+                        "Absolute Phase 5 safety cap ({PHASE5_MAX_TOTAL_ATTEMPTS} total attempts) \
+                         reached. Stopping."
                     )
                 );
                 break;
@@ -4981,13 +5110,15 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_encode",
                     format!(
-                        "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe lower CRF without recoverable current-best output",
+                        "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe \
+                         lower CRF without recoverable current-best output",
                         self.output.display(),
                         backup_path.display()
                     ),
                 );
                 return Err(anyhow::anyhow!(
-                    "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe lower CRF without recoverable current-best output",
+                    "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe lower \
+                     CRF without recoverable current-best output",
                     self.output.display(),
                     backup_path.display()
                 ));
@@ -5016,7 +5147,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_PHASE_5,
                             &format!(
-                                "{} CRF {test_crf:.2} -> {test_size} bytes (decreased by {pct_gain:.2}%, keeping)",
+                                "{} CRF {test_crf:.2} -> {test_size} bytes (decreased by \
+                                 {pct_gain:.2}%, keeping)",
                                 crf_pass_prefix(),
                             )
                         );
@@ -5034,7 +5166,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_PHASE_5,
                             &format!(
-                                "{} CRF {test_crf:.2} -> {test_size} bytes (increased past {final_full_size}, discarding)",
+                                "{} CRF {test_crf:.2} -> {test_size} bytes (increased past \
+                                 {final_full_size}, discarding)",
                                 crf_fail_prefix(),
                             )
                         );
@@ -5042,7 +5175,8 @@ impl<'a> CpuFineTuneSession<'a> {
                             crate::log_info!(
                                 crate::infra::static_logs::messages::LABEL_PHASE_5,
                                 &format!(
-                                    "... exploring further ({attempts_left} lookahead attempts remaining)"
+                                    "... exploring further ({attempts_left} lookahead attempts \
+                                     remaining)"
                                 )
                             );
                         }
@@ -5056,7 +5190,8 @@ impl<'a> CpuFineTuneSession<'a> {
                             self.output,
                         ) {
                             return Err(anyhow::anyhow!(
-                                "Phase-5 failed to restore previous best output from {} to {} after non-improving candidate",
+                                "Phase-5 failed to restore previous best output from {} to {} \
+                                 after non-improving candidate",
                                 backup_path.display(),
                                 self.output.display()
                             ));
@@ -5083,7 +5218,8 @@ impl<'a> CpuFineTuneSession<'a> {
                         self.output,
                     ) {
                         return Err(anyhow::anyhow!(
-                            "Phase-5 failed to restore previous best output from {} to {} after encode failure",
+                            "Phase-5 failed to restore previous best output from {} to {} after \
+                             encode failure",
                             backup_path.display(),
                             self.output.display()
                         ));
@@ -5101,7 +5237,8 @@ impl<'a> CpuFineTuneSession<'a> {
         Ok((final_crf, final_full_size))
     }
 
-    /// Run quality verification, package the explore result, and emit the closing logs.
+    /// Run quality verification, package the explore result, and emit the
+    /// closing logs.
     fn build_result(self, final_crf: f32, final_full_size: u64) -> anyhow::Result<ExploreResult> {
         let CpuFineTuneSession {
             input,
@@ -5197,7 +5334,8 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "[FINISH] {result_prefix}: CRF {final_crf:.2} │ Size {size_change_pct:+.1}% │ Iterations: {iterations}"
+                "[FINISH] {result_prefix}: CRF {final_crf:.2} │ Size {size_change_pct:+.1}% │ \
+                 Iterations: {iterations}"
             )
         );
         crate::log_info!(
@@ -5296,7 +5434,8 @@ impl<'a> CpuFineTuneSession<'a> {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "explore_gpu_coarse",
                 format!(
-                    "Video stream compressed ({video_stream_pct:+.1}%) but total file larger ({total_file_pct:+.1}%)"
+                    "Video stream compressed ({video_stream_pct:+.1}%) but total file larger \
+                     ({total_file_pct:+.1}%)"
                 ),
             );
             crate::log_info!(
@@ -5362,7 +5501,8 @@ impl<'a> CpuFineTuneSession<'a> {
         let (ssim, lossless_integrity_ok) = if ultimate_mode {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_DETECTION,
-                "Ultimate mode: skipping SSIM in settle phase; final 3D gate owns quality validation"
+                "Ultimate mode: skipping SSIM in settle phase; final 3D gate owns quality \
+                 validation"
             );
             (None, None)
         } else if input_is_animated_image_like
@@ -6336,7 +6476,8 @@ mod tests {
 
     #[test]
     fn test_adaptive_psnr_floor_clamps_to_sanity() {
-        // baseline 31.0/31.2 - 1.5 would fall below 30.0, so both clamp to the sanity floor
+        // baseline 31.0/31.2 - 1.5 would fall below 30.0, so both clamp to the sanity
+        // floor
         let psnr = adaptive_psnr_uv_floor(Some((31.0_f64, 31.2_f64))).expect("psnr floor");
         assert!((psnr.0 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
         assert!((psnr.1 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
@@ -6344,7 +6485,8 @@ mod tests {
 
     #[test]
     fn test_adaptive_cambi_ceiling_borderline_clean() {
-        // Source CAMBI exactly at EXPLORATION_CAMBI_MAX boundary gets the clean-source rise.
+        // Source CAMBI exactly at EXPLORATION_CAMBI_MAX boundary gets the clean-source
+        // rise.
         let ceil = adaptive_cambi_ceiling(Some(EXPLORATION_CAMBI_MAX)).expect("cambi ceiling");
         assert!((ceil - 7.0).abs() < 1e-6_f64);
     }

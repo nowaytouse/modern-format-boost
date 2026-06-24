@@ -1,5 +1,7 @@
-//! Modern Format Boost - Drag/Drop Processor (Rust primary; `drag_and_drop_processor.py` retained as compat reference).
-//! PTY/process streaming, watch mode, interactive TUI menu, handoff preserve — parity with Python launcher.
+//! Modern Format Boost - Drag/Drop Processor (Rust primary;
+//! `drag_and_drop_processor.py` retained as compat reference). PTY/process
+//! streaming, watch mode, interactive TUI menu, handoff preserve — parity with
+//! Python launcher.
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
@@ -53,7 +55,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
-// ── Error mode constants (mirrors Python MFB_DRAG_DROP_ERROR_MODE) ────────────
+// ── Error mode constants (mirrors Python MFB_DRAG_DROP_ERROR_MODE)
+// ────────────
 const DRAG_DROP_ERROR_MODE_ENV: &str = "MFB_DRAG_DROP_ERROR_MODE";
 const DRAG_DROP_FAIL_FAST_ENV: &str = "MFB_DRAG_DROP_FAIL_FAST";
 const DRAG_DROP_ERROR_MODE_FAIL_FAST: &str = "fail-fast";
@@ -211,7 +214,8 @@ impl DragDropSession {
             .with_context(|| format!("write drag/drop log {}", path.display()))
     }
 
-    /// Rename session log to include project folder name (mirrors Python `rename_log_to_project`).
+    /// Rename session log to include project folder name (mirrors Python
+    /// `rename_log_to_project`).
     fn rename_log_to_project(&mut self, target: &Path) -> Result<()> {
         let project_name = target.file_name().map_or_else(
             || "project".to_string(),
@@ -236,7 +240,8 @@ impl DragDropSession {
         Ok(())
     }
 
-    /// Write final statistics block to session log (mirrors Python `finish_log`).
+    /// Write final statistics block to session log (mirrors Python
+    /// `finish_log`).
     fn finish_log(&self, summary: &PipelineSummary, size_summary: Option<&str>) -> Result<()> {
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -292,12 +297,14 @@ impl DragDropSession {
         }
         writeln!(
             file,
-            "\n========================================\nSession completed.\n========================================"
+            "\n========================================\nSession \
+             completed.\n========================================"
         )?;
         append_jsonl_audit_record(
             &self.session_audit,
             &format!(
-                "SESSION_COMPLETED images_ok={} images_skip={} images_fail={} videos_ok={} videos_skip={} videos_fail={}",
+                "SESSION_COMPLETED images_ok={} images_skip={} images_fail={} videos_ok={} \
+                 videos_skip={} videos_fail={}",
                 summary.img.succeeded,
                 summary.img.skipped,
                 summary.img.failed,
@@ -610,10 +617,12 @@ fn project_root() -> Result<PathBuf> {
 
 fn cli_binary(project_root: &Path, name: &str) -> PathBuf {
     if is_app_bundle_resource_root(project_root) {
-        // When running from an app bundle, binaries are packaged alongside the executable.
+        // When running from an app bundle, binaries are packaged alongside the
+        // executable.
         project_root.join(name)
     } else {
-        // smart_build always produces release binaries, regardless of how drag_and_drop_processor was compiled
+        // smart_build always produces release binaries, regardless of how
+        // drag_and_drop_processor was compiled
         project_root.join("target").join("release").join(name)
     }
 }
@@ -683,8 +692,9 @@ const fn mode_needs_db_health(mode: &LaunchMode) -> bool {
 /// Resolve the current drag/drop error mode from the environment.
 ///
 /// Mirrors `drag_drop_error_mode()` in the Python implementation.
-/// Checks `MFB_DRAG_DROP_FAIL_FAST` (legacy) first, then `MFB_DRAG_DROP_ERROR_MODE`.
-/// Any unrecognised value falls through to log-and-continue.
+/// Checks `MFB_DRAG_DROP_FAIL_FAST` (legacy) first, then
+/// `MFB_DRAG_DROP_ERROR_MODE`. Any unrecognised value falls through to
+/// log-and-continue.
 fn drag_drop_error_mode() -> &'static str {
     fn truthy(v: &str) -> bool {
         matches!(
@@ -714,7 +724,8 @@ fn drag_drop_error_mode() -> &'static str {
         }
         _ => {
             eprintln!(
-                "{} Unknown {DRAG_DROP_ERROR_MODE_ENV}={raw:?}; falling back to {DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE}",
+                "{} Unknown {DRAG_DROP_ERROR_MODE_ENV}={raw:?}; falling back to \
+                 {DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE}",
                 pick_symbol("⚠️", "[WARN]")
             );
             DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE
@@ -1299,7 +1310,8 @@ fn plan_cli_invocations(
 ) -> Result<Vec<LaunchCommand>> {
     if args.vue {
         bail!(
-            "Vue prototype is scaffolding only; invoke it separately from crates/dev/src/vue without processing files"
+            "Vue prototype is scaffolding only; invoke it separately from crates/dev/src/vue \
+             without processing files"
         );
     }
     if args.inputs.is_empty() {
@@ -1505,7 +1517,8 @@ fn run_drag_drop(
             None
         };
 
-    // Defer binary check until after scan (matches Python: ensure_tools_ready after count_files)
+    // Defer binary check until after scan (matches Python: ensure_tools_ready after
+    // count_files)
     if mode_needs_img_vid_binaries(&args.mode) {
         ensure_tools_ready(&root, &args.mode)?;
     }
@@ -1750,7 +1763,8 @@ fn run_drag_drop(
         }
         if effective_f > 0 {
             eprintln!(
-                "\n   {} Exiting with failures: {effective_f} file(s) did not complete successfully.",
+                "\n   {} Exiting with failures: {effective_f} file(s) did not complete \
+                 successfully.",
                 pick_symbol("❌", "[ERROR]")
             );
         }
@@ -1933,7 +1947,8 @@ fn prompt_for_input() -> Result<Option<PathBuf>> {
     let cyan = if colors_enabled() { "\x1b[0;36m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
     println!(
-        "\n{cyan}Please drag and drop a folder or file into this terminal window and press Enter.{reset}"
+        "\n{cyan}Please drag and drop a folder or file into this terminal window and press \
+         Enter.{reset}"
     );
     drain_stdin();
     let path = read_choice(&format!("{cyan} > {reset}"))?;
@@ -2406,11 +2421,13 @@ fn main() -> Result<()> {
     // Vue launcher check
     if args.vue {
         bail!(
-            "Vue launcher is not implemented; run crates/dev/src/vue scripts directly during UI prototyping"
+            "Vue launcher is not implemented; run crates/dev/src/vue scripts directly during UI \
+             prototyping"
         );
     }
 
-    // ALWAYS show interactive menu when terminal (matches Python's unconditional select_mode())
+    // ALWAYS show interactive menu when terminal (matches Python's unconditional
+    // select_mode())
     if io::stdin().is_terminal() {
         return interactive_menu(&args, &mut session);
     }

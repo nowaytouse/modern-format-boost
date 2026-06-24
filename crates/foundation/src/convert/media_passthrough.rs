@@ -41,8 +41,9 @@ pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> V
 ///
 /// - No subtitles: returns empty vec (nothing to map).
 /// - MKV: `-c:s copy` (supports all subtitle formats).
-/// - MP4/MOV: text-based subs → `-c:s mov_text`; image-based subs → skip
-///   (MP4 doesn't support bitmap subtitle tracks like `dvd_subtitle` / `hdmv_pgs_subtitle`).
+/// - MP4/MOV: text-based subs → `-c:s mov_text`; image-based subs → skip (MP4
+///   doesn't support bitmap subtitle tracks like `dvd_subtitle` /
+///   `hdmv_pgs_subtitle`).
 #[must_use]
 pub fn subtitle_args_for_container(
     has_subtitles: bool,
@@ -70,8 +71,8 @@ pub fn subtitle_args_for_container(
     if is_text_based {
         vec!["-c:s".to_string(), "mov_text".to_string()]
     } else {
-        // Image-based subtitles (dvd_subtitle, hdmv_pgs_subtitle, etc.) cannot go into MP4.
-        // Drop them silently rather than failing the encode.
+        // Image-based subtitles (dvd_subtitle, hdmv_pgs_subtitle, etc.) cannot go into
+        // MP4. Drop them silently rather than failing the encode.
         vec!["-sn".to_string()]
     }
 }

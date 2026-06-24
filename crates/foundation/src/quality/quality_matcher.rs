@@ -1,7 +1,8 @@
 //! Quality Matcher Module
 //!
 //! Unified quality matching algorithm for all `modern_format_boost` tools.
-//! Calculates optimal encoding parameters (CRF/distance) based on input quality analysis.
+//! Calculates optimal encoding parameters (CRF/distance) based on input quality
+//! analysis.
 
 #[cfg(feature = "high-precision")]
 use rug::Rational;
@@ -63,9 +64,11 @@ pub enum SourceCodec {
 }
 
 impl SourceCodec {
-    /// Relative encoding efficiency vs. H.264 (1.0). Lower value = more efficient at same quality.
-    /// H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are empirical from bitrate comparison studies; no single
-    /// canonical reference—values tuned for CRF mapping consistency across codecs.
+    /// Relative encoding efficiency vs. H.264 (1.0). Lower value = more
+    /// efficient at same quality. H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are
+    /// empirical from bitrate comparison studies; no single
+    /// canonical reference—values tuned for CRF mapping consistency across
+    /// codecs.
     #[must_use]
     pub const fn efficiency_factor(&self) -> f64 {
         match self {
@@ -146,7 +149,8 @@ impl SourceCodec {
         matches!(self, Self::Gif | Self::Apng | Self::WebpAnimated)
     }
 
-    /// Returns true if the format is known to support animation (GIF, APNG, WebP, AVIF, HEIC, JXL).
+    /// Returns true if the format is known to support animation (GIF, APNG,
+    /// WebP, AVIF, HEIC, JXL).
     #[must_use]
     pub const fn can_be_animated(&self) -> bool {
         matches!(
@@ -205,7 +209,8 @@ impl SourceCodec {
         crate::constants::IMAGE_EXTENSIONS
     }
 
-    /// Image extensions that should be collected for conversion (excludes JXL/AVIF/HEIC depending on tool).
+    /// Image extensions that should be collected for conversion (excludes
+    /// JXL/AVIF/HEIC depending on tool).
     #[must_use]
     pub const fn image_extensions_for_convert() -> &'static [&'static str] {
         crate::constants::IMAGE_EXTENSIONS
@@ -300,7 +305,8 @@ impl SourceCodec {
     }
 
     /// Identifies the file format based on internal magic bytes.
-    /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
+    /// This is the "Tight Entry" mechanism that avoids relying on file
+    /// extensions.
     pub fn identify_by_content(path: &std::path::Path) -> std::io::Result<Option<Self>> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).map_err(|e| {
@@ -348,9 +354,10 @@ impl SourceCodec {
         let mut codec = Self::identify_by_header(header_slice);
 
         // Deep WebP animation verification
-        // Some WebP files (notably Safari exports) may not place `VP8X` within the first 64 bytes
-        // even when the file is animated, causing false `WebpStatic` classification.
-        // We scan a bounded prefix for `ANIM`/`ANMF` markers as a fast, reliable fallback.
+        // Some WebP files (notably Safari exports) may not place `VP8X` within the
+        // first 64 bytes even when the file is animated, causing false
+        // `WebpStatic` classification. We scan a bounded prefix for
+        // `ANIM`/`ANMF` markers as a fast, reliable fallback.
         if codec == Some(Self::WebpStatic)
             && header.starts_with(b"RIFF")
             && n >= 12
@@ -389,7 +396,8 @@ impl SourceCodec {
 
         // Deep APNG verification
         // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
-        // can push the acTL chunk far beyond the header. We use Seek to jump over chunk data.
+        // can push the acTL chunk far beyond the header. We use Seek to jump over chunk
+        // data.
         if codec == Some(Self::Png) {
             file.seek(SeekFrom::Start(8)).map_err(|e| {
                 crate::media_conversion_gate::probe_quality_layer_audit(
@@ -418,7 +426,8 @@ impl SourceCodec {
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_ANOMALY,
                         &format!(
-                            "APNG CORRUPTION AUDIT: Chunk header missing byte 0 at position {:?} | Forensic: Unexpected EOF during animation traversal; breaking scan",
+                            "APNG CORRUPTION AUDIT: Chunk header missing byte 0 at position {:?} \
+                             | Forensic: Unexpected EOF during animation traversal; breaking scan",
                             file.stream_position()
                         )
                     );
@@ -429,7 +438,8 @@ impl SourceCodec {
                 } else {
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 1 | Forensic: Truncated bitstream; breaking scan"
+                        "APNG CORRUPTION AUDIT: Chunk header missing byte 1 | Forensic: Truncated \
+                         bitstream; breaking scan"
                     );
                     break;
                 };
@@ -438,7 +448,8 @@ impl SourceCodec {
                 } else {
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 2 | Forensic: Truncated bitstream; breaking scan"
+                        "APNG CORRUPTION AUDIT: Chunk header missing byte 2 | Forensic: Truncated \
+                         bitstream; breaking scan"
                     );
                     break;
                 };
@@ -447,7 +458,8 @@ impl SourceCodec {
                 } else {
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 3 | Forensic: Truncated bitstream; breaking scan"
+                        "APNG CORRUPTION AUDIT: Chunk header missing byte 3 | Forensic: Truncated \
+                         bitstream; breaking scan"
                     );
                     break;
                 };
@@ -457,7 +469,8 @@ impl SourceCodec {
                         "quality_matcher_apng_chunk_type_missing",
                         path,
                         format!(
-                            "APNG chunk type missing at position {:?}; terminating animation search",
+                            "APNG chunk type missing at position {:?}; terminating animation \
+                             search",
                             file.stream_position()
                         ),
                     );
@@ -502,7 +515,8 @@ impl SourceCodec {
         }
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte 33 starts the second chunk)
+            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte
+            // 33 starts the second chunk)
             if header.len() >= 41 && header.get(37..41) == Some(b"acTL") {
                 return Some(Self::Apng);
             }
@@ -775,7 +789,8 @@ fn seal_matcher_factor_field(value: &mut f64) {
 }
 
 impl MatchedQuality {
-    /// Sanitize matcher outputs before they feed `VideoExplorer` or encoder setpoints.
+    /// Sanitize matcher outputs before they feed `VideoExplorer` or encoder
+    /// setpoints.
     pub fn seal_algorithm_outputs(&mut self) {
         if let Some(v) = crate::algorithm_seal::seal_non_negative_finite(self.effective_bpp) {
             self.effective_bpp = v;
@@ -903,15 +918,18 @@ impl Default for AnalysisDetails {
     }
 }
 
-/// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF is still clamped to [0, 51] for maximum flexibility.
+/// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF
+/// is still clamped to [0, 51] for maximum flexibility.
 const SAFE_BPP_MIN: f64 = crate::constants::SAFE_BPP_MIN;
 const SAFE_BPP_MAX: f64 = crate::constants::SAFE_BPP_MAX;
 
-/// AV1 CRF output range; final clamp is the last line of defense for extreme BPP or content/bias adjustments.
+/// AV1 CRF output range; final clamp is the last line of defense for extreme
+/// BPP or content/bias adjustments.
 const AV1_CRF_CLAMP_MIN: f32 = crate::constants::AV1_CRF_CLAMP_MIN;
 const AV1_CRF_CLAMP_MAX: f32 = crate::constants::AV1_CRF_CLAMP_MAX;
 
-/// HEVC CRF output range (x265 0–51, we use 0–51 to allow full range in ultimate mode).
+/// HEVC CRF output range (x265 0–51, we use 0–51 to allow full range in
+/// ultimate mode).
 const HEVC_CRF_CLAMP_MIN: f32 = crate::constants::HEVC_CRF_CLAMP_MIN;
 const HEVC_CRF_CLAMP_MAX: f32 = crate::constants::HEVC_CRF_CLAMP_MAX;
 
@@ -942,12 +960,8 @@ pub fn calculate_av1_crf_with_options(
         );
         return Err(format!(
             "{}\n   {} Possible causes:
-\
-             - File size is 0 or unknown\n\
-             - video_bitrate not provided\n\
-             - Duration/fps detection failed\n\
-             - Invalid dimensions\n\
-             {} Confidence: {conf_str}",
+- File size is 0 or unknown\n- video_bitrate not provided\n- Duration/fps detection failed\n- \
+             Invalid dimensions\n{} Confidence: {conf_str}",
             crate::media_conversion_gate::ui_user_facing_error(format!(
                 "Cannot calculate AV1 CRF: effective_bpp is {effective_bpp} (must be > 0)"
             )),
@@ -968,7 +982,8 @@ pub fn calculate_av1_crf_with_options(
             crate::media_conversion_gate::ui_icon_pick("💡", "[HINT]")
         ));
     }
-    // Defensive clamp so formula inputs are always in a safe range; final CRF clamp [15, 40] remains the safeguard.
+    // Defensive clamp so formula inputs are always in a safe range; final CRF clamp
+    // [15, 40] remains the safeguard.
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < crate::constants::BPP_LOW_GATE_HEVC {
@@ -1002,7 +1017,8 @@ pub fn calculate_av1_crf_with_options(
 
     let rf = crate::constants::MATCHER_CRF_ROUNDING_FACTOR;
     let crf_rounded = (crf_with_bias * rf).round() / rf;
-    // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
+    // Last line of defense: guarantee CRF in valid range regardless of extreme BPP
+    // or content/bias.
     let crf = (crate::numeric_cast::f64_to_f32_lossy(crf_rounded))
         .clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
 
@@ -1042,12 +1058,8 @@ pub fn calculate_hevc_crf_with_options(
         );
         return Err(format!(
             "{}\n   {} Possible causes:
-\
-             - File size is 0 or unknown\n\
-             - video_bitrate not provided\n\
-             - Duration/fps detection failed\n\
-             - Invalid dimensions\n\
-             {} Confidence: {conf_str}",
+- File size is 0 or unknown\n- video_bitrate not provided\n- Duration/fps detection failed\n- \
+             Invalid dimensions\n{} Confidence: {conf_str}",
             crate::media_conversion_gate::ui_user_facing_error(format!(
                 "Cannot calculate HEVC CRF: effective_bpp is {effective_bpp} (must be > 0)"
             )),
@@ -1177,11 +1189,8 @@ pub fn calculate_jxl_distance_with_options(
         );
         return Err(format!(
             "{}\n   {} Possible causes:
-\
-             - File size is 0 or unknown\n\
-             - Invalid dimensions\n\
-             {} For JPEG sources, ensure JPEG quality analysis is available\n\
-             {} Confidence: {conf_str}",
+- File size is 0 or unknown\n- Invalid dimensions\n{} For JPEG sources, ensure JPEG quality \
+             analysis is available\n{} Confidence: {conf_str}",
             crate::media_conversion_gate::ui_user_facing_error(format!(
                 "Cannot calculate JXL distance: effective_bpp is {effective_bpp} (must be > 0)"
             )),
@@ -1235,7 +1244,8 @@ pub fn calculate_jxl_distance_with_options(
 /// Calculate effective bits per pixel with advanced options.
 ///
 /// # Errors
-/// Returns an error message if calculation fails (e.g., missing or invalid dimensions).
+/// Returns an error message if calculation fails (e.g., missing or invalid
+/// dimensions).
 pub fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,
@@ -1609,7 +1619,8 @@ fn calculate_resolution_factor(pixels: u64) -> f64 {
     }
 }
 
-/// Bit depth for CRF math: confirmed probe only; `#[cfg(test)]` supplies 8 when fixtures omit it.
+/// Bit depth for CRF math: confirmed probe only; `#[cfg(test)]` supplies 8 when
+/// fixtures omit it.
 fn crf_effective_bit_depth(analysis: &QualityAnalysis) -> Option<u8> {
     if let Some(depth) = analysis.confirmed_bit_depth() {
         return Some(depth);
@@ -1696,7 +1707,9 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     let mut score: f64 = 0.0;
     let mut max_score: f64 = 0.0;
@@ -1775,7 +1788,8 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     max_score += crate::constants::MATCHER_SCORE_FORMAT_WEIGHT;
     if let Some(bd) = analysis.bit_depth.filter(|bd| *bd > 0) {
         // Unrecognized bit-depth values must not receive "known-feature" credit.
-        // Even if downstream factors treat them neutrally, confidence weighting must be fail-closed.
+        // Even if downstream factors treat them neutrally, confidence weighting must be
+        // fail-closed.
         let codec = parse_source_codec(&analysis.source_codec);
         let bit_depth_recognized = match codec {
             SourceCodec::Gif => (1..=8).contains(&bd) || matches!(bd, 10 | 12 | 16),
@@ -2195,7 +2209,8 @@ pub fn log_quality_analysis(
 #[must_use]
 /// # Panics
 ///
-/// Panics if the internal numeric calculations for BPP encounter a division-by-zero that was not caught by earlier guards.
+/// Panics if the internal numeric calculations for BPP encounter a
+/// division-by-zero that was not caught by earlier guards.
 pub fn from_video_detection(
     file_path: &str,
     codec: &str,
@@ -2383,8 +2398,10 @@ pub struct SkipDecision {
 pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
-    // Normal mode: skip all modern codecs (HEVC, AV1, VP9, VVC, AV2) — already modern, no need to process.
-    // Only when Apple-compat flag is on do we convert AV1/VP9/VVC/AV2 via should_skip_video_codec_apple_compat (skip HEVC only).
+    // Normal mode: skip all modern codecs (HEVC, AV1, VP9, VVC, AV2) — already
+    // modern, no need to process. Only when Apple-compat flag is on do we
+    // convert AV1/VP9/VVC/AV2 via should_skip_video_codec_apple_compat (skip HEVC
+    // only).
     let should_skip = matches!(
         codec,
         SourceCodec::H265
@@ -2463,9 +2480,12 @@ pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
     }
 }
 
-/// True only when we may keep best-effort HEVC/AV1 output on compression/quality failure.
-/// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable file.
-/// - ProRes/DNxHD are NOT included: decision is strictly by SSIM and size balance.
+/// True only when we may keep best-effort HEVC/AV1 output on
+/// compression/quality failure.
+/// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable
+///   file.
+/// - ProRes/DNxHD are NOT included: decision is strictly by SSIM and size
+///   balance.
 #[must_use]
 pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
     matches!(
@@ -2484,7 +2504,8 @@ pub struct AppleOutcomeFlags {
 pub struct AppleContextFlags {
     pub apple_compat: bool,
     pub source_is_gif: bool,
-    /// Ultimate explore: 3D gate owns quality; do not salvage via size-only HEVC keep.
+    /// Ultimate explore: 3D gate owns quality; do not salvage via size-only
+    /// HEVC keep.
     pub ultimate_explore: bool,
 }
 
@@ -2507,7 +2528,8 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
     if request.flags.context.ultimate_explore {
         return false;
     }
-    // If the source is already Apple-native (like GIF), we never allow fallback to a larger file.
+    // If the source is already Apple-native (like GIF), we never allow fallback to
+    // a larger file.
     if request.flags.context.source_is_gif || is_apple_native_format(request.codec_str) {
         return false;
     }
@@ -2546,7 +2568,8 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     let codec = parse_source_codec(format_str);
 
     // Modern lossy static formats: skip to avoid generational loss.
-    // WebP/AVIF lossy static are skipped; HEIC/HEIF lossy static follow the same pattern.
+    // WebP/AVIF lossy static are skipped; HEIC/HEIF lossy static follow the same
+    // pattern.
     let is_modern_lossy = !is_lossless
         && matches!(
             codec,
@@ -2616,7 +2639,8 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     }
 }
 
-/// Calculate quality analysis from raw image analysis results. Returns None if calculation fails.
+/// Calculate quality analysis from raw image analysis results. Returns None if
+/// calculation fails.
 #[must_use]
 pub fn from_image_analysis(
     format: &str,
@@ -2685,7 +2709,8 @@ mod tests {
         };
 
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
-        // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing artificial constraints
+        // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing
+        // artificial constraints
         assert!(result.crf >= 0.0 && result.crf <= 51.0);
         assert!(result.analysis_details.confidence > Some(0.5_f64));
     }
@@ -2738,8 +2763,9 @@ mod tests {
 
     #[test]
     fn test_size_guard_in_apple_compat_is_disabled_for_non_apple_native_inputs() {
-        // Apple compat should never size-guard non-apple-native sources such as WebP/AVIF:
-        // compatibility takes priority and the guard is only meaningful for already-native inputs.
+        // Apple compat should never size-guard non-apple-native sources such as
+        // WebP/AVIF: compatibility takes priority and the guard is only
+        // meaningful for already-native inputs.
         assert!(!is_size_guard_active("webp", true));
         assert!(!is_size_guard_active("avif", true));
 

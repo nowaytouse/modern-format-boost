@@ -1,4 +1,5 @@
-//! `algo` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `algo` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod algorithm_audit;
 

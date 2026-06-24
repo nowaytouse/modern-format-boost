@@ -1,13 +1,15 @@
 //! Centralized Numeric Cast Safety Layer
 //!
-//! This module provides **audited, saturating cast functions** that replace raw `as` casts
-//! throughout the crate. Every numeric conversion is handled here exactly once, with clear
-//! safety documentation and proper `#[allow]` annotations.
+//! This module provides **audited, saturating cast functions** that replace raw
+//! `as` casts throughout the crate. Every numeric conversion is handled here
+//! exactly once, with clear safety documentation and proper `#[allow]`
+//! annotations.
 //!
 //! ## Design Principles
 //! - **Single audit point**: Each cast pattern is reviewed once in this module
 //! - **Saturating semantics**: NaN/negative → 0, overflow → `T::MAX`
-//! - **Zero `as` at call sites**: Callers use named functions instead of raw casts
+//! - **Zero `as` at call sites**: Callers use named functions instead of raw
+//!   casts
 //!
 //! ## Usage
 //! ```rust
@@ -71,7 +73,9 @@ pub fn f64_to_rational_strict(val: f64, name: &str) -> Option<Rational> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Failed to convert f64 value '{val}' to Rational for field '{name}' | Forensic: Value is NaN or Infinite; refusing to forge data to prevent upstream corruption"
+                "NUMERIC CONVERSION AUDIT: Failed to convert f64 value '{val}' to Rational for \
+                 field '{name}' | Forensic: Value is NaN or Infinite; refusing to forge data to \
+                 prevent upstream corruption"
             ),
         );
     }
@@ -86,7 +90,8 @@ pub fn option_f64_strict(val: Option<f64>, name: &str) -> Option<f64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "FIELD STRICTNESS AUDIT: Required optional field '{name}' is missing! | Forensic: Value is None; refusing to forge default data to maintain integrity"
+                "FIELD STRICTNESS AUDIT: Required optional field '{name}' is missing! | Forensic: \
+                 Value is None; refusing to forge default data to maintain integrity"
             ),
         );
     }
@@ -100,7 +105,8 @@ pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is out of range for u64! | Forensic: NaN, Inf, or negative value detected; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is out of range for \
+                 u64! | Forensic: NaN, Inf, or negative value detected; refusing to forge data"
             ),
         );
         return None;
@@ -110,7 +116,8 @@ pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u64! | Forensic: Magnitude exceeds 2^64-1; refusing to forge truncated data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u64! | \
+                 Forensic: Magnitude exceeds 2^64-1; refusing to forge truncated data"
             ),
         );
         return None;
@@ -125,7 +132,9 @@ pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or negative! | Forensic: Cannot convert to u32; refusing to forge data to prevent upstream corruption"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or \
+                 negative! | Forensic: Cannot convert to u32; refusing to forge data to prevent \
+                 upstream corruption"
             ),
         );
         return None;
@@ -135,7 +144,8 @@ pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | Forensic: Value >= 2^32; refusing to forge data to maintain integrity"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | \
+                 Forensic: Value >= 2^32; refusing to forge data to maintain integrity"
             ),
         );
         return None;
@@ -150,7 +160,8 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or negative! | Forensic: Cannot convert to usize; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or \
+                 negative! | Forensic: Cannot convert to usize; refusing to forge data"
             ),
         );
         return None;
@@ -161,7 +172,8 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows 64-bit usize! | Forensic: Value >= 2^64; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows 64-bit \
+                     usize! | Forensic: Value >= 2^64; refusing to forge data"
                 ),
             );
             return None;
@@ -173,7 +185,8 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{}' overflows 32-bit usize! | Forensic: Value >= 2^32 on 32-bit platform; refusing to forge data",
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{}' overflows 32-bit \
+                     usize! | Forensic: Value >= 2^32 on 32-bit platform; refusing to forge data",
                     name
                 ),
             );
@@ -192,7 +205,9 @@ pub fn parse_strict<T: std::str::FromStr>(s: &str, name: &str) -> Option<T> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "PARSE AUDIT: Failed to parse field '{name}' from string '{s}'! | Forensic: String is not a valid numeric representation; refusing to forge data to prevent logic corruption"
+                    "PARSE AUDIT: Failed to parse field '{name}' from string '{s}'! | Forensic: \
+                     String is not a valid numeric representation; refusing to forge data to \
+                     prevent logic corruption"
                 ),
             );
             None
@@ -216,7 +231,8 @@ pub fn u32_to_i32_strict(val: u32, name: &str) -> Option<i32> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | Forensic: Value exceeds i32::MAX; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | \
+                     Forensic: Value exceeds i32::MAX; refusing to forge data"
                 ),
             );
             None
@@ -228,30 +244,38 @@ pub fn u32_to_i32_strict(val: u32, name: &str) -> Option<i32> {
 /// Convert `i32` to `u32` with loud warning on sign loss.
 #[must_use]
 pub fn i32_to_u32_strict(val: i32, name: &str) -> Option<u32> {
-    u32::try_from(val).map_or_else(|_| {
+    u32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | Forensic: Cannot convert negative i32 to u32; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | \
+                     Forensic: Cannot convert negative i32 to u32; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `u64` to `u32` with loud warning on overflow.
 /// Refuses to forge data; returns None on overflow.
 #[must_use]
 pub fn u64_to_u32_strict(val: u64, name: &str) -> Option<u32> {
-    u32::try_from(val).map_or_else(|_| {
+    u32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | Forensic: Value exceeds u32::MAX; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | \
+                     Forensic: Value exceeds u32::MAX; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 #[cfg(not(feature = "high-precision"))]
@@ -269,15 +293,20 @@ pub(crate) const fn u64_to_i64_unchecked(val: u64) -> i64 {
 /// Convert `usize` to `u32` with loud warning on overflow.
 #[must_use]
 pub fn usize_to_u32_strict(val: usize, name: &str) -> Option<u32> {
-    u32::try_from(val).map_or_else(|_| {
+    u32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | Forensic: Value exceeds u32::MAX (platform-specific limit); refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | \
+                     Forensic: Value exceeds u32::MAX (platform-specific limit); refusing to \
+                     forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `usize` to `u16` with loud warning on overflow.
@@ -288,7 +317,8 @@ pub fn usize_to_u16_strict(val: usize, name: &str) -> Option<u16> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u16! | Forensic: Value exceeds u16::MAX; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u16! | \
+                     Forensic: Value exceeds u16::MAX; refusing to forge data"
                 ),
             );
             None
@@ -300,15 +330,20 @@ pub fn usize_to_u16_strict(val: usize, name: &str) -> Option<u16> {
 /// Convert `usize` to `u64` with loud warning on overflow.
 #[must_use]
 pub fn usize_to_u64_strict(val: usize, name: &str) -> Option<u64> {
-    u64::try_from(val).map_or_else(|_| {
+    u64::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u64! | Forensic: Value exceeds u64::MAX (platform-specific limit); refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u64! | \
+                     Forensic: Value exceeds u64::MAX (platform-specific limit); refusing to \
+                     forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `u64` to `usize` with loud warning on overflow.
@@ -319,7 +354,9 @@ pub fn u64_to_usize_strict(val: u64, name: &str) -> Option<usize> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! | Forensic: Value exceeds platform pointer width limit; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! \
+                     | Forensic: Value exceeds platform pointer width limit; refusing to forge \
+                     data"
                 ),
             );
             None
@@ -332,15 +369,20 @@ pub fn u64_to_usize_strict(val: u64, name: &str) -> Option<usize> {
 /// Critical for allocation paths where `usize::MAX` would cause OOM panic.
 #[must_use]
 pub fn try_u64_to_usize_strict(val: u64, name: &str) -> Option<usize> {
-    usize::try_from(val).map_or_else(|_| {
+    usize::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! | Forensic: Value exceeds platform pointer width limit; refusing to forge data to prevent OOM panic"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! \
+                     | Forensic: Value exceeds platform pointer width limit; refusing to forge \
+                     data to prevent OOM panic"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `Option<u64>` to `Option<u64>` with loud warning on None.
@@ -350,7 +392,8 @@ pub fn option_u64_strict(val: Option<u64>, name: &str) -> Option<u64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "FIELD STRICTNESS AUDIT: Required u64 field '{name}' is missing! | Forensic: Value is None; refusing to forge default data to maintain integrity"
+                "FIELD STRICTNESS AUDIT: Required u64 field '{name}' is missing! | Forensic: \
+                 Value is None; refusing to forge default data to maintain integrity"
             ),
         );
     }
@@ -364,7 +407,8 @@ pub fn option_f32_strict(val: Option<f32>, name: &str) -> Option<f32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "FIELD STRICTNESS AUDIT: Required f32 field '{name}' is missing! | Forensic: Value is None; refusing to forge default data to maintain integrity"
+                "FIELD STRICTNESS AUDIT: Required f32 field '{name}' is missing! | Forensic: \
+                 Value is None; refusing to forge default data to maintain integrity"
             ),
         );
     }
@@ -378,7 +422,8 @@ pub fn option_u8_strict(val: Option<u8>, name: &str) -> Option<u8> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "FIELD STRICTNESS AUDIT: Required u8 field '{name}' is missing! | Forensic: Value is None; refusing to forge default data to maintain integrity"
+                "FIELD STRICTNESS AUDIT: Required u8 field '{name}' is missing! | Forensic: Value \
+                 is None; refusing to forge default data to maintain integrity"
             ),
         );
     }
@@ -392,7 +437,8 @@ pub fn option_usize_strict(val: Option<usize>, name: &str) -> Option<usize> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "FIELD STRICTNESS AUDIT: Required usize field '{name}' is missing! | Forensic: Value is None; refusing to forge default data to maintain integrity"
+                "FIELD STRICTNESS AUDIT: Required usize field '{name}' is missing! | Forensic: \
+                 Value is None; refusing to forge default data to maintain integrity"
             ),
         );
     }
@@ -403,57 +449,75 @@ pub fn option_usize_strict(val: Option<usize>, name: &str) -> Option<usize> {
 /// Follows "Integrity Audit" requirements: Loud, Honest, Non-breaking.
 #[must_use]
 pub fn try_u32_strict(val: u64, name: &str) -> Option<u32> {
-    u32::try_from(val).map_or_else(|_| {
+    u32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | Forensic: Value exceeds u32::MAX; refusing to forge data. Returning None for safety"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | \
+                     Forensic: Value exceeds u32::MAX; refusing to forge data. Returning None for \
+                     safety"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `u64` to `usize` with loud warning on overflow, returning None.
 #[must_use]
 pub fn try_usize_strict(val: u64, name: &str) -> Option<usize> {
-    usize::try_from(val).map_or_else(|_| {
+    usize::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! | Forensic: Value exceeds platform pointer width limit; refusing to forge data. Returning None for safety"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! \
+                     | Forensic: Value exceeds platform pointer width limit; refusing to forge \
+                     data. Returning None for safety"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `i64` to `u64` with loud warning on sign loss.
 #[must_use]
 pub fn i64_to_u64_strict(val: i64, name: &str) -> Option<u64> {
-    u64::try_from(val).map_or_else(|_| {
+    u64::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | Forensic: Cannot convert negative i64 to u64; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | \
+                     Forensic: Cannot convert negative i64 to u64; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `i64` to `u32` with loud warning on overflow/sign loss.
 #[must_use]
 pub fn i64_to_u32_strict(val: i64, name: &str) -> Option<u32> {
-    u32::try_from(val).map_or_else(|_| {
+    u32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of u32 range! | Forensic: i64 value exceeds u32 boundaries; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of u32 range! \
+                     | Forensic: i64 value exceeds u32 boundaries; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `f64` to `u8` with loud warning on overflow/NaN.
@@ -463,7 +527,8 @@ pub fn f64_to_u8_strict(val: f64, name: &str) -> Option<u8> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Field '{name}' is NaN/Inf! | Forensic: Floating point anomaly detected; refusing to forge u8 data"
+                "NUMERIC CONVERSION AUDIT: Field '{name}' is NaN/Inf! | Forensic: Floating point \
+                 anomaly detected; refusing to forge u8 data"
             ),
         );
         return None;
@@ -473,7 +538,8 @@ pub fn f64_to_u8_strict(val: f64, name: &str) -> Option<u8> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u8 range! | Forensic: Value exceeds [0, 255] boundary; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u8 range! \
+                 | Forensic: Value exceeds [0, 255] boundary; refusing to forge data"
             ),
         );
         return None;
@@ -489,7 +555,8 @@ pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | Forensic: Floating point anomaly detected; refusing to forge i64 data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | \
+                 Forensic: Floating point anomaly detected; refusing to forge i64 data"
             ),
         );
         return None;
@@ -498,7 +565,8 @@ pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | Forensic: Value exceeds i64::MIN/MAX boundary; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | \
+                 Forensic: Value exceeds i64::MIN/MAX boundary; refusing to forge data"
             ),
         );
         return None;
@@ -515,7 +583,9 @@ pub fn u32_to_usize_strict(val: u32, name: &str) -> Option<usize> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! | Forensic: Value exceeds platform pointer width limit; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows usize! \
+                     | Forensic: Value exceeds platform pointer width limit; refusing to forge \
+                     data"
                 ),
             );
             None
@@ -532,7 +602,8 @@ pub fn i32_to_u64_strict(val: i32, name: &str) -> Option<u64> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | Forensic: Cannot convert negative i32 to u64; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is negative! | \
+                     Forensic: Cannot convert negative i32 to u64; refusing to forge data"
                 ),
             );
             None
@@ -544,29 +615,38 @@ pub fn i32_to_u64_strict(val: i32, name: &str) -> Option<u64> {
 /// Convert `i32` to `usize` with loud warning on sign loss or overflow.
 #[must_use]
 pub fn i32_to_usize_strict(val: i32, name: &str) -> Option<usize> {
-    usize::try_from(val).map_or_else(|_| {
+    usize::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of usize range! | Forensic: i32 value out of platform pointer width limits; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of usize \
+                     range! | Forensic: i32 value out of platform pointer width limits; refusing \
+                     to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `usize` to `i32` with loud warning on overflow.
 #[must_use]
 pub fn usize_to_i32_strict(val: usize, name: &str) -> Option<i32> {
-    i32::try_from(val).map_or_else(|_| {
+    i32::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i32 range! | Forensic: usize value exceeds i32 boundaries; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i32 range! \
+                     | Forensic: usize value exceeds i32 boundaries; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `u16` to `usize` with loud warning on overflow.
@@ -591,7 +671,8 @@ pub fn u64_to_i64_strict(val: u64, name: &str) -> Option<i64> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | Forensic: Value >= 2^63; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | \
+                     Forensic: Value >= 2^63; refusing to forge data"
                 ),
             );
             None
@@ -608,7 +689,8 @@ pub fn u64_to_i32_strict(val: u64, name: &str) -> Option<i32> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | Forensic: refusing truncation"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | \
+                     Forensic: refusing truncation"
                 ),
             );
             None
@@ -624,7 +706,9 @@ pub fn f32_to_u32_strict(val: f32, name: &str) -> Option<u32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or negative! | Forensic: Cannot convert to u32; refusing to forge data to maintain integrity"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or \
+                 negative! | Forensic: Cannot convert to u32; refusing to forge data to maintain \
+                 integrity"
             ),
         );
         return None;
@@ -634,7 +718,8 @@ pub fn f32_to_u32_strict(val: f32, name: &str) -> Option<u32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | Forensic: Value exceeds 2^32-1; refusing to forge truncated data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u32! | \
+                 Forensic: Value exceeds 2^32-1; refusing to forge truncated data"
             ),
         );
         return None;
@@ -649,7 +734,8 @@ pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | Forensic: Cannot convert non-finite f32 to i32; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | \
+                 Forensic: Cannot convert non-finite f32 to i32; refusing to forge data"
             ),
         );
         return None;
@@ -659,7 +745,8 @@ pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i32 range! | Forensic: f32 magnitude exceeds i32 limits; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i32 range! | \
+                 Forensic: f32 magnitude exceeds i32 limits; refusing to forge data"
             ),
         );
         return None;
@@ -668,14 +755,16 @@ pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
     Some(raw::f32_to_i32(val))
 }
 
-/// Convert `f32` to `usize` with loud warning on NaN/Inf/Overflow or lossy index precision.
+/// Convert `f32` to `usize` with loud warning on NaN/Inf/Overflow or lossy
+/// index precision.
 #[must_use]
 pub fn f32_to_usize_strict(val: f32, name: &str) -> Option<usize> {
     if !val.is_finite() || val < 0.0 {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or negative! | Forensic: Cannot convert to usize; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN, Inf or \
+                 negative! | Forensic: Cannot convert to usize; refusing to forge data"
             ),
         );
         return None;
@@ -684,7 +773,8 @@ pub fn f32_to_usize_strict(val: f32, name: &str) -> Option<usize> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' exceeds exact f32 integer range for usize! | Forensic: refusing lossy index conversion"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' exceeds exact f32 \
+                 integer range for usize! | Forensic: refusing lossy index conversion"
             ),
         );
         return None;
@@ -699,7 +789,8 @@ pub fn f64_to_i32_strict(val: f64, name: &str) -> Option<i32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | Forensic: Cannot convert non-finite f64 to i32; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Inf! | \
+                 Forensic: Cannot convert non-finite f64 to i32; refusing to forge data"
             ),
         );
         return None;
@@ -708,7 +799,8 @@ pub fn f64_to_i32_strict(val: f64, name: &str) -> Option<i32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | Forensic: f64 magnitude exceeds i32 limits; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i32! | \
+                 Forensic: f64 magnitude exceeds i32 limits; refusing to forge data"
             ),
         );
         return None;
@@ -719,15 +811,19 @@ pub fn f64_to_i32_strict(val: f64, name: &str) -> Option<i32> {
 /// Convert `u32` to `u8` with loud warning on overflow.
 #[must_use]
 pub fn u32_to_u8_strict(val: u32, name: &str) -> Option<u8> {
-    u8::try_from(val).map_or_else(|_| {
+    u8::try_from(val).map_or_else(
+        |_| {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u8! | Forensic: Value exceeds u8::MAX; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows u8! | \
+                     Forensic: Value exceeds u8::MAX; refusing to forge data"
                 ),
             );
             None
-        }, Some)
+        },
+        Some,
+    )
 }
 
 /// Convert `usize` to `i64` with loud warning on overflow.
@@ -738,7 +834,8 @@ pub fn usize_to_i64_strict(val: usize, name: &str) -> Option<i64> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | Forensic: Value >= 2^63; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | \
+                     Forensic: Value >= 2^63; refusing to forge data"
                 ),
             );
             None
@@ -755,7 +852,8 @@ pub fn f64_to_f32_strict(val: f64, name: &str) -> Option<f32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Infinite! | Forensic: Cannot convert non-finite f64 to f32; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN or Infinite! | \
+                 Forensic: Cannot convert non-finite f64 to f32; refusing to forge data"
             ),
         );
         return None;
@@ -764,7 +862,8 @@ pub fn f64_to_f32_strict(val: f64, name: &str) -> Option<f32> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of f32 range! | Forensic: f64 magnitude exceeds f32 boundaries; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of f32 range! | \
+                 Forensic: f64 magnitude exceeds f32 boundaries; refusing to forge data"
             ),
         );
         return None;
@@ -779,7 +878,8 @@ pub fn f32_to_u16_strict(val: f32, name: &str) -> Option<u16> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN/Inf! | Forensic: Cannot convert to u16; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN/Inf! | \
+                 Forensic: Cannot convert to u16; refusing to forge data"
             ),
         );
         return None;
@@ -789,7 +889,8 @@ pub fn f32_to_u16_strict(val: f32, name: &str) -> Option<u16> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u16 range! | Forensic: f32 magnitude exceeds u16 limits; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u16 range! \
+                 | Forensic: f32 magnitude exceeds u16 limits; refusing to forge data"
             ),
         );
         return None;
@@ -804,7 +905,8 @@ pub fn f64_to_u16_strict(val: f64, name: &str) -> Option<u16> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN/Inf! | Forensic: Cannot convert to u16; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' is NaN/Inf! | \
+                 Forensic: Cannot convert to u16; refusing to forge data"
             ),
         );
         return None;
@@ -814,7 +916,8 @@ pub fn f64_to_u16_strict(val: f64, name: &str) -> Option<u16> {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
             format!(
-                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u16 range! | Forensic: f64 magnitude exceeds u16 limits; refusing to forge data"
+                "NUMERIC CONVERSION AUDIT: Value '{rounded}' for field '{name}' out of u16 range! \
+                 | Forensic: f64 magnitude exceeds u16 limits; refusing to forge data"
             ),
         );
         return None;
@@ -830,7 +933,8 @@ pub fn u128_to_i64_strict(val: u128, name: &str) -> Option<i64> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | Forensic: Value >= 2^63; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' overflows i64! | \
+                     Forensic: Value >= 2^63; refusing to forge data"
                 ),
             );
             None
@@ -847,7 +951,8 @@ pub fn i128_to_i64_strict(val: i128, name: &str) -> Option<i64> {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i64 range! | Forensic: Value outside [i64::MIN, i64::MAX]; refusing to forge data"
+                    "NUMERIC CONVERSION AUDIT: Value '{val}' for field '{name}' out of i64 range! \
+                     | Forensic: Value outside [i64::MIN, i64::MAX]; refusing to forge data"
                 ),
             );
             None
@@ -982,8 +1087,8 @@ pub(crate) mod raw {
 
 /// Saturating cast: `f64` → `u64`.
 ///
-/// **WARNING**: This function performs silent data forgery (saturates to 0 on NaN/negative).
-/// Use `f64_to_u64_strict` for non-UI data paths.
+/// **WARNING**: This function performs silent data forgery (saturates to 0 on
+/// NaN/negative). Use `f64_to_u64_strict` for non-UI data paths.
 ///
 /// - `NaN` or negative → `0`
 /// - `> u64::MAX` → `u64::MAX`
@@ -1124,7 +1229,8 @@ pub fn f32_to_u32_sat(v: f32) -> u32 {
     if v.is_nan() || v < 0.0 {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
-            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value squashed to 0 during saturating cast to prevent logic corruption",
+            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value \
+             squashed to 0 during saturating cast to prevent logic corruption",
         );
         return 0;
     }
@@ -1141,7 +1247,8 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
     if v.is_nan() || v < 0.0 {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
-            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value squashed to 0 during saturating cast to prevent logic corruption",
+            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value \
+             squashed to 0 during saturating cast to prevent logic corruption",
         );
         return 0;
     }
@@ -1158,7 +1265,8 @@ pub fn f32_to_u8_sat(v: f32) -> u8 {
     if v.is_nan() || v < 0.0 {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
-            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value squashed to 0 during saturating cast to prevent logic corruption",
+            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value \
+             squashed to 0 during saturating cast to prevent logic corruption",
         );
         return 0;
     }
@@ -1191,8 +1299,8 @@ pub const fn f32_to_i32_sat(v: f32) -> i32 {
 
 /// Lossy precision reduction: `f64` → `f32`.
 ///
-/// Audited: acceptable for ML feature vectors, display metrics, and quality scores
-/// where f32 precision (≈7 decimal digits) is sufficient.
+/// Audited: acceptable for ML feature vectors, display metrics, and quality
+/// scores where f32 precision (≈7 decimal digits) is sufficient.
 #[inline]
 #[must_use]
 pub const fn f64_to_f32_lossy(v: f64) -> f32 {
@@ -1201,7 +1309,8 @@ pub const fn f64_to_f32_lossy(v: f64) -> f32 {
 
 /// Exact promotion: `f32` → `f64`.
 ///
-/// Retained as a named wrapper for API consistency with the other audited cast helpers.
+/// Retained as a named wrapper for API consistency with the other audited cast
+/// helpers.
 #[inline]
 #[must_use]
 pub fn f32_to_f64_lossy(v: f32) -> f64 {
@@ -1217,7 +1326,8 @@ pub const fn u64_to_f64(v: u64) -> f64 {
 
 /// Extract the high 32 bits of a `u64` as `u32`.
 ///
-/// The shift proves the narrowed value is in range, so this is not a saturating conversion.
+/// The shift proves the narrowed value is in range, so this is not a saturating
+/// conversion.
 #[inline]
 #[must_use]
 pub const fn u64_high32_to_u32(v: u64) -> u32 {
@@ -1265,7 +1375,8 @@ pub fn u32_to_f64(v: u32) -> f64 {
 
 /// Potentially lossy integer-to-float conversion: `usize` → `f64`.
 ///
-/// On 64-bit targets, large values may lose integer precision once they exceed `2^53`.
+/// On 64-bit targets, large values may lose integer precision once they exceed
+/// `2^53`.
 #[inline]
 #[must_use]
 pub const fn usize_to_f64(v: usize) -> f64 {
@@ -1324,7 +1435,8 @@ pub fn f32_to_usize_sat(v: f32) -> usize {
     if v.is_nan() || v < 0.0 {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
             "delivery_numeric",
-            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value squashed to 0 during saturating cast to prevent logic corruption",
+            "NUMERIC CONVERSION AUDIT: Float NaN or negative value detected! | Forensic: Value \
+             squashed to 0 during saturating cast to prevent logic corruption",
         );
         return 0;
     }
@@ -1343,11 +1455,12 @@ pub fn f32_to_usize_sat(v: f32) -> usize {
 pub fn u64_to_usize_sat(v: u64) -> usize {
     usize::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating \
+                 cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
             ),
-            );
+        );
         usize::MAX
     })
 }
@@ -1360,11 +1473,12 @@ pub fn u64_to_usize_sat(v: u64) -> usize {
 pub fn u32_to_usize_sat(v: u32) -> usize {
     usize::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating \
+                 cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
             ),
-            );
+        );
         usize::MAX
     })
 }
@@ -1397,11 +1511,12 @@ pub fn u8_to_usize_sat(v: u8) -> usize {
 pub fn i32_to_usize_sat(v: i32) -> usize {
     usize::try_from(v.max(0)).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating \
+                 cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
             ),
-            );
+        );
         usize::MAX
     })
 }
@@ -1414,11 +1529,12 @@ pub fn i32_to_usize_sat(v: i32) -> usize {
 pub fn i64_to_usize_sat(v: i64) -> usize {
     usize::try_from(v.max(0)).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows target type during saturating \
+                 cast! | Forensic: Value squashed to target MAX to prevent logic corruption"
             ),
-            );
+        );
         usize::MAX
     })
 }
@@ -1431,11 +1547,12 @@ pub fn i64_to_usize_sat(v: i64) -> usize {
 pub fn usize_to_i32_sat(v: usize) -> i32 {
     i32::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i32 target! | Forensic: Value squashed to i32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i32 target! | Forensic: Value \
+                 squashed to i32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         i32::MAX
     })
 }
@@ -1448,11 +1565,12 @@ pub fn usize_to_i32_sat(v: usize) -> i32 {
 pub fn i64_to_u32_sat(v: i64) -> u32 {
     u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value squashed to u32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value \
+                 squashed to u32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u32::MAX
     })
 }
@@ -1465,11 +1583,12 @@ pub fn i64_to_u32_sat(v: i64) -> u32 {
 pub fn i64_to_u64_sat(v: i64) -> u64 {
     u64::try_from(v.max(0)).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value squashed to u64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value \
+                 squashed to u64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u64::MAX
     })
 }
@@ -1482,11 +1601,12 @@ pub fn i64_to_u64_sat(v: i64) -> u64 {
 pub fn u64_to_i64_sat(v: u64) -> i64 {
     i64::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value squashed to i64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value \
+                 squashed to i64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         i64::MAX
     })
 }
@@ -1508,11 +1628,12 @@ pub const fn i64_to_i64_sat_no_op(v: i64) -> i64 {
 pub fn u64_to_u32_sat(v: u64) -> u32 {
     u32::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value squashed to u32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value \
+                 squashed to u32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u32::MAX
     })
 }
@@ -1525,11 +1646,12 @@ pub fn u64_to_u32_sat(v: u64) -> u32 {
 pub fn usize_to_u32_sat(v: usize) -> u32 {
     u32::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value squashed to u32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value \
+                 squashed to u32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u32::MAX
     })
 }
@@ -1542,11 +1664,12 @@ pub fn usize_to_u32_sat(v: usize) -> u32 {
 pub fn usize_to_i64_sat(v: usize) -> i64 {
     i64::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value squashed to i64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value \
+                 squashed to i64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         i64::MAX
     })
 }
@@ -1559,11 +1682,12 @@ pub fn usize_to_i64_sat(v: usize) -> i64 {
 pub fn usize_to_u16_sat(v: usize) -> u16 {
     u16::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u16 target! | Forensic: Value squashed to u16::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u16 target! | Forensic: Value \
+                 squashed to u16::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u16::MAX
     })
 }
@@ -1576,11 +1700,12 @@ pub fn usize_to_u16_sat(v: usize) -> u16 {
 pub fn usize_to_u8_sat(v: usize) -> u8 {
     u8::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u8 target! | Forensic: Value squashed to u8::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u8 target! | Forensic: Value \
+                 squashed to u8::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u8::MAX
     })
 }
@@ -1593,11 +1718,12 @@ pub fn usize_to_u8_sat(v: usize) -> u8 {
 pub fn u32_to_u8_sat(v: u32) -> u8 {
     u8::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u8 target! | Forensic: Value squashed to u8::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u8 target! | Forensic: Value \
+                 squashed to u8::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u8::MAX
     })
 }
@@ -1610,11 +1736,12 @@ pub fn u32_to_u8_sat(v: u32) -> u8 {
 pub fn u32_to_i32_sat(v: u32) -> i32 {
     i32::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i32 target! | Forensic: Value squashed to i32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i32 target! | Forensic: Value \
+                 squashed to i32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         i32::MAX
     })
 }
@@ -1627,11 +1754,12 @@ pub fn u32_to_i32_sat(v: u32) -> i32 {
 pub fn i32_to_u32_sat(v: i32) -> u32 {
     u32::try_from(v.max(0)).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value squashed to u32::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u32 target! | Forensic: Value \
+                 squashed to u32::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u32::MAX
     })
 }
@@ -1644,11 +1772,12 @@ pub fn i32_to_u32_sat(v: i32) -> u32 {
 pub fn i32_to_u64_sat(v: i32) -> u64 {
     u64::try_from(i64::from(v).max(0)).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value squashed to u64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value \
+                 squashed to u64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u64::MAX
     })
 }
@@ -1661,11 +1790,12 @@ pub fn i32_to_u64_sat(v: i32) -> u64 {
 pub fn usize_to_u64(v: usize) -> u64 {
     u64::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value squashed to u64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value \
+                 squashed to u64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u64::MAX
     })
 }
@@ -1691,11 +1821,12 @@ pub fn i32_to_u8_sat(v: i32) -> u8 {
 pub fn u128_to_i64_sat(v: u128) -> i64 {
     i64::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value squashed to i64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows i64 target! | Forensic: Value \
+                 squashed to i64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         i64::MAX
     })
 }
@@ -1708,11 +1839,12 @@ pub fn u128_to_i64_sat(v: u128) -> i64 {
 pub fn u128_to_u64_sat(v: u128) -> u64 {
     u64::try_from(v).unwrap_or_else(|_| {
         crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value squashed to u64::MAX during saturating cast to prevent logic corruption"
+            "delivery_numeric",
+            format!(
+                "NUMERIC CONVERSION AUDIT: Value '{v}' overflows u64 target! | Forensic: Value \
+                 squashed to u64::MAX during saturating cast to prevent logic corruption"
             ),
-            );
+        );
         u64::MAX
     })
 }
@@ -1738,7 +1870,8 @@ pub fn unix_secs_i64() -> i64 {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "TIME AUDIT: System time before UNIX_EPOCH: {e}! | Forensic: Duration since epoch is negative; refusing to forge data; process state is inconsistent"
+                    "TIME AUDIT: System time before UNIX_EPOCH: {e}! | Forensic: Duration since \
+                     epoch is negative; refusing to forge data; process state is inconsistent"
                 ),
             );
             unreachable!("System time before UNIX_EPOCH: {e}");
@@ -1766,7 +1899,8 @@ pub fn unix_secs_i64_result() -> Result<i64, std::time::SystemTimeError> {
 /// Context-aware tolerance for floating point comparisons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatContext {
-    /// Values resulting from accumulation, image processing variance, or video metrics (e.g., PSNR denominator).
+    /// Values resulting from accumulation, image processing variance, or video
+    /// metrics (e.g., PSNR denominator).
     Accumulation,
     /// FFmpeg/ffprobe reported metrics (e.g., PTS, framerates).
     FfmpegMeasurement,
@@ -1785,8 +1919,9 @@ impl FloatContext {
     }
 }
 
-/// Robust check for whether a float is effectively zero given its computational context.
-/// Exposes numerical instability rather than silently swallowing it via `abs() < 1e-9`.
+/// Robust check for whether a float is effectively zero given its computational
+/// context. Exposes numerical instability rather than silently swallowing it
+/// via `abs() < 1e-9`.
 #[inline]
 #[must_use]
 pub fn is_effectively_zero(value: f64, context: FloatContext) -> bool {
@@ -1796,7 +1931,9 @@ pub fn is_effectively_zero(value: f64, context: FloatContext) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC PRECISION AUDIT: Near-zero float encountered: {value} (context: {context:?}) | Forensic: Value falls below tolerance threshold; treated as zero to prevent computational drift"
+                    "NUMERIC PRECISION AUDIT: Near-zero float encountered: {value} (context: \
+                     {context:?}) | Forensic: Value falls below tolerance threshold; treated as \
+                     zero to prevent computational drift"
                 ),
             );
         }
@@ -1805,8 +1942,9 @@ pub fn is_effectively_zero(value: f64, context: FloatContext) -> bool {
     false
 }
 
-/// Robust check for whether two floats are effectively equal given their computational context.
-/// Uses absolute difference for near-zero values and relative difference otherwise.
+/// Robust check for whether two floats are effectively equal given their
+/// computational context. Uses absolute difference for near-zero values and
+/// relative difference otherwise.
 #[inline]
 #[must_use]
 pub fn is_effectively_equal(a: f64, b: f64, context: FloatContext) -> bool {
@@ -1819,7 +1957,9 @@ pub fn is_effectively_equal(a: f64, b: f64, context: FloatContext) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "NUMERIC PRECISION AUDIT: Near-equal floats encountered: a={a}, b={b}, diff={diff} (context: {context:?}) | Forensic: Difference falls below relative tolerance threshold; treated as equal"
+                    "NUMERIC PRECISION AUDIT: Near-equal floats encountered: a={a}, b={b}, \
+                     diff={diff} (context: {context:?}) | Forensic: Difference falls below \
+                     relative tolerance threshold; treated as equal"
                 ),
             );
         }

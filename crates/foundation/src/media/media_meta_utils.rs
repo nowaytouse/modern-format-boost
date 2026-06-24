@@ -1,6 +1,7 @@
 //! Media Metadata Utilities
 //!
-//! Consolidated utility functions for low-level media header parsing and metadata extraction.
+//! Consolidated utility functions for low-level media header parsing and
+//! metadata extraction.
 
 use std::path::Path;
 
@@ -21,11 +22,14 @@ pub struct GifHeaderScan {
 /// detailed frame delay variation.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read or if the `GIF` header is malformed.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Returns an error if the file cannot be read or if the `GIF` header is
+/// malformed.
+// Rationale: This function handles complex, sequential initialization or business logic where
+// further fragmentation would hinder readability and maintainability.
 #[allow(
     clippy::too_many_lines,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would \
+              decrease readability and increase cognitive overhead."
 )]
 pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let buf = std::fs::read(path)?;
@@ -279,9 +283,9 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     };
 
     // A GIF with >4 billion frames would require ~4TB of data; `u32::try_from` here
-    // would only fail if the Vec grew beyond u32::MAX entries, which is impossible in
-    // practice. If it somehow did, that is anomalous data — return Err rather than
-    // silently wrapping or using a sentinel.
+    // would only fail if the Vec grew beyond u32::MAX entries, which is impossible
+    // in practice. If it somehow did, that is anomalous data — return Err
+    // rather than silently wrapping or using a sentinel.
     let _payload_count = u32::try_from(frame_payload_sizes.len()).map_err(|_| {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_meta_gif",
@@ -311,8 +315,9 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
         )
     })?;
     // Honest reporting: `frame_count_direct` is the count of image descriptors
-    // we actually saw in the GIF stream. If a file has none, we report 0 (the truth).
-    // Callers must decide whether 0 frames is anomalous; we do not fabricate a frame.
+    // we actually saw in the GIF stream. If a file has none, we report 0 (the
+    // truth). Callers must decide whether 0 frames is anomalous; we do not
+    // fabricate a frame.
     let frame_count_calculated = frame_count_direct;
 
     Ok(GifHeaderScan {

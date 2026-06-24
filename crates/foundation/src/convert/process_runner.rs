@@ -1,7 +1,8 @@
 //! Unified Process Runner with Deadlock Prevention and Loud Error Handling
 //!
-//! Provides a robust execution environment for all external tools (magick, exiftool, cjxl, etc.)
-//! by ensuring stdout/stderr are concurrently consumed to prevent kernel buffer deadlocks.
+//! Provides a robust execution environment for all external tools (magick,
+//! exiftool, cjxl, etc.) by ensuring stdout/stderr are concurrently consumed to
+//! prevent kernel buffer deadlocks.
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader};
@@ -12,8 +13,8 @@ use std::time::{Duration, Instant};
 /// Wait for a raw child process with a hard timeout.
 ///
 /// # Errors
-/// Returns an error if polling, killing, or reaping the child fails, or when the
-/// timeout expires.
+/// Returns an error if polling, killing, or reaping the child fails, or when
+/// the timeout expires.
 pub fn wait_child_with_timeout(
     child: &mut Child,
     timeout: Duration,
@@ -34,7 +35,8 @@ pub fn wait_child_with_timeout(
                 .wait()
                 .with_context(|| format!("Failed to reap timed-out process for {context}"))?;
             anyhow::bail!(
-                "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, exit_code={exit_code})",
+                "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, \
+                 exit_code={exit_code})",
                 elapsed = start.elapsed(),
                 exit_code = crate::media_conversion_gate::process_exit_code_for_context(
                     status.code(),
@@ -78,7 +80,6 @@ impl ManagedProcess {
     ///
     /// # Errors
     /// Returns error if spawning fails.
-    ///
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
@@ -146,7 +147,8 @@ impl ManagedProcess {
     /// Uses `taskkill` on Windows, `kill` on Unix.
     ///
     /// # Errors
-    /// Returns error if the kill command fails to execute or the process cannot be terminated.
+    /// Returns error if the kill command fails to execute or the process cannot
+    /// be terminated.
     pub fn kill(&self) -> anyhow::Result<()> {
         let pid = self.pid();
 
@@ -219,11 +221,12 @@ impl ManagedProcess {
     }
 
     /// Wait for completion with a hard timeout. On timeout the child is killed,
-    /// outputs are drained, and an error is returned with captured tail context.
+    /// outputs are drained, and an error is returned with captured tail
+    /// context.
     ///
     /// # Errors
-    /// Returns error if waiting, killing, or draining the process fails, or when
-    /// the deadline is exceeded.
+    /// Returns error if waiting, killing, or draining the process fails, or
+    /// when the deadline is exceeded.
     pub fn wait_timeout(self, timeout: Duration, context: &str) -> Result<ProcessOutput> {
         let mut this = self;
         let start = Instant::now();
@@ -279,7 +282,10 @@ impl ManagedProcess {
                     format!("... [truncated {stderr_len} bytes] ...\n{tail}")
                 };
                 anyhow::bail!(
-                    "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, exit_code={exit_code_label})\n   Command: {command_line}\n   Pid: {child_id}\n   Stdout bytes: {stdout_len}, stderr bytes: {stderr_len}\n   Stdout tail: {stdout_tail}\n   Stderr:\n{stderr_summary}\n",
+                    "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, \
+                     exit_code={exit_code_label})\n   Command: {command_line}\n   Pid: \
+                     {child_id}\n   Stdout bytes: {stdout_len}, stderr bytes: {stderr_len}\n   \
+                     Stdout tail: {stdout_tail}\n   Stderr:\n{stderr_summary}\n",
                 );
             }
             thread::sleep(Duration::from_millis(35));

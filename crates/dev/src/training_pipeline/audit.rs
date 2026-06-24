@@ -141,8 +141,8 @@ fn read_embedding_dimension(client: &mut Client, table: &str) -> Result<Option<i
     let dim_row = client
         .query_opt(
             &format!(
-                "SELECT vector_dims(embedding)::int FROM {table} \
-                 WHERE embedding IS NOT NULL LIMIT 1"
+                "SELECT vector_dims(embedding)::int FROM {table} WHERE embedding IS NOT NULL \
+                 LIMIT 1"
             ),
             &[],
         )
@@ -343,8 +343,8 @@ pub(super) fn evaluate_image_quality_model_status(
             foundation::numeric_cast::i64_to_u64_sat(low),
         );
         readiness_issues.push(format!(
-            "corpus_shortfall={shortfall} (need total>={}, high/low>={}; \
-                 have total={} high={high} low={low})",
+            "corpus_shortfall={shortfall} (need total>={}, high/low>={}; have total={} \
+             high={high} low={low})",
             min_quality_samples_total(),
             min_quality_samples_per_class(),
             summary.total,
@@ -433,8 +433,8 @@ pub(super) fn evaluate_loop_intent_runtime_status(
     if !loop_corpus_is_mature(total_u64, loop_high, video) {
         let shortfall = loop_corpus_samples_shortfall(total_u64, loop_high, video);
         readiness_issues.push(format!(
-            "corpus_shortfall={shortfall} (need total>={}, loop_high/video>={}; \
-             have total={} loop_high={loop_high} video={video})",
+            "corpus_shortfall={shortfall} (need total>={}, loop_high/video>={}; have total={} \
+             loop_high={loop_high} video={video})",
             min_loop_samples_total(),
             min_loop_samples_per_class(),
             summary.total,
@@ -475,8 +475,8 @@ pub(super) fn evaluate_loop_intent_runtime_status(
 pub(super) fn print_loop_intent_runtime_status(summary: &LoopIntentTableSummary) {
     let status = evaluate_loop_intent_runtime_status(summary);
     println!(
-        "knn_readiness={} thresholds=total>={},loop_high>={},video>={} \
-         loop_high={} video={} predictor={}",
+        "knn_readiness={} thresholds=total>={},loop_high>={},video>={} loop_high={} video={} \
+         predictor={}",
         if status.ready_for_knn {
             "ready"
         } else {
@@ -767,8 +767,8 @@ pub fn verify_fabrication_stock(client: &mut Client) -> Result<i32> {
     if loop_rows > 0 && stats_empty {
         failures += 1;
         println!(
-            "fabrication_blocker=loop_feature_stats_empty_with_samples \
-             (run: training_pipeline refresh-loop-stats)"
+            "fabrication_blocker=loop_feature_stats_empty_with_samples (run: training_pipeline \
+             refresh-loop-stats)"
         );
     }
 

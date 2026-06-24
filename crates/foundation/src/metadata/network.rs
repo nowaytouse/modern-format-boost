@@ -1,16 +1,19 @@
 //! Network & cloud-related metadata preservation (macOS xattrs).
 //!
-//! Copies AND verifies extended attributes needed for Finder, iCloud Photos, and downloads.
+//! Copies AND verifies extended attributes needed for Finder, iCloud Photos,
+//! and downloads.
 //!
-//! **Policy:** all `com.apple.metadata:*` keys plus explicit Finder/provenance keys.
-//! **Skipped:** `XATTR_PRESERVE_SKIP_KEYS` (quarantine, `decmpfs`, etc.).
+//! **Policy:** all `com.apple.metadata:*` keys plus explicit Finder/provenance
+//! keys. **Skipped:** `XATTR_PRESERVE_SKIP_KEYS` (quarantine, `decmpfs`, etc.).
 
 use std::{io, path::Path};
 
-/// Copy macOS Spotlight / Finder / download xattrs from `src` to `dst`, then verify priority keys.
+/// Copy macOS Spotlight / Finder / download xattrs from `src` to `dst`, then
+/// verify priority keys.
 ///
 /// # Errors
-/// Returns an error when source metadata exists but cannot be copied or verified.
+/// Returns an error when source metadata exists but cannot be copied or
+/// verified.
 pub(super) fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     let mut failures = Vec::new();
     match xattr::list(src) {
@@ -84,7 +87,8 @@ pub(super) fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()
                     crate::media_conversion_gate::delivery_metadata_batch_audit(
                         "delivery_metadata_platform",
                         format!(
-                            "xattr '{key}' present on source but missing on destination after copy attempt."
+                            "xattr '{key}' present on source but missing on destination after \
+                             copy attempt."
                         ),
                     );
                     failures.push(format!(

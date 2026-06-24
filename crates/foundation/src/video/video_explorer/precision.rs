@@ -1,10 +1,15 @@
 //! CRF precision constants and quality grade helpers.
 //!
 //! Exploration precision layers (bottom → top):
-//! 1. **Parse** — ffmpeg/VMAF parsers reject non-finite or out-of-domain samples.
-//! 2. **Search grid** — CRF steps via [`SearchPhase`]; JXL distances via `seal_jxl_distance` in `algorithm_seal`.
-//! 3. **Algorithm seal** — [`crate::video_explorer::ExploreResult::seal_algorithm_outputs`] snaps CRF to the cache grid.
-//! 4. **Delivery gates** — [`ExploreResult::sealed`] enforces coherence before pipeline acceptance.
+//! 1. **Parse** — ffmpeg/VMAF parsers reject non-finite or out-of-domain
+//!    samples.
+//! 2. **Search grid** — CRF steps via [`SearchPhase`]; JXL distances via
+//!    `seal_jxl_distance` in `algorithm_seal`.
+//! 3. **Algorithm seal** —
+//!    [`crate::video_explorer::ExploreResult::seal_algorithm_outputs`] snaps
+//!    CRF to the cache grid.
+//! 4. **Delivery gates** — [`ExploreResult::sealed`] enforces coherence before
+//!    pipeline acceptance.
 
 use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
 
@@ -15,7 +20,8 @@ pub const SEARCH_STEP_FINE: f32 = crate::constants::SEARCH_STEP_FINE;
 pub const SEARCH_STEP_ULTRA_FINE: f32 = crate::constants::SEARCH_STEP_ULTRA_FINE;
 pub const SEARCH_STEP_CPU_FINEST: f32 = crate::constants::SEARCH_STEP_CPU_FINEST;
 
-/// Same as `crf_constants::CRF_CACHE_KEY_MULTIPLIER` so cache keys match `CrfCache` / `Crf::to_cache_key`.
+/// Same as `crf_constants::CRF_CACHE_KEY_MULTIPLIER` so cache keys match
+/// `CrfCache` / `Crf::to_cache_key`.
 pub const CACHE_KEY_MULTIPLIER: f64 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[inline]
@@ -29,7 +35,8 @@ pub fn crf_to_cache_key(crf: f32) -> Option<i32> {
     crate::numeric_cast::f64_to_i32_strict(normalized, "crf_precision_key")
 }
 
-/// Snap exploration CRF to the shared `CrfCache` key grid (rejects non-finite / negative).
+/// Snap exploration CRF to the shared `CrfCache` key grid (rejects non-finite /
+/// negative).
 #[inline]
 #[must_use]
 pub fn seal_exploration_crf(crf: f32) -> f32 {
@@ -88,7 +95,8 @@ impl SearchPhase {
     }
 }
 
-/// Step sizes per phase; mirrors `SearchPhase::step_size()` but allows runtime override (e.g. tests). Defaults match `SearchPhase`.
+/// Step sizes per phase; mirrors `SearchPhase::step_size()` but allows runtime
+/// override (e.g. tests). Defaults match `SearchPhase`.
 #[derive(Debug, Clone)]
 pub struct ThreePhaseSearch {
     pub gpu_coarse_step: f32,
@@ -133,7 +141,8 @@ pub const PSNR_DISPLAY_PRECISION: u32 = crate::constants::PSNR_DISPLAY_PRECISION
 pub const DEFAULT_MIN_PSNR: f64 = crate::constants::DEFAULT_MIN_PSNR;
 pub const HIGH_QUALITY_MIN_PSNR: f64 = crate::constants::HIGH_QUALITY_MIN_PSNR;
 
-/// Returns binary-search iteration count for CRF range. Returns None if calculation fails.
+/// Returns binary-search iteration count for CRF range. Returns None if
+/// calculation fails.
 #[must_use]
 pub fn required_iterations(min_crf: u8, max_crf: u8) -> Option<u32> {
     let range = f64::from(max_crf.saturating_sub(min_crf));
@@ -161,7 +170,8 @@ pub fn is_valid_psnr(psnr: f64) -> bool {
     psnr.is_finite() && psnr >= 0.0
 }
 
-/// `FFmpeg` reports `inf` PSNR for identical streams; exploration uses a finite sentinel (M72).
+/// `FFmpeg` reports `inf` PSNR for identical streams; exploration uses a finite
+/// sentinel (M72).
 pub const EXPLORE_PSNR_INF_SENTINEL: f64 = 100.0;
 
 /// Seal parsed PSNR before it enters explore results.
@@ -299,7 +309,8 @@ pub fn seal_vmaf_y(vmaf: f64) -> Option<f64> {
     is_valid_vmaf_y(vmaf).then_some(vmaf)
 }
 
-/// CAMBI score must be finite and non-negative (higher is worse, no hard cap here).
+/// CAMBI score must be finite and non-negative (higher is worse, no hard cap
+/// here).
 #[must_use]
 pub fn is_valid_cambi(cambi: f64) -> bool {
     cambi.is_finite() && cambi >= 0.0
@@ -317,7 +328,8 @@ pub fn seal_ms_ssim(ms_ssim: f64) -> Option<f64> {
     is_valid_ms_ssim(ms_ssim).then_some(ms_ssim)
 }
 
-/// Seal Y/U/V MS-SSIM triplet and 4:2:0 weighted average before explore fusion (M71).
+/// Seal Y/U/V MS-SSIM triplet and 4:2:0 weighted average before explore fusion
+/// (M71).
 #[must_use]
 pub fn seal_ms_ssim_yuv_bundle(
     y: f64,
@@ -336,7 +348,8 @@ pub fn seal_ms_ssim_yuv_bundle(
     }
 }
 
-/// Ultimate explore captured all three 3D metrics (strict delivery requires this, not partial telemetry).
+/// Ultimate explore captured all three 3D metrics (strict delivery requires
+/// this, not partial telemetry).
 #[must_use]
 pub const fn has_complete_ultimate_metrics(
     vmaf_y: Option<f64>,
@@ -346,7 +359,8 @@ pub const fn has_complete_ultimate_metrics(
     vmaf_y.is_some() && cambi.is_some() && psnr_uv.is_some()
 }
 
-/// Hard sanity floors for sealed explore results (independent of per-file adaptive Phase 3 floors).
+/// Hard sanity floors for sealed explore results (independent of per-file
+/// adaptive Phase 3 floors).
 #[must_use]
 pub fn ultimate_metrics_meet_exploration_sanity(
     vmaf_y: Option<f64>,
@@ -372,7 +386,8 @@ pub fn ultimate_metrics_meet_exploration_sanity(
         && cambi <= crate::constants::EXPLORATION_CAMBI_MAX
 }
 
-/// Do not use for fixed-width terminal alignment; string length != display width (CJK).
+/// Do not use for fixed-width terminal alignment; string length != display
+/// width (CJK).
 #[must_use]
 pub fn ssim_quality_grade(ssim: f64) -> &'static str {
     if ssim >= crate::constants::SSIM_GRADE_EXCELLENT {
@@ -439,7 +454,8 @@ fn seal_ms_ssim_composite_average(raw_avg: f64) -> Option<f64> {
     if is_valid_ms_ssim(raw_avg) {
         return Some(raw_avg);
     }
-    // Weighted mean of sealed [0,1] channels can land at 1.0 ± float noise — snap to domain edge only.
+    // Weighted mean of sealed [0,1] channels can land at 1.0 ± float noise — snap
+    // to domain edge only.
     if (0.0..=1.0 + MS_SSIM_COMPOSITE_AVG_EPSILON).contains(&raw_avg) {
         let snapped = if raw_avg > 1.0 { 1.0 } else { 0.0 };
         return is_valid_ms_ssim(snapped).then_some(snapped);
@@ -447,7 +463,8 @@ fn seal_ms_ssim_composite_average(raw_avg: f64) -> Option<f64> {
     None
 }
 
-/// Do not use for fixed-width terminal alignment; string length != display width (CJK).
+/// Do not use for fixed-width terminal alignment; string length != display
+/// width (CJK).
 #[must_use]
 pub fn ms_ssim_quality_grade(ms_ssim: f64) -> &'static str {
     if ms_ssim >= crate::constants::MS_SSIM_GRADE_EXCELLENT {

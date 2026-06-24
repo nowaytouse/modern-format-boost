@@ -11,7 +11,8 @@ use std::time::Duration;
 /// Display width between vertical box borders (U9).
 const REPORT_INNER_WIDTH: usize = 76;
 
-/// Shared before/after size comparison for batch, single-file, and wrapper summaries.
+/// Shared before/after size comparison for batch, single-file, and wrapper
+/// summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SizeComparison {
     before_bytes: u64,
@@ -213,7 +214,8 @@ pub fn print_summary(
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_REPORT,
         format!(
-            "Summary: {operation_name} | total={total}, succeeded={succ}, failed={fail}, skipped={skip} | {comparison} | reduction={reduction_str} | elapsed={dur}",
+            "Summary: {operation_name} | total={total}, succeeded={succ}, failed={fail}, \
+             skipped={skip} | {comparison} | reduction={reduction_str} | elapsed={dur}",
             total = result.total,
             succ = result.succeeded,
             fail = result.failed,
@@ -231,7 +233,8 @@ pub fn print_summary(
     print_pause_info(result);
 }
 
-/// Size reduction percent for summary reporting. Returns `None` when input size is unknown (zero).
+/// Size reduction percent for summary reporting. Returns `None` when input size
+/// is unknown (zero).
 #[must_use]
 pub fn summary_size_reduction_pct(input_bytes: u64, output_bytes: u64) -> Option<f64> {
     if input_bytes == 0 {
@@ -507,7 +510,8 @@ pub fn print_health(passed: usize, failed: usize, warnings: usize) {
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_REPORT,
         format!(
-            "Health Audit: {health_rate_label} healthy | passed={passed}, failed={failed}, warnings={warnings}"
+            "Health Audit: {health_rate_label} healthy | passed={passed}, failed={failed}, \
+             warnings={warnings}"
         )
     );
     let style = BoxStyle::current();
@@ -534,7 +538,8 @@ pub fn print_health(passed: usize, failed: usize, warnings: usize) {
     style.emit_border_bottom();
 }
 
-/// Health pass rate for summary reporting. Returns `None` when no checks ran (zero total).
+/// Health pass rate for summary reporting. Returns `None` when no checks ran
+/// (zero total).
 #[must_use]
 pub fn summary_health_rate_pct(passed: usize, failed: usize, warnings: usize) -> Option<f64> {
     let total = passed + failed + warnings;

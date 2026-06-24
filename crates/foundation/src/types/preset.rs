@@ -1,6 +1,7 @@
 //! Encoder Preset Types
 //!
-//! Provides unified enumeration for encoding speed/quality trade-offs (presets).
+//! Provides unified enumeration for encoding speed/quality trade-offs
+//! (presets).
 
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +34,8 @@ impl Preset {
         self.x26x_name()
     }
 
-    /// HEVC/x265 policy window: only `medium`, `slow`, and `slower` are allowed.
+    /// HEVC/x265 policy window: only `medium`, `slow`, and `slower` are
+    /// allowed.
     #[must_use]
     pub const fn sanitize_hevc(self) -> Self {
         match self {
@@ -57,7 +59,8 @@ impl Preset {
         }
     }
 
-    /// SVT-AV1 policy window: same delivery band as HEVC (`medium` / `slow` / `slower`).
+    /// SVT-AV1 policy window: same delivery band as HEVC (`medium` / `slow` /
+    /// `slower`).
     #[must_use]
     pub const fn sanitize_av1(self) -> Self {
         match self {

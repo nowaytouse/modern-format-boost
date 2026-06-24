@@ -3,7 +3,8 @@
 use anyhow::Result;
 use foundation::logging::{self, LogConfig};
 
-/// Setup rotating file logger + stderr logger matching python `mfb_logger` setup.
+/// Setup rotating file logger + stderr logger matching python `mfb_logger`
+/// setup.
 ///
 /// # Errors
 /// Returns an error if logging initialization fails.
@@ -25,8 +26,8 @@ mod tests {
     #[serial]
     fn test_setup_logger() {
         // Since logging::init can only be successfully initialized once per process,
-        // it might return Ok(()) or Err(_) depending on whether other tests already ran it.
-        // We just ensure calling it doesn't panic.
+        // it might return Ok(()) or Err(_) depending on whether other tests already ran
+        // it. We just ensure calling it doesn't panic.
         let _ = setup_logger("test_program");
     }
 }

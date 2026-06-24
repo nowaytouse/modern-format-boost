@@ -8,20 +8,24 @@
 //! - Size formatting: Unified message formatting
 //!
 //! ## Atomic output (TOCTOU)
-//! All conversion paths **must** write to a temp path via `temp_path_for_output()` or
+//! All conversion paths **must** write to a temp path via
+//! `temp_path_for_output()` or
 //! `foundation::path_safety::isolated_temp_path_for_search()` then
 //! call `commit_temp_to_output_with_metadata(temp, output, force, original)`.
 //! Do not write directly to the final output.
 //!
 //! ## Compress mode (authoritative)
-//! When `options.compress` is true: **only** `output_size < input_size` is accepted.
-//! **Any** `output_size >= input_size` (including equal) is rejected — goal not achieved.
-//! All size checks use `>=` for this; do not change to `>`.
+//! When `options.compress` is true: **only** `output_size < input_size` is
+//! accepted. **Any** `output_size >= input_size` (including equal) is rejected
+//! — goal not achieved. All size checks use `>=` for this; do not change to
+//! `>`.
 //!
 //! ## `allow_size_tolerance` (default false)
-//! When true: "oversized" threshold is `output size increase < 1_048_576 bytes` (accept). Video path may treat
-//! `video_compression_ratio < 1.01` as acceptable when `require_compression` is checked.
-//! Does **not** mean "accept up to `1_048_576` bytes larger as success" for compress goal — compress still requires output < input.
+//! When true: "oversized" threshold is `output size increase < 1_048_576 bytes`
+//! (accept). Video path may treat `video_compression_ratio < 1.01` as
+//! acceptable when `require_compression` is checked. Does **not** mean "accept
+//! up to `1_048_576` bytes larger as success" for compress goal — compress
+//! still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -66,8 +70,9 @@ const TOKEN_SIZE_TAG: &str = "{size_tag}";
 
 /// Generates a unique suffix for temporary output files.
 ///
-/// Uses timestamp, PID, and atomic counter to ensure uniqueness across concurrent processes.
-/// Falls back to counter-only mode if system time is unavailable (e.g., clock skew).
+/// Uses timestamp, PID, and atomic counter to ensure uniqueness across
+/// concurrent processes. Falls back to counter-only mode if system time is
+/// unavailable (e.g., clock skew).
 ///
 /// # Returns
 /// A 10-character alphanumeric suffix string.
@@ -121,8 +126,9 @@ pub fn next_temp_output_suffix() -> String {
 
 /// Checks if a file has already been processed.
 ///
-/// Uses canonical path for reliable duplicate detection across symlinks and relative paths.
-/// Falls back to display path if canonicalization fails (e.g., file doesn't exist yet).
+/// Uses canonical path for reliable duplicate detection across symlinks and
+/// relative paths. Falls back to display path if canonicalization fails (e.g.,
+/// file doesn't exist yet).
 ///
 /// # Arguments
 /// * `path` - The file path to check
@@ -141,8 +147,8 @@ pub fn is_already_processed(path: &Path) -> bool {
 
 /// Marks a file as processed to prevent duplicate processing.
 ///
-/// Uses canonical path for reliable tracking across symlinks and relative paths.
-/// Falls back to display path if canonicalization fails.
+/// Uses canonical path for reliable tracking across symlinks and relative
+/// paths. Falls back to display path if canonicalization fails.
 ///
 /// # Arguments
 /// * `path` - The file path to mark as processed
@@ -208,10 +214,12 @@ fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
 ///
 /// # Returns
 /// Unique output path that doesn't conflict
-/// Reserves a unique output path to avoid conflicts between concurrent conversions.
+/// Reserves a unique output path to avoid conflicts between concurrent
+/// conversions.
 ///
-/// If the candidate path is already reserved by another input, appends a collision suffix
-/// (e.g., "file (2).jxl") and retries until a unique path is found.
+/// If the candidate path is already reserved by another input, appends a
+/// collision suffix (e.g., "file (2).jxl") and retries until a unique path is
+/// found.
 ///
 /// # Arguments
 /// * `input` - The input file path (used as reservation owner)
@@ -248,7 +256,8 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
                 crate::media_conversion_gate::delivery_path_layout_fallback_audit(
                     "output_path_collision",
                     format!(
-                        "collision index exceeded 10,000 for output reservation (input: {}, candidate: {}); using timestamp suffix",
+                        "collision index exceeded 10,000 for output reservation (input: {}, \
+                         candidate: {}); using timestamp suffix",
                         input.display(),
                         resolved.display()
                     ),
@@ -260,7 +269,8 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
                             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                                 "delivery_numeric",
                                 format!(
-                                    "epoch timestamp {timestamp} does not fit usize for collision suffix: {e}; using collision index"
+                                    "epoch timestamp {timestamp} does not fit usize for collision \
+                                     suffix: {e}; using collision index"
                                 ),
                             );
                             collision_index
@@ -345,7 +355,8 @@ fn validate_processed_session_key(session_key: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Load the in-memory processed set from `mfb_store.sqlite` (`blob_store.processed`).
+/// Load the in-memory processed set from `mfb_store.sqlite`
+/// (`blob_store.processed`).
 ///
 /// **Atomic behavior**: decode failure leaves the in-memory set unchanged.
 ///
@@ -414,7 +425,8 @@ pub fn save_processed_list(session_key: &str) -> std::io::Result<()> {
     .map_err(std::io::Error::other)
 }
 
-/// Clear in-memory state and delete the persisted processed blob for `session_key`.
+/// Clear in-memory state and delete the persisted processed blob for
+/// `session_key`.
 ///
 /// # Errors
 /// Propagates store delete errors.
@@ -439,7 +451,8 @@ pub struct TaskResult {
     pub ignored: bool,
     pub skip_reason: Option<String>,
     pub blake3: Option<String>,
-    /// Set when the task completed a video CRF exploration (`success_video_explored`).
+    /// Set when the task completed a video CRF exploration
+    /// (`success_video_explored`).
     pub explore_final_crf: Option<f32>,
     pub explore_iterations: Option<u32>,
 }
@@ -579,9 +592,11 @@ impl TaskResult {
         self.blake3 = Some(hash);
         self
     }
+
     #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
-        // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
+        // After terminology fix, "transcoding" is only used for JPEG bitstream
+        // reconstruction (lossless JXL)
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 
@@ -703,7 +718,8 @@ impl TaskResult {
         }
     }
 
-    /// Used when compress mode is on and output size equals input (goal: must be strictly smaller).
+    /// Used when compress mode is on and output size equals input (goal: must
+    /// be strictly smaller).
     #[must_use]
     pub fn skipped_size_unchanged(input: &Path, input_size: u64, format_label: &str) -> Self {
         Self {
@@ -714,7 +730,8 @@ impl TaskResult {
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Conversion Audit ({format_label}): Output size unchanged; compression goal not achieved"
+                "Conversion Audit ({format_label}): Output size unchanged; compression goal not \
+                 achieved"
             ),
             skipped: true,
             ignored: false,
@@ -726,7 +743,8 @@ impl TaskResult {
     }
 
     /// # Errors
-    /// Returns an error if input metadata cannot be read or the original cannot be copied.
+    /// Returns an error if input metadata cannot be read or the original cannot
+    /// be copied.
     pub fn skipped_with_fallback(
         input: &Path,
         options: &ConvertOptions,
@@ -742,7 +760,8 @@ impl TaskResult {
     }
 
     /// # Errors
-    /// Returns an error if input metadata cannot be read or the original cannot be copied.
+    /// Returns an error if input metadata cannot be read or the original cannot
+    /// be copied.
     pub fn skipped_with_fallback_owned(
         input: &Path,
         options: &ConvertOptions,
@@ -792,7 +811,8 @@ impl TaskResult {
     }
 
     /// # Errors
-    /// Returns an error if input metadata cannot be read or the original cannot be copied.
+    /// Returns an error if input metadata cannot be read or the original cannot
+    /// be copied.
     pub fn failed_with_fallback(
         input: &Path,
         options: &ConvertOptions,
@@ -808,7 +828,8 @@ impl TaskResult {
     }
 
     /// # Errors
-    /// Returns an error if input metadata cannot be read or the original cannot be copied.
+    /// Returns an error if input metadata cannot be read or the original cannot
+    /// be copied.
     pub fn failed_with_fallback_owned(
         input: &Path,
         options: &ConvertOptions,
@@ -931,7 +952,8 @@ impl TaskResult {
         };
         let reduction_pct = reduction.map(|v| v * crate::constants::PERCENTAGE_FACTOR);
 
-        // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
+        // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI
+        // colors
         let size_tag = if let Some(reduction_pct) = reduction_pct {
             let reduction = reduction_pct / crate::constants::PERCENTAGE_FACTOR;
             if reduction >= 0.0_f64 {
@@ -1083,70 +1105,86 @@ impl ConvertOptions {
     pub const fn force(&self) -> bool {
         self.flags.contains(ConvertFlags::FORCE)
     }
+
     #[must_use]
     pub const fn delete_original(&self) -> bool {
         self.flags.contains(ConvertFlags::DELETE_ORIGINAL)
     }
+
     #[must_use]
     pub const fn in_place(&self) -> bool {
         self.flags.contains(ConvertFlags::IN_PLACE)
     }
+
     #[must_use]
     pub const fn explore(&self) -> bool {
         self.flags.contains(ConvertFlags::EXPLORE)
     }
+
     #[must_use]
     pub const fn match_quality(&self) -> bool {
         self.flags.contains(ConvertFlags::MATCH_QUALITY)
     }
+
     #[must_use]
     pub const fn apple_compat(&self) -> bool {
         self.flags.contains(ConvertFlags::APPLE_COMPAT)
     }
+
     #[must_use]
     pub const fn compress(&self) -> bool {
         self.flags.contains(ConvertFlags::COMPRESS)
     }
+
     #[must_use]
     pub const fn use_gpu(&self) -> bool {
         self.flags.contains(ConvertFlags::USE_GPU)
     }
+
     #[must_use]
     pub const fn ultimate(&self) -> bool {
         self.flags.contains(ConvertFlags::ULTIMATE)
     }
+
     #[must_use]
     pub const fn archive(&self) -> bool {
         self.flags.contains(ConvertFlags::ARCHIVE)
     }
+
     #[must_use]
     pub const fn allow_size_tolerance(&self) -> bool {
         self.flags.contains(ConvertFlags::ALLOW_SIZE_TOLERANCE)
     }
 
-    /// Honours [`crate::media_conversion_gate::effective_allow_size_tolerance`] (strict layer may veto).
+    /// Honours [`crate::media_conversion_gate::effective_allow_size_tolerance`]
+    /// (strict layer may veto).
     #[must_use]
     pub fn effective_allow_size_tolerance(&self) -> bool {
         crate::media_conversion_gate::effective_allow_size_tolerance(self.allow_size_tolerance())
     }
+
     #[must_use]
     pub const fn verbose(&self) -> bool {
         self.flags.contains(ConvertFlags::VERBOSE)
     }
+
     #[must_use]
     pub const fn require_jpeg_reconstruction(&self) -> bool {
         self.flags
             .contains(ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION)
     }
+
     #[must_use]
     pub const fn require_output_delivery(&self) -> bool {
         self.flags.contains(ConvertFlags::REQUIRE_OUTPUT_DELIVERY)
     }
+
     #[must_use]
     pub const fn allow_jpeg_pixel_reencode_fallback(&self) -> bool {
         self.flags
             .contains(ConvertFlags::ALLOW_JPEG_PIXEL_REENCODE_FALLBACK)
     }
+
     #[must_use]
     pub const fn allow_expert_options(&self) -> bool {
         self.flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS)
@@ -1206,7 +1244,8 @@ impl ConvertOptions {
 
     #[must_use]
     pub const fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
-        // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
+        // flag_mode() result is irrelevant — always use
+        // PreciseQualityMatchWithCompression
         crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
     }
 }
@@ -1246,8 +1285,8 @@ pub fn determine_output_path(
 
     if input_canonical == output_canonical || input == output {
         return Err(format!(
-            "Input and output paths are identical: {}\n\
-             Tip: use --output/-o for a different output dir, or --in-place to replace in place (deletes original)",
+            "Input and output paths are identical: {}\nTip: use --output/-o for a different \
+             output dir, or --in-place to replace in place (deletes original)",
             input.display()
         ));
     }
@@ -1312,8 +1351,8 @@ pub fn determine_output_path_with_base(
 
     if input_canonical == output_canonical || input == output {
         return Err(format!(
-            "Input and output paths are identical: {}\n\
-             Tip: use --output/-o for a different output dir, or --in-place to replace in place (deletes original)",
+            "Input and output paths are identical: {}\nTip: use --output/-o for a different \
+             output dir, or --in-place to replace in place (deletes original)",
             input.display()
         ));
     }
@@ -1382,7 +1421,8 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
 /// to write atomically; do NOT rely on this check as a write guard.
 #[must_use = "Result must be checked"]
 /// # Errors
-/// Returns an error if auxiliary metadata or filesystem operations fail during checks.
+/// Returns an error if auxiliary metadata or filesystem operations fail during
+/// checks.
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
@@ -1459,9 +1499,11 @@ pub fn post_conversion_actions(
 
 // --- Atomic output (TOCTOU mitigation) ---
 
-/// Guard that removes the temp file on drop if it still exists (e.g. conversion failed before commit).
+/// Guard that removes the temp file on drop if it still exists (e.g. conversion
+/// failed before commit).
 ///
-/// Hold this for the lifetime of conversion; after successful `commit_temp_to_output` the file is gone so drop is a no-op.
+/// Hold this for the lifetime of conversion; after successful
+/// `commit_temp_to_output` the file is gone so drop is a no-op.
 pub struct TempOutputGuard(PathBuf);
 
 impl TempOutputGuard {
@@ -1481,21 +1523,25 @@ impl Drop for TempOutputGuard {
     }
 }
 
-/// **LEAKY**: Returns a path for temporary output in the same directory as `output`.
+/// **LEAKY**: Returns a path for temporary output in the same directory as
+/// `output`.
 ///
-/// \[WARNING\] This function pollutes the user's folder with intermediate files.
-/// For Ghost Mode (Zero Pollution), use `foundation::path_safety::isolated_temp_path_for_search` instead.
+/// \[WARNING\] This function pollutes the user's folder with intermediate
+/// files. For Ghost Mode (Zero Pollution), use
+/// `foundation::path_safety::isolated_temp_path_for_search` instead.
 ///
-/// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
-/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
-/// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
+/// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use
+/// with `commit_temp_to_output`. Uses stem + ".tmp." + extension (e.g. file.mov
+/// → file.tmp.mov) so `FFmpeg` and other tools that infer format from extension
+/// still see the correct extension (mov, mp4, mkv, etc.).
 #[must_use]
 pub fn temp_path_for_output(output: &Path) -> PathBuf {
     let stem = crate::media_conversion_gate::temp_output_stem_lossy(output);
     let ext = crate::media_conversion_gate::temp_output_extension_lossy(output);
     let parent = crate::media_conversion_gate::output_parent_or_dot(output);
 
-    // Use a timestamp/pid/counter suffix so temp naming stays branch-agnostic across rand APIs.
+    // Use a timestamp/pid/counter suffix so temp naming stays branch-agnostic
+    // across rand APIs.
     let random_id = next_temp_output_suffix();
 
     parent.join(format!("{stem}.tmp.{random_id}.{ext}"))
@@ -1503,10 +1549,12 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
 
 /// **DEPRECATED AND REMOVED**: This function has been removed.
 ///
-/// All conversions MUST preserve metadata. Use `commit_temp_to_output_with_metadata` instead.
+/// All conversions MUST preserve metadata. Use
+/// `commit_temp_to_output_with_metadata` instead.
 ///
-/// This function previously did NOT preserve metadata (timestamps, EXIF, XMP, xattrs, permissions),
-/// which violated the program's core requirement of comprehensive metadata preservation.
+/// This function previously did NOT preserve metadata (timestamps, EXIF, XMP,
+/// xattrs, permissions), which violated the program's core requirement of
+/// comprehensive metadata preservation.
 #[deprecated(
     since = "0.10.71",
     note = "Removed. Use commit_temp_to_output_with_metadata instead."
@@ -1522,10 +1570,12 @@ pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std:
     ))
 }
 
-/// Commits a temp file with complete metadata preservation from the original file.
+/// Commits a temp file with complete metadata preservation from the original
+/// file.
 ///
-/// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data, XMP sidecars.
-/// Commit a temporary file to the final output location with metadata preservation.
+/// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data,
+/// XMP sidecars. Commit a temporary file to the final output location with
+/// metadata preservation.
 ///
 /// # Errors
 /// Returns an `io::Result` if commit fails.
@@ -1538,11 +1588,12 @@ pub fn commit_temp_to_output_with_metadata(
     commit_temp_to_output_with_metadata_inner(temp, output, force, original, false)
 }
 
-/// Same as [`commit_temp_to_output_with_metadata`] but skips the pixel-diff orientation audit.
+/// Same as [`commit_temp_to_output_with_metadata`] but skips the pixel-diff
+/// orientation audit.
 ///
 /// Use this when the caller has already verified pixel correctness via an
-/// equivalent proof (e.g. `verify_jxl_pixel_equivalence_integrity`) before commit,
-/// to avoid running `djxl` twice on the same file.
+/// equivalent proof (e.g. `verify_jxl_pixel_equivalence_integrity`) before
+/// commit, to avoid running `djxl` twice on the same file.
 ///
 /// # Errors
 /// Returns an `io::Result` if commit fails.
@@ -1614,7 +1665,8 @@ fn commit_temp_to_output_with_metadata_inner(
         };
 
         // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
-        // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
+        // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes
+        // timestamps
         match crate::metadata::preserve_for_delivery(src, output) {
             Ok(report)
                 if matches!(
@@ -1643,7 +1695,8 @@ fn commit_temp_to_output_with_metadata_inner(
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_METADATA,
                     &format!(
-                        "Metadata delivery best-effort for {} (exif={:?}, xattr={:?}, timestamps={:?})",
+                        "Metadata delivery best-effort for {} (exif={:?}, xattr={:?}, \
+                         timestamps={:?})",
                         output.display(),
                         report.exif,
                         report.xattr,
@@ -1724,10 +1777,11 @@ fn commit_temp_to_output_with_metadata_inner(
         }
 
         // Step 3: Apply timestamps AFTER all file modifications
-        // This is critical because ExifTool and other tools reset creation time to current time
-        // We must reapply timestamps as the final step to preserve original creation time
-        // Step 3: Apply timestamps AFTER all file modifications
-        // Only attempt when source metadata is available; otherwise keep commit non-blocking.
+        // This is critical because ExifTool and other tools reset creation time to
+        // current time We must reapply timestamps as the final step to preserve
+        // original creation time Step 3: Apply timestamps AFTER all file
+        // modifications Only attempt when source metadata is available;
+        // otherwise keep commit non-blocking.
         if src_exists {
             let mut ts_report = crate::metadata::MetadataDeliveryReport::default();
             crate::metadata::apply_file_timestamps_for_delivery(src, output, &mut ts_report)?;
@@ -1789,7 +1843,8 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
     crate::media_conversion_gate::delivery_metadata_path_audit(
         "delivery_metadata_jxl_exif_repair",
         output,
-        "Corrupted Brotli 'Exif' data detected in JXL metadata; stripping EXIF metadata box to preserve Photos import compatibility",
+        "Corrupted Brotli 'Exif' data detected in JXL metadata; stripping EXIF metadata box to \
+         preserve Photos import compatibility",
     );
     let repair = crate::ExiftoolBuilder::new()
         .overwrite_original()
@@ -1820,7 +1875,8 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
                 "delivery_metadata_jxl_exif_repair",
                 output,
                 format!(
-                    "JXL EXIF metadata repair stripped corrupt EXIF; source unavailable for non-Orientation metadata rehydration ({})",
+                    "JXL EXIF metadata repair stripped corrupt EXIF; source unavailable for \
+                     non-Orientation metadata rehydration ({})",
                     src.display()
                 ),
             );
@@ -2054,11 +2110,13 @@ fn validate_temp_output_path(temp: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Read image dimensions directly from the file header without external dependencies.
+/// Read image dimensions directly from the file header without external
+/// dependencies.
 ///
-/// Supports the hot-path image formats (GIF/PNG/JPEG/WebP/BMP). Much faster and more
-/// reliable than subprocess fallbacks — works regardless of ffprobe/ImageMagick availability
-/// and handles filenames with non-ASCII characters uniformly.
+/// Supports the hot-path image formats (GIF/PNG/JPEG/WebP/BMP). Much faster and
+/// more reliable than subprocess fallbacks — works regardless of
+/// ffprobe/ImageMagick availability and handles filenames with non-ASCII
+/// characters uniformly.
 ///
 /// Returns `None` if the format is unsupported or the header is malformed.
 #[allow(clippy::indexing_slicing)] // hot-path header sniff: lengths checked before indexed reads
@@ -2075,7 +2133,8 @@ pub fn dimensions_from_header(input: &Path) -> std::io::Result<Option<(u32, u32)
         );
         err
     })?;
-    // Large enough to cover all supported header layouts (JPEG SOF can appear a few KB in).
+    // Large enough to cover all supported header layouts (JPEG SOF can appear a few
+    // KB in).
     let mut head = [0u8; 4096];
     let n = file.read(&mut head).map_err(|err| {
         crate::media_conversion_gate::probe_layer_audit(
@@ -2089,7 +2148,8 @@ pub fn dimensions_from_header(input: &Path) -> std::io::Result<Option<(u32, u32)
         return Ok(None);
     };
 
-    // GIF: magic "GIF87a"/"GIF89a", logical screen width/height at bytes 6..10 as little-endian u16.
+    // GIF: magic "GIF87a"/"GIF89a", logical screen width/height at bytes 6..10 as
+    // little-endian u16.
     if head.len() >= 10 && (head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a")) {
         let w = u16::from_le_bytes([head[6], head[7]]);
         let h = u16::from_le_bytes([head[8], head[9]]);
@@ -2098,7 +2158,8 @@ pub fn dimensions_from_header(input: &Path) -> std::io::Result<Option<(u32, u32)
         }
     }
 
-    // PNG: magic 89 50 4E 47 0D 0A 1A 0A then IHDR chunk at offset 8 (4 len + "IHDR" + width/height BE u32).
+    // PNG: magic 89 50 4E 47 0D 0A 1A 0A then IHDR chunk at offset 8 (4 len +
+    // "IHDR" + width/height BE u32).
     if head.len() >= 24 && head.starts_with(&PNG_MAGIC) && &head[12..16] == b"IHDR" {
         let w = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
         let h = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
@@ -2107,7 +2168,8 @@ pub fn dimensions_from_header(input: &Path) -> std::io::Result<Option<(u32, u32)
         }
     }
 
-    // BMP: magic "BM", DIB header width/height at offsets 18..22 and 22..26 (little-endian i32; height can be negative).
+    // BMP: magic "BM", DIB header width/height at offsets 18..22 and 22..26
+    // (little-endian i32; height can be negative).
     if head.len() >= 26 && head.starts_with(b"BM") {
         let w = i32::from_le_bytes([head[18], head[19], head[20], head[21]]);
         let h = i32::from_le_bytes([head[22], head[23], head[24], head[25]]);
@@ -2181,7 +2243,8 @@ struct JpegSofInfo {
 
 /// # Errors
 ///
-/// Returns `None` on malformed or truncated JPEG structure (no panic on hostile input).
+/// Returns `None` on malformed or truncated JPEG structure (no panic on hostile
+/// input).
 fn scan_jpeg_sof(file: &mut std::fs::File, head: &[u8]) -> std::io::Result<Option<JpegSofInfo>> {
     use std::io::{Read, Seek, SeekFrom};
     // We may need more than the initial 4KB; widen the buffer progressively.
@@ -2232,7 +2295,8 @@ fn scan_jpeg_sof(file: &mut std::fs::File, head: &[u8]) -> std::io::Result<Optio
         if seg_len < 2 {
             return Ok(None);
         }
-        // SOFn (Start of Frame): 0xC0, 0xC1, 0xC2, 0xC3, 0xC5-0xC7, 0xC9-0xCB, 0xCD-0xCF.
+        // SOFn (Start of Frame): 0xC0, 0xC1, 0xC2, 0xC3, 0xC5-0xC7, 0xC9-0xCB,
+        // 0xCD-0xCF.
         let is_sof = (0xC0..=0xCF).contains(&marker)
             && marker != 0xC4 // DHT
             && marker != 0xC8 // JPG
@@ -2284,7 +2348,8 @@ fn scan_jxl_container_dimensions(
     head: &[u8],
 ) -> std::io::Result<Option<(u32, u32)>> {
     use std::io::{Read, Seek, SeekFrom};
-    // ISOBMFF-style JXL container: same scan_isobmff_ispe works since JXL uses image item props too.
+    // ISOBMFF-style JXL container: same scan_isobmff_ispe works since JXL uses
+    // image item props too.
     let mut buf: Vec<u8> = head.to_vec();
     file.seek(SeekFrom::Start(crate::numeric_cast::usize_to_u64(
         buf.len(),
@@ -2303,11 +2368,13 @@ fn scan_jxl_container_dimensions(
     Ok(scan_isobmff_ispe(&buf))
 }
 
-/// Scan ISOBMFF byte slice for the first `ispe` (Image Spatial Extents) box and return (width, height).
+/// Scan ISOBMFF byte slice for the first `ispe` (Image Spatial Extents) box and
+/// return (width, height).
 ///
 /// ISOBMFF layout: box = [4-byte BE length][4-byte type]{payload...}
-/// For `ispe` v0: payload = [1-byte version=0][3-byte flags=0][4-byte width BE][4-byte height BE].
-/// We scan recursively through container boxes (`meta`, `iprp`, `ipco`) to find `ispe`.
+/// For `ispe` v0: payload = [1-byte version=0][3-byte flags=0][4-byte width
+/// BE][4-byte height BE]. We scan recursively through container boxes (`meta`,
+/// `iprp`, `ipco`) to find `ispe`.
 fn scan_isobmff_ispe(buf: &[u8]) -> Option<(u32, u32)> {
     // Container boxes whose children we must recurse into.
     const CONTAINERS: &[&[u8; 4]] = &[b"meta", b"iprp", b"ipco", b"moov", b"trak", b"mdia"];
@@ -2407,7 +2474,6 @@ fn scan_isobmff_ispe(buf: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Media info fallback chain that does NOT invoke ffprobe.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitstreamMediaInfo {
     pub width: u32,
@@ -2432,7 +2498,8 @@ pub fn media_info_without_ffprobe(input: &Path) -> anyhow::Result<Option<Bitstre
     // Covers GIF/PNG/JPEG/WebP/BMP which are the vast majority of files.
     // We keep the dimensions as a fallback, but continue so later stages can
     // fill in real channel/depth metadata when available.
-    // Stage 1: Fast in-process image crate (handles more formats including some TIFF/ICO variants).
+    // Stage 1: Fast in-process image crate (handles more formats including some
+    // TIFF/ICO variants).
     match image::ImageReader::open(input) {
         Ok(mut reader) => {
             use image::GenericImageView;
@@ -2466,8 +2533,9 @@ pub fn media_info_without_ffprobe(input: &Path) -> anyhow::Result<Option<Bitstre
         }
     }
 
-    // Stage 2: ImageMagick identify (covers JXL, HEIC, AVIF and provides bit-depth/channels).
-    // Format: %w (width) %h (height) %[channels] (type string, e.g. 'srgba') %z (depth)
+    // Stage 2: ImageMagick identify (covers JXL, HEIC, AVIF and provides
+    // bit-depth/channels). Format: %w (width) %h (height) %[channels] (type
+    // string, e.g. 'srgba') %z (depth)
     let output = crate::media_conversion_gate::probe_identify_output_magick_then_system(
         input,
         "%w %h %[channels] %z\n",
@@ -2498,7 +2566,8 @@ pub fn media_info_without_ffprobe(input: &Path) -> anyhow::Result<Option<Bitstre
                                 "identify_media_info_parse_failed",
                                 input,
                                 format!(
-                                    "ImageMagick media-info probe parse failed for line {line:?}: {err}"
+                                    "ImageMagick media-info probe parse failed for line {line:?}: \
+                                     {err}"
                                 ),
                             );
                         }
@@ -2546,7 +2615,8 @@ pub fn dimensions_without_ffprobe(input: &Path) -> anyhow::Result<Option<(u32, u
     Ok(media_info_without_ffprobe(input)?.map(|info| (info.width, info.height)))
 }
 
-/// Get image/video dimensions using ffprobe → `image` crate → `ImageMagick` fallback chain.
+/// Get image/video dimensions using ffprobe → `image` crate → `ImageMagick`
+/// fallback chain.
 ///
 /// # Errors
 /// Returns an error message if every method fails.
@@ -2585,19 +2655,24 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// Check if output exceeds allowed size growth and clean up if so.
 ///
 /// **Two independent but coordinated flags:**
-/// - `allow_size_tolerance`: when true, allows bounded byte growth; when false, requires `output <= input`.
-///   This absolute byte allowance is fairer to all file sizes than percentage-based.
+/// - `allow_size_tolerance`: when true, allows bounded byte growth; when false,
+///   requires `output <= input`. This absolute byte allowance is fairer to all
+///   file sizes than percentage-based.
 /// - `compress`: when true, **goal is to make output smaller than input**.
-///   **BUT: respects `allow_size_tolerance` when enabled** - if increase is below the byte allowance, still accepts.
-///   Only when increase reaches the byte allowance (or the allowance is disabled), compress mode rejects the output.
+///   **BUT: respects `allow_size_tolerance` when enabled** - if increase is
+///   below the byte allowance, still accepts. Only when increase reaches the
+///   byte allowance (or the allowance is disabled), compress mode rejects the
+///   output.
 ///
 /// **Logic flow:**
-/// 1. Check oversized threshold: if increase reaches the byte allowance → reject
-/// 2. Check compress goal: if compress=true AND increase reaches the allowance → reject
+/// 1. Check oversized threshold: if increase reaches the byte allowance →
+///    reject
+/// 2. Check compress goal: if compress=true AND increase reaches the allowance
+///    → reject
 /// 3. Otherwise: accept
 ///
-/// Returns `Some(TaskResult)` if the output should be rejected (caller should return it),
-/// or `None` if the output passes the size check.
+/// Returns `Some(TaskResult)` if the output should be rejected (caller should
+/// return it), or `None` if the output passes the size check.
 #[derive(Debug, Clone, Copy)]
 struct SizeDeltaSummary {
     increase_bytes: u64,
@@ -2726,11 +2801,13 @@ impl SizeToleranceCheck<'_> {
 
         if delta.change_pct.abs() < 0.01_f64 {
             crate::log_detail!(format!(
-                "Conversion Audit ({format_label}): Discarding candidate (Size unchanged | Mode: UNCHANGED)",
+                "Conversion Audit ({format_label}): Discarding candidate (Size unchanged | Mode: \
+                 UNCHANGED)",
                 format_label = self.format_label,
             ));
             crate::log_detail!(format!(
-                "Conversion Audit: Discarding candidate (Size unchanged) original=\x1b[2m{input_size}\x1b[0m candidate=\x1b[2m{output_size}\x1b[0m",
+                "Conversion Audit: Discarding candidate (Size unchanged) \
+                 original=\x1b[2m{input_size}\x1b[0m candidate=\x1b[2m{output_size}\x1b[0m",
                 input_size = self.input_size,
                 output_size = self.output_size,
             ));
@@ -2762,15 +2839,19 @@ impl SizeToleranceCheck<'_> {
             let delta_mb = delta.increase_mb;
             if let Some(mode_label) = mode {
                 crate::log_detail!(format!(
-                    "{cross} Conversion Audit ({format_label}): Discarding candidate ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_mb:.2} MB{reset} | Mode: {mode_label})"
+                    "{cross} Conversion Audit ({format_label}): Discarding candidate \
+                     ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_mb:.2} MB{reset} \
+                     | Mode: {mode_label})"
                 ));
             } else {
                 crate::log_detail!(format!(
-                    "{cross} Conversion Audit ({format_label}): Discarding candidate ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_mb:.2} MB{reset})"
+                    "{cross} Conversion Audit ({format_label}): Discarding candidate \
+                     ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_mb:.2} MB{reset})"
                 ));
             }
             crate::log_detail!(format!(
-                "{chart} Conversion Audit: original {dim}{input_size}{reset} bytes, candidate {red}{output_size}{reset} bytes (+{delta_mb:.2} MB)"
+                "{chart} Conversion Audit: original {dim}{input_size}{reset} bytes, candidate \
+                 {red}{output_size}{reset} bytes (+{delta_mb:.2} MB)"
             ));
             return;
         }
@@ -2778,15 +2859,19 @@ impl SizeToleranceCheck<'_> {
         let delta_kb = delta.increase_kb;
         if let Some(mode_label) = mode {
             crate::log_detail!(format!(
-                "{cross} Conversion Audit ({format_label}): Discarding candidate ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_kb:.1} KB{reset} | Mode: {mode_label})"
+                "{cross} Conversion Audit ({format_label}): Discarding candidate \
+                 ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_kb:.1} KB{reset} | \
+                 Mode: {mode_label})"
             ));
         } else {
             crate::log_detail!(format!(
-                "{cross} Conversion Audit ({format_label}): Discarding candidate ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_kb:.1} KB{reset})"
+                "{cross} Conversion Audit ({format_label}): Discarding candidate \
+                 ({bold}{ratio_pct:.1}% over budget{reset}, {orange}+{delta_kb:.1} KB{reset})"
             ));
         }
         crate::log_detail!(format!(
-            "{chart} Conversion Audit: original {dim}{input_size}{reset} bytes, candidate {red}{output_size}{reset} bytes (+{delta_kb:.1} KB)"
+            "{chart} Conversion Audit: original {dim}{input_size}{reset} bytes, candidate \
+             {red}{output_size}{reset} bytes (+{delta_kb:.1} KB)"
         ));
     }
 
@@ -2795,7 +2880,8 @@ impl SizeToleranceCheck<'_> {
             match failure {
                 SizeGuardFailure::ToleranceExceeded => {
                     crate::log_detail!(format!(
-                        "{warn} Conversion Audit: Failed to cleanup temporary bitstream artifacts: {err}",
+                        "{warn} Conversion Audit: Failed to cleanup temporary bitstream \
+                         artifacts: {err}",
                         warn = symbols::WARNING,
                     ));
                 }
@@ -2819,7 +2905,8 @@ impl SizeToleranceCheck<'_> {
             Ok(Some(dest)) => match failure {
                 SizeGuardFailure::ToleranceExceeded => {
                     crate::log_detail!(format!(
-                        "{shield} Conversion Audit: Preserving original file due to safety margin veto -> {dim}{dest}{reset}",
+                        "{shield} Conversion Audit: Preserving original file due to safety margin \
+                         veto -> {dim}{dest}{reset}",
                         shield = symbols::SHIELD,
                         dim = colors::DIM,
                         reset = colors::RESET,
@@ -2828,7 +2915,8 @@ impl SizeToleranceCheck<'_> {
                 }
                 SizeGuardFailure::CompressionGoalMissed => {
                     crate::log_detail!(format!(
-                        "Conversion Audit: Copying original bitstream (Passthrough Mode) -> \x1b[2m{dest}\x1b[0m",
+                        "Conversion Audit: Copying original bitstream (Passthrough Mode) -> \
+                         \x1b[2m{dest}\x1b[0m",
                         dest = dest.display(),
                     ));
                 }
@@ -2939,9 +3027,9 @@ pub fn validate_input_file(input: &Path) -> Result<(), String> {
 ///
 /// Returns Ok(()) if valid, Err with descriptive message otherwise.
 ///
-/// Note: Path traversal check removed - output paths are generated programmatically
-/// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
-/// Validate an output path before conversion.
+/// Note: Path traversal check removed - output paths are generated
+/// programmatically and may intentionally be in adjacent directories (e.g.,
+/// _optimized suffix mode). Validate an output path before conversion.
 ///
 /// # Errors
 /// Returns an error message if validation fails.
@@ -3280,7 +3368,8 @@ mod tests {
 
     #[test]
     fn test_temp_path_for_output_keeps_extension() {
-        // Temp path must end with same extension as output so FFmpeg/muxers see correct format.
+        // Temp path must end with same extension as output so FFmpeg/muxers see correct
+        // format.
         let path1 = temp_path_for_output(Path::new("/dir/file.mov"))
             .to_string_lossy()
             .to_string();
@@ -3522,7 +3611,8 @@ mod tests {
                 && branding_pos < exact_copy_pos
                 && exact_copy_pos < timestamp_pos
                 && repair_pos < timestamp_pos,
-            "JXL corrupt-EXIF repair must run after metadata copy and before final timestamp restore"
+            "JXL corrupt-EXIF repair must run after metadata copy and before final timestamp \
+             restore"
         );
         let forbidden_downstream_helper =
             ["strip_jxl_exif", "_if_orientation_remains_for_delivery"].concat();
@@ -4141,7 +4231,8 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_png() {
-        // Minimal PNG: 8-byte magic + 4-byte IHDR length + "IHDR" + 4-byte width BE + 4-byte height BE
+        // Minimal PNG: 8-byte magic + 4-byte IHDR length + "IHDR" + 4-byte width BE +
+        // 4-byte height BE
         let bytes = [
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // magic
             0x00, 0x00, 0x00, 0x0D, // IHDR length = 13
@@ -4182,7 +4273,8 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_jpeg_sof0() {
-        // Minimal JPEG: SOI + SOF0 marker + length(17) + precision + height BE + width BE + components
+        // Minimal JPEG: SOI + SOF0 marker + length(17) + precision + height BE + width
+        // BE + components
         let bytes = [
             0xFF, 0xD8, // SOI
             0xFF, 0xC0, // SOF0
@@ -4202,17 +4294,21 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_jpeg_with_app_segments() {
-        // JPEG with APP0 (JFIF) + APP1 (EXIF-ish padding) before SOF0 — tests scan across markers.
+        // JPEG with APP0 (JFIF) + APP1 (EXIF-ish padding) before SOF0 — tests scan
+        // across markers.
         let mut bytes = vec![0xFF, 0xD8]; // SOI
-        // APP0 segment: FF E0, length 0x10, "JFIF\0", version 1.1, density units etc. (16 bytes total with length)
+        // APP0 segment: FF E0, length 0x10, "JFIF\0", version 1.1, density units etc.
+        // (16 bytes total with length)
         bytes.extend_from_slice(&[
             0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x48,
             0x00, 0x48, 0x00, 0x00,
         ]);
-        // APP1 segment: 32-byte dummy payload (length 0x0020 includes the 2 length bytes)
+        // APP1 segment: 32-byte dummy payload (length 0x0020 includes the 2 length
+        // bytes)
         bytes.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x20]);
         bytes.extend(std::iter::repeat_n(0x00, 30));
-        // SOF0 marker: FF C0, length 0x0011, precision 8, height 0x0300=768, width 0x0400=1024, 3 components
+        // SOF0 marker: FF C0, length 0x0011, precision 8, height 0x0300=768, width
+        // 0x0400=1024, 3 components
         bytes.extend_from_slice(&[
             0xFF, 0xC0, 0x00, 0x11, 0x08, 0x03, 0x00, 0x04, 0x00, 0x03, 0x01, 0x22, 0x00, 0x02,
             0x11, 0x01, 0x03, 0x11, 0x01,
@@ -4236,7 +4332,8 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_webp_vp8() {
-        // WebP VP8 (lossy): RIFF + size + WEBP + VP8 + chunk length + 3-byte frame tag + start code + 14-bit w/h
+        // WebP VP8 (lossy): RIFF + size + WEBP + VP8 + chunk length + 3-byte frame tag
+        // + start code + 14-bit w/h
         let mut bytes = b"RIFF".to_vec();
         bytes.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // size (ignored by our reader)
         bytes.extend_from_slice(b"WEBP");
@@ -4256,7 +4353,8 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_bmp() {
-        // BMP: "BM" + size(dummy) + reserved(4) + offset(4) + DIB header size(4) + width LE i32 + height LE i32 + ...
+        // BMP: "BM" + size(dummy) + reserved(4) + offset(4) + DIB header size(4) +
+        // width LE i32 + height LE i32 + ...
         let bytes = [
             b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x36, 0x00, 0x00, 0x00, 0xA0, 0x00,
             0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x00,
@@ -4382,7 +4480,8 @@ mod tests {
         assert_eq!(path4_again, candidate_exist);
 
         // 6. Multi-level collision test (3+ inputs colliding on the same candidate)
-        // This ensures clean numbering like -1, -2 instead of chained suffixes like -1-2
+        // This ensures clean numbering like -1, -2 instead of chained suffixes like
+        // -1-2
         let input5 = temp_dir_path.join("input5.jpg");
         let input6 = temp_dir_path.join("input6.jpg");
         let multi_candidate = temp_dir_path.join("multi_output.jxl");

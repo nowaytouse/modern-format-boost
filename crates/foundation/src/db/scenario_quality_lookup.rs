@@ -1,23 +1,28 @@
 //! Scenario quality lookup for `animated_image_quality` and `video_quality`.
 //!
-//! **No-fabrication (B06):** production returns **`None`** on all branches — no KNN-only / hybrid-bootstrap
-//! decision scores. Immature corpus, failed KNN, and successful KNN without a scenario `LightGBM` model all
-//! refuse to emit a sealed score (`LightGbmRequiredAbort` + audit).
+//! **No-fabrication (B06):** production returns **`None`** on all branches — no
+//! KNN-only / hybrid-bootstrap decision scores. Immature corpus, failed KNN,
+//! and successful KNN without a scenario `LightGBM` model all refuse to emit a
+//! sealed score (`LightGbmRequiredAbort` + audit).
 //!
 //! ## DB resolution ordering (audit contract)
 //!
-//! Callers must not insert stages without updating this list and `ScenarioQualityBranch`:
+//! Callers must not insert stages without updating this list and
+//! `ScenarioQualityBranch`:
 //! 1. DB disabled → `None` + audit.
 //! 2. `PostgreSQL` unavailable → `None` + audit.
 //! 3. Corpus immature → `None` + audit.
 //! 4. Embedding invalid → `None` + audit.
 //! 5. KNN no neighbors / unusable / query error → `None` + audit.
 //! 6. KNN usable but no scenario `LightGBM` → `None` (`LightGbmRequiredAbort`).
-//! 7. Successful paths (future): `QualityScore::sealed()` before inference log insert.
+//! 7. Successful paths (future): `QualityScore::sealed()` before inference log
+//!    insert.
 //!
-//! `lookup_media_quality_by_path` routes animated containers to `animated_image_quality_db`,
-//! everything else to `video_quality_db`. Detection-layer score fusion defaults on unless
-//! `MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_FUSION` (see `fuse_quality_regression_prediction_if_enabled`).
+//! `lookup_media_quality_by_path` routes animated containers to
+//! `animated_image_quality_db`, everything else to `video_quality_db`.
+//! Detection-layer score fusion defaults on unless
+//! `MODERN_FORMAT_DISABLE_SCENARIO_QUALITY_DB_FUSION` (see
+//! `fuse_quality_regression_prediction_if_enabled`).
 
 use crate::animated_image_quality_features::AnimatedImageQualityFeatures;
 use crate::image_quality_db::{QualityScore, query_quality_knn_features};
@@ -44,7 +49,8 @@ impl ScenarioQualityBranch {
         false
     }
 
-    /// Heuristic / immature paths must not write BPP/heuristic scores into `knn_score` columns.
+    /// Heuristic / immature paths must not write BPP/heuristic scores into
+    /// `knn_score` columns.
     const fn is_heuristic_only_branch(self) -> bool {
         matches!(
             self,
@@ -320,7 +326,8 @@ fn log_scenario_quality_inference(
         column_verdict = crate::constants::INFERENCE_TELEMETRY_ONLY_VERDICT.to_string();
     }
     let sql = format!(
-        "INSERT INTO {} (blake3, source_path, knn_score, knn_confidence, knn_neighbor_count, predictor_family, final_verdict, resolution_branch, inference_snapshot)
+        "INSERT INTO {} (blake3, source_path, knn_score, knn_confidence, knn_neighbor_count, \
+         predictor_family, final_verdict, resolution_branch, inference_snapshot)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)",
         scenario.inference_log_table()
     );
@@ -452,7 +459,8 @@ pub fn lookup_animated_image_quality(path: &Path) -> Option<QualityScore> {
     )
 }
 
-/// Route by container semantics: animated image vs video (static uses `lookup_image_quality`).
+/// Route by container semantics: animated image vs video (static uses
+/// `lookup_image_quality`).
 #[must_use]
 pub fn lookup_media_quality_by_path(path: &Path) -> Option<QualityScore> {
     match crate::image_detection::detect_format_from_bytes(path) {
@@ -465,7 +473,8 @@ pub fn lookup_media_quality_by_path(path: &Path) -> Option<QualityScore> {
                         "scenario_animation",
                         path,
                         format!(
-                            "Quality lookup: animation detection failed; refusing route guess: {err}"
+                            "Quality lookup: animation detection failed; refusing route guess: \
+                             {err}"
                         ),
                     );
                     return None;
@@ -639,7 +648,8 @@ mod tests {
 
     #[test]
     fn animation_detection_error_refuses_route_guess() {
-        // Minimal truncated PNG signature: format detect should succeed, animation detect may error.
+        // Minimal truncated PNG signature: format detect should succeed, animation
+        // detect may error.
         let dir =
             std::env::temp_dir().join(format!("mfb_scenario_quality_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir"); // audited: db module unit-test fixture assertion; not production DB runtime path

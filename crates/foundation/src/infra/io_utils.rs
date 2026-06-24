@@ -7,15 +7,15 @@
 use std::fs;
 use std::path::Path;
 
-/// Read file metadata with a retry mechanism to handle transient OS locks or network glitches.
+/// Read file metadata with a retry mechanism to handle transient OS locks or
+/// network glitches.
 ///
 /// Default: 3 retries with 100ms delay.
-/// This prevents one-off "Failed to read file metadata" errors from breaking batch processing.
-/// Get metadata with retry.
+/// This prevents one-off "Failed to read file metadata" errors from breaking
+/// batch processing. Get metadata with retry.
 ///
 /// # Errors
 /// Returns an error if the metadata cannot be retrieved after all retries.
-///
 pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metadata> {
     let p = path.as_ref();
     let mut last_err = None;
@@ -46,7 +46,8 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
             "delivery_intent",
             p,
             format!(
-                "FILE METADATA HARD FAILURE: Retry loop exhausted for '{}' | Forensic: No underlying OS error captured",
+                "FILE METADATA HARD FAILURE: Retry loop exhausted for '{}' | Forensic: No \
+                 underlying OS error captured",
                 p.display()
             ),
         );
@@ -57,7 +58,8 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
         "delivery_io",
         p,
         format!(
-            "FILE METADATA HARD FAILURE: Persistent read failure after 3 retries for '{}' | System Error: {}",
+            "FILE METADATA HARD FAILURE: Persistent read failure after 3 retries for '{}' | \
+             System Error: {}",
             p.display(),
             err
         ),
@@ -86,7 +88,8 @@ pub fn safe_remove_file<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
                 "delivery_io",
                 p,
                 format!(
-                    "FILE REMOVAL FAILURE: Unexpected error while deleting '{}' (non-NotFound) | System Error: {}",
+                    "FILE REMOVAL FAILURE: Unexpected error while deleting '{}' (non-NotFound) | \
+                     System Error: {}",
                     p.display(),
                     e
                 ),
@@ -111,7 +114,8 @@ pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
                 "delivery_io",
                 p,
                 format!(
-                    "DIR REMOVAL FAILURE: Unexpected error while deleting tree '{}' (non-NotFound) | System Error: {}",
+                    "DIR REMOVAL FAILURE: Unexpected error while deleting tree '{}' \
+                     (non-NotFound) | System Error: {}",
                     p.display(),
                     e
                 ),
@@ -124,8 +128,8 @@ pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
 /// Robust move that handles cross-filesystem boundaries (EXDEV).
 ///
 /// If `fs::rename` fails because the source and destination are on different
-/// mount points (e.g. system SSD to external HDD), falls back to `copy` + `delete`.
-/// Move a file robustly.
+/// mount points (e.g. system SSD to external HDD), falls back to `copy` +
+/// `delete`. Move a file robustly.
 ///
 /// # Errors
 /// Returns an error if the move fails.
@@ -196,7 +200,8 @@ fn copy_via_destination_staging(src: &Path, dst: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Cross-device move copy length mismatch for {} -> {}: source={src_len}, copied={copied}, staging={staging_len}",
+                "Cross-device move copy length mismatch for {} -> {}: source={src_len}, \
+                 copied={copied}, staging={staging_len}",
                 src.display(),
                 dst.display()
             ),
@@ -216,7 +221,8 @@ fn copy_via_destination_staging(src: &Path, dst: &Path) -> std::io::Result<()> {
             "delivery_io",
             src,
             format!(
-                "SOURCE REMOVAL FAILURE: Cross-device move committed to '{}' but failed to delete source '{}' | System Error: {}",
+                "SOURCE REMOVAL FAILURE: Cross-device move committed to '{}' but failed to delete \
+                 source '{}' | System Error: {}",
                 dst.display(),
                 src.display(),
                 err
@@ -228,7 +234,8 @@ fn copy_via_destination_staging(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Extract the last `n` non-empty lines from a stderr buffer, joined by `" | "`.
+/// Extract the last `n` non-empty lines from a stderr buffer, joined by `" |
+/// "`.
 ///
 /// `stderr.lines().last()` on ffmpeg/exiftool output typically returns an empty
 /// string (trailing newline) or a meaningless summary line. This helper returns
@@ -244,16 +251,16 @@ pub fn tail_error_lines(stderr: &str, n: usize) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    // `start` is always ≤ `lines.len()` because `saturating_sub` cannot produce a value
-    // larger than the operand; direct indexing is sound.
+    // `start` is always ≤ `lines.len()` because `saturating_sub` cannot produce a
+    // value larger than the operand; direct indexing is sound.
     let start = lines.len().saturating_sub(n);
     lines[start..].join(" | ")
 }
 
 /// Systematic safe byte access for media metadata parsing.
 ///
-/// Follows the "Quality Manifesto": Loud (warns), Honest (returns None/Err on failure),
-/// and Non-blocking (prevents panics).
+/// Follows the "Quality Manifesto": Loud (warns), Honest (returns None/Err on
+/// failure), and Non-blocking (prevents panics).
 pub trait ByteSliceExt {
     /// Safely read a u32 (Little Endian) with a loud warning on failure.
     fn get_u32_le_strict(&self, pos: usize, name: &str) -> Option<u32>;

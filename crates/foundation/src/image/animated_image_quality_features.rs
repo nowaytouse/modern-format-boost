@@ -50,7 +50,8 @@ pub struct AnimatedImageQualityFeatures {
     pub content_flags: AnimatedImageContentFlags,
     pub animation_intensity: f64,
     pub render_flags: AnimatedImageRenderFlags,
-    /// Reference-frame entropy when measured; `None` when absent (never fabricated as `0.0`).
+    /// Reference-frame entropy when measured; `None` when absent (never
+    /// fabricated as `0.0`).
     pub reference_entropy: Option<f64>,
 
     // Physical signal (225D)
@@ -78,7 +79,8 @@ impl AnimatedImageQualityFeatures {
                 .context("Failed to detect animated image timing")?;
         anyhow::ensure!(
             is_animated,
-            "animated_image_quality requires a real multi-frame animated image; static assets belong to image_quality"
+            "animated_image_quality requires a real multi-frame animated image; static assets \
+             belong to image_quality"
         );
 
         let metadata = fs::metadata(path).context("Failed to read animated image file metadata")?;
@@ -433,7 +435,8 @@ const fn unit_interval(value: f64) -> f64 {
     }
 }
 
-/// Animated tail embed slots that may be `NaN` when the source `Option` is absent.
+/// Animated tail embed slots that may be `NaN` when the source `Option` is
+/// absent.
 const fn animated_embed_absent_slot(index: usize) -> bool {
     matches!(index, 239 | 240 | 253)
 }

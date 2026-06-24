@@ -24,7 +24,8 @@ const PLAIN_DETAIL_PREFIXES: &[(&str, &str)] = &[
     ("📊 ", "[MET] "),
 ];
 
-// ─── Error Logging Infrastructure (Moved from error_logging.rs) ───────────────
+// ─── Error Logging Infrastructure (Moved from error_logging.rs)
+// ───────────────
 
 /// Error severity levels for enhanced visibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +68,8 @@ impl ErrorSeverity {
     }
 }
 
-/// Rewrite user-facing detail text for plain mode (strip leading decorative emoji).
+/// Rewrite user-facing detail text for plain mode (strip leading decorative
+/// emoji).
 #[must_use]
 pub fn plain_aware_detail(detail: &str) -> String {
     if !crate::progress_mode::is_plain_mode() {
@@ -182,7 +184,8 @@ pub fn get_symbol_by_label(label: &str) -> &'static str {
     }
 }
 
-/// Emit an enhanced error via tracing for full audit-readiness and vertical alignment.
+/// Emit an enhanced error via tracing for full audit-readiness and vertical
+/// alignment.
 pub fn log_enhanced_error(severity: ErrorSeverity, context: &str, detail: &str) {
     crate::ctrlc_guard::wait_if_prompt_active();
     let symbol = get_symbol_by_label(context);
@@ -387,7 +390,8 @@ impl DiagnosticLayout {
     }
 }
 
-/// Calculate the visual display width of a string, accounting for multi-byte Unicode characters.
+/// Calculate the visual display width of a string, accounting for multi-byte
+/// Unicode characters.
 fn visual_width(s: &str) -> usize {
     s.chars()
         .map(|c| {
@@ -539,7 +543,8 @@ macro_rules! log_auto_error {
     }};
 }
 
-// ─── Themed Progress Logging ──────────────────────────────────────────────────
+// ─── Themed Progress Logging
+// ──────────────────────────────────────────────────
 
 fn format_path_reason(path: Option<&std::path::Path>, reason: &str) -> String {
     crate::media_conversion_gate::delivery_log_detail_with_optional_path(path, reason)
@@ -566,19 +571,23 @@ pub mod audit_ignore_class {
     pub const VID_STATIC_UNKNOWN_FRAMES: &str = "vid_static_unknown_frames";
     /// Vid rejects asset outside video domain (orchestrator may route to img).
     pub const VID_OUT_OF_DOMAIN: &str = "vid_out_of_domain";
-    /// Img **ignores** confirmed animated media (static-only pipeline). **Not** a relay/forward to `vid`.
+    /// Img **ignores** confirmed animated media (static-only pipeline). **Not**
+    /// a relay/forward to `vid`.
     pub const IMG_ANIMATED_HANDOFF: &str = "img_animated_handoff";
     /// Img refuses static conversion due to analysis uncertainty.
     pub const IMG_ANALYSIS_UNCERTAINTY: &str = "img_analysis_uncertainty";
     /// Strict delivery: missing/non-finite entropy blocks static conversion.
     pub const IMG_STRICT_ENTROPY: &str = "img_strict_entropy_missing";
-    /// Animation probe ambiguous, contradictory, or failed — fail-closed static skip.
+    /// Animation probe ambiguous, contradictory, or failed — fail-closed static
+    /// skip.
     pub const IMG_ANIMATION_AMBIGUITY: &str = "img_animation_ambiguity";
 }
 
-/// Machine-readable line for Rust `verify` / session log reconciliation (`target: mfb::audit`).
+/// Machine-readable line for Rust `verify` / session log reconciliation
+/// (`target: mfb::audit`).
 ///
-/// ``mfb_audit_schema=1`` documents the field vocabulary; bump when adding required keys.
+/// ``mfb_audit_schema=1`` documents the field vocabulary; bump when adding
+/// required keys.
 pub fn emit_mfb_audit(
     outcome: &str,
     pipeline: &str,
@@ -632,7 +641,8 @@ pub fn emit_mfb_audit(
     }
 }
 
-/// File-level audit for batch outcomes (failed / ignored without path in layout).
+/// File-level audit for batch outcomes (failed / ignored without path in
+/// layout).
 pub fn log_file_outcome_audit(
     pipeline: &'static str,
     outcome: &str,
@@ -642,7 +652,8 @@ pub fn log_file_outcome_audit(
     log_file_outcome_audit_with_class(pipeline, outcome, path, reason, None);
 }
 
-/// File-level audit with optional structured ``ignore_class`` for verify reconciliation.
+/// File-level audit with optional structured ``ignore_class`` for verify
+/// reconciliation.
 pub fn log_file_outcome_audit_with_class(
     pipeline: &'static str,
     outcome: &str,
@@ -666,7 +677,8 @@ pub fn log_batch_start_audit(pipeline: &'static str, label: &str, file_count: us
     );
 }
 
-/// End-of-batch summary for cross-layer reconciliation (`verify` / session logs).
+/// End-of-batch summary for cross-layer reconciliation (`verify` / session
+/// logs).
 pub fn log_batch_complete_audit(
     pipeline: &'static str,
     succeeded: usize,
@@ -741,7 +753,8 @@ pub fn log_success(label: &str, detail: &str) {
     log_success_at(label, None, detail);
 }
 
-/// File-aware success log with explicit pipeline id for cross-layer audit (`img` / `vid`).
+/// File-aware success log with explicit pipeline id for cross-layer audit
+/// (`img` / `vid`).
 pub fn log_success_at_with_pipeline(
     label: &str,
     pipeline: &'static str,
@@ -761,7 +774,8 @@ pub fn log_success_at_with_pipeline(
     emit_static_outcome_log(StaticLogLevel::Info, path, "converted", reason, &rendered);
 }
 
-/// File-aware success log: always writes structured fields to the log file (grep-friendly).
+/// File-aware success log: always writes structured fields to the log file
+/// (grep-friendly).
 pub fn log_success_at(label: &str, path: Option<&std::path::Path>, reason: &str) {
     log_success_at_with_pipeline(label, audit_pipeline_from_label(label), path, reason);
 }
@@ -770,7 +784,8 @@ pub fn log_skip(label: &str, detail: &str) {
     log_skip_at(label, None, detail);
 }
 
-/// File-aware skip log with explicit pipeline id for cross-layer audit (`img` / `vid`).
+/// File-aware skip log with explicit pipeline id for cross-layer audit (`img` /
+/// `vid`).
 pub fn log_skip_at_with_pipeline(
     label: &str,
     pipeline: &'static str,
@@ -790,7 +805,8 @@ pub fn log_skip_at_with_pipeline(
     emit_static_outcome_log(StaticLogLevel::Warn, path, "skipped", reason, &rendered);
 }
 
-/// File-aware skip log: always writes structured fields to the log file (grep-friendly).
+/// File-aware skip log: always writes structured fields to the log file
+/// (grep-friendly).
 pub fn log_skip_at(label: &str, path: Option<&std::path::Path>, reason: &str) {
     log_skip_at_with_pipeline(label, audit_pipeline_from_label(label), path, reason);
 }
@@ -799,7 +815,8 @@ pub fn log_ignore(label: &str, detail: &str) {
     log_ignore_at(label, None, detail);
 }
 
-/// File-aware ignore log with explicit pipeline id for cross-layer audit (`img` / `vid`).
+/// File-aware ignore log with explicit pipeline id for cross-layer audit (`img`
+/// / `vid`).
 pub fn log_ignore_at_with_pipeline(
     label: &str,
     pipeline: &'static str,
@@ -820,7 +837,8 @@ pub fn log_ignore_at_with_pipeline(
     emit_static_outcome_log(StaticLogLevel::Info, path, "ignored", reason, &rendered);
 }
 
-/// File-aware ignore log: always writes structured fields to the log file (grep-friendly).
+/// File-aware ignore log: always writes structured fields to the log file
+/// (grep-friendly).
 pub fn log_ignore_at(label: &str, path: Option<&std::path::Path>, reason: &str) {
     log_ignore_at_with_pipeline(label, audit_pipeline_from_label(label), path, reason, None);
 }
@@ -1463,7 +1481,8 @@ pub mod messages {
         "Efficiency NaN/Inf! Refusing to forge data. Information invalidated.";
     pub const MSG_VQD_CRF_FAIL: &str =
         "Video Analysis: Metadata search for CRF failed; falling back to BPP heuristic";
-    pub const MSG_VQD_CRF_PARAMS_AUDIT: &str = "ENCODER PARAMS AUDIT: Extracted CRF value '{}' is out of valid u8 range | Forensic: Numeric overflow or invalid tag value; defaulting to heuristic fallback";
+    pub const MSG_VQD_CRF_PARAMS_AUDIT: &str = "ENCODER PARAMS AUDIT: Extracted CRF value '{}' is out of valid u8 range | Forensic: \
+         Numeric overflow or invalid tag value; defaulting to heuristic fallback";
 
     pub const MSG_MSSSIM_VERIFIED: &str =
         "Forensic: MS-SSIM verified in {:.2}s (Sampled {}/{} frames)";
@@ -1494,26 +1513,40 @@ pub mod messages {
         "ftyp box truncated before brands at '{}'. Refusing to forge HEIC.";
     pub const MSG_IMAGE_DETECTION_OOB_BRANDS: &str =
         "ftyp box brands out of bounds at '{}'. Information invalidated.";
-    pub const MSG_IMAGE_DETECTION_GIF_TRUNCATED: &str = "GIF DECODE AUDIT: Truncated image descriptor at '{}' | Forensic: Unexpected EOF during descriptor parse; breaking loop to prevent out-of-bounds access";
+    pub const MSG_IMAGE_DETECTION_GIF_TRUNCATED: &str = "GIF DECODE AUDIT: Truncated image descriptor at '{}' | Forensic: Unexpected EOF during \
+         descriptor parse; breaking loop to prevent out-of-bounds access";
 
-    pub const MSG_GIF_TOO_SMALL: &str = "GIF AUDIT: File too small | Forensic: len={} (min 13 required for header + logical screen descriptor); refusing to parse";
+    pub const MSG_GIF_TOO_SMALL: &str = "GIF AUDIT: File too small | Forensic: len={} (min 13 \
+                                         required for header + logical screen descriptor); \
+                                         refusing to parse";
     pub const MSG_GIF_INVALID_MAGIC: &str =
         "GIF AUDIT: Invalid magic | Forensic: Found '{}'; expected GIF87a/GIF89a";
-    pub const MSG_GIF_OVERFLOW_FRAME: &str = "GIF AUDIT: Frame count overflow | Forensic: payload_count={} exceeds u32::MAX; file is highly anomalous";
-    pub const MSG_GIF_OVERFLOW_DELAY: &str = "GIF AUDIT: Delay count overflow | Forensic: delay_count={} exceeds u32::MAX; file is highly anomalous";
+    pub const MSG_GIF_OVERFLOW_FRAME: &str = "GIF AUDIT: Frame count overflow | Forensic: \
+                                              payload_count={} exceeds u32::MAX; file is highly \
+                                              anomalous";
+    pub const MSG_GIF_OVERFLOW_DELAY: &str = "GIF AUDIT: Delay count overflow | Forensic: \
+                                              delay_count={} exceeds u32::MAX; file is highly \
+                                              anomalous";
 
-    pub const MSG_DATE_ANOMALY_FILENAME: &str = "METADATA ANOMALY: Missing 'FileName' in exiftool output | Forensic: Field is None in JSON response; defaulting to empty string (may cause matching failures)";
-    pub const MSG_DATE_ANOMALY_SOURCE: &str = "METADATA ANOMALY: Missing 'SourceFile' in exiftool output | Forensic: Field is None in JSON response; defaulting to empty string (may cause path resolution issues)";
+    pub const MSG_DATE_ANOMALY_FILENAME: &str = "METADATA ANOMALY: Missing 'FileName' in exiftool output | Forensic: Field is None in \
+         JSON response; defaulting to empty string (may cause matching failures)";
+    pub const MSG_DATE_ANOMALY_SOURCE: &str = "METADATA ANOMALY: Missing 'SourceFile' in exiftool output | Forensic: Field is None in \
+         JSON response; defaulting to empty string (may cause path resolution issues)";
 
     pub const MSG_IQD_PIXEL_FEATURE: &str =
         "Forensic: Initiating pixel-level feature extraction for {}x{} {} media";
     pub const MSG_IQD_INVALID_RGBA: &str = "Invalid RGBA data: expected {} bytes for {}x{}, got {}";
     pub const MSG_IQD_INVALID_DIM: &str = "Invalid dimensions: width or height is 0";
     pub const MSG_VQD_INVALID_DIM: &str = "Invalid dimensions: width or height is 0";
-    pub const MSG_IQD_CLASSIFIED: &str = "Forensic: Content classified as {} (Confidence: {:.0}%) | Decision: Based on multi-dimensional pixel heuristics";
+    pub const MSG_IQD_CLASSIFIED: &str = "Forensic: Content classified as {} (Confidence: {:.0}%) \
+                                          | Decision: Based on multi-dimensional pixel heuristics";
 
-    pub const DB_FALLBACK: &str = "Component Reliability: Cascading to heuristic-only mode | Forensic: Local KNN service unavailable; system remains operational via conservative priors";
-    pub const MSG_DB_FALLBACK: &str = "Component Reliability: Cascading to heuristic-only mode | Forensic: Local KNN service unavailable; system remains operational via conservative priors";
+    pub const DB_FALLBACK: &str = "Component Reliability: Cascading to heuristic-only mode | \
+                                   Forensic: Local KNN service unavailable; system remains \
+                                   operational via conservative priors";
+    pub const MSG_DB_FALLBACK: &str = "Component Reliability: Cascading to heuristic-only mode | \
+                                       Forensic: Local KNN service unavailable; system remains \
+                                       operational via conservative priors";
     pub const DB_INIT_HINT: &str =
         "Forensic: Verify PostgreSQL service state and MFB_PG_CONNSTR environment variable";
     pub const MSG_DB_INIT_HINT: &str =
@@ -1529,8 +1562,12 @@ pub mod messages {
     pub const DB_BACKFILL_PGVECTOR: &str =
         "Database Audit: Backfilling pgvector embeddings for legacy records...";
 
-    pub const MSG_SIGNAL_VOID_AUDIO_SILENT: &str = "Signal Void: Audio stream is silent or empty | Forensic: Normalizing to silent-video-bias priors";
-    pub const MSG_SIGNAL_VOID_FRAME_COUNT: &str = "Signal Void: Frame count is 0 or negative | Forensic: Information invalidated; refusing to forge data";
+    pub const MSG_SIGNAL_VOID_AUDIO_SILENT: &str = "Signal Void: Audio stream is silent or empty \
+                                                    | Forensic: Normalizing to silent-video-bias \
+                                                    priors";
+    pub const MSG_SIGNAL_VOID_FRAME_COUNT: &str = "Signal Void: Frame count is 0 or negative | \
+                                                   Forensic: Information invalidated; refusing to \
+                                                   forge data";
     pub const MSG_LOOP_CLEANUP_FAIL: &str =
         "Forensic: Failed to cleanup temporary loop artifacts: {}";
 
@@ -1736,7 +1773,8 @@ pub mod messages {
         "Forensic: Executing HDR GainMap synthesis (P3 Conversion: {})";
     pub const MSG_GAINMAP_EXTRACTED: &str =
         "Forensic: Gainmap isolated successfully ({}) | Reference Plane: {}";
-    pub const MSG_GAINMAP_PARAMS: &str = "Forensic: Harvested ISO 21496-1 Gainmap metadata: {:.2} (max) / {:.2} (min) | Gamma: {:.2}";
+    pub const MSG_GAINMAP_PARAMS: &str = "Forensic: Harvested ISO 21496-1 Gainmap metadata: {:.2} \
+                                          (max) / {:.2} (min) | Gamma: {:.2}";
     pub const MSG_ENCODE_FINALIZED: &str =
         "Encoder Audit: x265 CPU encoding cycle finalized (Payload: {})";
     pub const MSG_VERIFICATION_INIT: &str =

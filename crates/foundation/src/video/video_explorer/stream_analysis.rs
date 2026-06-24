@@ -1,6 +1,7 @@
 //! Stream Analysis Module
 //!
-//! This module is responsible for video stream analysis and quality assessment, including:
+//! This module is responsible for video stream analysis and quality assessment,
+//! including:
 //! - SSIM (Structural Similarity Index) calculation
 //! - PSNR (Peak Signal-to-Noise Ratio) calculation
 //! - MS-SSIM (Multi-Scale SSIM) calculation
@@ -88,7 +89,8 @@ pub fn get_video_duration(input: &Path) -> anyhow::Result<f64> {
         crate::media_conversion_gate::explore_precheck_degraded_audit(
             "explore_audit",
             format!(
-                "Failed to read video duration for {} (non-zero exit status); container may be malformed",
+                "Failed to read video duration for {} (non-zero exit status); container may be \
+                 malformed",
                 input.display()
             ),
         );
@@ -193,7 +195,8 @@ fn count_video_frames(path: &Path) -> Option<u64> {
                 crate::media_conversion_gate::explore_precheck_degraded_audit(
                     "explore_audit",
                     format!(
-                        "Subprocess failed to start for frame count ({}): verify ffprobe is in PATH",
+                        "Subprocess failed to start for frame count ({}): verify ffprobe is in \
+                         PATH",
                         path.display()
                     ),
                 );
@@ -255,7 +258,8 @@ pub fn is_gif_magic(path: &Path) -> std::io::Result<bool> {
 }
 
 /// # Errors
-/// Returns an error if required probes fail or metric output contains malformed numeric tokens.
+/// Returns an error if required probes fail or metric output contains malformed
+/// numeric tokens.
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Result<Option<f64>> {
     // GIF-specific path: force palette → yuv420p conversion on the reference side
     // before comparing with the yuv420p-encoded output.  This avoids all three
@@ -278,15 +282,23 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Result<Option<f64
             .context("failed to build GIF SSIM timebase")?;
         filters.push((
             "gif_sync".to_string(),
-            format!("[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"),
+            format!(
+                "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},\
+                 setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:\
+                 0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"
+            ),
         ));
         filters.push((
             "gif_palette".to_string(),
-            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:\
+             v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim"
+                .to_string(),
         ));
         filters.push((
             "gif_pad_even".to_string(),
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,\
+             2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim"
+                .to_string(),
         ));
     } else {
         filters.push((
@@ -295,7 +307,9 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Result<Option<f64
         ));
         filters.push((
             "format_convert".to_string(),
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim".to_string(),
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,\
+             2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim"
+                .to_string(),
         ));
         filters.push(("simple".to_string(), "ssim".to_string()));
     }
@@ -401,29 +415,41 @@ fn run_ssim_all_filter(
 /// Non-GIF sources try:
 /// 1. Direct ssim (when formats already match).
 /// 2. Format normalization (odd-size → yuv420p even).
-/// 3. Alpha composite on black (transparent WebP/PNG vs HEVC which has no alpha):
-///    converts the input to rgb24 (discarding alpha channel) then yuv420p,
-///    matching the actual encoder behaviour.
+/// 3. Alpha composite on black (transparent WebP/PNG vs HEVC which has no
+///    alpha): converts the input to rgb24 (discarding alpha channel) then
+///    yuv420p, matching the actual encoder behaviour.
 /// # Errors
-/// Returns an error if required probes fail or metric output contains malformed numeric tokens.
+/// Returns an error if required probes fail or metric output contains malformed
+/// numeric tokens.
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Result<Option<(f64, f64, f64, f64)>> {
     // GIF-specific chains: render palette → rgb24 → yuv420p before comparing.
-    // Use padding (upward to even) to match encoder's padding logic, and use settb/setpts to sync pts.
-    const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
-    const GIF_NORM: &str = "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
+    // Use padding (upward to even) to match encoder's padding logic, and use
+    // settb/setpts to sync pts.
+    const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,\
+                             format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,\
+                             format=yuv420p[cmp];[ref][cmp]ssim";
+    const GIF_NORM: &str = "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:\
+                            v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];\
+                            [ref][cmp]ssim";
 
     // Generic chains (pad to even)
     const DIRECT: &str = "[0:v][1:v]ssim";
-    const FORMAT_NORM: &str = "[0:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
+    const FORMAT_NORM: &str = "[0:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:\
+                               v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];\
+                               [ref][cmp]ssim";
     // Alpha-composite on black without the deprecated premultiply=inplace=1 filter:
     // decode to rgb24 (which discards alpha by blending on black in ffmpeg's
     // swscale path) then convert to yuv420p for comparison.
-    const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
+    const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,\
+                                 2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,\
+                                 2)':0:0[cmp];[ref][cmp]ssim";
 
     let ms = crate::numeric_cast::f64_to_u64_strict(crate::constants::MS_PER_SEC_F64, "MS_PER_SEC")
         .context("failed to build SSIM-All GIF timebase")?;
     let gif_sync = format!(
-        "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"
+        "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},setpts=PTS-STARTPTS,\
+         format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/{ms},\
+         setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim"
     );
 
     let is_gif = match is_gif_magic(input) {
@@ -489,7 +515,8 @@ fn extract_ssim_value(line: &str, prefix: &str) -> Result<Option<f64>> {
     })
 }
 
-// ── CRF=0 Lossless Integrity Check ────────────────────────────────────────────
+// ── CRF=0 Lossless Integrity Check
+// ────────────────────────────────────────────
 
 /// Fast integrity check for CRF=0 (lossless) encodes.
 ///
@@ -542,7 +569,8 @@ pub fn check_lossless_integrity(
             if is_animated_image {
                 // For animated images (GIF/WebP), frame counts often decrease due to
                 // FFmpeg's VFR-to-CFR alignment (merging frames into the same slot).
-                // We pivot to duration validation: if the timeline remains intact, the data is OK.
+                // We pivot to duration validation: if the timeline remains intact, the data is
+                // OK.
                 let i_dur = get_video_duration(input).map_err(|err| {
                     format!(
                         "Integrity check failed: cannot determine input duration for {}: {err}",
@@ -564,7 +592,9 @@ pub fn check_lossless_integrity(
                     crate::media_conversion_gate::explore_precheck_degraded_audit(
                         "explore_audit",
                         format!(
-                            "CRF=0 integrity: both frame count AND duration dropped significantly — possible frame drop error (input={i}, output={o}, ratio={dur_ratio:.4})"
+                            "CRF=0 integrity: both frame count AND duration dropped significantly \
+                             — possible frame drop error (input={i}, output={o}, \
+                             ratio={dur_ratio:.4})"
                         ),
                     );
                     Ok(false)
@@ -573,14 +603,16 @@ pub fn check_lossless_integrity(
                 crate::media_conversion_gate::explore_precheck_degraded_audit(
                     "explore_audit",
                     format!(
-                        "CRF=0 integrity: output has FEWER frames than input — possible encode error (input={i}, output={o})"
+                        "CRF=0 integrity: output has FEWER frames than input — possible encode \
+                         error (input={i}, output={o})"
                     ),
                 );
                 Ok(false)
             }
         }
         (None, _) | (_, None) => {
-            // Cannot determine frame count — soft warning only; file is non-empty so accept.
+            // Cannot determine frame count — soft warning only; file is non-empty so
+            // accept.
             Ok(true)
         }
     }

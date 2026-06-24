@@ -1,5 +1,6 @@
 //! Elapsed time spinner with terminal title updates.
-//! Mirrors `_fmt_elapsed()` and `spinner_run()` from drag_and_drop_processor.py.
+//! Mirrors `_fmt_elapsed()` and `spinner_run()` from
+//! drag_and_drop_processor.py.
 
 use std::io::Write;
 use std::sync::Arc;

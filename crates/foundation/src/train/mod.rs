@@ -1,4 +1,5 @@
-//! `train` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `train` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod training_progress;
 

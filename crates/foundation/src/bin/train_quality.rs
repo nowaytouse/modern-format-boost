@@ -23,7 +23,8 @@ struct Cli {
     #[arg(required = true)] // 🛡️ HARDENED: Quality label is mandatory for valid training data
     label: Option<String>,
 
-    /// Target scenario: `image_quality` (default), `animated_image_quality`, or `video_quality`
+    /// Target scenario: `image_quality` (default), `animated_image_quality`, or
+    /// `video_quality`
     #[arg(long, default_value = "image_quality")]
     scenario: ScenarioType,
 
@@ -96,7 +97,8 @@ fn main() -> Result<()> {
         && foundation::scenario::ImageQualityLabel::from_label(label.as_str()).is_some()
     {
         anyhow::bail!(
-            "{} only accepts generic labels `high`/`low`; image-family labels belong to image_quality",
+            "{} only accepts generic labels `high`/`low`; image-family labels belong to \
+             image_quality",
             cli.scenario
         );
     }
@@ -300,7 +302,8 @@ fn main() -> Result<()> {
         symbols::SUCCESS,
         symbols::plain::SUCCESS,
         format!(
-            "Finished scan: ingested {} / {} candidate samples ({} scanned, {} unsupported skipped, {} failed).",
+            "Finished scan: ingested {} / {} candidate samples ({} scanned, {} unsupported \
+             skipped, {} failed).",
             stats.ingested,
             stats.candidates,
             stats.scanned,
@@ -311,7 +314,8 @@ fn main() -> Result<()> {
 
     if stats.ingested == 0 {
         anyhow::bail!(
-            "No {} samples were ingested. scanned={}, candidates={}, unsupported_skipped={}, failed={}.{}",
+            "No {} samples were ingested. scanned={}, candidates={}, unsupported_skipped={}, \
+             failed={}.{}",
             cli.scenario,
             stats.scanned,
             stats.candidates,
@@ -322,7 +326,8 @@ fn main() -> Result<()> {
     }
     if stats.failed > 0 && !cli.allow_partial {
         anyhow::bail!(
-            "{} candidate(s) failed during {} ingestion; {} sample(s) were inserted, but the command refuses to report clean success without --allow-partial.{}",
+            "{} candidate(s) failed during {} ingestion; {} sample(s) were inserted, but the \
+             command refuses to report clean success without --allow-partial.{}",
             stats.failed,
             cli.scenario,
             stats.ingested,
@@ -334,7 +339,9 @@ fn main() -> Result<()> {
         foundation::ui_stderr::line(
             symbols::BRAIN,
             symbols::plain::BRAIN,
-            "Next: run `python3 crates/dev/scripts/training_pipeline.py train-image-quality-model` once both high and low image_quality samples are populated.",
+            "Next: run `python3 crates/dev/scripts/training_pipeline.py \
+             train-image-quality-model` once both high and low image_quality samples are \
+             populated.",
         );
     }
     Ok(())

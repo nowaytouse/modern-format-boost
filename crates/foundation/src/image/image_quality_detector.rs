@@ -1,13 +1,17 @@
 //! 🔬 Image Quality Detector - Content Classification & Media Metrics
 //!
-//! This module provides **pixel-based image classification** and quality dimensions.
-//! It is used to generate UI labels (e.g., PHOTO, SCREENSHOT) and detailed quality metrics
-//! for logging. Routing and compression decisions are handled by `image_analyzer/recommender`.
+//! This module provides **pixel-based image classification** and quality
+//! dimensions. It is used to generate UI labels (e.g., PHOTO, SCREENSHOT) and
+//! detailed quality metrics for logging. Routing and compression decisions are
+//! handled by `image_analyzer/recommender`.
 //!
 //! ## Functions
-//! - **Image Content Classification**: Categorizes images into logical types (Icon, Photo, etc.)
-//! - **Quality Metrics**: Extracts complexity, edge density, color diversity, and more.
-//! - **Media Information**: Provides a formatted summary of image characteristics.
+//! - **Image Content Classification**: Categorizes images into logical types
+//!   (Icon, Photo, etc.)
+//! - **Quality Metrics**: Extracts complexity, edge density, color diversity,
+//!   and more.
+//! - **Media Information**: Provides a formatted summary of image
+//!   characteristics.
 
 use crate::image_detection::PrecisionMetadata;
 use crate::progress_mode::has_log_file;
@@ -48,8 +52,9 @@ pub struct ImageQualityAnalysis {
 }
 
 impl ImageQualityAnalysis {
-    /// Calculates a "Lossless Affinity Score" (0.0 to 1.0) indicating how likely the image
-    /// is to be a clean, digital, or master-quality source that warrants lossless preservation.
+    /// Calculates a "Lossless Affinity Score" (0.0 to 1.0) indicating how
+    /// likely the image is to be a clean, digital, or master-quality source
+    /// that warrants lossless preservation.
     ///
     /// Combines complexity, noise, and content-type heuristics.
     #[must_use]
@@ -208,7 +213,8 @@ fn get_classifier_rules() -> &'static [ClassifierRule] {
             Some(rules_array) => match serde_json::from_value(rules_array.clone()) {
                 Ok(v) => v,
                 Err(e) => unreachable!(
-                    "CRITICAL: embedded image_classifiers.json 'classifiers' array is malformed (error: {})",
+                    "CRITICAL: embedded image_classifiers.json 'classifiers' array is malformed \
+                     (error: {})",
                     e
                 ),
             },
@@ -428,7 +434,8 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> Option<f64> {
 /// Calculates the color diversity of an image.
 ///
 /// Analyzes the image to measure the variety and distribution of colors.
-/// Higher diversity indicates more complex and potentially higher quality images.
+/// Higher diversity indicates more complex and potentially higher quality
+/// images.
 ///
 /// # Arguments
 /// * `rgba` - RGBA image data as bytes
@@ -1175,7 +1182,8 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
     crate::log_report_stat!(
         label,
         format!(
-            "Diversity: {} | Texture: {} | Noise: {} | Sharpness: {} | Contrast: {} | Confidence: {:.1}%",
+            "Diversity: {} | Texture: {} | Noise: {} | Sharpness: {} | Contrast: {} | Confidence: \
+             {:.1}%",
             crate::media_conversion_gate::ui_f64_or_na(
                 analysis.color_diversity,
                 "image_quality_color_diversity",
@@ -1284,7 +1292,8 @@ mod property_tests {
         };
 
         let score = screenshot.lossless_affinity_score().unwrap();
-        // Base affinity (approx): 0.9*0.4 + 0.99*0.3 + 0.95*0.2 + 0.2*0.1 = 0.36 + 0.297 + 0.19 + 0.02 = 0.867
+        // Base affinity (approx): 0.9*0.4 + 0.99*0.3 + 0.95*0.2 + 0.2*0.1 = 0.36 +
+        // 0.297 + 0.19 + 0.02 = 0.867
         // + Credible bonus (0.15) = 1.017 -> clamp 1.0
         assert!(score >= 0.95);
 
@@ -1314,7 +1323,8 @@ mod property_tests {
         };
 
         let score_photo = photo.lossless_affinity_score().unwrap();
-        // Base affinity (approx): 0.3*0.4 + 0.5*0.3 + 0.4*0.2 + 0.8*0.1 = 0.12 + 0.15 + 0.08 + 0.08 = 0.43
+        // Base affinity (approx): 0.3*0.4 + 0.5*0.3 + 0.4*0.2 + 0.8*0.1 = 0.12 + 0.15 +
+        // 0.08 + 0.08 = 0.43
         assert!(score_photo < 0.6);
     }
 

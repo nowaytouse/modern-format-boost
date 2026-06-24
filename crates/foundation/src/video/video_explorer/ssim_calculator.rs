@@ -1,7 +1,8 @@
 //! MS-SSIM quality metric calculations (multi-scale, YUV channel-wise)
 //!
-//! Primary entry: `calculate_ms_ssim_yuv` (used by `gpu_coarse_search` Phase 3).
-//! `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback for other callers.
+//! Primary entry: `calculate_ms_ssim_yuv` (used by `gpu_coarse_search` Phase
+//! 3). `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback
+//! for other callers.
 
 use crate::builder_base::ToolBuilder;
 use std::path::Path;
@@ -34,10 +35,14 @@ fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("metric dimensions collapsed to zero after even rounding"))
 }
 
-/// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0 normal, 25.0 ultimate).
+/// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0
+/// normal, 25.0 ultimate).
 ///
-/// Policy skips (GIF, over-duration limit) return `Ok(None)`. Probe or compute failures return `Err`.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Policy skips (GIF, over-duration limit) return `Ok(None)`. Probe or compute
+/// failures return `Err`.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn calculate_ms_ssim_yuv(
     input: &Path,
     output: &Path,
@@ -59,7 +64,8 @@ pub fn calculate_ms_ssim_yuv(
     let duration = super::stream_analysis::get_video_duration(input)?;
     let duration_min = duration / 60.0_f64;
 
-    // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
+    // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control
+    // skip threshold.
     let (sample_rate, should_calculate) =
         if duration_min <= crate::constants::QUALITY_ANALYSIS_SHORT_DURATION_MIN {
             (crate::constants::QUALITY_ANALYSIS_SAMPLE_RATE_SHORT, true)
@@ -90,14 +96,16 @@ pub fn calculate_ms_ssim_yuv(
         )
         .ok_or_else(|| anyhow::anyhow!("estimated_time overflow for MS-SSIM"))?;
         crate::log_detail!(&format!(
-            "   Temporal Sampling: 1/{sample_rate} frames active (Estimated forensic window: {estimated_time}s)"
+            "   Temporal Sampling: 1/{sample_rate} frames active (Estimated forensic window: \
+             {estimated_time}s)"
         ));
     } else {
         let estimated_time =
             crate::numeric_cast::f64_to_u64_strict(duration * 3.0, "estimated_time")
                 .ok_or_else(|| anyhow::anyhow!("estimated_time overflow for MS-SSIM"))?;
         crate::log_detail!(&format!(
-            "   Exhaustive Analysis: Processing all frames (Estimated forensic window: {estimated_time}s)"
+            "   Exhaustive Analysis: Processing all frames (Estimated forensic window: \
+             {estimated_time}s)"
         ));
     }
     crate::log_detail!(crate::infra::static_logs::messages::MSG_SSIM_STRATEGY);
@@ -180,12 +188,14 @@ pub fn calculate_ms_ssim_yuv(
     let elapsed = start_time.elapsed().as_secs();
     let end_time = Local::now().format("%Y-%m-%d %H:%M:%S");
     crate::log_detail!(&format!(
-        "   MS-SSIM Structural Audit: Completed in {elapsed}s (End: {end_time} - Precision Level 3)"
+        "   MS-SSIM Structural Audit: Completed in {elapsed}s (End: {end_time} - Precision Level \
+         3)"
     ));
 
     if u_ms_ssim.is_none() || v_ms_ssim.is_none() {
         crate::log_detail!(
-            "   Forensic: Falling back to Y-only structural metric (chroma planes missing or invalid)"
+            "   Forensic: Falling back to Y-only structural metric (chroma planes missing or \
+             invalid)"
         );
     }
 
@@ -226,7 +236,8 @@ fn calculate_ms_ssim_channel_sampled(
             || target_height < crate::constants::MS_SSIM_CHROMA_MIN_DIM)
     {
         crate::log_detail!(&format!(
-            "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min {}x{}), skipping",
+            "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min {}x{}), \
+             skipping",
             channel.to_uppercase(),
             target_width,
             target_height,
@@ -246,7 +257,10 @@ fn calculate_ms_ssim_channel_sampled(
     // libvmaf's MS-SSIM feature may not support 10-bit input properly
     // Note: This means we lose some HDR information, but it's better than failing
     let filter = format!(
-        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[c0];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
+        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,\
+         extractplanes={channel}[c0];[1:v]{sample_filter}scale={target_width}:{target_height}:\
+         flags=bicubic,format=yuv420p,extractplanes={channel}[c1];[c0][c1]libvmaf=feature='\
+         name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
     );
 
     let result = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -275,7 +289,8 @@ fn calculate_ms_ssim_channel_sampled(
                     crate::media_conversion_gate::explore_ssim_metric_degraded_audit(
                         "explore_ssim_audit",
                         format!(
-                            "Channel {} MS-SSIM score {score:.4} parsed despite ffmpeg exit {:?}; stderr tail: {stderr_tail}",
+                            "Channel {} MS-SSIM score {score:.4} parsed despite ffmpeg exit {:?}; \
+                             stderr tail: {stderr_tail}",
                             channel.to_uppercase(),
                             out.status.code()
                         ),
@@ -366,7 +381,9 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> anyhow::Result<Option<f
         .input(output)
         .arg("-filter_complex")
         .arg(format!(
-            "[0:v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[ref];[1:v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[dis];[ref][dis]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'",
+            "[0:v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[ref];[1:\
+             v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[dis];\
+             [ref][dis]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'",
         ))
         .arg("-f")
         .arg("null")
@@ -389,7 +406,8 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> anyhow::Result<Option<f
                     crate::media_conversion_gate::explore_ssim_metric_degraded_audit(
                         "explore_ssim_audit",
                         format!(
-                            "MS-SSIM score {ms_ssim:.4} parsed despite ffmpeg exit {:?}; stderr tail: {stderr_tail}",
+                            "MS-SSIM score {ms_ssim:.4} parsed despite ffmpeg exit {:?}; stderr \
+                             tail: {stderr_tail}",
                             out.status.code()
                         ),
                     );
@@ -421,7 +439,8 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> anyhow::Result<Option<f
                     "ffmpeg libvmaf MS-SSIM failed"
                 );
                 crate::log_detail!(
-                    "   Forensic: Primary metric failed; attempting standalone VMAF-bin structural recovery..."
+                    "   Forensic: Primary metric failed; attempting standalone VMAF-bin \
+                     structural recovery..."
                 );
 
                 if crate::vmaf_standalone::is_vmaf_available() {
@@ -544,7 +563,8 @@ fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
     None
 }
 
-// ─── Ultimate Mode: 3D Quality Metrics ────────────────────────────────────────
+// ─── Ultimate Mode: 3D Quality Metrics
+// ────────────────────────────────────────
 
 /// Calculate VMAF Y-channel score (perceptual quality, 0–100 scale).
 /// `sample_rate`: 1 = every frame, 3 = every 3rd frame, etc.
@@ -569,7 +589,10 @@ pub fn calculate_vmaf_y(
     // Always use 8-bit yuv420p for VMAF calculation compatibility
     // VMAF models are trained on 8-bit content
     let filter = format!(
-        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[dis];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={n_threads}:log_fmt=json:log_path=/dev/stdout",
+        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,\
+         format=yuv420p[dis];[1:v]{sample_filter}scale={target_width}:{target_height}:\
+         flags=bicubic,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:\
+         n_threads={n_threads}:log_fmt=json:log_path=/dev/stdout",
     );
 
     let result = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -596,7 +619,8 @@ pub fn calculate_vmaf_y(
                     crate::media_conversion_gate::explore_ssim_metric_degraded_audit(
                         "explore_vmaf_audit",
                         format!(
-                            "VMAF-Y score {score:.4} parsed despite ffmpeg exit {:?}; stderr tail: {stderr_tail}",
+                            "VMAF-Y score {score:.4} parsed despite ffmpeg exit {:?}; stderr \
+                             tail: {stderr_tail}",
                             out.status.code()
                         ),
                     );
@@ -647,13 +671,16 @@ pub fn calculate_vmaf_y(
     }
 }
 
-/// Calculate CAMBI (Contrast Aware Multiscale Banding Index) for the output video.
+/// Calculate CAMBI (Contrast Aware Multiscale Banding Index) for the output
+/// video.
 ///
-/// CAMBI is a single-video metric (no reference needed) — lower is better (0 = no banding).
-/// Returns `Ok(None)` when no metric is present in successful output.
+/// CAMBI is a single-video metric (no reference needed) — lower is better (0 =
+/// no banding). Returns `Ok(None)` when no metric is present in successful
+/// output.
 ///
 /// # Errors
-/// Returns an error when temp-file creation, command execution, log read, or parsing fails.
+/// Returns an error when temp-file creation, command execution, log read, or
+/// parsing fails.
 pub fn calculate_cambi(output: &Path, sample_rate: usize) -> anyhow::Result<Option<f64>> {
     let n_threads = num_cpus_capped();
 
@@ -678,7 +705,9 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> anyhow::Result<Opti
     // Use n_subsample for speed (skips frames inside libvmaf, faster than
     // select filter which still decodes every frame).
     let filter_complex = format!(
-        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[dist];[dist][ref]libvmaf=feature=name=cambi:n_threads={nt}:n_subsample={ns}:log_fmt=json:log_path={lp}",
+        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:\
+         trunc(ih/2)*2,format=yuv420p[dist];[dist][ref]libvmaf=feature=name=cambi:n_threads={nt}:\
+         n_subsample={ns}:log_fmt=json:log_path={lp}",
         nt = n_threads,
         ns = sample_rate.max(1),
         lp = log_path.display(),
@@ -757,11 +786,13 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> anyhow::Result<Opti
 
 /// Calculate PSNR for the U and V chroma channels independently.
 ///
-/// Returns `(psnr_u, psnr_v)` in dB, or `Ok(None)` when successful output has no metric.
-/// Uses `extractplanes` + ffmpeg's `psnr` filter (no libvmaf dependency).
+/// Returns `(psnr_u, psnr_v)` in dB, or `Ok(None)` when successful output has
+/// no metric. Uses `extractplanes` + ffmpeg's `psnr` filter (no libvmaf
+/// dependency).
 ///
 /// # Errors
-/// Returns an error when probes, command execution, worker joins, or parsing fails.
+/// Returns an error when probes, command execution, worker joins, or parsing
+/// fails.
 pub fn calculate_psnr_uv(
     input: &Path,
     output: &Path,
@@ -842,7 +873,9 @@ fn psnr_single_channel(
     // Always use 8-bit yuv420p for PSNR calculation compatibility
     // PSNR filter works best with consistent bit depth
     let filter = format!(
-        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[ref];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[dis];[ref][dis]psnr=stats_file=-",
+        "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,\
+         extractplanes={channel}[ref];[1:v]{sample_filter}scale={target_width}:{target_height}:\
+         flags=bicubic,format=yuv420p,extractplanes={channel}[dis];[ref][dis]psnr=stats_file=-",
     );
 
     let result = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -858,7 +891,8 @@ fn psnr_single_channel(
 
     match result {
         Ok(out) => {
-            // psnr stats_file=- writes per-frame stats to stdout; we need the average from stderr summary.
+            // psnr stats_file=- writes per-frame stats to stdout; we need the average from
+            // stderr summary.
             let stderr = String::from_utf8_lossy(&out.stderr);
             parse_psnr_average_y_from_stderr(&stderr)
         }
@@ -873,8 +907,9 @@ fn psnr_single_channel(
 }
 
 /// Parse average PSNR from the ffmpeg psnr filter summary line in stderr.
-/// Example: "PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567"
-/// Since we already extracted a single plane (which ffmpeg labels as 'y'), we read the 'y' value.
+/// Example: "PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123
+/// max:42.567" Since we already extracted a single plane (which ffmpeg labels
+/// as 'y'), we read the 'y' value.
 fn parse_psnr_average_y_from_stderr(stderr: &str) -> anyhow::Result<Option<f64>> {
     for line in stderr.lines() {
         if line.contains("PSNR") && line.contains("average:") {
@@ -967,7 +1002,8 @@ fn parse_cambi_mean_from_json(stdout: &str) -> anyhow::Result<Option<f64>> {
     Ok(None)
 }
 
-/// Returns a capped thread count for libvmaf (max 8 to avoid over-subscription).
+/// Returns a capped thread count for libvmaf (max 8 to avoid
+/// over-subscription).
 fn num_cpus_capped() -> usize {
     crate::media_conversion_gate::runtime_available_parallelism_capped_or_default(
         8,
@@ -1131,7 +1167,8 @@ mod tests {
     #[test]
     fn test_parse_psnr_standard_ffmpeg_line() {
         // Standard ffmpeg psnr filter summary line
-        let stderr = "[Parsed_psnr_4 @ 0x123] PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567\n";
+        let stderr = "[Parsed_psnr_4 @ 0x123] PSNR y:41.234 u:39.876 v:40.123 average:40.411 \
+                      min:38.123 max:42.567\n";
         let result = ok_metric(parse_psnr_average_y_from_stderr(stderr));
         assert!(result.is_some(), "Should parse PSNR from standard line");
         let v = result.unwrap_or_else(|| panic!("missing value"));
@@ -1177,7 +1214,8 @@ mod tests {
             "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'test.mp4':\n",
             "  Stream #0:0: Video: h264\n",
             "frame=  120 fps= 48 q=-0.0 Lsize=N/A time=00:00:05.00\n",
-            "[Parsed_psnr_1 @ 0xdeadbeef] PSNR y:44.100 u:42.300 v:42.500 average:43.300 min:41.200 max:46.100\n",
+            "[Parsed_psnr_1 @ 0xdeadbeef] PSNR y:44.100 u:42.300 v:42.500 average:43.300 \
+             min:41.200 max:46.100\n",
         );
         let result = ok_metric(parse_psnr_average_y_from_stderr(stderr));
         assert!(result.is_some());

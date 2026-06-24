@@ -14,7 +14,8 @@ const IMAGE_QUALITY_MODEL_METADATA_NAME: &str = "lightgbm_model.metadata.json";
 const IMAGE_QUALITY_MODEL_SCHEMA: &str = "image_quality_lgbm_v1";
 const IMAGE_QUALITY_MODEL_SCENARIO: &str = "image_quality";
 const IMAGE_QUALITY_MODEL_PREDICTOR_FAMILY: &str = "lightgbm_binary";
-/// Upper bound on on-disk `LightGBM` artifact size (reject corrupt/huge files before subprocess).
+/// Upper bound on on-disk `LightGBM` artifact size (reject corrupt/huge files
+/// before subprocess).
 const IMAGE_QUALITY_MODEL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -44,9 +45,12 @@ struct PythonModelPrediction {
 /// Run the real `LightGBM` image-quality regressor when a trained model exists.
 ///
 /// Subprocess contract:
-/// - Stdin is closed after the JSON feature payload is written (EOF signals end of request).
-/// - Wall-clock is bounded by [`crate::constants::IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS`]
-///   or `MFB_IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS` (5–600 seconds); overrun kills the child.
+/// - Stdin is closed after the JSON feature payload is written (EOF signals end
+///   of request).
+/// - Wall-clock is bounded by
+///   [`crate::constants::IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS`] or
+///   `MFB_IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS` (5–600 seconds); overrun
+///   kills the child.
 ///
 /// # Errors
 /// Returns an error when feature extraction, subprocess execution, or response
@@ -333,7 +337,8 @@ fn inference_timeout() -> Duration {
                 crate::media_conversion_gate::probe_quality_batch_audit(
                     "quality_model_timeout",
                     format!(
-                        "failed to parse inference timeout '{raw}': {e}; using default {default_secs}s"
+                        "failed to parse inference timeout '{raw}': {e}; using default \
+                         {default_secs}s"
                     ),
                 );
                 Duration::from_secs(default_secs)
@@ -350,7 +355,8 @@ fn inference_timeout() -> Duration {
     }
 }
 
-/// Bounded wait with kill-on-timeout so a wedged Python cannot stall the encoder indefinitely.
+/// Bounded wait with kill-on-timeout so a wedged Python cannot stall the
+/// encoder indefinitely.
 fn wait_child_output_with_timeout(
     mut child: Child,
     timeout: Duration,
@@ -382,7 +388,8 @@ fn wait_child_output_with_timeout(
             audit_timeout_reader_result(collect_child_stream_reader(stdout_reader, "stdout"));
             audit_timeout_reader_result(collect_child_stream_reader(stderr_reader, "stderr"));
             anyhow::bail!(
-                "image quality model runtime timed out after {timeout:?} (subprocess killed, exit={:?})",
+                "image quality model runtime timed out after {timeout:?} (subprocess killed, \
+                 exit={:?})",
                 status.code()
             );
         }
@@ -436,7 +443,8 @@ fn kill_quality_model_after_timeout(child: &mut Child, timeout: Duration) -> Res
                 format!("failed to kill image quality model after {timeout:?}: {kill_err}"),
             );
             anyhow::bail!(
-                "image quality model runtime timed out after {timeout:?} and kill failed: {kill_err}"
+                "image quality model runtime timed out after {timeout:?} and kill failed: \
+                 {kill_err}"
             );
         }
     }
@@ -456,7 +464,8 @@ fn read_child_stream_limited(
         .with_context(|| format!("read image quality model {label}"))?;
     if buf.len() > max_bytes {
         anyhow::bail!(
-            "image quality model {label} exceeded {max_bytes} bytes (hard cap for JSON subprocess output)"
+            "image quality model {label} exceeded {max_bytes} bytes (hard cap for JSON subprocess \
+             output)"
         );
     }
     Ok(buf)

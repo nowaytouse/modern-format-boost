@@ -26,7 +26,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::{fs, io};
 
-// ── constants ─────────────────────────────────────────────────────────────────
+// ── constants
+// ─────────────────────────────────────────────────────────────────
 
 const IMAGE_EXTENSIONS: &[&str] = &["jxl"];
 const VIDEO_EXTENSIONS: &[&str] = &["mov", "mp4"];
@@ -89,10 +90,12 @@ fn append_plain_audit_line(path: &Path, line: &str) -> Result<()> {
     Ok(())
 }
 
-// ── video codec probe ─────────────────────────────────────────────────────────
+// ── video codec probe
+// ─────────────────────────────────────────────────────────
 
 /// Call ffprobe to get the primary video codec name.
-/// Returns `(Some(codec), None)` on success or `(None, Some(error))` on failure.
+/// Returns `(Some(codec), None)` on success or `(None, Some(error))` on
+/// failure.
 fn probe_video_codec(path: &Path) -> (Option<String>, Option<String>) {
     let mut child = match Command::new("ffprobe")
         .args([
@@ -156,7 +159,8 @@ fn probe_video_codec(path: &Path) -> (Option<String>, Option<String>) {
     }
 }
 
-// ── directory timestamp snapshot ──────────────────────────────────────────────
+// ── directory timestamp snapshot
+// ──────────────────────────────────────────────
 
 type DirTimestamps = BTreeMap<PathBuf, (SystemTime, SystemTime)>;
 
@@ -179,7 +183,8 @@ fn snapshot_directories(src_root: &Path) -> Result<DirTimestamps> {
     Ok(map)
 }
 
-// ── candidate scan ────────────────────────────────────────────────────────────
+// ── candidate scan
+// ────────────────────────────────────────────────────────────
 
 struct ScanResult {
     candidates: Vec<PathBuf>,
@@ -237,7 +242,8 @@ fn scan_candidates(src_root: &Path) -> Result<ScanResult> {
     Ok(res)
 }
 
-// ── destination layout mirror ─────────────────────────────────────────────────
+// ── destination layout mirror
+// ─────────────────────────────────────────────────
 
 fn ensure_destination_layout(
     src_root: &Path,
@@ -271,7 +277,8 @@ fn ensure_destination_layout(
     Ok(created)
 }
 
-// ── timestamp restoration ─────────────────────────────────────────────────────
+// ── timestamp restoration
+// ─────────────────────────────────────────────────────
 
 fn restore_directory_times(
     src_root: &Path,
@@ -344,7 +351,8 @@ fn set_times(path: &Path, atime: SystemTime, mtime: SystemTime) -> Result<()> {
     Ok(())
 }
 
-// ── prune empty source dirs ───────────────────────────────────────────────────
+// ── prune empty source dirs
+// ───────────────────────────────────────────────────
 
 fn prune_empty_source_directories(dir_meta: &DirTimestamps) -> usize {
     let mut removed = 0;
@@ -377,7 +385,8 @@ fn prune_empty_source_directories(dir_meta: &DirTimestamps) -> usize {
     removed
 }
 
-// ── validate ──────────────────────────────────────────────────────────────────
+// ── validate
+// ──────────────────────────────────────────────────────────────────
 
 fn validate_paths(src_root: &Path, dest_root: &Path) -> bool {
     if !src_root.is_dir() {
@@ -412,7 +421,8 @@ fn validate_paths(src_root: &Path, dest_root: &Path) -> bool {
     true
 }
 
-// ── probe failure display ─────────────────────────────────────────────────────
+// ── probe failure display
+// ─────────────────────────────────────────────────────
 
 fn print_probe_failures(src_root: &Path, failures: &[(PathBuf, String)]) {
     if failures.is_empty() {
@@ -429,7 +439,8 @@ fn print_probe_failures(src_root: &Path, failures: &[(PathBuf, String)]) {
     }
 }
 
-// ── main collection logic ─────────────────────────────────────────────────────
+// ── main collection logic
+// ─────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
 fn run_collection(src_root: &Path, dest_root: &Path, dry_run: bool, yes: bool) -> Result<bool> {
@@ -676,8 +687,8 @@ fn run_collection(src_root: &Path, dest_root: &Path, dry_run: bool, yes: bool) -
     }
 
     println!(
-        "Operation finished. Optimized files moved, legacy files retained, \
-         empty source directories removed, directory tree mirrored."
+        "Operation finished. Optimized files moved, legacy files retained, empty source \
+         directories removed, directory tree mirrored."
     );
     Ok(failed.is_empty())
 }

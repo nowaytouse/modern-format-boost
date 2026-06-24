@@ -23,7 +23,8 @@ struct Args {
     #[arg(short, long, default_value = "debug/media_index.sqlite")]
     db: PathBuf,
 
-    /// Save the current decisions as a snapshot with this tag (e.g. v1.0, baseline)
+    /// Save the current decisions as a snapshot with this tag (e.g. v1.0,
+    /// baseline)
     #[arg(short, long)]
     save: Option<String>,
 }

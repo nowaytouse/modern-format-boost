@@ -63,7 +63,9 @@ pub struct DolbyVisionMetadata {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FFprobeHdrInfo {
-    /// HDR10 mastering display metadata (e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)")
+    /// HDR10 mastering display metadata (e.g.
+    /// "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)"
+    /// )
     pub mastering_display: Option<String>,
     /// HDR10 content light level metadata (e.g. "MaxCLL=1000,MaxFALL=400")
     pub max_cll: Option<String>,
@@ -106,7 +108,8 @@ pub struct FFprobeResult {
     pub duration: Option<f64>,
     pub size: u64,
     /// Container-level bit rate from ffprobe format section.
-    /// `None` when ffprobe does not report it (common for image containers, e.g. WebP).
+    /// `None` when ffprobe does not report it (common for image containers,
+    /// e.g. WebP).
     pub bit_rate: Option<u64>,
     pub video_codec: String,
     pub video_codec_long: String,
@@ -120,8 +123,8 @@ pub struct FFprobeResult {
     pub color_transfer: Option<String>,
     pub color_primaries: Option<String>,
     pub bit_depth: Option<u8>,
-    /// True when `bit_depth` was inferred from `pix_fmt` because ffprobe did not
-    /// expose explicit sample-depth fields.
+    /// True when `bit_depth` was inferred from `pix_fmt` because ffprobe did
+    /// not expose explicit sample-depth fields.
     pub bit_depth_inferred_from_pix_fmt: bool,
     pub audio: FFprobeAudioInfo,
     pub profile: Option<String>,
@@ -136,7 +139,8 @@ pub struct FFprobeResult {
     pub subtitles: FFprobeSubtitleInfo,
     /// Variable frame rate detected (`r_frame_rate` != `avg_frame_rate`)
     pub is_variable_frame_rate: bool,
-    /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
+    /// Stream index of the selected video stream (for multi-stream files like
+    /// animated AVIF)
     pub stream_index: usize,
     /// Format tags (e.g. encoder, `creation_time`) from the format section
     pub tags: HashMap<String, String>,
@@ -282,7 +286,8 @@ fn detect_vfr_enhanced(
 struct ProbeFormatInfo {
     format_name: String,
     size: u64,
-    /// `None` when ffprobe format section omits `bit_rate` (e.g. image containers).
+    /// `None` when ffprobe format section omits `bit_rate` (e.g. image
+    /// containers).
     bit_rate: Option<u64>,
     duration: Option<f64>,
     tags: HashMap<String, String>,
@@ -413,7 +418,8 @@ fn parse_u64_string_field(value: &serde_json::Value) -> Option<u64> {
     crate::numeric_cast::parse_option_strict(value.as_str(), "u64_field")
 }
 
-/// `nb_frames` for each video stream (empty when ffprobe is unavailable or probe fails).
+/// `nb_frames` for each video stream (empty when ffprobe is unavailable or
+/// probe fails).
 #[must_use]
 pub fn video_stream_frame_counts(path: &Path) -> Vec<u64> {
     if !is_ffprobe_available() {
@@ -432,7 +438,8 @@ pub fn video_stream_frame_counts(path: &Path) -> Vec<u64> {
         .collect()
 }
 
-/// Returns true when `counts` look like a cover stream (≤1 frame) plus a longer stream.
+/// Returns true when `counts` look like a cover stream (≤1 frame) plus a longer
+/// stream.
 #[must_use]
 pub(crate) fn isobmff_cover_stream_ambiguous_from_counts(counts: &[u64]) -> bool {
     if counts.len() <= 1 {
@@ -443,7 +450,8 @@ pub(crate) fn isobmff_cover_stream_ambiguous_from_counts(counts: &[u64]) -> bool
     has_multi && has_single
 }
 
-/// Multiple video streams where one looks like a single-frame cover/thumbnail and another is longer.
+/// Multiple video streams where one looks like a single-frame cover/thumbnail
+/// and another is longer.
 #[must_use]
 pub fn isobmff_cover_stream_ambiguous(path: &Path) -> bool {
     isobmff_cover_stream_ambiguous_from_counts(&video_stream_frame_counts(path))
@@ -496,7 +504,8 @@ fn collect_string_tags(tags_value: &serde_json::Value) -> HashMap<String, String
     tags
 }
 
-/// Still-image and pipe muxers often omit `format.duration`; absence is not a probe defect.
+/// Still-image and pipe muxers often omit `format.duration`; absence is not a
+/// probe defect.
 fn format_duration_absent_is_expected(format_name: &str, path: &Path) -> bool {
     let name = format_name.to_ascii_lowercase();
     if name.contains("heif")
@@ -542,7 +551,8 @@ fn parse_probe_format(
     let size = parse_u64_string_field(&format["size"])
         .ok_or_else(|| FFprobeError::ParseError("Missing or invalid file size".to_string()))?;
 
-    // `bit_rate` is absent for many image containers (WebP, AVIF) — treat as optional.
+    // `bit_rate` is absent for many image containers (WebP, AVIF) — treat as
+    // optional.
     let bit_rate = parse_u64_string_field(&format["bit_rate"]);
     if bit_rate.is_none() {
         crate::log_info!(
@@ -592,7 +602,8 @@ fn select_video_stream<'a>(
         ));
     }
 
-    // A stream with zero or absent dimensions is not selectable as the primary stream.
+    // A stream with zero or absent dimensions is not selectable as the primary
+    // stream.
     let has_valid_dimensions = |stream: &serde_json::Value| -> bool {
         stream["width"].as_u64().is_some_and(|w| w > 0)
             && stream["height"].as_u64().is_some_and(|h| h > 0)
@@ -631,7 +642,8 @@ fn select_video_stream<'a>(
 /// Resolves the accurate duration from format and stream information.
 ///
 /// Uses format duration as primary source, falls back to stream duration.
-/// Applies format-specific corrections and fallbacks for different container types.
+/// Applies format-specific corrections and fallbacks for different container
+/// types.
 ///
 /// # Arguments
 /// * `format_duration` - Duration from format information
@@ -655,8 +667,9 @@ fn resolve_probe_duration(
         duration = parse_f64_string_field(&video_stream["duration"]);
     }
 
-    // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
-    // Loop-intent logic requires a real duration; derive it from ANMF frame durations.
+    // Root fix: ffprobe often reports 0/N/A duration for animated WebP
+    // (`webp_pipe`). Loop-intent logic requires a real duration; derive it from
+    // ANMF frame durations.
     if duration.is_none() && format_name.contains("webp") {
         let data = read_native_probe_bytes(path, "webp duration fallback")?;
         if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
@@ -694,7 +707,8 @@ fn resolve_probe_duration(
         );
     }
 
-    // Allow 0.0 duration for formats like headless GIFs where duration is not globally specified
+    // Allow 0.0 duration for formats like headless GIFs where duration is not
+    // globally specified
     Ok(duration)
 }
 
@@ -745,8 +759,9 @@ fn probe_duration_from_frame_count_and_fps(
 
 /// Parses a required u32 field from video stream JSON.
 ///
-/// Attempts to parse the specified field as `u32`, with fallback to `coded_width`/`coded_height`
-/// for width/height fields. Returns an error if the field is missing or invalid.
+/// Attempts to parse the specified field as `u32`, with fallback to
+/// `coded_width`/`coded_height` for width/height fields. Returns an error if
+/// the field is missing or invalid.
 ///
 /// # Arguments
 /// * `video_stream` - The video stream JSON object
@@ -820,9 +835,10 @@ fn parse_video_stream_fields(
         detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, format_name);
     let mut frame_count = parse_u64_string_field(&video_stream["nb_frames"]);
 
-    // Root fix for Safari-style animated WebP: ffprobe often reports invalid frame metadata
-    // (e.g. nb_frames missing/absurd, image data not found) even when ANMF frames exist.
-    // If the container is animated per native markers, trust native frame counting.
+    // Root fix for Safari-style animated WebP: ffprobe often reports invalid frame
+    // metadata (e.g. nb_frames missing/absurd, image data not found) even when
+    // ANMF frames exist. If the container is animated per native markers, trust
+    // native frame counting.
     if format_name.contains("webp") {
         let data = read_native_probe_bytes(path, "webp native frame fallback")?;
         if crate::image_formats::webp::is_animated_from_bytes(&data) {
@@ -867,7 +883,8 @@ fn parse_video_stream_fields(
         }
     }
 
-    // Root fix: APNG via `png_pipe` — trust `acTL` / `fcTL` when ffprobe omits frames (M126).
+    // Root fix: APNG via `png_pipe` — trust `acTL` / `fcTL` when ffprobe omits
+    // frames (M126).
     if format_name.contains("png")
         || format_name.contains("apng")
         || video_codec.eq_ignore_ascii_case("apng")
@@ -990,7 +1007,8 @@ fn extract_subtitle_stream_fields(streams: &[serde_json::Value]) -> FFprobeSubti
 /// Probe video file using ffprobe.
 ///
 /// # Errors
-/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or parsing results fails.
+/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or
+/// parsing results fails.
 ///
 /// # Panics
 /// Panics if no video streams are found.
@@ -1088,7 +1106,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     Ok(result)
 }
 
-/// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or `LoopCount`)
+/// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or
+/// `LoopCount`)
 fn extract_loop_count(path: &Path, format: &serde_json::Value) -> Option<u16> {
     if let Some(tags) = format["tags"].as_object()
         && let Some(val) = crate::media_conversion_gate::probe_ffprobe_format_loop_count_tag(tags)
@@ -1275,7 +1294,8 @@ pub(crate) fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo 
                             compat_id,
                             "ffprobe_dv_compat_id_out_of_range",
                             format!(
-                                "DV bl_signal_compatibility_id {compat_id} out of u8 range; ignoring"
+                                "DV bl_signal_compatibility_id {compat_id} out of u8 range; \
+                                 ignoring"
                             ),
                         );
                     }
@@ -1308,8 +1328,8 @@ pub(crate) fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo 
     result
 }
 
-/// Build the ffmpeg `-master_display` string from a `mastering_display` `side_data` object.
-/// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
+/// Build the ffmpeg `-master_display` string from a `mastering_display`
+/// `side_data` object. Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let gx =
         crate::media_conversion_gate::probe_ffprobe_hdr_side_data_chromaticity_u64(sd, "green_x")?;
@@ -1436,7 +1456,8 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
         return None;
     }
 
-    // Multi-stream ISOBMFF (AVIF/HEIC cover + image) can emit one count per stream line ("1\n1").
+    // Multi-stream ISOBMFF (AVIF/HEIC cover + image) can emit one count per stream
+    // line ("1\n1").
     let mut parsed: Vec<u64> = Vec::new();
     for line in output.stdout.lines() {
         let trimmed = line.trim();
@@ -2010,7 +2031,8 @@ mod tests {
         assert!(result.unwrap().duration.is_none());
     }
 
-    /// Generic muxer name + still-image extension must not require format.duration.
+    /// Generic muxer name + still-image extension must not require
+    /// format.duration.
     #[test]
     fn parse_probe_format_still_image_extension_without_duration_is_ok() {
         let format = serde_json::json!({
@@ -2043,7 +2065,8 @@ mod tests {
         );
     }
 
-    /// `nb_frames` absent from stream — must not panic in `select_video_stream`.
+    /// `nb_frames` absent from stream — must not panic in
+    /// `select_video_stream`.
     #[test]
     fn select_video_stream_absent_nb_frames_does_not_panic() {
         let streams = vec![serde_json::json!({
@@ -2146,8 +2169,9 @@ mod tests {
         assert!(hdr.has_explicit_hdr_metadata());
     }
 
-    /// CONTRACT: frame `side_data_list` must be present in ffprobe JSON (see `run_ffprobe_json`).
-    /// Generic unregistered SEI alone is not treated as HDR10+.
+    /// CONTRACT: frame `side_data_list` must be present in ffprobe JSON (see
+    /// `run_ffprobe_json`). Generic unregistered SEI alone is not treated
+    /// as HDR10+.
     #[test]
     fn contract_ffprobe_frame_show_entries_includes_side_data_list() {
         assert!(

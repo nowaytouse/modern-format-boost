@@ -1,7 +1,9 @@
-//! Re-read media files on disk to backfill missing loop probe fields in `loop_samples.metadata`.
+//! Re-read media files on disk to backfill missing loop probe fields in
+//! `loop_samples.metadata`.
 //!
-//! This can take a long time (one decode per broken row). It is **not** full re-ingest or retrain;
-//! use `refresh_stats` / `refresh-loop-stats` afterward for fast SQL-only stats + embedding refresh.
+//! This can take a long time (one decode per broken row). It is **not** full
+//! re-ingest or retrain; use `refresh_stats` / `refresh-loop-stats` afterward
+//! for fast SQL-only stats + embedding refresh.
 use anyhow::{Context, Result};
 use foundation::database::{open_pg_client, repair_loop_samples_missing_probe_fields};
 use foundation::modern_ui::symbols;
@@ -29,7 +31,8 @@ fn main() -> Result<()> {
         symbols::INFO,
         symbols::plain::INFO,
         format!(
-            "loop_samples with frame_count>1: {row_count} (repair targets rows missing probe JSON keys)"
+            "loop_samples with frame_count>1: {row_count} (repair targets rows missing probe JSON \
+             keys)"
         ),
     );
     let (repaired, skipped_no_path, reprobe_failed) =
@@ -39,7 +42,8 @@ fn main() -> Result<()> {
         symbols::SUCCESS,
         symbols::plain::SUCCESS,
         format!(
-            "Loop probe repair done: repaired={repaired} skipped_no_source_path={skipped_no_path} reprobe_failed={reprobe_failed}"
+            "Loop probe repair done: repaired={repaired} skipped_no_source_path={skipped_no_path} \
+             reprobe_failed={reprobe_failed}"
         ),
     );
     Ok(())

@@ -1,4 +1,5 @@
-//! `quality` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `quality` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod quality_matcher;
 

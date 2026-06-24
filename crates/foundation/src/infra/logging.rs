@@ -1,6 +1,7 @@
 //! Logging Module - Unified logging system
 //!
-//! This module provides a unified logging system based on the tracing framework, supporting:
+//! This module provides a unified logging system based on the tracing
+//! framework, supporting:
 //! - Log output to the system temporary directory
 //! - Log file size limits and automatic rotation
 //! - Structured logging
@@ -10,7 +11,7 @@
 //!
 //! ```no_run
 //! use foundation::{LogConfig, init_logging};
-//! use tracing::{info, error};
+//! use tracing::{error, info};
 //!
 //! // Initialize logging system
 //! let config = LogConfig::default();
@@ -163,7 +164,8 @@ where
             event.record(&mut visitor);
         }
 
-        // 3. Milestone Stats: Only append to WARN and ERROR for context (skip info for clean output)
+        // 3. Milestone Stats: Only append to WARN and ERROR for context (skip info for
+        //    clean output)
         if level <= tracing::Level::WARN {
             let stats = crate::progress_mode::get_current_stats_string();
             // Align stats for tracing logs
@@ -220,7 +222,8 @@ impl Visit for FieldVisitor<'_, '_> {
     }
 }
 
-/// Stable field order for ``target: mfb::audit`` file + terminal lines (Python ``media_scope`` / verify).
+/// Stable field order for ``target: mfb::audit`` file + terminal lines (Python
+/// ``media_scope`` / verify).
 const MFB_AUDIT_FIELD_ORDER: &[&str] = &[
     "mfb_audit_schema",
     "outcome",
@@ -440,15 +443,19 @@ impl Visit for SimpleFieldVisitor<'_, '_> {
     }
 }
 
-// ── Current log level: so progress_mode direct writes respect the same level as the tracing filter ──
-/// Cached level from `init_logging`; used by `progress_mode::write_to_log_at_level` so direct run-log writes respect the level.
+// ── Current log level: so progress_mode direct writes respect the same level
+// as the tracing filter ──
+/// Cached level from `init_logging`; used by
+/// `progress_mode::write_to_log_at_level` so direct run-log writes respect the
+/// level.
 static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
 
 static LOG_FILE_INCLUDES_PROGRESS: OnceLock<bool> = OnceLock::new();
 
 pub const DEFAULT_MAX_LOG_FILE_SIZE_BYTES: u64 = 30 * 1024 * 1024;
 
-/// When true (`MFB_LOG_PROGRESS=1`), `mfb::progress` events are written to run/jsonl/rotating logs.
+/// When true (`MFB_LOG_PROGRESS=1`), `mfb::progress` events are written to
+/// run/jsonl/rotating logs.
 #[must_use]
 pub fn log_file_includes_progress() -> bool {
     *LOG_FILE_INCLUDES_PROGRESS.get_or_init(|| {
@@ -477,7 +484,8 @@ fn log_layer_accepts_metadata(metadata: &tracing::Metadata<'_>) -> bool {
     log_file_includes_progress() || metadata.target() != "mfb::progress"
 }
 
-/// Returns true if an event at this level should be logged. Uses tracing order: TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
+/// Returns true if an event at this level should be logged. Uses tracing order:
+/// TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
 ///
 /// So config INFO passes INFO, WARN, ERROR; config TRACE passes all.
 pub fn should_log(level: Level) -> bool {
@@ -487,9 +495,11 @@ pub fn should_log(level: Level) -> bool {
     }
 }
 
-// ── Run log forwarder: when progress_mode sets a run log file, tracing events are also written there ──
+// ── Run log forwarder: when progress_mode sets a run log file, tracing events
+// are also written there ──
 
-/// Store the "Logging system initialized" line so `progress_mode` can write it to the run log when it opens (run log is set after init).
+/// Store the "Logging system initialized" line so `progress_mode` can write it
+/// to the run log when it opens (run log is set after init).
 fn store_init_message_for_run_log(msg: String) {
     let mut guard = crate::media_conversion_gate::logging_mutex_guard_or_recover(
         "logging_init_message",
@@ -499,7 +509,8 @@ fn store_init_message_for_run_log(msg: String) {
     *guard = Some(msg);
 }
 
-/// Take the stored init message and clear it so it is written to the run log exactly once.
+/// Take the stored init message and clear it so it is written to the run log
+/// exactly once.
 pub fn take_init_message_for_run_log() -> Option<String> {
     let mut guard = crate::media_conversion_gate::logging_mutex_guard_or_recover(
         "logging_init_message_take",
@@ -511,9 +522,11 @@ pub fn take_init_message_for_run_log() -> Option<String> {
 
 static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
 
-/// Register a callback so that when tracing events are formatted, each line is also written to the run log.
+/// Register a callback so that when tracing events are formatted, each line is
+/// also written to the run log.
 ///
-/// Called by `progress_mode::set_log_file` so the run log gets complete output (all tracing + progress).
+/// Called by `progress_mode::set_log_file` so the run log gets complete output
+/// (all tracing + progress).
 pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
     let mut guard = crate::media_conversion_gate::logging_mutex_guard_or_recover(
         "logging_run_log_forwarder",
@@ -526,7 +539,8 @@ pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
 static RUN_LOG_FORWARDER: Mutex<Option<Box<dyn Fn(&str) + Send>>> = Mutex::new(None);
 static RUN_LOG_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-/// Writer used by the run-log layer: buffers output and forwards each complete line to the run log when a forwarder is set.
+/// Writer used by the run-log layer: buffers output and forwards each complete
+/// line to the run log when a forwarder is set.
 struct RunLogWriter;
 
 impl Write for RunLogWriter {
@@ -593,13 +607,15 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 
 /// Strip ANSI escape sequences from a string.
 ///
-/// Handles all CSI sequences (`ESC [ <params> <final>` where final is `0x40–0x7E`),
-/// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
-/// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
+/// Handles all CSI sequences (`ESC [ <params> <final>` where final is
+/// `0x40–0x7E`), including SGR colour codes (`ESC[…m`), cursor-movement codes,
+/// and others. Non-escape characters (including multi-byte UTF-8) are passed
+/// through unchanged.
 #[must_use]
 /// # Panics
 ///
-/// Panics if the string slicing logic encounters an invalid UTF-8 boundary during escape sequence extraction.
+/// Panics if the string slicing logic encounters an invalid UTF-8 boundary
+/// during escape sequence extraction.
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -611,7 +627,9 @@ pub fn strip_ansi_str(s: &str) -> String {
             while i < bytes.len() {
                 let Some(&b) = bytes.get(i) else {
                     crate::progress_mode::emit_stderr(&format!(
-                        "{} [LOGGING ANOMALY] Required metadata byte missing (out of bounds) in strip_ansi_str | Forensic: ESC[ sequence incomplete; defaulting to 0 to prevent panic",
+                        "{} [LOGGING ANOMALY] Required metadata byte missing (out of bounds) in \
+                         strip_ansi_str | Forensic: ESC[ sequence incomplete; defaulting to 0 to \
+                         prevent panic",
                         crate::media_conversion_gate::ui_icon_pick("☢️", "[RARE]")
                     ));
                     break;
@@ -631,7 +649,8 @@ pub fn strip_ansi_str(s: &str) -> String {
     out
 }
 
-/// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.
+/// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text,
+/// not raw codes.
 fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
     let Ok(s) = std::str::from_utf8(buf) else {
         return buf.to_vec();
@@ -652,7 +671,8 @@ fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
     result.into_bytes()
 }
 
-/// Wraps a writer and strips ANSI from each line before writing (so log files are readable, not raw `\x1b[92m`).
+/// Wraps a writer and strips ANSI from each line before writing (so log files
+/// are readable, not raw `\x1b[92m`).
 struct StripAnsiWriter<W: Write + Send> {
     buffer: Vec<u8>,
     inner: Mutex<W>,
@@ -714,7 +734,8 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 // Safe: buffer is process-local; inner is Mutex<W> and W: Send.
 unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 
-/// A writer that rotates files based on size and optionally limits the total number of files.
+/// A writer that rotates files based on size and optionally limits the total
+/// number of files.
 struct SizeRotatingAppender {
     log_dir: PathBuf,
     program_name: String,
@@ -980,13 +1001,15 @@ fn persistent_log_dir() -> PathBuf {
     }
 }
 
-/// Logging configuration. Default: TRACE level, unified log directory, 30 MiB per log file.
+/// Logging configuration. Default: TRACE level, unified log directory, 30 MiB
+/// per log file.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
     /// Max size per log file (bytes). Default = 30 MiB.
     pub max_file_size: u64,
-    /// Max number of log files to keep in `log_dir`; older ones are deleted. Default `usize::MAX` = no limit.
+    /// Max number of log files to keep in `log_dir`; older ones are deleted.
+    /// Default `usize::MAX` = no limit.
     pub max_files: usize,
     /// Minimum level (TRACE = most comprehensive).
     pub level: Level,
@@ -1107,14 +1130,15 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     );
     let json_writer = Mutex::new(json_appender);
 
-    // Registry: config.level has real effect (TRACE = all; INFO = info+; etc.). RUST_LOG overrides when set.
+    // Registry: config.level has real effect (TRACE = all; INFO = info+; etc.).
+    // RUST_LOG overrides when set.
     let registry_filter = crate::media_conversion_gate::tracing_registry_env_filter_or_config(
         program_name,
         config.level,
     );
 
-    // Temp file + run log: all events that pass the registry filter (level and targets).
-    // StripAnsiWriter strips \x1b[...m so log files are plain text.
+    // Temp file + run log: all events that pass the registry filter (level and
+    // targets). StripAnsiWriter strips \x1b[...m so log files are plain text.
     let file_layer = fmt::layer()
         .with_writer(file_writer)
         .event_format(FileFormatter)
@@ -1122,7 +1146,8 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
             log_layer_accepts_metadata(m)
         }));
 
-    // Run log: same as file_layer — when forwarder is set, receives every tracing event.
+    // Run log: same as file_layer — when forwarder is set, receives every tracing
+    // event.
     let run_log_layer = fmt::layer()
         .with_writer(RunLogMaker)
         .event_format(FileFormatter)
@@ -1130,14 +1155,16 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
             log_layer_accepts_metadata(m)
         }));
 
-    // Stderr (terminal): filtered for display — exclude DEBUG level, no level/target in message.
+    // Stderr (terminal): filtered for display — exclude DEBUG level, no
+    // level/target in message.
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .event_format(ModernFormatter)
         .with_filter(FilterFn::new(|m: &tracing::Metadata| {
             // Only show INFO, WARN, ERROR in terminal (no DEBUG or TRACE)
-            // Also exclude events with target "mfb::ui" as they are handled manually via emit_stderr
-            // Also exclude verbose reports with target "mfb::report" to keep terminal clean
+            // Also exclude events with target "mfb::ui" as they are handled manually via
+            // emit_stderr Also exclude verbose reports with target
+            // "mfb::report" to keep terminal clean
             m.level() <= &tracing::Level::INFO
                 && m.target() != "mfb::ui"
                 && m.target() != "mfb::report"
@@ -1166,7 +1193,8 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let current_dir = crate::media_conversion_gate::delivery_cwd_display_or_unknown("logging init");
     let init_msg = format!(
-        "Logging system initialized program=\"{}\" log_dir=\"{}\" max_file_size={} max_files={} level={:?} args={:?} cwd=\"{}\" os=\"{}\"",
+        "Logging system initialized program=\"{}\" log_dir=\"{}\" max_file_size={} max_files={} \
+         level={:?} args={:?} cwd=\"{}\" os=\"{}\"",
         program_name,
         config.log_dir.display(),
         config.max_file_size,
@@ -1176,8 +1204,9 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
         current_dir,
         std::env::consts::OS,
     );
-    // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
-    // The run log writer will handle it if we pass it through.
+    // Note: We don't call append_stats_to_line here to avoid potential circular
+    // dependency during init. The run log writer will handle it if we pass it
+    // through.
 
     tracing::debug!("{}", init_msg);
     store_init_message_for_run_log(init_msg);
@@ -1190,7 +1219,8 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
         config.log_dir.display()
     );
 
-    // Only prune old logs when an explicit limit is set (default usize::MAX = no limit).
+    // Only prune old logs when an explicit limit is set (default usize::MAX = no
+    // limit).
     if config.max_files != usize::MAX {
         cleanup_old_logs(&config.log_dir, program_name, config.max_files)?;
     }
@@ -1227,7 +1257,8 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
                                 "log_cleanup_mtime",
                                 &path,
                                 format!(
-                                    "SYSTEM AUDIT: Failed to read log file modification time during cleanup for '{}' | Forensic: Error '{}'",
+                                    "SYSTEM AUDIT: Failed to read log file modification time \
+                                     during cleanup for '{}' | Forensic: Error '{}'",
                                     path.display(),
                                     err
                                 ),
@@ -1239,7 +1270,8 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
                             "log_cleanup_metadata",
                             &path,
                             format!(
-                                "SYSTEM AUDIT: Failed to read log file metadata during cleanup for '{}' | Forensic: Error '{}'",
+                                "SYSTEM AUDIT: Failed to read log file metadata during cleanup \
+                                 for '{}' | Forensic: Error '{}'",
                                 path.display(),
                                 err
                             ),
@@ -1380,7 +1412,8 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
 /// Execute an external command and ensure it succeeds.
 ///
 /// # Errors
-/// Returns an error if the command fails to start or exits with a non-zero status.
+/// Returns an error if the command fails to start or exits with a non-zero
+/// status.
 pub fn execute_external_command_checked(
     tool_name: &str,
     args: &[&str],

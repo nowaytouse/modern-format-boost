@@ -6,9 +6,12 @@
 //! - Fast path for same-format conversions
 //!
 //! Special handling for video metadata:
-//! - `QuickTime` Create Date / Modify Date needs to be inferred from source file dates.
-//! - When converting image formats like GIF/PNG to video, source files lack `QuickTime` metadata.
-//! - `QuickTime` dates need to be set from XMP:DateCreated or file modification time.
+//! - `QuickTime` Create Date / Modify Date needs to be inferred from source
+//!   file dates.
+//! - When converting image formats like GIF/PNG to video, source files lack
+//!   `QuickTime` metadata.
+//! - `QuickTime` dates need to be set from XMP:DateCreated or file modification
+//!   time.
 
 use crate::builder_base::ToolBuilder;
 use std::io;
@@ -49,7 +52,8 @@ fn get_best_date_from_source(src: &Path) -> io::Result<Option<String>> {
                 "delivery_metadata",
                 src,
                 format!(
-                    "Metadata Audit: Failed to extract or normalize date tags from {src_display}: {e}",
+                    "Metadata Audit: Failed to extract or normalize date tags from {src_display}: \
+                     {e}",
                     src_display = src.display(),
                 ),
             );
@@ -83,7 +87,8 @@ fn get_best_date_from_source(src: &Path) -> io::Result<Option<String>> {
                     "delivery_metadata",
                     src,
                     format!(
-                        "Metadata Audit: Failed to read source modification time for date fallback from {src_display}: {e}",
+                        "Metadata Audit: Failed to read source modification time for date \
+                         fallback from {src_display}: {e}",
                         src_display = src.display(),
                     ),
                 );
@@ -101,7 +106,8 @@ fn get_best_date_from_source(src: &Path) -> io::Result<Option<String>> {
                 "delivery_metadata",
                 src,
                 format!(
-                    "Metadata Audit: Failed to read source metadata for date fallback from {src_display}: {e}",
+                    "Metadata Audit: Failed to read source metadata for date fallback from \
+                     {src_display}: {e}",
                     src_display = src.display(),
                 ),
             );
@@ -144,7 +150,8 @@ pub fn preserve_internal(src: &Path, dst: &Path) -> io::Result<()> {
                         log_stat!(
                             crate::infra::static_logs::messages::LABEL_METADATA,
                             format!(
-                                "Metadata Audit: Fallback strategy applied successfully for {dst_display}",
+                                "Metadata Audit: Fallback strategy applied successfully for \
+                                 {dst_display}",
                                 dst_display = dst.display(),
                             )
                         );
@@ -255,7 +262,8 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
             "delivery_metadata",
             dst,
             format!(
-                "Metadata Audit: Failed to restore original filename during recovery (from {temp_display} to {dst_display}): {e}",
+                "Metadata Audit: Failed to restore original filename during recovery (from \
+                 {temp_display} to {dst_display}): {e}",
                 temp_display = temp_path.display(),
                 dst_display = dst.display(),
             ),
@@ -290,8 +298,9 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
 }
 
 /// Extract a meaningful error message from an `ExifTool` output.
-/// `ExifTool` with `-q` writes errors to stdout (not stderr); stderr is often empty on failure.
-/// Returns Some(msg) only when there is a real actionable error (not just warnings or empty output).
+/// `ExifTool` with `-q` writes errors to stdout (not stderr); stderr is often
+/// empty on failure. Returns Some(msg) only when there is a real actionable
+/// error (not just warnings or empty output).
 fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -317,13 +326,15 @@ fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
 }
 
 /// CONTRACT (iCloud / Apple compat on-demand nuclear repair, v8.2.2):
-/// Output extensions eligible for `ImageMagick` + `exiftool -all=` structural rebuild.
+/// Output extensions eligible for `ImageMagick` + `exiftool -all=` structural
+/// rebuild.
 #[must_use]
 fn is_nuclear_format_extension(ext: &str) -> bool {
     ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp"
 }
 
-/// CONTRACT: `exiftool` stderr patterns that may trigger structural repair after a failed first pass.
+/// CONTRACT: `exiftool` stderr patterns that may trigger structural repair
+/// after a failed first pass.
 #[must_use]
 fn stderr_triggers_structural_repair(stderr: &str) -> bool {
     stderr.contains("Error")
@@ -333,13 +344,15 @@ fn stderr_triggers_structural_repair(stderr: &str) -> bool {
         || stderr.contains("Not a valid")
 }
 
-/// CONTRACT: `preserve_internal` forensic extension fallback (lighter than nuclear repair).
+/// CONTRACT: `preserve_internal` forensic extension fallback (lighter than
+/// nuclear repair).
 #[must_use]
 fn stderr_triggers_extension_fallback(err: &str) -> bool {
     err.contains("Not a valid") || err.contains("looks more like")
 }
 
-/// CONTRACT: on-demand gate — nuclear repair runs only when every condition holds.
+/// CONTRACT: on-demand gate — nuclear repair runs only when every condition
+/// holds.
 #[must_use]
 fn should_run_structural_repair(
     apple_compat: bool,
@@ -395,7 +408,8 @@ fn append_jxl_metadata_rehydrate_without_orientation_args(
         .ignore_minor();
 }
 
-/// CONTRACT: argv fragment for the nuclear rebuild pass (`-all=` then restore from `@` + source).
+/// CONTRACT: argv fragment for the nuclear rebuild pass (`-all=` then restore
+/// from `@` + source).
 fn append_nuclear_repair_exiftool(builder: &mut crate::ExiftoolBuilder, src: &Path, dst_ext: &str) {
     builder
         .arg("-charset")
@@ -420,7 +434,9 @@ fn append_nuclear_repair_exiftool(builder: &mut crate::ExiftoolBuilder, src: &Pa
         .arg("-m");
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         static WARNED: OnceLock<()> = OnceLock::new();
@@ -433,7 +449,8 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
+    // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from
+    // prior run.
     if let Some(name) = dst.file_name() {
         let tmp_path = dst.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
         crate::media_conversion_gate::delivery_remove_file_or_audit(
@@ -448,15 +465,17 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     };
     let apple_compat = std::env::var(crate::constants::ENV_APPLE_COMPAT).is_ok();
 
-    // ICC priority: cjxl/native tool embeds ICC from container (colr box, iCCP chunk, APP2)
-    // which is more authoritative than ExifTool re-extraction. For JXL output, exclude
-    // -ICC_Profile<ICC_Profile so ExifTool doesn't overwrite the tool-embedded ICC.
-    // For other formats, include it as those tools may not handle ICC natively.
+    // ICC priority: cjxl/native tool embeds ICC from container (colr box, iCCP
+    // chunk, APP2) which is more authoritative than ExifTool re-extraction. For
+    // JXL output, exclude -ICC_Profile<ICC_Profile so ExifTool doesn't
+    // overwrite the tool-embedded ICC. For other formats, include it as those
+    // tools may not handle ICC natively.
     let is_jxl_output = ext == "jxl";
 
-    // For JXL output: skip ICC copy if cjxl already embedded it (authoritative source).
-    // Fallback: if JXL has no ICC (source had no container ICC, only EXIF ColorSpace tag),
-    // allow exiftool to inject it as a safety net so the output is never ICC-less.
+    // For JXL output: skip ICC copy if cjxl already embedded it (authoritative
+    // source). Fallback: if JXL has no ICC (source had no container ICC, only
+    // EXIF ColorSpace tag), allow exiftool to inject it as a safety net so the
+    // output is never ICC-less.
     let jxl_already_has_icc = if is_jxl_output {
         crate::jxl_utils::verify_jxl_has_icc(dst).map_err(|err| {
             io::Error::other(format!(
@@ -510,8 +529,8 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     let mut output = builder.build().output()?;
 
     // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
-    // This surfaces warnings like "[minor] Will wrap JXL codestream" and any exiftool
-    // quirks that are silenced by the -m flag.
+    // This surfaces warnings like "[minor] Will wrap JXL codestream" and any
+    // exiftool quirks that are silenced by the -m flag.
     {
         let stderr_str = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
@@ -648,8 +667,9 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
-    // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
-    // because the date may have been reset to encode time rather than original capture time.
+    // Always sync all QuickTime date fields from source — don't skip if dst already
+    // has a date, because the date may have been reset to encode time rather
+    // than original capture time.
     let Some(best_date) = get_best_date_from_source(src)? else {
         crate::media_conversion_gate::delivery_metadata_batch_audit(
             "delivery_metadata",
@@ -742,7 +762,8 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    /// Tests for path safety conversions that prevent hijacking of tool commands.
+    /// Tests for path safety conversions that prevent hijacking of tool
+    /// commands.
     ///
     /// ! WARNING FOR FUTURE MAINTAINERS:
     /// Do NOT "simplify" these tests. Filenames starting with '-' or '@' are
@@ -826,8 +847,9 @@ mod tests {
     /// Stress test for 'evil' filenames that combine multiple edge cases.
     ///
     /// RATIONALE:
-    /// This test explicitly uses a filename containing URL-encoded sequences (`%3A%2F`),
-    /// `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
+    /// This test explicitly uses a filename containing URL-encoded sequences
+    /// (`%3A%2F`), `ExifTool` format codes (`%d%f%e`), and suspicious
+    /// command-line prefixes (`-@`).
     ///
     /// This ensures that our `STDIN` piping strategy and path prefixing work
     /// correctly even under absolute "worst-case" filename conditions.
@@ -839,7 +861,8 @@ mod tests {
             return;
         }
         let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
-        // Filename containing: URL encoded chars (%3A), Format strings (%d%f), and Shell-suspicious prefixes
+        // Filename containing: URL encoded chars (%3A), Format strings (%d%f), and
+        // Shell-suspicious prefixes
         let evil_name = "http%3A%2F%2Ftest%d%f%e-@evil.jpg";
         let src_path = temp.path().join(evil_name);
 
@@ -866,8 +889,9 @@ mod tests {
         if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
             return;
         }
-        // This test verifies that the 'Structural Repair' path is reachable and handles environment variables correctly.
-        // We simulate a repair condition by enabling APPLE_COMPAT.
+        // This test verifies that the 'Structural Repair' path is reachable and handles
+        // environment variables correctly. We simulate a repair condition by
+        // enabling APPLE_COMPAT.
         let _guard = crate::common_utils::EnvGuard::set("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
 
         let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -964,7 +988,8 @@ mod tests {
 
         // 2. Create a "damaged" destination image (Valid PNG disguised as a JPG)
         // ExifTool strictly fails because the extension doesn't match the magic bytes.
-        // ImageMagick forgivingly reads the PNG and outputs a real JPEG because of the .jpg extension.
+        // ImageMagick forgivingly reads the PNG and outputs a real JPEG because of the
+        // .jpg extension.
         let png_data = [
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
@@ -979,7 +1004,8 @@ mod tests {
             std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
         }
 
-        // 4. Perform preservation by calling the core function directly to bypass content-aware fallback
+        // 4. Perform preservation by calling the core function directly to bypass
+        //    content-aware fallback
         // This forces the "nuclear" ImageMagick structural repair to activate.
         let result = preserve_internal_core(&src_path, &dst_path);
 
@@ -1072,16 +1098,17 @@ mod tests {
 
         let result = preserve_internal(&src_path, &dst_path);
         // Because ExifTool returns "Not a valid JPG (looks more like a PNG)",
-        // the outer function triggers preserve_internal_fallback which successfully preserves it
-        // by temporarily renaming it to .png. Thus, it doesn't fail, but it completely bypasses
-        // the structural repair block.
+        // the outer function triggers preserve_internal_fallback which successfully
+        // preserves it by temporarily renaming it to .png. Thus, it doesn't
+        // fail, but it completely bypasses the structural repair block.
 
         // Wait, if it successfully preserves via fallback, result is Ok(()).
         // Let's ensure it does NOT invoke ImageMagick.
         assert!(result.is_ok());
 
-        // We can verify it is STILL a PNG, because fallback just renames, runs exiftool, renames back.
-        // It does not use ImageMagick to convert it to JPEG.
+        // We can verify it is STILL a PNG, because fallback just renames, runs
+        // exiftool, renames back. It does not use ImageMagick to convert it to
+        // JPEG.
         let output_bytes = fs::read(&dst_path).unwrap();
         assert_eq!(
             &output_bytes[0..4],

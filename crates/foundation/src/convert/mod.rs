@@ -1,4 +1,5 @@
-//! `convert` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `convert` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 pub mod conversion;
 

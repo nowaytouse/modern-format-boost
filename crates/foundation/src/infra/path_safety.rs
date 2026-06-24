@@ -131,7 +131,8 @@ pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
     }
 }
 
-/// Returns a unique temporary path for search iterations, fully isolated from user folders.
+/// Returns a unique temporary path for search iterations, fully isolated from
+/// user folders.
 ///
 /// Ensures Ghost Mode (Zero Pollution) by using the central MFB tmp directory.
 /// Create an isolated temporary path for search operations.

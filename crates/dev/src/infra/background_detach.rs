@@ -1,4 +1,5 @@
-//! Detach long-running dev binaries to background (mirrors `mfb_entry_guard.detach_to_background`).
+//! Detach long-running dev binaries to background (mirrors
+//! `mfb_entry_guard.detach_to_background`).
 
 use crate::infra::hardening::optional_env;
 use anyhow::{Context, Result, bail};
@@ -10,7 +11,8 @@ use std::process::{Command, Stdio};
 pub const MFB_BACKGROUND_PID_FILE_ENV: &str = "MFB_BACKGROUND_PID_FILE";
 pub const MFB_INVOKER_INTERNAL_REEXEC: &str = "internal_reexec";
 
-/// Remove pid file on normal process exit when spawned via [`detach_current_process`].
+/// Remove pid file on normal process exit when spawned via
+/// [`detach_current_process`].
 pub struct BackgroundPidGuard {
     path: PathBuf,
 }
@@ -146,7 +148,8 @@ pub fn detach_current_process(
 
     if let Err(exc) = fs::write(pid_file, format!("{pid}\n")) {
         eprintln!(
-            "  [BACKGROUND] pid file write failed ({}): {exc}; terminating detached child PID={pid}",
+            "  [BACKGROUND] pid file write failed ({}): {exc}; terminating detached child \
+             PID={pid}",
             pid_file.display()
         );
         let _ = child.kill();

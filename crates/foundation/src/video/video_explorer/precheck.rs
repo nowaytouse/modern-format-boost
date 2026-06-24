@@ -158,7 +158,8 @@ const LEGACY_CODECS_STRONGLY_RECOMMENDED: &[&str] = &[
     "rpza",
     "mjpeg",
     "mjpegb",
-    // huffyuv omitted: lossless codec; video_quality_detector routes to FFV1, not "strongly upgrade to lossy"
+    // huffyuv omitted: lossless codec; video_quality_detector routes to FFV1, not "strongly
+    // upgrade to lossy"
 ];
 
 const OPTIMAL_CODECS: &[&str] = &["hevc", "h265", "x265", "hvc1", "av1", "av01", "libaom-av1"];
@@ -168,7 +169,8 @@ const FPS_RANGE_EXTENDED: (f64, f64) = crate::constants::PRECHECK_FPS_RANGE_EXTE
 const FPS_RANGE_EXTREME: (f64, f64) = crate::constants::PRECHECK_FPS_RANGE_EXTREME;
 const FPS_THRESHOLD_INVALID: f64 = crate::constants::PRECHECK_FPS_THRESHOLD_INVALID;
 
-/// Single ffprobe run for precheck: stream (codec, size, duration, fps, `bit_rate`, color) + format.duration.
+/// Single ffprobe run for precheck: stream (codec, size, duration, fps,
+/// `bit_rate`, color) + format.duration.
 fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
     let output = FfprobeBuilder::new()
         .input(input)
@@ -177,7 +179,11 @@ fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
         .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
         .arg("-count_frames")
         .arg("-show_entries")
-        .arg("stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,nb_read_frames,bit_rate,color_space,color_transfer,color_primaries,pix_fmt,bits_per_raw_sample,bits_per_sample,side_data_list")
+        .arg(
+            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,\
+             nb_read_frames,bit_rate,color_space,color_transfer,color_primaries,pix_fmt,\
+             bits_per_raw_sample,bits_per_sample,side_data_list",
+        )
         .arg("-show_entries")
         .arg("format=duration")
         .arg("-of")
@@ -210,9 +216,10 @@ fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
     })
 }
 
-/// Prefer `avg_frame_rate` (actual frames per second); fallback to `r_frame_rate`.
-/// `r_frame_rate` can be the `time_base` reciprocal (e.g. 90000) rather than real FPS — callers
-/// should use `fps_sanitise_for_validation` when fps may be `time_base`.
+/// Prefer `avg_frame_rate` (actual frames per second); fallback to
+/// `r_frame_rate`. `r_frame_rate` can be the `time_base` reciprocal (e.g.
+/// 90000) rather than real FPS — callers should use
+/// `fps_sanitise_for_validation` when fps may be `time_base`.
 fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     let avg = parse_rational_fps(&stream["avg_frame_rate"])
         .filter(|&v| v > 0.0_f64 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
@@ -221,7 +228,8 @@ fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     avg.or(r_fps)
 }
 
-/// If fps looks like `time_base` (e.g. 90000) rather than real FPS, derive from `frame_count/duration`.
+/// If fps looks like `time_base` (e.g. 90000) rather than real FPS, derive from
+/// `frame_count/duration`.
 fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: Option<u64>) -> f64 {
     if let Some(frames) = frame_count.filter(|&n| n > 0)
         && fps > FPS_THRESHOLD_INVALID
@@ -235,7 +243,8 @@ fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: Option<u64>
     fps
 }
 
-/// Derive a positive frame count from optional probe value or duration×fps (never fabricate 0).
+/// Derive a positive frame count from optional probe value or duration×fps
+/// (never fabricate 0).
 fn materialize_frame_count(frame_count: Option<u64>, duration: f64, fps: f64) -> Result<u64> {
     if let Some(n) = frame_count.filter(|&n| n > 0) {
         return Ok(n);
@@ -303,7 +312,8 @@ fn parse_duration_from_precheck_json(
         let duration = crate::numeric_cast::u64_to_f64(frames) / fps;
         if duration > 0.0_f64 {
             crate::log_detail!(format!(
-                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frames}, fps={fps:.2})"
+                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frames}, \
+                 fps={fps:.2})"
             ));
             return Ok((duration, fps, frame_count));
         }
@@ -316,7 +326,8 @@ fn parse_duration_from_precheck_json(
     {
         let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
         crate::log_detail!(format!(
-            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, fps={inferred_fps:.2})"
+            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, \
+             fps={inferred_fps:.2})"
         ));
         return Ok((duration_secs, inferred_fps, Some(frames)));
     }
@@ -350,7 +361,8 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         .context("Missing or invalid video height")?;
     let fps =
         parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
-    // `nb_frames` may be absent for image containers; `None` triggers re-derivation from duration×fps.
+    // `nb_frames` may be absent for image containers; `None` triggers re-derivation
+    // from duration×fps.
     let nb_frames_parsed =
         crate::numeric_cast::parse_option_strict(stream["nb_frames"].as_str(), "nb_frames_str");
     let nb_frames_u64 = stream["nb_frames"].as_u64();
@@ -498,7 +510,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         let duration = crate::numeric_cast::u64_to_f64(frames) / fps;
         if duration > 0.0_f64 {
             crate::log_detail!(format!(
-                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frames}, fps={fps:.2})"
+                "DURATION RECOVERED via frame_count/fps: {duration:.3}s (frames={frames}, \
+                 fps={fps:.2})"
             ));
             return Ok((duration, fps, frames, "frame_count/fps"));
         }
@@ -511,7 +524,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     {
         let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
         crate::log_detail!(format!(
-            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, fps={inferred_fps:.2})"
+            "DURATION RECOVERED via ImageMagick: {duration_secs:.3}s (frames={frames}, \
+             fps={inferred_fps:.2})"
         ));
         return Ok((duration_secs, inferred_fps, frames, "imagemagick"));
     }
@@ -533,7 +547,9 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 ///
 /// # Errors
 /// Returns an error if information gathering fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = crate::io_utils::metadata_with_retry(input)
         .context("Failed to read file metadata")?
@@ -571,7 +587,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
 
     let fps = parse_fps_from_stream(stream).context("Could not determine FPS for video info")?;
-    // `nb_frames` may be absent for image containers; `None` triggers re-derivation from duration×fps.
+    // `nb_frames` may be absent for image containers; `None` triggers re-derivation
+    // from duration×fps.
     let nb_frames_parsed =
         crate::numeric_cast::parse_option_strict(stream["nb_frames"].as_str(), "nb_frames_str");
     let nb_frames_u64 = stream["nb_frames"].as_u64();
@@ -736,7 +753,9 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 }
 
 /// Caller must pass lowercase codec (e.g. from `get_video_info`).
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn evaluate_processing_recommendation(
     codec: &str,
     width: u32,
@@ -760,7 +779,8 @@ fn evaluate_processing_recommendation(
     if duration < crate::constants::DURATION_MIN_VALID {
         return ProcessingRecommendation::CannotProcess {
             reason: format!(
-                "Duration read as {duration:.3}s (possible metadata issue, will attempt conversion)"
+                "Duration read as {duration:.3}s (possible metadata issue, will attempt \
+                 conversion)"
             ),
         };
     }
@@ -807,7 +827,8 @@ fn evaluate_processing_recommendation(
         return ProcessingRecommendation::StronglyRecommended {
             codec: codec.to_string(),
             reason: format!(
-                "Detected {codec_category}, strongly recommended to upgrade to modern codec (expect 10-50x better compression)"
+                "Detected {codec_category}, strongly recommended to upgrade to modern codec \
+                 (expect 10-50x better compression)"
             ),
         };
     }
@@ -880,8 +901,8 @@ fn evaluate_processing_recommendation(
     {
         return ProcessingRecommendation::Optional {
             reason: format!(
-                "File already highly compressed (bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < {:.4}), \
-                            limited gain expected",
+                "File already highly compressed (bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < \
+                 {:.4}), limited gain expected",
                 bitrate_kbps,
                 expected_min_bitrate * 0.5,
                 bpp,
@@ -893,20 +914,22 @@ fn evaluate_processing_recommendation(
     if bitrate_kbps > 0.0_f64 && bitrate_kbps < expected_min_bitrate && bpp < bpp_threshold_low {
         return ProcessingRecommendation::Recommended {
             reason: format!(
-                "File has some compression (bitrate: {bitrate_kbps:.0} kbps), but modern codecs can optimize further"
+                "File has some compression (bitrate: {bitrate_kbps:.0} kbps), but modern codecs \
+                 can optimize further"
             ),
         };
     }
 
     ProcessingRecommendation::Recommended {
         reason: format!(
-            "Standard codec ({codec}), suggest upgrading to HEVC/AV1 for better compression and quality"
+            "Standard codec ({codec}), suggest upgrading to HEVC/AV1 for better compression and \
+             quality"
         ),
     }
 }
 
-/// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3 lightweight path).
-/// Calculate the bits per pixel (BPP) for a video file.
+/// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3
+/// lightweight path). Calculate the bits per pixel (BPP) for a video file.
 ///
 /// # Errors
 /// Returns an error if calculation fails.
@@ -1049,7 +1072,8 @@ pub fn run(input: &Path) -> Result<VideoInfo> {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PRECHECK,
                 format!(
-                    "EXCELLENT TARGET: legacy codec ({codec}), will benefit from modern encoding: {reason}"
+                    "EXCELLENT TARGET: legacy codec ({codec}), will benefit from modern encoding: \
+                     {reason}"
                 )
             );
         }

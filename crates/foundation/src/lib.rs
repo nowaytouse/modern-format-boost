@@ -3,7 +3,6 @@
 // Legacy media analyzers exceed pedantic `too_many_lines` (100); workspace keeps this allow
 // until refactors split loop_intent / image_detection. New code in img/vid must stay under 100 LOC.
 #![allow(clippy::too_many_lines)]
-//!
 //! This crate provides common functionality shared across `img` and `vid`:
 //! - Progress bar with ETA
 //! - Safety checks (dangerous directory detection)
@@ -13,7 +12,8 @@
 //! - External tools detection
 //! - Codec information
 //! - Metadata preservation (EXIF/IPTC/xattr/timestamps/ACL)
-//! - Conversion utilities (`Conversion..Result`, `ConvertOptions`, anti-duplicate)
+//! - Conversion utilities (`Conversion..Result`, `ConvertOptions`,
+//!   anti-duplicate)
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 //! - Unified version management (program, cache, schema versions)
@@ -90,7 +90,8 @@ macro_rules! impl_rational_from_int {
     };
 }
 
-// Removed impl_rational_from_int_lossy and impl_rational_cmp_int_lossy to prevent silent precision loss on 64-bit integers.
+// Removed impl_rational_from_int_lossy and impl_rational_cmp_int_lossy to
+// prevent silent precision loss on 64-bit integers.
 
 #[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_from_pair {
@@ -176,6 +177,7 @@ impl From<Integer> for Rational {
 #[cfg(not(feature = "high-precision"))]
 impl std::ops::Mul<Self> for Integer {
     type Output = Self;
+
     fn mul(self, other: Self) -> Self {
         Self(self.0 * other.0)
     }
@@ -322,7 +324,8 @@ pub use video_detection::{
     VideoStreamFlags, detect_video, detect_video_with_cache, promote_animated_container_for_vid,
 };
 
-// Deliberate public surface from `algorithm_*` (do not widen without contract review):
+// Deliberate public surface from `algorithm_*` (do not widen without contract
+// review):
 pub use algorithm_runtime::static_quality_db_lookup_enabled;
 /// Quality-preserving video conversion recommender.
 pub use database::{SampleMatch, lookup_similar_samples};

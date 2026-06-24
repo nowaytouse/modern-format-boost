@@ -1,15 +1,19 @@
 //! Unified Candidate Ranking and Comparison Utilities
 //!
-//! Centralizes all finalist selection and quality comparison logic to ensure consistent
-//! ordering priorities across HEVC ultimate, JXL ultimate, and direct exploration modes.
+//! Centralizes all finalist selection and quality comparison logic to ensure
+//! consistent ordering priorities across HEVC ultimate, JXL ultimate, and
+//! direct exploration modes.
 //!
 //! ## Unified Ranking Terminology
 //!
 //! To maintain consistency across all exploration modes, we use these terms:
 //!
-//! - **Screening**: Initial phase of testing multiple parameter values (fast, coarse-grained)
-//! - **Finalist/Shortlist**: A curated subset of screened candidates promoted for final evaluation
-//! - **Candidate**: A specific parameter value with its encoded result (part of finalist set)
+//! - **Screening**: Initial phase of testing multiple parameter values (fast,
+//!   coarse-grained)
+//! - **Finalist/Shortlist**: A curated subset of screened candidates promoted
+//!   for final evaluation
+//! - **Candidate**: A specific parameter value with its encoded result (part of
+//!   finalist set)
 //! - **Winner/Selection**: The single best candidate chosen after comparison
 //!
 //! ### HEVC Ultimate Terminology
@@ -28,19 +32,23 @@
 //!
 //! All comparators follow this priority chain (highest priority first):
 //!
-//! 1. **Gating/Pass Status**: Size gate, quality checks (`quality_passed`, `ms_ssim_passed`)
+//! 1. **Gating/Pass Status**: Size gate, quality checks (`quality_passed`,
+//!    `ms_ssim_passed`)
 //! 2. **Quality Metrics**: VMAF > CAMBI > `PSNR_UV` > MS-SSIM > SSIM > PSNR
 //! 3. **Size/Efficiency**: Output file size (prefer smaller)
-//! 4. **Parameter**: CRF (prefer aggressive/lower) or Distance (prefer higher compression)
+//! 4. **Parameter**: CRF (prefer aggressive/lower) or Distance (prefer higher
+//!    compression)
 //! 5. **Preset/Strategy**: Encoder preset rank (prefer slower/better quality)
 
 use std::cmp::Ordering;
 
-/// Compares two optional quality metrics in descending order (higher is better).
+/// Compares two optional quality metrics in descending order (higher is
+/// better).
 ///
-/// Semantic correctness: `None` means absent/missing data and is treated as the worst case (0.0).
-/// This ensures transitivity: if A > B and B > None, then A > None.
-/// NOTE: When used with `min_by`, this correctly selects the highest quality candidate.
+/// Semantic correctness: `None` means absent/missing data and is treated as the
+/// worst case (0.0). This ensures transitivity: if A > B and B > None, then A >
+/// None. NOTE: When used with `min_by`, this correctly selects the highest
+/// quality candidate.
 #[inline]
 #[must_use]
 pub fn compare_quality_desc(left: Option<f64>, right: Option<f64>, epsilon: f64) -> Ordering {
@@ -60,9 +68,10 @@ pub fn compare_quality_desc(left: Option<f64>, right: Option<f64>, epsilon: f64)
 
 /// Compares two optional quality metrics in ascending order (lower is better).
 ///
-/// Semantic correctness: `None` means absent/missing data and is treated as the worst case (infinity).
-/// This ensures transitivity: if A < B and B < None, then A < None.
-/// NOTE: When used with `min_by`, this correctly selects the lowest value candidate.
+/// Semantic correctness: `None` means absent/missing data and is treated as the
+/// worst case (infinity). This ensures transitivity: if A < B and B < None,
+/// then A < None. NOTE: When used with `min_by`, this correctly selects the
+/// lowest value candidate.
 #[inline]
 #[must_use]
 pub fn compare_quality_asc(left: Option<f64>, right: Option<f64>, epsilon: f64) -> Ordering {
@@ -80,9 +89,11 @@ pub fn compare_quality_asc(left: Option<f64>, right: Option<f64>, epsilon: f64) 
     }
 }
 
-/// Compares two optional (lower, upper) quality metric pairs in descending order.
+/// Compares two optional (lower, upper) quality metric pairs in descending
+/// order.
 ///
-/// Uses the floor (minimum) of each pair as the primary comparison, then individual components.
+/// Uses the floor (minimum) of each pair as the primary comparison, then
+/// individual components.
 #[inline]
 #[must_use]
 pub fn compare_quality_pair_desc(
@@ -128,8 +139,9 @@ pub fn compare_size_asc(left: u64, right: u64) -> Ordering {
     left.cmp(&right)
 }
 
-/// Compares CRF values: lower/more aggressive CRF is slightly preferred as tiebreaker.
-/// (Higher CRF means lower quality; we prefer candidates that achieved compression at lower CRF.)
+/// Compares CRF values: lower/more aggressive CRF is slightly preferred as
+/// tiebreaker. (Higher CRF means lower quality; we prefer candidates that
+/// achieved compression at lower CRF.)
 #[inline]
 #[must_use]
 pub fn compare_crf_asc(left: f32, right: f32) -> Ordering {
@@ -305,7 +317,8 @@ mod tests {
 
     #[test]
     fn test_transitivity_quality_asc() {
-        // Transitivity test: ensures None is consistently treated as worst case (infinity)
+        // Transitivity test: ensures None is consistently treated as worst case
+        // (infinity)
         let low = Some(0.01_f64);
         let medium = Some(0.05_f64);
         let high = Some(0.10_f64);

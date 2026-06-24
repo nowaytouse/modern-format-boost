@@ -1,6 +1,7 @@
 //! Type-Safe Wrappers Module
 //!
-//! Provides type-safe wrappers to elevate mathematical assumptions to the type system level.
+//! Provides type-safe wrappers to elevate mathematical assumptions to the type
+//! system level.
 //!
 //! ## Module List
 //! - `crf`: Type-safe wrapper for CRF (Constant Rate Factor)
@@ -31,14 +32,16 @@ pub enum CheckResult {
     Passed,
     /// The check was performed and failed with the given reason.
     Failed(String),
-    /// The check was not performed (e.g., not required by options or prerequisite failed).
+    /// The check was not performed (e.g., not required by options or
+    /// prerequisite failed).
     NotChecked,
 }
 
 impl CheckResult {
     /// Returns true if the check did not explicitly fail.
     ///
-    /// Prefer [`Self::is_passed`] when the caller needs strict success semantics.
+    /// Prefer [`Self::is_passed`] when the caller needs strict success
+    /// semantics.
     #[must_use]
     pub const fn is_ok(&self) -> bool {
         !self.is_failed()

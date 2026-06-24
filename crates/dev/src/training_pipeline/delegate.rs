@@ -73,7 +73,8 @@ pub fn ensure_python_training_requirements(root: &Path, install_missing: bool) -
             install_python_training_requirements(root)?;
         } else {
             bail!(
-                "Missing python training requirements. Pass --install-missing-python-deps or run pip install -r requirements-training.txt"
+                "Missing python training requirements. Pass --install-missing-python-deps or run \
+                 pip install -r requirements-training.txt"
             );
         }
     }
@@ -90,7 +91,16 @@ fn foundation_bin(root: &Path, name: &str, stale: bool) -> Command {
         Command::new(bin)
     } else {
         let mut cmd = Command::new("cargo");
-        cmd.args(["run", "--locked", "--release", "-p", "foundation", "--bin", name, "--"]);
+        cmd.args([
+            "run",
+            "--locked",
+            "--release",
+            "-p",
+            "foundation",
+            "--bin",
+            name,
+            "--",
+        ]);
         cmd
     }
 }
@@ -150,7 +160,16 @@ pub fn run_dev_bin(root: &Path, bin: &str, args: &[&str]) -> Result<i32> {
         Command::new(release)
     } else {
         let mut c = Command::new("cargo");
-        c.args(["run", "--locked", "--release", "-p", "dev", "--bin", bin, "--"]);
+        c.args([
+            "run",
+            "--locked",
+            "--release",
+            "-p",
+            "dev",
+            "--bin",
+            bin,
+            "--",
+        ]);
         c
     };
     cmd.args(args).current_dir(root);

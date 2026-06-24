@@ -1,10 +1,11 @@
 //! Shared x265 parameter policy helpers.
 //!
-//! Large archival/intermediate sources such as `ProRes` and `DNxHD` can drive `libx265`
-//! to very high resident memory usage because x265 auto-scales frame threading and
-//! lookahead buffering. This module provides a tiered memory profile that adapts
-//! to the actual available system RAM rather than a hard binary switch, trading
-//! some throughput for a lower peak RAM footprint only when truly necessary.
+//! Large archival/intermediate sources such as `ProRes` and `DNxHD` can drive
+//! `libx265` to very high resident memory usage because x265 auto-scales frame
+//! threading and lookahead buffering. This module provides a tiered memory
+//! profile that adapts to the actual available system RAM rather than a hard
+//! binary switch, trading some throughput for a lower peak RAM footprint only
+//! when truly necessary.
 
 use crate::constants;
 use crate::video_detection::{DetectedCodec, Detection};
@@ -78,10 +79,11 @@ fn ram_aware_profile() -> X265MemoryProfile {
     }
 }
 
-/// Query the current system RAM tier using the same thresholds that shape x265 behavior.
+/// Query the current system RAM tier using the same thresholds that shape x265
+/// behavior.
 ///
-/// This is shared with batch/thread scheduling so file-level parallelism follows the
-/// same `Default` / `Moderate` / `LowMemory` policy as x265 itself.
+/// This is shared with batch/thread scheduling so file-level parallelism
+/// follows the same `Default` / `Moderate` / `LowMemory` policy as x265 itself.
 #[must_use]
 pub fn current_memory_profile() -> X265MemoryProfile {
     ram_aware_profile()
@@ -186,7 +188,8 @@ fn profile_for_available_memory(available_mb: u64, total_mb: u64) -> X265MemoryP
 }
 
 fn capped_pool_threads(max_threads: usize, profile: X265MemoryProfile) -> usize {
-    // Unit tests assert exact pool counts; host RAM tier must not change `format()` output.
+    // Unit tests assert exact pool counts; host RAM tier must not change `format()`
+    // output.
     #[cfg(test)]
     let tier = crate::performance_schedule::PerfGovernorTier::Relaxed;
     #[cfg(not(test))]
@@ -277,8 +280,8 @@ mod tests {
     fn archival_codec_enables_constrained_profile() {
         let detection = sample_detection(DetectedCodec::ProRes, 512 * 1024 * 1024);
         let profile = memory_profile_for_detection(&detection);
-        // The exact profile depends on the current machine, but archival sources should always
-        // resolve to one of the supported tiers without panicking.
+        // The exact profile depends on the current machine, but archival sources should
+        // always resolve to one of the supported tiers without panicking.
         assert!(
             profile == X265MemoryProfile::Default
                 || profile == X265MemoryProfile::Moderate

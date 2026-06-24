@@ -1,6 +1,7 @@
 //! `Guard` - Safeguard for maximum iterations
 //!
-//! Prevents infinite loops and provides boundary protection for iteration counts.
+//! Prevents infinite loops and provides boundary protection for iteration
+//! counts.
 
 use std::fmt;
 

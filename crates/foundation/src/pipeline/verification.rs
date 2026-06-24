@@ -604,7 +604,8 @@ where
     }
     let actual = if let Some(first_error) = probe_errors.first() {
         format!(
-            "{tagged_count} files with Orientation tag; {} orientation probe errors; first {first_error}",
+            "{tagged_count} files with Orientation tag; {} orientation probe errors; first \
+             {first_error}",
             probe_errors.len()
         )
     } else {
@@ -745,7 +746,8 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
                 .find(|line| !line.trim().is_empty()),
         );
         crate::log_detail!(format!(
-            "djxl JPEG decode probe failed: djxl {} {} -> exit {:?}; stderr tail: {jpeg_stderr_tail}",
+            "djxl JPEG decode probe failed: djxl {} {} -> exit {:?}; stderr tail: \
+             {jpeg_stderr_tail}",
             path.display(),
             jpeg_temp.path().display(),
             jpeg_output.status.code()

@@ -811,13 +811,17 @@ pub fn classify_missing_entry(
                 if processing_mode == "videos_only" {
                     return Ok((
                         "pipeline_handoff".to_string(),
-                        "vid ignored static/single-frame asset — videos_only does not require optimized output for this file".to_string(),
+                        "vid ignored static/single-frame asset — videos_only does not require \
+                         optimized output for this file"
+                            .to_string(),
                     ));
                 }
                 if processing_mode == "both" && owner.as_deref() == Some(PIPELINE_IMAGE) {
                     return Ok((
                         "pipeline_handoff".to_string(),
-                        "vid ignored static asset — both mode expects img pipeline output (check img batch / rsync for this path)".to_string(),
+                        "vid ignored static asset — both mode expects img pipeline output (check \
+                         img batch / rsync for this path)"
+                            .to_string(),
                     ));
                 }
                 if processing_mode == "both" {
@@ -865,7 +869,8 @@ pub fn classify_missing_entry(
                 return Ok((
                     "pipeline_handoff".to_string(),
                     format!(
-                        "img could not confirm static-only (AVIF/HEIC/JXL ambiguity) — no optimized output until re-probed or manual review{}",
+                        "img could not confirm static-only (AVIF/HEIC/JXL ambiguity) — no \
+                         optimized output until re-probed or manual review{}",
                         if reason.is_empty() {
                             String::new()
                         } else {
@@ -916,7 +921,8 @@ pub fn classify_missing_entry(
         && (owner.as_deref() == Some(PIPELINE_VIDEO) || anim.is_some())
     {
         let detail = format!(
-            "{}: not in images_only verify scope (owner={}); if present in tree, run vid or use both mode",
+            "{}: not in images_only verify scope (owner={}); if present in tree, run vid or use \
+             both mode",
             anim.as_deref().unwrap_or("video-scoped asset"),
             owner.as_deref().unwrap_or("video")
         );
@@ -927,7 +933,8 @@ pub fn classify_missing_entry(
         return Ok((
             "pipeline_handoff".to_string(),
             format!(
-                "{true_format} is static image-owned — excluded from videos_only scope (matches_processing_mode); no optimized counterpart required"
+                "{true_format} is static image-owned — excluded from videos_only scope \
+                 (matches_processing_mode); no optimized counterpart required"
             ),
         ));
     }
@@ -959,7 +966,8 @@ pub fn classify_missing_entry(
             return Ok((
                 "vid_pipeline_unverified".to_string(),
                 format!(
-                    "{}: missing mfb::audit for pipeline={}; re-run verify with --session-audit and bundle run logs",
+                    "{}: missing mfb::audit for pipeline={}; re-run verify with --session-audit \
+                     and bundle run logs",
                     anim.as_deref().unwrap_or("video-route asset"),
                     routed_note
                 ),
@@ -969,7 +977,8 @@ pub fn classify_missing_entry(
         return Ok((
             "vid_pipeline_failed".to_string(),
             format!(
-                "{}: session routed pipeline={}; both mode expects vid transcode output — no optimized counterpart",
+                "{}: session routed pipeline={}; both mode expects vid transcode output — no \
+                 optimized counterpart",
                 anim.as_deref().unwrap_or("video-route asset"),
                 routed_note
             ),
@@ -1315,7 +1324,11 @@ pub fn reconcile_handoff(
         }
 
         if rust_hits.is_empty() {
-            lines.push("      Rust log: (no img/vid outcome line for this path — check bundle img_run / vid_run or run was before structured audit)".to_string());
+            lines.push(
+                "      Rust log: (no img/vid outcome line for this path — check bundle img_run / \
+                 vid_run or run was before structured audit)"
+                    .to_string(),
+            );
         } else {
             for rec in rust_hits.iter().take(3) {
                 let reason = rec.get("reason").map_or("", std::string::String::as_str);
@@ -1338,14 +1351,30 @@ pub fn reconcile_handoff(
             if let Some(rec) = last_outcome {
                 let outcome = rec.get("outcome").map(std::string::String::as_str);
                 if outcome == Some("ignored") && is_vid_static_ignore(rec) {
-                    lines.push("      ✓ vid ignored static/single-frame — expected gap in videos_only; not a transcode failure".to_string());
+                    lines.push(
+                        "      ✓ vid ignored static/single-frame — expected gap in videos_only; \
+                         not a transcode failure"
+                            .to_string(),
+                    );
                 } else if outcome == Some("failed") || outcome == Some("skipped") {
-                    lines.push("      ✗ vid pipeline failed/skipped — both mode expects transcode; this is a real integrity gap (not img handoff ignore)".to_string());
+                    lines.push(
+                        "      ✗ vid pipeline failed/skipped — both mode expects transcode; this \
+                         is a real integrity gap (not img handoff ignore)"
+                            .to_string(),
+                    );
                 } else {
-                    lines.push("      ⚠ video-route asset missing optimized output; check vid batch logs (both mode expects vid transcode, not img ignore)".to_string());
+                    lines.push(
+                        "      ⚠ video-route asset missing optimized output; check vid batch logs \
+                         (both mode expects vid transcode, not img ignore)"
+                            .to_string(),
+                    );
                 }
             } else {
-                lines.push("      ⚠ video-route asset missing optimized output; check vid batch logs (both mode expects vid transcode, not img ignore)".to_string());
+                lines.push(
+                    "      ⚠ video-route asset missing optimized output; check vid batch logs \
+                     (both mode expects vid transcode, not img ignore)"
+                        .to_string(),
+                );
             }
         } else if routed == Some(PIPELINE_IMAGE) && owner == PIPELINE_VIDEO {
             lines.push(
@@ -1380,7 +1409,11 @@ pub fn reconcile_handoff(
             } else {
                 let was_preserved = preserved_rel_paths.is_some_and(|p| p.contains(&rel_s));
                 if !was_preserved {
-                    lines.push("      Optimized tree: still missing — re-run batch or call finalize_handoff_preservation()".to_string());
+                    lines.push(
+                        "      Optimized tree: still missing — re-run batch or call \
+                         finalize_handoff_preservation()"
+                            .to_string(),
+                    );
                 }
             }
         }

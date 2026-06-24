@@ -1,5 +1,6 @@
 //! Modern Format Boost - Workspace Auditor in Rust.
-//! Checks code formatting, Cargo.toml validity, changelog versions, and runs tests.
+//! Checks code formatting, Cargo.toml validity, changelog versions, and runs
+//! tests.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -861,7 +862,9 @@ fn main() -> Result<()> {
         println!("  Fix: {}", nc.install_hint());
     } else if !nc.toolchain {
         println!(
-            "  Nightly toolchain not found. Install: rustup toolchain install nightly --component clippy --component rustfmt --component miri --component rust-src --component llvm-tools"
+            "  Nightly toolchain not found. Install: rustup toolchain install nightly --component \
+             clippy --component rustfmt --component miri --component rust-src --component \
+             llvm-tools"
         );
     }
 
@@ -882,7 +885,8 @@ fn main() -> Result<()> {
             let current_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !args.allow_non_nightly && current_branch != args.branch {
                 eprintln!(
-                    "Fatal: required branch '{}', current is '{}'. Use --allow-non-nightly or --branch <n>.",
+                    "Fatal: required branch '{}', current is '{}'. Use --allow-non-nightly or \
+                     --branch <n>.",
                     args.branch, current_branch
                 );
                 std::process::exit(2);
@@ -1647,7 +1651,8 @@ mod tests {
     #[test]
     fn parses_installed_nightly_components_exactly() {
         let components = parse_installed_rustup_components(
-            "clippy-x86_64-apple-darwin\nrustfmt-x86_64-apple-darwin\nrust-src\nllvm-tools-x86_64-apple-darwin\n",
+            "clippy-x86_64-apple-darwin\nrustfmt-x86_64-apple-darwin\nrust-src\\
+             nllvm-tools-x86_64-apple-darwin\n",
         );
         assert!(components.toolchain);
         assert!(components.clippy);
@@ -1673,7 +1678,8 @@ mod tests {
         assert!(rendered.contains("--workspace"));
         assert!(
             !rendered.contains("mfb_launcher"),
-            "mfb_launcher is not a root workspace member, so CI cargo check must not reference it: {rendered}"
+            "mfb_launcher is not a root workspace member, so CI cargo check must not reference \
+             it: {rendered}"
         );
     }
 

@@ -47,7 +47,8 @@ pub fn find_mfb_workspace_root(start: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
-/// Returns true if `path` is `<workspace>/logs` or `<workspace>/target/training*`.
+/// Returns true if `path` is `<workspace>/logs` or
+/// `<workspace>/target/training*`.
 #[must_use]
 pub fn is_forbidden_log_path(path: &Path) -> bool {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());

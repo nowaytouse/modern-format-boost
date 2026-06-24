@@ -109,7 +109,8 @@ pub fn safety_check(target: &Path) -> Result<()> {
         for p in user_unsafe {
             if s == p {
                 bail!(
-                    "safety block: common user folders cannot be processed directly; use a subdirectory"
+                    "safety block: common user folders cannot be processed directly; use a \
+                     subdirectory"
                 );
             }
         }
@@ -121,7 +122,8 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Unique output path with `` (N)`` suffix (mirrors Python `get_unique_output_path`).
+/// Unique output path with `` (N)`` suffix (mirrors Python
+/// `get_unique_output_path`).
 #[must_use]
 pub fn get_unique_output_path(base_path: &Path) -> PathBuf {
     if !base_path.exists() {
@@ -149,7 +151,8 @@ fn audit_line(session_audit: Option<&Path>, line: &str) -> Result<()> {
     Ok(())
 }
 
-/// Mirror directory tree metadata into adjacent output (Python `create_directory_structure`).
+/// Mirror directory tree metadata into adjacent output (Python
+/// `create_directory_structure`).
 pub fn create_directory_structure(
     src: &Path,
     dest: &Path,
@@ -380,18 +383,22 @@ pub fn choose_fast_img_action() -> Result<FastImgAction> {
     println!("\n{green}FAST MODE SELECTED{reset}");
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
     println!(
-        "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then local JXL folder cleanup.{reset}"
+        "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
+         local JXL folder cleanup.{reset}"
     );
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
     println!(
-        "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still deleted after strict verification.{reset}"
+        "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still \
+         deleted after strict verification.{reset}"
     );
     println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
     println!(
-        "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure preserved.{reset}"
+        "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure \
+         preserved.{reset}"
     );
     let answer = read_line(&format!(
-        "\n   {bold}Choose Fast Mode path [1/2/3] ({green}Enter = Shortest Path{reset}{bold}): {reset}"
+        "\n   {bold}Choose Fast Mode path [1/2/3] ({green}Enter = Shortest Path{reset}{bold}): \
+         {reset}"
     ))?;
     Ok(match answer.trim() {
         "2" => FastImgAction::Normal,
@@ -409,12 +416,14 @@ pub fn choose_fast_vid_shortest_path() -> Result<bool> {
     println!("\n{green}FAST VIDEO MODE SELECTED{reset}");
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
     println!(
-        "       {dim}Full LoopIntent video and animated-image delivery through Rust vid run.{reset}"
+        "       {dim}Full LoopIntent video and animated-image delivery through Rust vid \
+         run.{reset}"
     );
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
     println!("       {dim}Full vid pipeline adjacent output with archive-quality settings.{reset}");
     let answer = read_line(&format!(
-        "\n   {bold}Choose Fast Video path [1/2] ({green}Enter = Shortest Path{reset}{bold}): {reset}"
+        "\n   {bold}Choose Fast Video path [1/2] ({green}Enter = Shortest Path{reset}{bold}): \
+         {reset}"
     ))?;
     Ok(answer.trim() != "2")
 }
@@ -429,7 +438,8 @@ pub fn confirm_in_place() -> Result<bool> {
     println!("{bold}{white}   Original files will be replaced after successful conversion.{reset}");
     println!("{yellow}   This action is irreversible if you don't have backups.{reset}\n");
     let confirm = read_line(&format!(
-        "   {bold}To proceed, type {red}'yes'{reset}{bold} (case-sensitive) and press Enter: {reset}"
+        "   {bold}To proceed, type {red}'yes'{reset}{bold} (case-sensitive) and press Enter: \
+         {reset}"
     ))?;
     Ok(confirm == "yes")
 }
@@ -865,7 +875,8 @@ fn integrity_summary_int(summary: &str, label: &str) -> Option<usize> {
     None
 }
 
-/// Parse fast-img delivery integrity summary lines (mirrors Python `fast_img_integrity_counts`).
+/// Parse fast-img delivery integrity summary lines (mirrors Python
+/// `fast_img_integrity_counts`).
 #[must_use]
 pub fn fast_img_integrity_counts(summary: &str) -> Option<FastImgIntegrityCounts> {
     let source_count = integrity_summary_int(summary, "Recorded source JPEGs")?;
@@ -938,7 +949,8 @@ pub fn fast_img_session_size_metrics(summary: &str) -> FastImgSessionSizeMetrics
     metrics
 }
 
-/// Parse fast-img restore integrity summary lines (mirrors Python `fast_img_restore_integrity_counts`).
+/// Parse fast-img restore integrity summary lines (mirrors Python
+/// `fast_img_restore_integrity_counts`).
 #[must_use]
 pub fn fast_img_restore_integrity_counts(summary: &str) -> Option<FastImgRestoreIntegrityCounts> {
     let source_jxl_count = integrity_summary_int(summary, "Source JXL files")?;
@@ -957,7 +969,8 @@ pub fn fast_img_restore_integrity_counts(summary: &str) -> Option<FastImgRestore
     })
 }
 
-/// Count true JXL outputs under fast-img directory (mirrors Python `count_fast_img_jxl_outputs`).
+/// Count true JXL outputs under fast-img directory (mirrors Python
+/// `count_fast_img_jxl_outputs`).
 pub fn count_fast_img_jxl_outputs(output_dir: &Path) -> Result<(usize, u64)> {
     let mut count = 0usize;
     let mut total_size = 0u64;
@@ -1117,7 +1130,8 @@ fn fast_img_remove_ignorable_cleanup_files(output_root: &Path) -> Result<usize> 
     Ok(removed)
 }
 
-/// Remove marker-recorded JXL outputs after shortest-path iCloud import (Python parity).
+/// Remove marker-recorded JXL outputs after shortest-path iCloud import (Python
+/// parity).
 pub fn delete_fast_img_shortest_path_output_dir(
     output_dir: &Path,
     verify_bin: &Path,
@@ -1174,13 +1188,16 @@ pub fn delete_fast_img_shortest_path_output_dir(
     let fully_removed = !output_dir.exists();
     if fully_removed {
         println!(
-            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s) and empty output folder after verified iCloud import: {}",
+            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s) and empty output \
+             folder after verified iCloud import: {}",
             pick_symbol("✓", "[OK]"),
             output_dir.display()
         );
     } else {
         println!(
-            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s), already absent={already_absent}, ignored files removed={ignored_removed}, empty dirs pruned={pruned}; preserved residual files in {}",
+            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s), already \
+             absent={already_absent}, ignored files removed={ignored_removed}, empty dirs \
+             pruned={pruned}; preserved residual files in {}",
             pick_symbol("✓", "[OK]"),
             output_dir.display()
         );
@@ -1219,7 +1236,8 @@ mod tests {
 
     #[test]
     fn fast_img_integrity_counts_parse_delivery_summary() {
-        let summary = "Recorded source JPEGs: 10\nOptimized JXL files: 8\nRecorded skipped JPEGs: 1\nRecorded failed JPEGs: 1\n";
+        let summary = "Recorded source JPEGs: 10\nOptimized JXL files: 8\nRecorded skipped JPEGs: \
+                       1\nRecorded failed JPEGs: 1\n";
         let counts = fast_img_integrity_counts(summary).expect("counts");
         assert_eq!(counts.source_count, 10);
         assert_eq!(counts.optimized_count, 8);

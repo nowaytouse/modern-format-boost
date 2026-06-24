@@ -98,7 +98,8 @@ pub trait ToolBuilder {
         ManagedProcess::spawn(&mut cmd)
     }
 
-    /// Executes the command and returns the output, handling deadlocks and errors.
+    /// Executes the command and returns the output, handling deadlocks and
+    /// errors.
     ///
     /// # Errors
     /// Returns an error if execution or waiting fails.
@@ -153,7 +154,8 @@ impl BaseBuilder {
         }
     }
 
-    /// Safely applies the first input to the command, optionally with a preceding flag.
+    /// Safely applies the first input to the command, optionally with a
+    /// preceding flag.
     pub fn apply_first_input(&self, cmd: &mut Command, flag: Option<&str>) {
         if let Some(input) = self.inputs.first() {
             if let Some(f) = flag {
@@ -163,7 +165,8 @@ impl BaseBuilder {
         }
     }
 
-    /// Safely applies all inputs to the command, optionally with a preceding flag for each.
+    /// Safely applies all inputs to the command, optionally with a preceding
+    /// flag for each.
     pub fn apply_all_inputs(&self, cmd: &mut Command, flag: Option<&str>) {
         for input in &self.inputs {
             if let Some(f) = flag {
@@ -173,7 +176,8 @@ impl BaseBuilder {
         }
     }
 
-    /// Safely applies the output to the command, optionally with a preceding flag.
+    /// Safely applies the output to the command, optionally with a preceding
+    /// flag.
     pub fn apply_output(&self, cmd: &mut Command, flag: Option<&str>) {
         if let Some(output) = &self.output {
             if let Some(f) = flag {
@@ -184,7 +188,8 @@ impl BaseBuilder {
     }
 }
 
-/// Macro to implement standard builder accessors that delegate to `BaseBuilder`.
+/// Macro to implement standard builder accessors that delegate to
+/// `BaseBuilder`.
 #[macro_export]
 macro_rules! impl_base_builder_accessors {
     ($name:ident) => {

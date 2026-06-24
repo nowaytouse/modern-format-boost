@@ -1,10 +1,11 @@
 //! Ctrl+C confirmation guard for long-running batch operations.
 //!
-//! After 10 seconds of processing, Ctrl+C shows a confirmation prompt instead of
-//! immediately exiting. This prevents accidental termination of batch jobs.
+//! After 10 seconds of processing, Ctrl+C shows a confirmation prompt instead
+//! of immediately exiting. This prevents accidental termination of batch jobs.
 //!
 //! # Design
-//! - Signal handler is minimal: only sets an atomic flag and wakes a watcher thread
+//! - Signal handler is minimal: only sets an atomic flag and wakes a watcher
+//!   thread
 //! - A dedicated watcher thread owns all blocking I/O and the timeout logic
 //! - No stdin read, no heap allocation, no mutex in the signal handler
 //! - Re-entrant signals during the prompt window are ignored gracefully
@@ -15,7 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Global lock for all terminal UI output to prevent interleaving and interference.
+/// Global lock for all terminal UI output to prevent interleaving and
+/// interference.
 pub static TERMINAL_LOCK: Mutex<()> = Mutex::new(());
 
 // ─── Shared state ────────────────────────────────────────────────────────────
@@ -145,12 +147,14 @@ fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
     }
 }
 
-// ─── Confirmation prompt ──────────────────────────────────────────────────────
+// ─── Confirmation prompt
+// ──────────────────────────────────────────────────────
 
 fn show_confirmation_prompt(elapsed_secs: u64) {
     // Enforcement: set PROMPT_ACTIVE *before* any lock attempts.
     // This ensures concurrent threads (e.g. main thread loggers) see the flag and
-    // pause/sleep, allowing the watcher thread to acquire TERMINAL_LOCK without starvation.
+    // pause/sleep, allowing the watcher thread to acquire TERMINAL_LOCK without
+    // starvation.
     if PROMPT_ACTIVE.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -178,7 +182,8 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
         }
         if let Err(err) = writeln!(
             out,
-            "  \x1b[1;33m⚠️  Ctrl+C detected\x1b[0m after \x1b[1m{elapsed_str}\x1b[0m of processing."
+            "  \x1b[1;33m⚠️  Ctrl+C detected\x1b[0m after \x1b[1m{elapsed_str}\x1b[0m of \
+             processing."
         ) {
             prompt_warnings.push(format!(
                 "[WARN] Could not write ctrl-c prompt header: {err}"
@@ -224,7 +229,8 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
                 crate::media_conversion_gate::delivery_numeric_fallback_audit(
                     "ctrlc_timeout",
                     format!(
-                        "[FALLBACK] CTRLC_PROMPT_TIMEOUT_MS exceeds i32 ({err}); using 10000ms poll timeout"
+                        "[FALLBACK] CTRLC_PROMPT_TIMEOUT_MS exceeds i32 ({err}); using 10000ms \
+                         poll timeout"
                     ),
                 );
                 10_000
@@ -316,7 +322,8 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
     }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers
+// ──────────────────────────────────────────────────────────────────
 
 fn format_duration(secs: u64) -> String {
     let h = secs / 3600;

@@ -39,9 +39,12 @@ fn installed(prefix: &Path) -> bool {
 }
 
 const fn help_text() -> &'static str {
-    "Build and install swift-corelibs-libdispatch for non-Apple CI hosts.\n\n\
-Usage: build_libdispatch\n\n\
-Environment:\n  LIBDISPATCH_PREFIX    Install prefix [default: /usr/local]\n  LIBDISPATCH_SRC_DIR   Source checkout dir [default: /tmp/swift-corelibs-libdispatch]\n  LIBDISPATCH_REF       Git ref/branch [default: main]\n  CC                    C compiler [default: clang]\n  CXX                   C++ compiler [default: clang++]"
+    "Build and install swift-corelibs-libdispatch for non-Apple CI hosts.\n\nUsage: \
+     build_libdispatch\n\nEnvironment:\n  LIBDISPATCH_PREFIX    Install prefix [default: \
+     /usr/local]\n  LIBDISPATCH_SRC_DIR   Source checkout dir [default: \
+     /tmp/swift-corelibs-libdispatch]\n  LIBDISPATCH_REF       Git ref/branch [default: main]\n  \
+     CC                    C compiler [default: clang]\n  CXX                   C++ compiler \
+     [default: clang++]"
 }
 
 fn print_help() {

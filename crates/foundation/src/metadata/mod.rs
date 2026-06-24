@@ -1,13 +1,17 @@
 //! Metadata Preservation Module
 //!
-//! Layered preservation: Internal (`ExifTool`) / XMP sidecar / macOS Spotlight xattrs /
-//! supplemental xattrs / platform ACL+attributes / timestamps (always last).
-//! Unified entry point for timestamps: single files via `apply_file_timestamps(src, dst)`, directory trees via
-//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`,
-//! Avoids redundant implementations. `ExifTool` rewrites files, so timestamps are always set after write operations.
+//! Layered preservation: Internal (`ExifTool`) / XMP sidecar / macOS Spotlight
+//! xattrs / supplemental xattrs / platform ACL+attributes / timestamps (always
+//! last). Unified entry point for timestamps: single files via
+//! `apply_file_timestamps(src, dst)`, directory trees via
+//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` /
+//! `restore_directory_timestamps`, Avoids redundant implementations. `ExifTool`
+//! rewrites files, so timestamps are always set after write operations.
 //!
-//! **Delivery:** [`preserve_for_delivery`] and [`apply_file_timestamps_for_delivery`] implement M23 best-effort
-//! semantics — missing source metadata must not block conversion (see `delivery_policy.rs`).
+//! **Delivery:** [`preserve_for_delivery`] and
+//! [`apply_file_timestamps_for_delivery`] implement M23 best-effort semantics —
+//! missing source metadata must not block conversion (see
+//! `delivery_policy.rs`).
 
 use crate::builder_base::ToolBuilder;
 use std::io;
@@ -54,11 +58,13 @@ pub enum AaeSidecarAction {
         source: PathBuf,
         destination: PathBuf,
     },
-    /// Source sidecar was removed because Apple compatibility was not requested.
+    /// Source sidecar was removed because Apple compatibility was not
+    /// requested.
     Deleted { source: PathBuf },
 }
 
-/// CONTRACT: xattrs never copied (security / APFS-specific / iCloud import safety).
+/// CONTRACT: xattrs never copied (security / APFS-specific / iCloud import
+/// safety).
 pub(crate) const XATTR_PRESERVE_SKIP_KEYS: &[&str] = &["com.apple.quarantine", "com.apple.decmpfs"];
 
 /// CONTRACT: minimum macOS keys verified after Spotlight-style copy (M23).
@@ -76,9 +82,10 @@ pub(crate) const XATTR_MACOS_EXPLICIT_KEYS: &[&str] =
 /// CONTRACT: macOS xattr prefixes preserved as part of asset history.
 /// Includes full Spotlight metadata namespace and per-app last-used timestamps.
 /// `com.apple.lastuseddate#App` records which app last accessed the asset —
-/// preserved for the same reason as EXIF `DateTimeOriginal` and `kMDItemWhereFroms`:
-/// the JXL is a format-converted version of the same asset, so its history is
-/// inherited. macOS overwrites with a fresh timestamp on next real app access.
+/// preserved for the same reason as EXIF `DateTimeOriginal` and
+/// `kMDItemWhereFroms`: the JXL is a format-converted version of the same
+/// asset, so its history is inherited. macOS overwrites with a fresh timestamp
+/// on next real app access.
 #[cfg(target_os = "macos")]
 pub(crate) const XATTR_MACOS_METADATA_PREFIXES: &[&str] =
     &["com.apple.metadata:", "com.apple.lastuseddate"];
@@ -177,7 +184,8 @@ struct MetadataCopySignature {
     xattrs: Vec<(String, String)>,
 }
 
-/// CONTRACT: macOS Finder / iCloud / download metadata xattrs (prefix + explicit keys).
+/// CONTRACT: macOS Finder / iCloud / download metadata xattrs (prefix +
+/// explicit keys).
 #[must_use]
 #[cfg(target_os = "macos")]
 pub(crate) fn should_copy_macos_extended_xattr(key: &str) -> bool {
@@ -255,10 +263,12 @@ fn system_time_diff_label(
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 /// # Errors
-/// Returns an error when the source metadata cannot be read or the destination timestamps
-/// cannot be fully restored after file mutations.
+/// Returns an error when the source metadata cannot be read or the destination
+/// timestamps cannot be fully restored after file mutations.
 pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
     log_detail!(format!(
         "Metadata Audit: Initiating timestamp synchronization flow from {src_path} -> {dst_path}",
@@ -311,7 +321,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
     };
 
     // Platform-specific creation time preservation FIRST (before atime/mtime)
-    // This is critical because filetime::set_file_times may reset creation time on some systems
+    // This is critical because filetime::set_file_times may reset creation time on
+    // some systems
     #[cfg(target_os = "macos")]
     {
         match m.created() {
@@ -399,8 +410,9 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        // Linux: Try to preserve birth time if available (requires statx on newer kernels)
-        // Note: Most Linux filesystems don't support setting birth time, so this is best-effort
+        // Linux: Try to preserve birth time if available (requires statx on newer
+        // kernels) Note: Most Linux filesystems don't support setting birth
+        // time, so this is best-effort
         match m.created() {
             Ok(created) => {
                 linux::try_set_birth_time(dst, created);
@@ -489,7 +501,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
             (Ok(expected_created), Ok(dst_meta)) => match dst_meta.created() {
                 Ok(actual_created) => {
                     log_detail!(format!(
-                        "Metadata Audit: Verifying creation time integrity ({label}) -> expected={expected_created:?} actual={actual_created:?}",
+                        "Metadata Audit: Verifying creation time integrity ({label}) -> \
+                         expected={expected_created:?} actual={actual_created:?}",
                         label = crate::infra::static_logs::messages::LABEL_METADATA,
                     ));
                     let creation_time_slack = std::time::Duration::from_secs(1);
@@ -505,7 +518,9 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                         crate::media_conversion_gate::delivery_metadata_batch_audit(
                             "delivery_metadata_timestamp",
                             format!(
-                                "Metadata Audit: Creation time mismatch detected (expected={expected_created:?}, actual={actual_created:?}, diff={diff_str})"
+                                "Metadata Audit: Creation time mismatch detected \
+                                 (expected={expected_created:?}, actual={actual_created:?}, \
+                                 diff={diff_str})"
                             ),
                         );
                     }
@@ -530,7 +545,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                     "delivery_metadata_timestamp",
                     dst,
                     format!(
-                        "Metadata Audit: Failed to read destination metadata for creation-time verification: {e}"
+                        "Metadata Audit: Failed to read destination metadata for creation-time \
+                         verification: {e}"
                     ),
                 );
             }
@@ -539,7 +555,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
             match macos::get_added_time(dst) {
                 Ok(actual_added) => {
                     log_detail!(format!(
-                        "Metadata Audit: Verifying Finder added time integrity ({label}) -> expected={expected_added:?} actual={actual_added:?}",
+                        "Metadata Audit: Verifying Finder added time integrity ({label}) -> \
+                         expected={expected_added:?} actual={actual_added:?}",
                         label = crate::infra::static_logs::messages::LABEL_METADATA,
                     ));
                     let added_time_slack = std::time::Duration::from_secs(1);
@@ -552,11 +569,14 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                         crate::media_conversion_gate::delivery_metadata_batch_audit(
                             "delivery_metadata_timestamp",
                             format!(
-                                "Metadata Audit: Finder added time mismatch detected (expected={expected_added:?}, actual={actual_added:?}, diff={diff_str})"
+                                "Metadata Audit: Finder added time mismatch detected \
+                                 (expected={expected_added:?}, actual={actual_added:?}, \
+                                 diff={diff_str})"
                             ),
                         );
                         failures.push(format!(
-                            "Finder added time mismatch on {}: expected={expected_added:?} actual={actual_added:?}",
+                            "Finder added time mismatch on {}: expected={expected_added:?} \
+                             actual={actual_added:?}",
                             dst.display()
                         ));
                     }
@@ -566,7 +586,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                         "delivery_metadata_timestamp",
                         dst,
                         format!(
-                            "Metadata Audit: Failed to read destination Finder added time for verification: {e}"
+                            "Metadata Audit: Failed to read destination Finder added time for \
+                             verification: {e}"
                         ),
                     );
                     failures.push(format!(
@@ -738,7 +759,8 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-/// Preserve all metadata from source to destination (strict — propagates layer errors).
+/// Preserve all metadata from source to destination (strict — propagates layer
+/// errors).
 ///
 /// For conversion delivery, prefer [`preserve_for_delivery`].
 ///
@@ -820,7 +842,8 @@ fn exact_copy_xattr_signature(path: &Path) -> io::Result<Vec<(String, String)>> 
                         return Err(io::Error::new(
                             e.kind(),
                             format!(
-                                "Failed to read extended attribute '{name_str}' from {} for exact metadata verification: {e}",
+                                "Failed to read extended attribute '{name_str}' from {} for exact \
+                                 metadata verification: {e}",
                                 path.display()
                             ),
                         ));
@@ -912,8 +935,8 @@ fn metadata_signature_mismatches(
 
 /// Verify that the shared filesystem metadata copy surface exactly matches.
 ///
-/// This is intentionally format-agnostic bottom-layer validation: callers use it
-/// after metadata copy/preservation to catch source/output pair misalignment
+/// This is intentionally format-agnostic bottom-layer validation: callers use
+/// it after metadata copy/preservation to catch source/output pair misalignment
 /// before higher-level codec or Photos checks can mask it.
 ///
 /// # Errors
@@ -1029,7 +1052,8 @@ pub(crate) fn reapply_macos_exact_copy_xattrs_for_delivery(
     reapply_spotlight_content_creation_date_for_delivery(src, dst, report);
 }
 
-/// Best-effort `preserve_pro` for conversion delivery (see [`preserve_for_delivery`]).
+/// Best-effort `preserve_pro` for conversion delivery (see
+/// [`preserve_for_delivery`]).
 pub(super) fn preserve_pro_for_delivery(
     src: &Path,
     dst: &Path,
@@ -1361,7 +1385,8 @@ pub fn handle_aae_sidecar(
 }
 
 /// # Errors
-/// Returns an error if metadata preservation or the final timestamp re-application fails.
+/// Returns an error if metadata preservation or the final timestamp
+/// re-application fails.
 pub fn copy(src: &Path, dst: &Path) -> io::Result<()> {
     preserve(src, dst)?;
     merge_xmp_sidecar(src, dst)?;
@@ -1459,7 +1484,8 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
                         "delivery_metadata_timestamp",
                         src_path,
                         format!(
-                            "Metadata Audit: Failed to read source directory creation time for {src_display}: {e}",
+                            "Metadata Audit: Failed to read source directory creation time for \
+                             {src_display}: {e}",
                             src_display = src_path.display(),
                         ),
                     );
@@ -1516,7 +1542,8 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
                         "delivery_metadata_timestamp",
                         src_path,
                         format!(
-                            "Metadata Audit: Failed to reread source directory creation time for {src_display}: {e}",
+                            "Metadata Audit: Failed to reread source directory creation time for \
+                             {src_display}: {e}",
                             src_display = src_path.display(),
                         ),
                     );
@@ -1535,7 +1562,8 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
                             "delivery_metadata",
                             &dst_path,
                             format!(
-                                "Metadata Audit: Failed to set 'added' time for directory {dst_display}: {e}",
+                                "Metadata Audit: Failed to set 'added' time for directory \
+                                 {dst_display}: {e}",
                                 dst_display = dst_path.display(),
                             ),
                         );
@@ -1551,7 +1579,8 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
                         "delivery_metadata",
                         src_path,
                         format!(
-                            "Metadata Audit: Failed to read Finder added time for directory {src_display}: {e}",
+                            "Metadata Audit: Failed to read Finder added time for directory \
+                             {src_display}: {e}",
                             src_display = src_path.display(),
                         ),
                     );
@@ -1626,7 +1655,8 @@ pub fn save_directory_timestamps(dir: &Path) -> io::Result<DirectoryTimestampsMa
 /// Restore saved directory timestamps back onto the source tree.
 ///
 /// # Errors
-/// Returns an aggregated `io::Error` if any directory timestamp restoration fails.
+/// Returns an aggregated `io::Error` if any directory timestamp restoration
+/// fails.
 pub fn restore_directory_timestamps<S>(
     saved: &std::collections::HashMap<
         std::path::PathBuf,
@@ -1683,7 +1713,8 @@ where
 /// Apply saved source directory timestamps onto the mirrored destination tree.
 ///
 /// # Errors
-/// Returns an aggregated `io::Error` if any destination directory timestamp update fails.
+/// Returns an aggregated `io::Error` if any destination directory timestamp
+/// update fails.
 pub fn apply_saved_timestamps_to_dst<S>(
     saved: &std::collections::HashMap<
         std::path::PathBuf,
@@ -1728,7 +1759,8 @@ where
                     first_error = Some(io::Error::new(
                         e.kind(),
                         format!(
-                            "missing destination directory mirror {} for saved timestamp path {}: {e}",
+                            "missing destination directory mirror {} for saved timestamp path {}: \
+                             {e}",
                             dst_path.display(),
                             src_path.display()
                         ),
@@ -1738,7 +1770,8 @@ where
                     "delivery_metadata",
                     &dst_path,
                     format!(
-                        "Metadata Audit: Missing destination directory mirror for saved timestamp path {src_display}: {e}",
+                        "Metadata Audit: Missing destination directory mirror for saved timestamp \
+                         path {src_display}: {e}",
                         src_display = src_path.display(),
                     ),
                 );
@@ -1757,7 +1790,8 @@ where
                 "delivery_metadata",
                 &dst_path,
                 format!(
-                    "Metadata Audit: Missing destination directory mirror for saved timestamp path {}: destination is not a directory",
+                    "Metadata Audit: Missing destination directory mirror for saved timestamp \
+                     path {}: destination is not a directory",
                     src_path.display(),
                 ),
             );
@@ -1788,7 +1822,8 @@ where
                 .replacen("{}", &total_count.to_string(), 1),
         );
         return Err(io::Error::other(format!(
-            "Failed to apply saved timestamps to {failed_count} of {total_count} directories under {}: {}",
+            "Failed to apply saved timestamps to {failed_count} of {total_count} directories \
+             under {}: {}",
             dst_root.display(),
             crate::media_conversion_gate::io_error_or_metadata_label(
                 first_error,
@@ -1829,7 +1864,8 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) -> io
                 crate::media_conversion_gate::delivery_metadata_batch_audit(
                     "delivery_metadata_timestamp",
                     format!(
-                        "Failed to inspect destination file while restoring timestamps from source tree (dir={}): {}",
+                        "Failed to inspect destination file while restoring timestamps from \
+                         source tree (dir={}): {}",
                         dst_root.display(),
                         err
                     ),
@@ -1897,15 +1933,16 @@ pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) 
     Ok(())
 }
 
-/// Restore source and destination directory metadata after a destructive delivery.
+/// Restore source and destination directory metadata after a destructive
+/// delivery.
 ///
 /// Fast image mode uses this after verified JPEG deletion: the source directory
 /// timestamps are restored from the pre-delete snapshot, while directory-level
 /// metadata is mirrored into the JXL-only output tree.
 ///
 /// # Errors
-/// Returns an aggregated `io::Error` if any source or destination metadata restore
-/// step fails.
+/// Returns an aggregated `io::Error` if any source or destination metadata
+/// restore step fails.
 pub fn restore_delivery_directory_metadata<S>(
     saved: &std::collections::HashMap<
         std::path::PathBuf,
@@ -1994,7 +2031,8 @@ fn copy_xattrs_with_policy(
                                 AUDIT,
                                 dst,
                                 format!(
-                                    "Metadata Audit: Failed to copy extended attribute '{name_str}' to {dst_display}: {e}",
+                                    "Metadata Audit: Failed to copy extended attribute \
+                                     '{name_str}' to {dst_display}: {e}",
                                     dst_display = dst.display(),
                                 ),
                             );
@@ -2011,7 +2049,8 @@ fn copy_xattrs_with_policy(
                             AUDIT,
                             src,
                             format!(
-                                "Metadata Audit: Failed to read extended attribute '{name_str}' from {src_display}: {e}",
+                                "Metadata Audit: Failed to read extended attribute '{name_str}' \
+                                 from {src_display}: {e}",
                                 src_display = src.display(),
                             ),
                         );
@@ -2060,7 +2099,8 @@ fn copy_preservable_xattrs(src: &Path, dst: &Path) -> io::Result<()> {
     copy_xattrs_with_policy(src, dst, should_preserve_xattr)
 }
 
-/// macOS: `user.*` and other non-Spotlight xattrs after the dedicated network pass.
+/// macOS: `user.*` and other non-Spotlight xattrs after the dedicated network
+/// pass.
 #[cfg(target_os = "macos")]
 fn copy_supplemental_xattrs(src: &Path, dst: &Path) -> io::Result<()> {
     copy_xattrs_with_policy(src, dst, |key| {
@@ -2068,8 +2108,10 @@ fn copy_supplemental_xattrs(src: &Path, dst: &Path) -> io::Result<()> {
     })
 }
 
-/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects sidecar named \\<stem\\>.xmp beside image).
-/// Returns true if exiv2 merge succeeded. No fake success; only when exiv2 actually succeeds do we return true.
+/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects
+/// sidecar named \\<stem\\>.xmp beside image). Returns true if exiv2 merge
+/// succeeded. No fake success; only when exiv2 actually succeeds do we return
+/// true.
 fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let Some(parent) = dst.parent() else {
         return false;
@@ -2107,7 +2149,8 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
                 "delivery_metadata_xmp",
                 dst,
                 format!(
-                    "Metadata Audit: exiv2 returned non-zero exit code during XMP harvest for {dst_display}: {stderr}",
+                    "Metadata Audit: exiv2 returned non-zero exit code during XMP harvest for \
+                     {dst_display}: {stderr}",
                     dst_display = dst.display(),
                     stderr = String::from_utf8_lossy(&out.stderr).trim(),
                 ),
@@ -2337,7 +2380,8 @@ fn existing_path_with_exact_name(path: &Path) -> Option<std::path::PathBuf> {
     })
 }
 
-/// CONTRACT: ordered Pro metadata delivery layers (`preserve_pro`); timestamps must stay last.
+/// CONTRACT: ordered Pro metadata delivery layers (`preserve_pro`); timestamps
+/// must stay last.
 #[must_use]
 #[cfg(test)]
 pub(crate) const fn preserve_pro_delivery_layer_order() -> &'static [&'static str] {

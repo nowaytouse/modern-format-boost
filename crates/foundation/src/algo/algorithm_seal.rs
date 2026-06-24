@@ -1,12 +1,13 @@
 //! Terminal contract for algorithm-layer probabilities.
 //!
-//! **Strict:** non-finite values always become [`None`]. Forbidden at call sites:
-//! `unwrap_or` / `unwrap_or_else` / `map_or` / `map_or_else` / `Option::or` that
-//! substitute numeric defaults (0.0, 0.5, 1.0, `DEFAULT_*`, `knn_kp`, etc.).
-//! Use `if let Some` / `match` / `?` and skip the branch when seal returns `None`.
+//! **Strict:** non-finite values always become [`None`]. Forbidden at call
+//! sites: `unwrap_or` / `unwrap_or_else` / `map_or` / `map_or_else` /
+//! `Option::or` that substitute numeric defaults (0.0, 0.5, 1.0, `DEFAULT_*`,
+//! `knn_kp`, etc.). Use `if let Some` / `match` / `?` and skip the branch when
+//! seal returns `None`.
 //!
-//! When a runtime seal gate is **off**, finite values pass through without unit clamp;
-//! when **on**, probabilities clamp to `[0, 1]`.
+//! When a runtime seal gate is **off**, finite values pass through without unit
+//! clamp; when **on**, probabilities clamp to `[0, 1]`.
 
 /// Reject non-finite values; clamp finite values into the unit interval.
 #[must_use]
@@ -30,7 +31,8 @@ pub(crate) fn seal_optional_non_negative_distance(value: Option<f64>) -> Option<
     value.and_then(seal_non_negative_finite)
 }
 
-/// Seal a quality-regression or loop-keep pair before logging or downstream fusion.
+/// Seal a quality-regression or loop-keep pair before logging or downstream
+/// fusion.
 #[must_use]
 pub(crate) fn seal_probability_pair(score: f64, confidence: f64) -> Option<(f64, f64)> {
     let score = seal_unit_probability(score)?;
@@ -60,7 +62,8 @@ pub(crate) const fn seal_u8_crf_setpoint(value: u8) -> u8 {
     if value > 51 { 51 } else { value }
 }
 
-/// Optional metric: drop non-finite values instead of propagating NaN into gates.
+/// Optional metric: drop non-finite values instead of propagating NaN into
+/// gates.
 #[must_use]
 pub(crate) fn seal_optional_unit_metric(value: Option<f64>) -> Option<f64> {
     value.and_then(seal_unit_probability)
@@ -158,7 +161,8 @@ pub(crate) fn quality_unit_probability(value: f64) -> Option<f64> {
     seal_unit_probability(value)
 }
 
-/// Quality score + confidence before exposing `QualityScore` or writing inference logs.
+/// Quality score + confidence before exposing `QualityScore` or writing
+/// inference logs.
 #[must_use]
 pub(crate) fn quality_probability_pair(score: f64, confidence: f64) -> Option<(f64, f64)> {
     if !score.is_finite() || !confidence.is_finite() {

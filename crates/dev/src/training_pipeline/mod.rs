@@ -1,7 +1,9 @@
-//! Training database audit and runtime-asset orchestration (Rust port of `training_pipeline.py`).
+//! Training database audit and runtime-asset orchestration (Rust port of
+//! `training_pipeline.py`).
 //!
-//! Python script remains the compatibility reference; this module is the primary
-//! implementation for Rust callers (`run_training`, `post_training_closure`, etc.).
+//! Python script remains the compatibility reference; this module is the
+//! primary implementation for Rust callers (`run_training`,
+//! `post_training_closure`, etc.).
 
 mod audit;
 mod delegate;

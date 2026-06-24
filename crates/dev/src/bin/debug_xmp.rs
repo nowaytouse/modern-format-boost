@@ -9,8 +9,11 @@ use foundation::image_jpeg_analysis::extract_xmp_from_jpeg_data;
 use std::fs;
 
 fn main() {
-    let data = fs::read("debug/Ultra_HDR_Samples-main/Ultra_HDR_Samples-main/Originals/Ultra_HDR_Samples_Originals_01.jpg")
-        .unwrap_or_else(|e| panic!("error: {e:?}"));
+    let data = fs::read(
+        "debug/Ultra_HDR_Samples-main/Ultra_HDR_Samples-main/Originals/\
+         Ultra_HDR_Samples_Originals_01.jpg",
+    )
+    .unwrap_or_else(|e| panic!("error: {e:?}"));
     if let Some(xmp) = extract_xmp_from_jpeg_data(&data) {
         log_detail!("XMP found (len: {}): \n{:?}", xmp.len(), xmp);
     } else {

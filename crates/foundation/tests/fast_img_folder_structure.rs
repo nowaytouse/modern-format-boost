@@ -1,7 +1,9 @@
-//! GAP-4: §`FolderStructure` — verify output path construction preserves source hierarchy.
+//! GAP-4: §`FolderStructure` — verify output path construction preserves source
+//! hierarchy.
 //!
-//! // [GAP-4] path construction verified: `determine_output_path_with_base` (conversion.rs:1209)
-//! All fixtures are synthesized temp dirs — no project assets.
+//! // [GAP-4] path construction verified: `determine_output_path_with_base`
+//! (conversion.rs:1209) All fixtures are synthesized temp dirs — no project
+//! assets.
 
 use foundation::conversion::determine_output_path_with_base;
 use std::path::PathBuf;
@@ -111,7 +113,8 @@ fn subdirectory_not_created_without_recursion_flag() -> anyhow::Result<()> {
 
 #[test]
 fn recursive_collects_subdirectory() -> anyhow::Result<()> {
-    // [SB-fix] restored: scan_image_files has no DB dep; tests actual file discovery
+    // [SB-fix] restored: scan_image_files has no DB dep; tests actual file
+    // discovery
     let input_root = TempDir::new()?;
     touch(input_root.path(), "top.jpg")?;
     touch(input_root.path(), "sub/img.jpg")?;
@@ -131,7 +134,8 @@ fn recursive_collects_subdirectory() -> anyhow::Result<()> {
 
 #[test]
 fn path_construction_mirrors_subdir() -> anyhow::Result<()> {
-    // [GAP-4] path construction verified: determine_output_path_with_base (conversion.rs:1209)
+    // [GAP-4] path construction verified: determine_output_path_with_base
+    // (conversion.rs:1209)
     let input_root = TempDir::new()?;
     let output_root = TempDir::new()?;
     touch(input_root.path(), "top.jpg")?;

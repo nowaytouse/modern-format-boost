@@ -10,7 +10,8 @@
 //!   cargo run --locked -p dev --bin delivery_heatmap
 //!   cargo run --locked -p dev --bin delivery_heatmap -- --report
 //!   cargo run --locked -p dev --bin delivery_heatmap -- --deep-audit
-//!   cargo run --locked -p dev --bin delivery_heatmap -- --check  # exits non-zero on gap
+//!   cargo run --locked -p dev --bin delivery_heatmap -- --check  # exits
+//! non-zero on gap
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -27,7 +28,8 @@ const DEFAULT_ALLOWLIST_PATH: &str = "crates/dev/scripts/delivery_allowlist.toml
 #[derive(Parser, Debug)]
 #[command(
     name = "delivery_heatmap",
-    about = "Audit Rust conversion bins for delivery segment coverage (port of media_conversion_delivery_heatmap.py)"
+    about = "Audit Rust conversion bins for delivery segment coverage (port of \
+             media_conversion_delivery_heatmap.py)"
 )]
 struct Args {
     /// Print segment report (default when no flag given)
@@ -81,7 +83,8 @@ fn production_segment(path: &Path) -> Option<String> {
     None
 }
 
-/// Collect all `*.rs` files under `crates/*/src/bin/` and `crates/*/src/bin/**/*.rs`.
+/// Collect all `*.rs` files under `crates/*/src/bin/` and
+/// `crates/*/src/bin/**/*.rs`.
 fn iter_delivery_rs(root: &Path) -> Result<Vec<PathBuf>> {
     let crates_dir = root.join("crates");
     let mut out = Vec::new();

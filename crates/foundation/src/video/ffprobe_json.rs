@@ -250,7 +250,8 @@ impl ColorInfo {
         )
     }
 
-    /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10,
+    /// HDR10+)
     #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.assessment().has_hdr_signaling()
@@ -421,7 +422,9 @@ fn parse_side_data_list(
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 #[must_use]
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
@@ -439,14 +442,16 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     {
         Ok(o) if o.status.success() => o,
         Ok(o) => {
-            // Check if failure is due to image2 demuxer pattern matching (e.g., filenames with [])
+            // Check if failure is due to image2 demuxer pattern matching (e.g., filenames
+            // with [])
             let stderr = String::from_utf8_lossy(&o.stderr);
             if stderr.contains("Could find no file with path")
                 && stderr.contains("and index in the range")
             {
                 crate::log_rare_error!(
                     "FFprobe",
-                    "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none",
+                    "Image2 demuxer pattern matching failed for file: {} - Retrying with \
+                     -pattern_type none",
                     input_str
                 );
                 // Retry with -pattern_type none to disable sequence pattern matching
@@ -491,7 +496,8 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 }
             } else {
                 // For JPEG/image files, ffprobe failure is often expected (not a video stream)
-                // Only log as warning if stderr suggests a real error (not just "no video stream")
+                // Only log as warning if stderr suggests a real error (not just "no video
+                // stream")
                 let stderr_lower = stderr.to_lowercase();
                 if !stderr_lower.contains("no such file")
                     && !stderr_lower.contains("invalid data")

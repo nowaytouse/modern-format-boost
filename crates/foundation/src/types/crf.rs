@@ -35,35 +35,35 @@ pub trait EncoderBounds: Clone + Copy {
 }
 
 impl EncoderBounds for HevcEncoder {
-    const MIN: f32 = 0.0;
-    const MAX: f32 = crate::constants::CRF_HEVC_MAX;
     const DEFAULT: f32 = crate::constants::CRF_HEVC_DEFAULT;
-    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_HEVC_VISUALLY_LOSSLESS;
+    const MAX: f32 = crate::constants::CRF_HEVC_MAX;
+    const MIN: f32 = 0.0;
     const NAME: &'static str = "HEVC";
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_HEVC_VISUALLY_LOSSLESS;
 }
 
 impl EncoderBounds for Av1Encoder {
-    const MIN: f32 = 0.0;
-    const MAX: f32 = crate::constants::CRF_AV1_MAX;
     const DEFAULT: f32 = crate::constants::CRF_AV1_DEFAULT;
-    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_AV1_VISUALLY_LOSSLESS;
+    const MAX: f32 = crate::constants::CRF_AV1_MAX;
+    const MIN: f32 = 0.0;
     const NAME: &'static str = "AV1";
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_AV1_VISUALLY_LOSSLESS;
 }
 
 impl EncoderBounds for Vp9Encoder {
-    const MIN: f32 = 0.0;
-    const MAX: f32 = crate::constants::CRF_VP9_MAX;
     const DEFAULT: f32 = crate::constants::CRF_VP9_DEFAULT;
-    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_VP9_VISUALLY_LOSSLESS;
+    const MAX: f32 = crate::constants::CRF_VP9_MAX;
+    const MIN: f32 = 0.0;
     const NAME: &'static str = "VP9";
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_VP9_VISUALLY_LOSSLESS;
 }
 
 impl EncoderBounds for X264Encoder {
-    const MIN: f32 = 0.0;
-    const MAX: f32 = crate::constants::CRF_X264_MAX;
     const DEFAULT: f32 = crate::constants::CRF_X264_DEFAULT;
-    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_X264_VISUALLY_LOSSLESS;
+    const MAX: f32 = crate::constants::CRF_X264_MAX;
+    const MIN: f32 = 0.0;
     const NAME: &'static str = "x264";
+    const VISUALLY_LOSSLESS: f32 = crate::constants::CRF_X264_VISUALLY_LOSSLESS;
 }
 
 #[derive(Debug, Clone, PartialEq)]

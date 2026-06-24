@@ -1,6 +1,7 @@
 //! Repair `~/.cargo/bin` rustup proxies on Homebrew macOS installs.
 //!
-//! Port of `crates/dev/scripts/ci/repair_rustup_shims.py` (Python retained as compat reference).
+//! Port of `crates/dev/scripts/ci/repair_rustup_shims.py` (Python retained as
+//! compat reference).
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;

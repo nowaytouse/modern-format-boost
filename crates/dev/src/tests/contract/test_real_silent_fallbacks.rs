@@ -321,12 +321,14 @@ fn join_legacy_aware(root: &impl AsRef<Path>, rel: &str) -> PathBuf {
     base.join(map_legacy_rel(rel))
 }
 
-/// True when the contract milestone table defines row M{n} (column padding tolerant).
+/// True when the contract milestone table defines row M{n} (column padding
+/// tolerant).
 fn contract_documents_milestone(contract: &str, n: u32) -> bool {
     contract_table_documents_row(contract, 'M', n)
 }
 
-/// True when a markdown contract table defines row `{prefix}{n}` (column padding tolerant).
+/// True when a markdown contract table defines row `{prefix}{n}` (column
+/// padding tolerant).
 fn contract_table_documents_row(contract: &str, prefix: char, n: u32) -> bool {
     let needle = format!("{prefix}{n}");
     let row_prefix = format!("| {prefix}");
@@ -364,7 +366,8 @@ const MC_FORBIDDEN_PRECISION_UNWRAP: &[&str] =
 const MC_FORBIDDEN_PRECISION_PIX_FMT_LITERAL: &[&str] =
     &["\"yuv420p10le\"", "\"yuv420p\"", "\"rgb48le\"", "\"rgb24\""];
 
-/// Production scope: strip `mod tests { … }` when present (files may use `#[cfg(test)]` imports at top).
+/// Production scope: strip `mod tests { … }` when present (files may use
+/// `#[cfg(test)]` imports at top).
 fn production_scope(content: &str) -> &str {
     if let Some((idx, _)) = content.match_indices("\nmod tests {").next() {
         &content[..idx]
@@ -381,7 +384,8 @@ fn production_rust_files(root: &Path) -> Vec<PathBuf> {
     workspace_crate_production_rust_files(root, &["foundation", "img", "vid"])
 }
 
-/// All `crates/<name>/src/**/*.rs` production units (M222 repo-wide silent-fabrication scan).
+/// All `crates/<name>/src/**/*.rs` production units (M222 repo-wide
+/// silent-fabrication scan).
 fn workspace_crate_production_rust_files(root: &Path, crate_names: &[&str]) -> Vec<PathBuf> {
     crate_names
         .iter()
@@ -532,7 +536,8 @@ fn whole_repo_silent_measurement_forgery_offenders(root: &Path) -> Vec<String> {
 }
 
 fn is_allowlisted_numeric_fallback(relative_file: &str, line: &str) -> bool {
-    // All production numeric-default paths must use media_conversion_gate helpers (M43).
+    // All production numeric-default paths must use media_conversion_gate helpers
+    // (M43).
     const ALLOWLIST: &[(&str, &str)] = &[];
 
     ALLOWLIST
@@ -694,7 +699,8 @@ const MC_FORBIDDEN_M188_RUNTIME_UI_STREAM_UOE: &[&str] = &[
     ".unwrap_or_else(|| \"python3\".to_string())",
     ".unwrap_or(\"python3\".to_string())",
     "u64::try_from(now_ms).unwrap_or_else",
-    "f64_to_rational_strict(overhead_percent, \"overhead_percent\")\n                .unwrap_or_else",
+    "f64_to_rational_strict(overhead_percent, \"overhead_percent\")\n                \
+     .unwrap_or_else",
     "f64_to_u64_strict(overhead.to_f64(), \"overhead\")\n            .unwrap_or_else",
     "width.unwrap_or_else(||",
     "height.unwrap_or_else(||",
@@ -703,7 +709,8 @@ const MC_FORBIDDEN_M188_RUNTIME_UI_STREAM_UOE: &[&str] = &[
 const MC_FORBIDDEN_M189_EXPLORE_JXL_UOE: &[&str] = &[
     "get_frame_count(path).unwrap_or_else",
     "count_frames_from_bytes(&data).unwrap_or_else",
-    "f64_to_u64_strict(\n        crate::numeric_cast::u64_to_f64(input_size) * JXL_NEAR_BEST_MARGIN_RATIO,\n        \"jxl_margin\",\n    )\n    .unwrap_or_else",
+    "f64_to_u64_strict(\n        crate::numeric_cast::u64_to_f64(input_size) * \
+     JXL_NEAR_BEST_MARGIN_RATIO,\n        \"jxl_margin\",\n    )\n    .unwrap_or_else",
     "f64_to_u64_strict(margin.to_f64(), \"margin\")\n            .unwrap_or_else",
 ];
 
@@ -778,10 +785,12 @@ const MC_FORBIDDEN_M205_QUALITY_TIMING_OR_ELSE: &[&str] = &[
     ".or_else(|| average_frame_delay_ms(frame_count, duration_secs))",
     ".or_else(|| normalized_delay_variation(&probe.pts_deltas))",
     ".or_else(|| probe.frame_rate.and_then(sanitize_positive_f64))",
-    ".and_then(sanitize_positive_f64)\n            .or_else(|| {\n                probe_frame_count",
+    ".and_then(sanitize_positive_f64)\n            .or_else(|| {\n                \
+     probe_frame_count",
     "probe_fps\n            .or_else(|| probe_frame_count",
     ".or_else(|| derive_frame_count(duration_secs, Some(fps)))",
-    ".map(|bit_rate| crate::numeric_cast::u64_to_f64(bit_rate) / 1_000_000.0)\n            .or_else(|| {",
+    ".map(|bit_rate| crate::numeric_cast::u64_to_f64(bit_rate) / 1_000_000.0)\n            \
+     .or_else(|| {",
     ".or_else(|| derive_bitrate_mbps(file_size, duration_secs))",
 ];
 
@@ -792,7 +801,8 @@ const MC_FORBIDDEN_M204_FFPROBE_HDR_OR_ELSE: &[&str] = &[
     ".and_then(parse_luminance_to_10k)\n            .or_else(||",
     ".or_else(|| sd[\"MaxCLL\"].as_u64())",
     ".or_else(|| sd[\"MaxFALL\"].as_u64())",
-    ".or_else(|| {\n        crate::numeric_cast::parse_option_strict(\n            stream.bits_per_sample",
+    ".or_else(|| {\n        crate::numeric_cast::parse_option_strict(\n            \
+     stream.bits_per_sample",
 ];
 
 const MC_FORBIDDEN_M203_FFPROBE_LOOP_OR_ELSE: &[&str] = &[
@@ -813,7 +823,8 @@ const MC_FORBIDDEN_M203_FFPROBE_LOOP_OR_ELSE: &[&str] = &[
 
 const MC_FORBIDDEN_M202_CONVERSION_CLI_OR_ELSE: &[&str] = &[
     ".or_else(|| Some(input.display().to_string()))",
-    ".or_else(|_| {\n            crate::image_builders::IdentifyBuilder::new()\n                .use_magick(false)",
+    ".or_else(|_| {\n            crate::image_builders::IdentifyBuilder::new()\n                \
+     .use_magick(false)",
     "base_dir.or_else(|| {",
     "checked_mul(u64::from(height)).or_else(|| {",
     "checked_mul(u64::from(probe.height))\n            .or_else(|| {",
@@ -838,7 +849,8 @@ const MC_FORBIDDEN_M200_DATABASE_TRAINING_UNWRAP_OR: &[&str] = &[
     "u64::try_from(avail_u128).unwrap_or(u64::MAX)",
     ".unwrap_or(\"\")",
     ".as_deref().unwrap_or(\"?\")",
-    "u64_to_usize_strict(\n                    frames,\n                    \"gif_frame_count_types\"\n                )\n                .unwrap_or_else",
+    "u64_to_usize_strict(\n                    frames,\n                    \
+     \"gif_frame_count_types\"\n                )\n                .unwrap_or_else",
     "u64_to_usize_strict(frames, \"gif_frame_count_pts\")\n                    .unwrap_or_else",
 ];
 
@@ -895,7 +907,8 @@ const MC_FORBIDDEN_M196_IO_GPU_VECTOR_DB_MAPOR: &[&str] = &[
     ".get(pos..pos + 4).map_or_else",
     ".get(pos..pos + 2).map_or_else",
     ".get(pos..pos + 8).map_or_else",
-    "diagnostics\n                    .first()\n                    .map_or(\"no supported encoder found\"",
+    "diagnostics\n                    .first()\n                    .map_or(\"no supported \
+     encoder found\"",
     ".find(' ')\n                .map_or(after_all",
     "self.prev_size.map_or(f64::MAX",
     "duration_secs.filter(|d| *d > 0.0_f64).map_or_else",
@@ -922,7 +935,8 @@ const MC_FORBIDDEN_M195_ANALYZER_LOOP_HDR_MAPOR: &[&str] = &[
 ];
 
 const MC_FORBIDDEN_M194_BATCH_DB_CONVERSION_MAPOR: &[&str] = &[
-    ".map_or_else(\n            || {\n                crate::media_conversion_gate::delivery_pipeline_path_audit",
+    ".map_or_else(\n            || {\n                \
+     crate::media_conversion_gate::delivery_pipeline_path_audit",
     concat!(
         "path.strip_prefix(root)\n        .",
         "ok",
@@ -1086,7 +1100,8 @@ const MC_FORBIDDEN_M92_JXL_BATCH: &[&str] = &["delivery_jxl_batch_audit("];
 
 const MC_FORBIDDEN_M95_CONVERSION: &[&str] = &["delivery_path_audit(", "delivery_batch_audit("];
 
-/// Production must not call always-on emitters; use strict/domain gate helpers (M100).
+/// Production must not call always-on emitters; use strict/domain gate helpers
+/// (M100).
 const MC_FORBIDDEN_M100_DELIVERY_EMITTERS: &[&str] = &[
     "delivery_fallback_audit(",
     "delivery_path_audit(",
@@ -2259,7 +2274,8 @@ fn media_conversion_session_fixes_no_silent_fabrication() {
         "supplementary KNN must not refine session meta after tree verdict"
     );
 
-    // ── Image quality embed: missing PSNR/SSIM → NaN (zero-tolerance; gate 备案不豁免) ─
+    // ── Image quality embed: missing PSNR/SSIM → NaN (zero-tolerance; gate
+    // 备案不豁免) ─
     let quality_db_prod = production_scope(&quality_db);
     assert!(
         gate.contains("quality_embedding_optional_f64_or_zero"),
@@ -2267,7 +2283,8 @@ fn media_conversion_session_fixes_no_silent_fabrication() {
     );
     assert!(
         quality_db_prod.contains("quality_embed_measured_dimension_f32"),
-        "image_quality_db must encode absent PSNR/SSIM as NaN via quality_embed_measured_dimension_f32"
+        "image_quality_db must encode absent PSNR/SSIM as NaN via \
+         quality_embed_measured_dimension_f32"
     );
     assert!(
         !quality_db_prod.contains("quality_embedding_optional_f64_or_zero"),
@@ -2656,7 +2673,8 @@ const MC_FORBIDDEN_DECISION_CHAIN_FABRICATION: &[&str] = &[
     "estimate_ssim_from_quality(",
 ];
 
-/// Explore confidence must come from measured evidence (`measured_exploration_confidence*`).
+/// Explore confidence must come from measured evidence
+/// (`measured_exploration_confidence*`).
 const MC_FORBIDDEN_EXPLORE_CONFIDENCE_FABRICATION: &[&str] = &[
     "sampling_coverage = Some(1.0_f64)",
     "GPU_SEARCH_PREDICTION_ACCURACY_BASE",
@@ -2665,7 +2683,8 @@ const MC_FORBIDDEN_EXPLORE_CONFIDENCE_FABRICATION: &[&str] = &[
     "margin_safety: Some(0.0)",
 ];
 
-/// Invented perfect SSIM or unconditional "approx" labeling (M229 — outside M222–M228 lists).
+/// Invented perfect SSIM or unconditional "approx" labeling (M229 — outside
+/// M222–M228 lists).
 const MC_FORBIDDEN_SILENT_MEASUREMENT_FORGERY: &[&str] = &[
     "ssim: Some(1.0_f64)",
     "ssim: Some(1.0)",
@@ -2676,7 +2695,8 @@ const MC_FORBIDDEN_SILENT_MEASUREMENT_FORGERY: &[&str] = &[
     "SSIM={ssim:.4}, approx.)",
 ];
 
-/// Neutral-prior / default-score injection on inference paths (M233; aligns with `algorithm_audit`).
+/// Neutral-prior / default-score injection on inference paths (M233; aligns
+/// with `algorithm_audit`).
 const MC_FORBIDDEN_NUMERIC_PRIOR_INJECTION: &[&str] = &[
     "unwrap_or(0.5",
     "map_or(0.5,",
@@ -2686,7 +2706,8 @@ const MC_FORBIDDEN_NUMERIC_PRIOR_INJECTION: &[&str] = &[
     "LOOP_INTENT_DEFAULT_KNN_CONFIDENCE",
 ];
 
-/// Legacy explore confidence literals must not reappear in production code (M234).
+/// Legacy explore confidence literals must not reappear in production code
+/// (M234).
 const MC_FORBIDDEN_EXPLORE_CONFIDENCE_LITERAL_USE: &[&str] = &[
     "EXPLORE_CONFIDENCE_HIGH",
     "EXPLORE_CONFIDENCE_NORMAL",
@@ -2694,7 +2715,8 @@ const MC_FORBIDDEN_EXPLORE_CONFIDENCE_LITERAL_USE: &[&str] = &[
     "EXPLORE_CONFIDENCE_LOW",
 ];
 
-/// Syntax-bypass hardening: quality-estimate helpers + perfect-score literals (M242).
+/// Syntax-bypass hardening: quality-estimate helpers + perfect-score literals
+/// (M242).
 const MC_FORBIDDEN_SYNTAX_BYPASS_M242: &[&str] = &[
     "confidence: Some(1.0)",
     "confidence: Some(1.00)",
@@ -2745,7 +2767,8 @@ const MC_FORBIDDEN_SYNTAX_BYPASS_M245: &[&str] = &[
     "unwrap_or_else(|| {\n            crate::constants::LOOP_INTENT_DEFAULT",
 ];
 
-/// Training/export hardcoding of absent embed 17/18 as numeric zero (M246 tier-C closure).
+/// Training/export hardcoding of absent embed 17/18 as numeric zero (M246
+/// tier-C closure).
 const MC_FORBIDDEN_SYNTAX_BYPASS_M246: &[&str] = &[
     "embedding_017\": 0.0",
     "embedding_018\": 0.0",
@@ -2753,7 +2776,8 @@ const MC_FORBIDDEN_SYNTAX_BYPASS_M246: &[&str] = &[
     "\"embedding_018\": 0.0",
 ];
 
-/// Full `algorithm_audit` inference surface (SSOT list lives in `comprehensive_weakness_audit.rs` too).
+/// Full `algorithm_audit` inference surface (SSOT list lives in
+/// `comprehensive_weakness_audit.rs` too).
 const PRODUCTION_SCOPE_FABRICATION_TARGETS_M246: &[&str] = &[
     "crates/foundation/src/algorithm_seal.rs",
     "crates/foundation/src/algorithm_runtime.rs",
@@ -2792,7 +2816,8 @@ const PRODUCTION_SCOPE_FABRICATION_TARGETS_M246: &[&str] = &[
     // `media_conversion_gate.rs` is SSOT for audited `*_optional_*_or_zero` helpers — excluded.
 ];
 
-/// Copy of `algorithm_audit::FORBIDDEN_SUBSTRINGS` — each entry must be covered by `mc_unified_fabrication_patterns()`.
+/// Copy of `algorithm_audit::FORBIDDEN_SUBSTRINGS` — each entry must be covered
+/// by `mc_unified_fabrication_patterns()`.
 const ALGORITHM_AUDIT_FORBIDDEN_PARITY_M245: &[&str] = &[
     "unwrap_or(0.5",
     "unwrap_or(f64::NAN",
@@ -2833,10 +2858,12 @@ const ALGORITHM_AUDIT_FORBIDDEN_PARITY_M245: &[&str] = &[
     "unwrap_or(1.0)",
 ];
 
-/// PSNR→SSIM estimate is only allowed on audited `explore_strategy` + `ssim_mapping` (M234).
+/// PSNR→SSIM estimate is only allowed on audited `explore_strategy` +
+/// `ssim_mapping` (M234).
 const MC_FORBIDDEN_PSNR_TO_SSIM_OUTSIDE_GATEWAY: &str = "psnr_to_ssim_estimate";
 
-/// Repo `scripts/*.sh` fabrication scan union (M235 decision chain + M236 explore/measurement).
+/// Repo `scripts/*.sh` fabrication scan union (M235 decision chain + M236
+/// explore/measurement).
 fn mc_repo_shell_fabrication_patterns() -> Vec<&'static str> {
     let mut patterns = mc_unified_fabrication_patterns();
     for list in [
@@ -2852,7 +2879,8 @@ fn mc_repo_shell_fabrication_patterns() -> Vec<&'static str> {
     patterns
 }
 
-/// Union of all CI forbidden fabrication pattern lists (M232 closure; M233 numeric priors; M236 M234 literals).
+/// Union of all CI forbidden fabrication pattern lists (M232 closure; M233
+/// numeric priors; M236 M234 literals).
 fn mc_unified_fabrication_patterns() -> Vec<&'static str> {
     let mut patterns: Vec<&'static str> = Vec::new();
     for list in [
@@ -2914,7 +2942,8 @@ fn fabrication_pattern_catalog_rust_file(path: &Path) -> bool {
     })
 }
 
-/// `crates/dev/src/tests/**/*.rs` excluding pattern-catalog harness files (M240 whole-repo parity).
+/// `crates/dev/src/tests/**/*.rs` excluding pattern-catalog harness files (M240
+/// whole-repo parity).
 fn workspace_dev_integration_test_rust_files(root: &Path) -> Vec<PathBuf> {
     let tests_dir = root.join("crates/dev/src/tests");
     let mut files = Vec::new();
@@ -2935,7 +2964,8 @@ fn workspace_dev_integration_test_rust_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Whole-repository Rust fabrication scan surface (M240: production + bins + fuzz + dev integration tests).
+/// Whole-repository Rust fabrication scan surface (M240: production + bins +
+/// fuzz + dev integration tests).
 fn workspace_whole_repository_rust_fabrication_targets(root: &Path) -> Vec<PathBuf> {
     let mut files = workspace_unified_fabrication_rust_targets(root);
     files.extend(workspace_dev_integration_test_rust_files(root));
@@ -2970,7 +3000,8 @@ fn fabrication_scan_skip_file(path: &Path) -> bool {
     })
 }
 
-/// Gate centralizes disclosed fallbacks; unified scan allows definitions + audit strings only.
+/// Gate centralizes disclosed fallbacks; unified scan allows definitions +
+/// audit strings only.
 fn gate_unified_fabrication_line_exempt(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.starts_with("pub fn ")
@@ -3087,7 +3118,8 @@ fn workspace_repo_shell_scripts(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Repo automation surfaces beyond `crates/dev/scripts/*.py` (M237 known-weakness closure).
+/// Repo automation surfaces beyond `crates/dev/scripts/*.py` (M237
+/// known-weakness closure).
 fn workspace_repo_automation_files(root: &Path) -> Vec<PathBuf> {
     let mut files = workspace_repo_shell_scripts(root);
     let just = root.join("justfile");
@@ -3299,7 +3331,8 @@ fn media_conversion_decision_chain_anti_fabrication_closure_m220() {
     let hits = decision_chain_fabrication_offenders(&root);
     assert!(
         hits.is_empty(),
-        "decision-chain fabrication patterns must be absent from production img/vid/foundation:\n{}",
+        "decision-chain fabrication patterns must be absent from production \
+         img/vid/foundation:\n{}",
         hits.join("\n")
     );
 
@@ -3344,7 +3377,8 @@ fn media_conversion_collection_duration_trust_m221() {
     assert!(
         prod_db.contains("COLLECTION_BASELINE_TRUSTED")
             && prod_db.contains("loop_collection_secs_or_baseline_policy"),
-        "KnnDistributionProfile::default must use trusted baseline policy for collection duration fields (M221)"
+        "KnnDistributionProfile::default must use trusted baseline policy for collection duration \
+         fields (M221)"
     );
     let loop_intent = fs::read_to_string(join_legacy_aware(
         &root,
@@ -3397,7 +3431,8 @@ fn media_conversion_repo_wide_silent_fabrication_scan_m222() {
     let hits = repo_wide_silent_fabrication_offenders(&root);
     assert!(
         hits.is_empty(),
-        "repo-wide silent fabrication patterns must be absent from all crate src production scopes:\n{}",
+        "repo-wide silent fabrication patterns must be absent from all crate src production \
+         scopes:\n{}",
         hits.join("\n")
     );
 
@@ -3688,7 +3723,8 @@ fn media_conversion_gpu_coarse_confidence_m227() {
         .expect("gpu build_result body should be present"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         build_result_body.contains("measured_exploration_confidence"),
-        "M227: non-ultimate build_result must delegate confidence to measured_exploration_confidence"
+        "M227: non-ultimate build_result must delegate confidence to \
+         measured_exploration_confidence"
     );
     for ban in MC_FORBIDDEN_EXPLORE_CONFIDENCE_FABRICATION {
         assert!(
@@ -3698,7 +3734,8 @@ fn media_conversion_gpu_coarse_confidence_m227() {
     }
     assert!(
         build_result_body.contains("exploration_size_margin_from_output"),
-        "M227: GPU coarse build_result must preserve measured size-headroom margin (not Some(0.0) fabrication)"
+        "M227: GPU coarse build_result must preserve measured size-headroom margin (not Some(0.0) \
+         fabrication)"
     );
 }
 
@@ -3769,7 +3806,8 @@ fn media_conversion_whole_repo_measurement_forgery_m229() {
     let hits = whole_repo_silent_measurement_forgery_offenders(&root);
     assert!(
         hits.is_empty(),
-        "silent measurement forgery patterns (M229, outside M222–M228 lists) must be absent from whole-repo production Rust:\n{}",
+        "silent measurement forgery patterns (M229, outside M222–M228 lists) must be absent from \
+         whole-repo production Rust:\n{}",
         hits.join("\n")
     );
 
@@ -3825,7 +3863,8 @@ fn media_conversion_unified_fabrication_closure_m232() {
     let hits = unified_fabrication_offenders(&root);
     assert!(
         hits.is_empty(),
-        "unified fabrication patterns (M222–M246 whole-repo union) must be absent from workspace rust+bins+fuzz+dev/tests+dev/scripts:\n{}",
+        "unified fabrication patterns (M222–M246 whole-repo union) must be absent from workspace \
+         rust+bins+fuzz+dev/tests+dev/scripts:\n{}",
         hits.join("\n")
     );
 
@@ -4132,7 +4171,8 @@ fn media_conversion_automation_surface_fabrication_m237() {
     let hits = automation_surface_fabrication_offenders(&root, &surfaces, &patterns);
     assert!(
         hits.is_empty(),
-        "automation surfaces (justfile/scripts/workflows) must not contain fabrication patterns:\n{}",
+        "automation surfaces (justfile/scripts/workflows) must not contain fabrication \
+         patterns:\n{}",
         hits.join("\n")
     );
 }
@@ -4186,7 +4226,8 @@ fn media_conversion_workspace_stderr_fabrication_m239() {
     let hits = workspace_stderr_line_unwrap_offenders(&root);
     assert!(
         hits.is_empty(),
-        "M239: stderr line unwrap_or must be absent outside gate across workspace rust closure:\n{}",
+        "M239: stderr line unwrap_or must be absent outside gate across workspace rust \
+         closure:\n{}",
         hits.join("\n")
     );
 
@@ -4584,7 +4625,8 @@ fn media_conversion_algorithm_audit_unified_parity_m245() {
     }
     assert!(
         missing.is_empty(),
-        "every algorithm_audit FORBIDDEN_SUBSTRINGS entry must be in mc_unified_fabrication_patterns (M245):\n{}",
+        "every algorithm_audit FORBIDDEN_SUBSTRINGS entry must be in \
+         mc_unified_fabrication_patterns (M245):\n{}",
         missing.join("\n")
     );
 }
@@ -5263,7 +5305,8 @@ fn scenario_quality_lookup_heuristic_contract_in_source() {
     ] {
         assert!(
             content.contains(required),
-            "scenario_quality_lookup.rs must implement heuristic knn_score contract; missing `{required}`"
+            "scenario_quality_lookup.rs must implement heuristic knn_score contract; missing \
+             `{required}`"
         );
     }
 }
@@ -5811,7 +5854,8 @@ fn media_conversion_probe_layer_strict_defaults() {
     .expect("video_explorer.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         explorer.contains("explore_boundary_crf_optional"),
-        "boundary search must resolve CRF via gate optional helper (fail-closed Err, no silent unwrap_or)"
+        "boundary search must resolve CRF via gate optional helper (fail-closed Err, no silent \
+         unwrap_or)"
     );
     assert!(
         !explorer.contains("refined.unwrap_or(boundary_crf)"),
@@ -8180,7 +8224,8 @@ fn media_conversion_precision_preservation_policy_m67() {
             .expect("media_conversion_gate.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
             assert!(
                 gate.contains("hevc_yuv420_output_pix_fmt"),
-                "explore_calibration_pix_fmt_optional must delegate to hevc_yuv420_output_pix_fmt (M67/M72)"
+                "explore_calibration_pix_fmt_optional must delegate to hevc_yuv420_output_pix_fmt \
+                 (M67/M72)"
             );
         }
         if rel == "crates/vid/src/conversion_api.rs" {
@@ -8864,7 +8909,8 @@ fn assert_media_conversion_contract_registry(
     assert_eq!(
         seen_milestones.len(),
         expected,
-        "contract must define exactly M{min_m}–M{max_m} ({expected} rows, found {seen_milestones:?})"
+        "contract must define exactly M{min_m}–M{max_m} ({expected} rows, found \
+         {seen_milestones:?})"
     );
 
     let mut required_dev_tests = std::collections::BTreeSet::new();
@@ -8912,7 +8958,8 @@ fn assert_media_conversion_contract_registry(
     );
     assert!(
         required_dev_tests.len() >= min_distinct_dev_tests,
-        "expected at least {min_distinct_dev_tests} distinct dev tests across M{min_m}–M{max_m}, got {}",
+        "expected at least {min_distinct_dev_tests} distinct dev tests across M{min_m}–M{max_m}, \
+         got {}",
         required_dev_tests.len()
     );
 }
@@ -9019,7 +9066,8 @@ fn media_conversion_batch_path_tree_m103() {
     let gate_hits = batch.matches("canonicalize_for_tool_input").count();
     assert!(
         gate_hits >= 5,
-        "batch path-tree must use canonicalize_for_tool_input at all cache roots (M103), got {gate_hits}"
+        "batch path-tree must use canonicalize_for_tool_input at all cache roots (M103), got \
+         {gate_hits}"
     );
 }
 
@@ -9237,7 +9285,8 @@ fn media_conversion_quality_content_type_m104() {
     let body = gate_fn_body(&gate, "quality_content_type_missing_audit");
     assert!(
         body.contains("quality_heuristic_fallback_audit"),
-        "quality_content_type_missing_audit must delegate to quality_heuristic_fallback_audit (M104)"
+        "quality_content_type_missing_audit must delegate to quality_heuristic_fallback_audit \
+         (M104)"
     );
 
     let qm = fs::read_to_string(join_legacy_aware(
@@ -9377,7 +9426,9 @@ fn media_conversion_loop_thresholds_ssot_m110() {
     );
     for ban in [
         ".or(reference.duration.p10)\n            .unwrap_or_else(|| {",
-        ".p75\n                    .map(|value| value.min(crate::constants::LOOP_INTENT_MAX_DURATION))\n            })\n            .unwrap_or_else(|| {",
+        ".p75\n                    .map(|value| \
+         value.min(crate::constants::LOOP_INTENT_MAX_DURATION))\n            })\n            \
+         .unwrap_or_else(|| {",
     ] {
         assert!(
             !prod.contains(ban),
@@ -9444,7 +9495,8 @@ fn media_conversion_loop_inference_ssot_m111() {
         "let total_pixels = match (meta.width, meta.height)",
         ".map_or(&[][..], |profile| profile.top_keywords",
         "map_or_else(|| \"unknown\".to_string(), |count| count.to_string())",
-        "duration_secs.map_or_else(\n            || {\n                crate::media_conversion_gate::loop_missing_duration_z_neutral",
+        "duration_secs.map_or_else(\n            || {\n                \
+         crate::media_conversion_gate::loop_missing_duration_z_neutral",
     ] {
         assert!(
             !prod.contains(ban),
@@ -9567,7 +9619,8 @@ fn media_conversion_progress_ssim_exit_suffix_m113() {
     );
     assert!(
         progress_prod.contains("explore_progress_ssim_token"),
-        "progress.rs finish path must audit missing final SSIM via explore_progress_ssim_token (M113)"
+        "progress.rs finish path must audit missing final SSIM via explore_progress_ssim_token \
+         (M113)"
     );
 
     for (rel, needle, ban) in [
@@ -11787,14 +11840,16 @@ fn media_conversion_discipline_layer_closure_m158() {
     let unscoped_tempfile_hits = delivery_unscoped_tempfile_offenders(&root);
     assert!(
         unscoped_tempfile_hits.is_empty(),
-        "M158/M169/M170 discipline: production must create temp files/dirs via gate scratch SSOT:\n{}",
+        "M158/M169/M170 discipline: production must create temp files/dirs via gate scratch \
+         SSOT:\n{}",
         unscoped_tempfile_hits.join("\n")
     );
 
     let mfb_tmp_hits = delivery_raw_get_mfb_tmp_offenders(&root);
     assert!(
         mfb_tmp_hits.is_empty(),
-        "M158/M171 discipline: production must not call get_mfb_tmp_dir() outside gate/process_lock:\n{}",
+        "M158/M171 discipline: production must not call get_mfb_tmp_dir() outside \
+         gate/process_lock:\n{}",
         mfb_tmp_hits.join("\n")
     );
 
@@ -11899,7 +11954,8 @@ fn media_conversion_discipline_layer_closure_m158() {
     let precheck_nb_direct_hits = delivery_precheck_nb_frames_direct_offenders(&root);
     assert!(
         precheck_nb_direct_hits.is_empty(),
-        "M158/M179 discipline: precheck nb_frames must use explore_precheck_nb_frames_resolved:\n{}",
+        "M158/M179 discipline: precheck nb_frames must use \
+         explore_precheck_nb_frames_resolved:\n{}",
         precheck_nb_direct_hits.join("\n")
     );
 
@@ -11990,7 +12046,8 @@ fn media_conversion_discipline_layer_closure_m158() {
     let analyzer_hits = delivery_image_analyzer_probe_unwrap_offenders(&root);
     assert!(
         analyzer_hits.is_empty(),
-        "M158/M186 discipline: image_analyzer probe paths must not inline unwrap_or_else fallbacks:\n{}",
+        "M158/M186 discipline: image_analyzer probe paths must not inline unwrap_or_else \
+         fallbacks:\n{}",
         analyzer_hits.join("\n")
     );
 
@@ -12018,14 +12075,16 @@ fn media_conversion_discipline_layer_closure_m158() {
     let metrics_margin_hits = delivery_metrics_margin_uoe_offenders(&root);
     assert!(
         metrics_margin_hits.is_empty(),
-        "M158/M190 discipline: image metrics / metadata margin must not use non-panic unwrap_or_else:\n{}",
+        "M158/M190 discipline: image metrics / metadata margin must not use non-panic \
+         unwrap_or_else:\n{}",
         metrics_margin_hits.join("\n")
     );
 
     let runtime_explore_hits = delivery_runtime_explore_uoe_offenders(&root);
     assert!(
         runtime_explore_hits.is_empty(),
-        "M158/M191 discipline: runtime/explore critical paths must not use non-panic unwrap_or_else:\n{}",
+        "M158/M191 discipline: runtime/explore critical paths must not use non-panic \
+         unwrap_or_else:\n{}",
         runtime_explore_hits.join("\n")
     );
 
@@ -12604,7 +12663,8 @@ fn media_conversion_tool_and_ffi_paths_m164() {
                     <= prod.matches("pub fn resolve_tool_path_or_audit").count();
                 assert!(
                     ssot_only,
-                    "{rel} must not use silent tool-path fallback outside resolve_tool_path_or_audit (M164)"
+                    "{rel} must not use silent tool-path fallback outside \
+                     resolve_tool_path_or_audit (M164)"
                 );
                 continue;
             }
@@ -13135,7 +13195,8 @@ fn media_conversion_output_adjacent_temp_m171() {
     let mfb_tmp_hits = delivery_raw_get_mfb_tmp_offenders(&root);
     assert!(
         mfb_tmp_hits.is_empty(),
-        "M171 discipline: production must not call get_mfb_tmp_dir() outside gate/process_lock:\n{}",
+        "M171 discipline: production must not call get_mfb_tmp_dir() outside \
+         gate/process_lock:\n{}",
         mfb_tmp_hits.join("\n")
     );
 
@@ -14115,7 +14176,8 @@ fn media_conversion_metrics_metadata_margin_m190() {
     let hits = delivery_metrics_margin_uoe_offenders(&root);
     assert!(
         hits.is_empty(),
-        "M190 discipline: image metrics / metadata margin must not use non-panic unwrap_or_else:\n{}",
+        "M190 discipline: image metrics / metadata margin must not use non-panic \
+         unwrap_or_else:\n{}",
         hits.join("\n")
     );
 }
@@ -14132,7 +14194,8 @@ fn media_conversion_runtime_explore_hardening_m191() {
     let hits = delivery_runtime_explore_uoe_offenders(&root);
     assert!(
         hits.is_empty(),
-        "M191 discipline: runtime/explore critical paths must not use non-panic unwrap_or_else:\n{}",
+        "M191 discipline: runtime/explore critical paths must not use non-panic \
+         unwrap_or_else:\n{}",
         hits.join("\n")
     );
 }
@@ -14210,7 +14273,8 @@ fn media_conversion_image_heic_detection_or_else_m208() {
     let hits = delivery_image_heic_detection_or_else_offenders(&root);
     assert!(
         hits.is_empty(),
-        "M208 discipline: image_heic_analysis/image_detection must not use targeted inline or_else:\n{}",
+        "M208 discipline: image_heic_analysis/image_detection must not use targeted inline \
+         or_else:\n{}",
         hits.join("\n")
     );
 }
@@ -14495,7 +14559,8 @@ fn database_inference_log_hash_failure_skips_insert_contract() {
     assert!(
         body.contains("let file_hash = match inference_log_file_hash_or_skip(path)")
             && body.contains("None => return,"),
-        "source-path BLAKE3 failure must audit and skip inference_log insert, not write NULL file_hash"
+        "source-path BLAKE3 failure must audit and skip inference_log insert, not write NULL \
+         file_hash"
     );
     assert!(
         !body.contains(concat!(".", "ok", "()\n    });")),
@@ -15328,7 +15393,8 @@ fn media_conversion_gpu_accel_numeric_ssot_m108() {
     let ceiling_body = gate_fn_body(&gate, "explore_gpu_quality_ceiling_crf_or_last_tested");
     assert!(
         ceiling_body.contains("delivery_gpu_batch_audit"),
-        "explore_gpu_quality_ceiling_crf_or_last_tested must audit via delivery_gpu_batch_audit (M108)"
+        "explore_gpu_quality_ceiling_crf_or_last_tested must audit via delivery_gpu_batch_audit \
+         (M108)"
     );
 
     let gpu = fs::read_to_string(join_legacy_aware(
@@ -15498,7 +15564,8 @@ fn media_conversion_dynamic_calibration_audit_m81() {
     let hits = offending_lines(&root, &[mapping_path], MC_FORBIDDEN_M81_DYNAMIC_MAPPING);
     assert!(
         hits.is_empty(),
-        "M81 dynamic_mapping must not use always-on precheck audits or inline duration fallback:\n{}",
+        "M81 dynamic_mapping must not use always-on precheck audits or inline duration \
+         fallback:\n{}",
         hits.join("\n")
     );
 }
@@ -15518,7 +15585,8 @@ fn media_conversion_quality_heuristic_audit_m85() {
     let body = gate_fn_body(&gate, "quality_heuristic_fallback_audit");
     assert!(
         body.contains("probe_quality_batch_audit"),
-        "quality_heuristic_fallback_audit must delegate to strict-gated probe quality audit (M85/M96)"
+        "quality_heuristic_fallback_audit must delegate to strict-gated probe quality audit \
+         (M85/M96)"
     );
     let qm = fs::read_to_string(join_legacy_aware(
         &root,
@@ -15917,7 +15985,8 @@ fn media_conversion_probe_substrate_audit_m93() {
     let ssim = gate_fn_body(&gate, "conversion_ssim_message_token");
     assert!(
         ssim.contains("delivery_progress_batch_audit"),
-        "conversion_ssim_message_token must audit missing SSIM via delivery_progress_batch_audit (M113/M93)"
+        "conversion_ssim_message_token must audit missing SSIM via delivery_progress_batch_audit \
+         (M113/M93)"
     );
 }
 
@@ -16007,7 +16076,8 @@ fn media_conversion_delivery_substrate_m95() {
     let hits = offending_lines(&root, &[conversion_path], MC_FORBIDDEN_M95_CONVERSION);
     assert!(
         hits.is_empty(),
-        "conversion.rs production must not call delivery_path_audit/delivery_batch_audit directly (M95):\n{}",
+        "conversion.rs production must not call delivery_path_audit/delivery_batch_audit directly \
+         (M95):\n{}",
         hits.join("\n")
     );
     let ffprobe = fs::read_to_string(join_legacy_aware(&root, "crates/foundation/src/ffprobe.rs"))
@@ -16418,7 +16488,8 @@ fn media_conversion_progress_eta_mutex_m82() {
     let eta = gate_fn_body(&gate, "delivery_progress_eta_unknown_audit");
     assert!(
         eta.contains("delivery_strict_batch_audit"),
-        "delivery_progress_eta_unknown_audit must delegate to delivery_strict_batch_audit (M82/M96)"
+        "delivery_progress_eta_unknown_audit must delegate to delivery_strict_batch_audit \
+         (M82/M96)"
     );
 
     let progress = fs::read_to_string(join_legacy_aware(
@@ -17408,7 +17479,7 @@ fn media_conversion_delivery_heatmap_no_regressions() {
     assert_eq!(
         baseline["contract_invariants"]
             .as_u64()
-            .expect("baseline contract_invariants"), // audited: contract test assertion path; panic/expect is test-only failure signal
+            .expect("baseline contract_invariants"), /* audited: contract test assertion path; panic/expect is test-only failure signal */
         66,
         "heatmap baseline must track M66 gpu_accel icon picks (66 invariants)"
     );
@@ -17421,28 +17492,32 @@ fn media_conversion_delivery_heatmap_no_regressions() {
         assert_eq!(
             audit["extended_scan"]["map_or_high_improvement"]
                 .as_u64()
-                .expect("deep audit map_or_high_improvement should be present"), // audited: contract test assertion path; panic/expect is test-only failure signal
+                .expect("deep audit map_or_high_improvement should be present"), /* audited: contract test assertion path; panic/expect is test-only failure signal */
             0,
             "deep audit must show no map_or(100.*) blind spots after M40"
         );
         assert_eq!(
             audit["extended_scan"]["unwrap_or_else_estimate"]
                 .as_u64()
-                .expect("deep audit unwrap_or_else_estimate should be present"), // audited: contract test assertion path; panic/expect is test-only failure signal
+                .expect("deep audit unwrap_or_else_estimate should be present"), /* audited: contract test assertion path; panic/expect is test-only failure signal */
             0,
             "deep audit must show no unwrap_or_else estimate chains after M40"
         );
         assert_eq!(
             audit["extended_scan"]["mutex_poison_inline"]
                 .as_u64()
-                .expect("deep audit mutex_poison_inline should be present"), // audited: contract test assertion path; panic/expect is test-only failure signal
+                .expect("deep audit mutex_poison_inline should be present"), /* audited: contract test assertion path; panic/expect is test-only failure signal */
             0,
             "deep audit must show no inline mutex poison recovery after M44"
         );
         assert_eq!(
             audit["extended_scan"]["temp_dir_inline"]
                 .as_u64()
-                .expect("deep audit temp_dir_inline should be present"), // audited: contract test assertion path; panic/expect is test-only failure signal
+                .expect("deep audit temp_dir_inline should be present"), /* audited: contract
+                                                                          * test assertion path;
+                                                                          * panic/expect is
+                                                                          * test-only failure
+                                                                          * signal */
             0,
             "deep audit must route temp_dir log fallbacks through gate after M45"
         );
@@ -17504,7 +17579,8 @@ fn media_conversion_delivery_layer_sealed() {
             && seal.contains("media_conversion_discipline_layer_closure_m158")
             && seal.contains("delivery_fallback_audit")
             && seal.contains("pub(crate)"),
-        "delivery seal doc must link discipline seal, M1–M158 registry, M39/M158, and emitter visibility"
+        "delivery seal doc must link discipline seal, M1–M158 registry, M39/M158, and emitter \
+         visibility"
     );
     assert!(
         root.join("crates/dev/scripts/media_conversion_delivery_heatmap.py")
@@ -17592,7 +17668,8 @@ fn media_conversion_delivery_layer_sealed() {
     let gate_log_anomaly = gate.matches("log_anomaly!").count();
     assert_eq!(
         gate_log_anomaly, 1,
-        "only delivery_fallback_audit may emit log_anomaly! in media_conversion_gate (found {gate_log_anomaly})"
+        "only delivery_fallback_audit may emit log_anomaly! in media_conversion_gate (found \
+         {gate_log_anomaly})"
     );
 }
 
@@ -17635,7 +17712,8 @@ fn training_tier_ambiguous_policy_defaults_to_exclude() {
             && tier_rs.contains("verify_training_tier_for_ingest")
             && tier_rs.contains("MFB_TIER_AMBIGUOUS_POLICY")
             && tier_rs.contains(".zip(resolved_from_rules)"),
-        "training tier layer must commit to exclude, verify ingest labels, and require assigned==resolved for tier_consistent"
+        "training tier layer must commit to exclude, verify ingest labels, and require \
+         assigned==resolved for tier_consistent"
     );
     let rules = fs::read_to_string(root.join("crates/dev/src/config/training_rules.json"))
         .expect("training_rules.json must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -17650,7 +17728,8 @@ fn training_tier_ambiguous_policy_defaults_to_exclude() {
             && rules.contains("\"value\": 512")
             && tier_rs.contains("HIGH_DIMENSION_ENTROPY_FLOOR")
             && tier_rs.contains("assert_non_animated_static_asset"),
-        "committed training rules must declare run_training.py consumer + exclude + tier logic + tightened entropy thresholds"
+        "committed training rules must declare run_training.py consumer + exclude + tier logic + \
+         tightened entropy thresholds"
     );
     assert!(
         tier_rs.contains("HIGH_TIER_LOGIC") && tier_rs.contains("LOW_TIER_LOGIC"),
@@ -17711,7 +17790,8 @@ fn database_audit_logs_use_symbol_pick() {
             content.contains("symbols::pick")
                 || content.contains("ui_stderr::line")
                 || content.contains("media_conversion_gate::ui_icon_pick"),
-            "{rel} audit/tracing user lines must use symbols::pick, ui_icon_pick, or ui_stderr::line (U7/U12/M64)"
+            "{rel} audit/tracing user lines must use symbols::pick, ui_icon_pick, or \
+             ui_stderr::line (U7/U12/M64)"
         );
         assert!(
             !content.contains("\"📊 LoopIntent DB Check")
@@ -17969,7 +18049,8 @@ fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
     assert!(
         root.join("crates/dev/scripts/archive/drag_and_drop_processor.py")
             .is_file(),
-        "py2bin archived source must remain until Rust parity is explicitly proven: drag_and_drop_processor.py"
+        "py2bin archived source must remain until Rust parity is explicitly proven: \
+         drag_and_drop_processor.py"
     );
 
     let drag_rs = fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
@@ -17979,7 +18060,8 @@ fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
             && drag_rs.contains("rich_panel")
             && drag_rs.contains("print_runtime_panel")
             && drag_rs.contains("print_summary_report"),
-        "drag_and_drop_processor.rs must implement Rich-style panels while keeping py compat reference"
+        "drag_and_drop_processor.rs must implement Rich-style panels while keeping py compat \
+         reference"
     );
 
     let run_training_rs = fs::read_to_string(root.join("crates/dev/src/bin/run_training.rs"))
@@ -18056,7 +18138,8 @@ fn processing_walks_do_not_silently_drop_directory_errors() {
         ] {
             assert!(
                 !content.contains(forbidden),
-                "{rel} must propagate or count walk/read_dir errors instead of dropping them with {forbidden}"
+                "{rel} must propagate or count walk/read_dir errors instead of dropping them with \
+                 {forbidden}"
             );
         }
     }
@@ -18102,7 +18185,8 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
     );
     assert!(
         workflow.contains("dtolnay/rust-toolchain@v1"),
-        "ci-quality workflow must install Rust via dtolnay/rust-toolchain (reads pinned toolchain file)"
+        "ci-quality workflow must install Rust via dtolnay/rust-toolchain (reads pinned toolchain \
+         file)"
     );
     let check_all = fs::read_to_string(root.join("crates/dev/src/bin/check_all.rs"))
         .expect("check_all.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -18440,7 +18524,8 @@ fn rust_probe_parse_residue_targets_are_absent_across_crates() {
 
     assert!(
         offenders.is_empty(),
-        "Rust source must not silently discard probe/read/parse errors via target residue forms:\n{}",
+        "Rust source must not silently discard probe/read/parse errors via target residue \
+         forms:\n{}",
         offenders.join("\n")
     );
 }
@@ -18471,7 +18556,8 @@ fn production_media_cleanup_does_not_drop_safe_remove_file_results() {
 
     assert!(
         offenders.is_empty(),
-        "Production media cleanup must use audited cleanup helpers instead of dropping safe_remove_file results:\n{}",
+        "Production media cleanup must use audited cleanup helpers instead of dropping \
+         safe_remove_file results:\n{}",
         offenders.join("\n")
     );
 }

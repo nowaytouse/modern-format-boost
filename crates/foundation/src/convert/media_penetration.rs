@@ -1,7 +1,8 @@
 //! Media Penetration Detection
 //!
 //! Content-based verification that bypasses potentially fake metadata.
-//! All detection functions decode actual media content instead of trusting container headers.
+//! All detection functions decode actual media content instead of trusting
+//! container headers.
 
 use crate::builder_base::ToolBuilder;
 use crate::progress_mode::emit_stderr;
@@ -12,7 +13,8 @@ use std::path::Path;
 pub enum PenetrationResult<T> {
     /// Detection succeeded with a definitive result
     Verified(T),
-    /// Detection failed due to technical error (file unreadable, codec unsupported, etc.)
+    /// Detection failed due to technical error (file unreadable, codec
+    /// unsupported, etc.)
     Failed,
     /// Detection skipped (optimization: claim is reasonable, no need to verify)
     Skipped,
@@ -136,7 +138,8 @@ fn parse_frame_count_line(line: &str) -> anyhow::Result<Option<u64>> {
 }
 
 /// Penetrating audio detection: decode and analyze actual audio samples.
-/// Returns `Verified(true)` if silent, `Verified(false)` if audible, `Failed` on error.
+/// Returns `Verified(true)` if silent, `Verified(false)` if audible, `Failed`
+/// on error.
 #[must_use]
 pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
     const SILENCE_THRESHOLD_DB: f64 = crate::constants::AUDIO_SILENCE_THRESHOLD_DB;
@@ -205,8 +208,9 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
 
 /// Penetrating transparency detection: decode frames and check alpha variance.
 ///
-/// Uses stratified sampling first, then falls back to full decode if suspicious.
-/// Returns `Verified(true)` if alpha is used, `Verified(false)` if fake, `Skipped` if no claim.
+/// Uses stratified sampling first, then falls back to full decode if
+/// suspicious. Returns `Verified(true)` if alpha is used, `Verified(false)` if
+/// fake, `Skipped` if no claim.
 #[must_use]
 pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> PenetrationResult<bool> {
     // Phase 1: Stratified Sampling (fast check)
@@ -302,8 +306,9 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     }
 
     // Phase 2: Full Decode Verification (for suspicious cases)
-    // If sampling succeeded but found no transparency, do a full decode to be absolutely sure.
-    // This catches cases where transparency only appears in specific frames.
+    // If sampling succeeded but found no transparency, do a full decode to be
+    // absolutely sure. This catches cases where transparency only appears in
+    // specific frames.
     if sampling_succeeded && duration_val > crate::constants::PENETRATION_MIN_SAMPLING_DURATION {
         return run_full_decode_transparency(path);
     }
@@ -373,8 +378,9 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
     PenetrationResult::Verified(false)
 }
 
-/// Penetrating frame count detection: decode and count actual frames via ffmpeg summary.
-/// Returns `Verified(count)` with real count, `Skipped` if a concrete claim is already reasonable.
+/// Penetrating frame count detection: decode and count actual frames via ffmpeg
+/// summary. Returns `Verified(count)` with real count, `Skipped` if a concrete
+/// claim is already reasonable.
 #[must_use]
 pub fn detect_real_frame_count(
     path: &Path,
@@ -390,8 +396,9 @@ pub fn detect_real_frame_count(
     }
 
     // Count frames via ffmpeg's physical output summary.
-    // Using '-fps_mode passthrough' ensures zero frame duplication/dropping, giving us
-    // the absolute physical number of frames as seen by the processing engine.
+    // Using '-fps_mode passthrough' ensures zero frame duplication/dropping, giving
+    // us the absolute physical number of frames as seen by the processing
+    // engine.
     let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
         .arg("-map")
@@ -417,7 +424,8 @@ pub fn detect_real_frame_count(
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Find the last "frame=" entry in the output
-    // Example line: "frame=  123 fps=0.1 q=-0.0 Lsize=N/A time=00:00:05.12 bitrate=N/A speed=4.5x"
+    // Example line: "frame=  123 fps=0.1 q=-0.0 Lsize=N/A time=00:00:05.12
+    // bitrate=N/A speed=4.5x"
     let mut actual_u64 = None;
     for line in stderr.lines().rev() {
         match parse_frame_count_line(line) {
@@ -469,10 +477,11 @@ pub fn detect_real_frame_count(
     }
 }
 
-/// Penetrating interlace detection: decodes a short sample and uses the `idet` filter.
+/// Penetrating interlace detection: decodes a short sample and uses the `idet`
+/// filter.
 ///
-/// Returns `Verified(true)` if interlacing is physically detected, `Verified(false)` if progressive.
-/// `Skipped` if the check isn't necessary.
+/// Returns `Verified(true)` if interlacing is physically detected,
+/// `Verified(false)` if progressive. `Skipped` if the check isn't necessary.
 #[must_use]
 pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
     // Only sample the first 24 frames (~1 second) to keep the penetration fast.
@@ -498,7 +507,8 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Look for: "Parsed_idet_0 ... Single frame detection: TFF: 12 BFF: 0 Progressive: 40 Undetermined: 0"
+    // Look for: "Parsed_idet_0 ... Single frame detection: TFF: 12 BFF: 0
+    // Progressive: 40 Undetermined: 0"
     for line in stderr.lines() {
         if line.contains("Parsed_idet_") && line.contains("Single frame detection:") {
             let tff = line.find("TFF:").and_then(|tff_idx| {
@@ -516,8 +526,9 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
                 _ => continue,
             };
 
-            // If we found multiple clear interlaced frames in the short sample, it's interlaced.
-            // Using a threshold of 2 to avoid single-frame false positives.
+            // If we found multiple clear interlaced frames in the short sample, it's
+            // interlaced. Using a threshold of 2 to avoid single-frame false
+            // positives.
             if interlaced_hits >= 2 {
                 let (Some(tff_hits), Some(bff_hits)) = (tff, bff) else {
                     continue;
@@ -661,15 +672,17 @@ mod tests {
         // in callers, but we test the function itself.
         // Providing a mock duration to avoid Failed result due to missing metadata.
         let result = detect_real_transparency(fake_path, Some(5.0));
-        // It will try to run ffmpeg and fail because file is nonexistent, returning Verified(false) or Failed.
-        // But the goal is to verify it doesn't panic on None duration.
+        // It will try to run ffmpeg and fail because file is nonexistent, returning
+        // Verified(false) or Failed. But the goal is to verify it doesn't panic
+        // on None duration.
         assert!(!result.is_verified() || result == PenetrationResult::Verified(false));
     }
 
     #[test]
     fn test_detect_real_frame_count_trusts_reasonable_claims() {
         let fake_path = Path::new("/nonexistent.mp4");
-        // Reasonable claims (LOWER_LIMIT+1 to UPPER_LIMIT) should be skipped without decoding
+        // Reasonable claims (LOWER_LIMIT+1 to UPPER_LIMIT) should be skipped without
+        // decoding
         assert_eq!(
             detect_real_frame_count(fake_path, Some(100)),
             PenetrationResult::Skipped

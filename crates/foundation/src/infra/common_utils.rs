@@ -80,8 +80,9 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the user's global project cache directory (~/.`modern_format_boost/cache`/).
-/// Creates the directory if it doesn't exist.
+/// Returns the user's global project cache directory
+/// (~/.`modern_format_boost/cache`/). Creates the directory if it doesn't
+/// exist.
 ///
 /// # Errors
 /// Returns an I/O error if the directory cannot be determined or created.
@@ -96,7 +97,8 @@ pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
             crate::media_conversion_gate::delivery_cwd_or_audit("user project cache base")
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Failed to determine cache base directory: MFB root unavailable ({root_err}) and current_dir unavailable (audited)"
+                        "Failed to determine cache base directory: MFB root unavailable \
+                         ({root_err}) and current_dir unavailable (audited)"
                     )
                 })?
         }
@@ -112,19 +114,20 @@ pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
     path.push("cache");
 
     if let Err(primary_err) = std::fs::create_dir_all(&path) {
-        let mut fallback = crate::media_conversion_gate::delivery_cwd_or_audit(
-            "user project cache fallback",
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Failed to determine project-local cache fallback after primary cache path {} creation failed: {primary_err}; current_dir unavailable (audited)",
-                path.display(),
-            )
-        })?;
+        let mut fallback =
+            crate::media_conversion_gate::delivery_cwd_or_audit("user project cache fallback")
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Failed to determine project-local cache fallback after primary cache \
+                         path {} creation failed: {primary_err}; current_dir unavailable (audited)",
+                        path.display(),
+                    )
+                })?;
         fallback.push(".cache");
         std::fs::create_dir_all(&fallback).with_context(|| {
             format!(
-                "Failed to create project cache directory at {} after primary cache path {} also failed: {}",
+                "Failed to create project cache directory at {} after primary cache path {} also \
+                 failed: {}",
                 fallback.display(),
                 path.display(),
                 primary_err
@@ -159,8 +162,8 @@ fn training_source_map_key(path: &Path) -> String {
         .to_string()
 }
 
-/// Resolve the original source path for a training replica when the batch runner
-/// provides a replica-to-source mapping via `MFB_TRAINING_SOURCE_MAP`.
+/// Resolve the original source path for a training replica when the batch
+/// runner provides a replica-to-source mapping via `MFB_TRAINING_SOURCE_MAP`.
 #[must_use]
 pub fn resolve_training_source_path(path: &Path) -> Option<PathBuf> {
     let map_path = match std::env::var(crate::constants::ENV_MFB_TRAINING_SOURCE_MAP) {
@@ -257,7 +260,8 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
                 "delivery_runtime",
                 path,
                 format!(
-                    "Format Detection: Failed to read file header for magic-byte analysis at {}: {}",
+                    "Format Detection: Failed to read file header for magic-byte analysis at {}: \
+                     {}",
                     path.display(),
                     e
                 ),
@@ -495,8 +499,8 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     Ok(output)
 }
 
-/// Recursively find a box by type and return its payload (excluding size + type).
-/// Used by ISO BMFF formats (AVIF, HEIC, JXL container).
+/// Recursively find a box by type and return its payload (excluding size +
+/// type). Used by ISO BMFF formats (AVIF, HEIC, JXL container).
 ///
 /// This version correctly handles:
 /// - Standard boxes (size + type + payload)
@@ -625,7 +629,8 @@ fn find_box_data_recursive_impl(
     results
 }
 
-/// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
+/// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL
+/// " container).
 #[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
     find_any_box_recursive_impl(data, box_type, 0, 32)
@@ -821,7 +826,8 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Resolved external tool path, or bare `name` for `PATH` lookup (strict-gated when unresolved).
+/// Resolved external tool path, or bare `name` for `PATH` lookup (strict-gated
+/// when unresolved).
 #[must_use]
 pub fn resolve_tool_path_or_audit(name: &str) -> std::path::PathBuf {
     crate::media_conversion_gate::delivery_tool_path_or_bare_name(name)
@@ -1022,8 +1028,9 @@ pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }
 
-/// A RAII guard that sets an environment variable and restores its original value when dropped.
-/// Useful for thread-safe (serial) unit tests that modify global environment state.
+/// A RAII guard that sets an environment variable and restores its original
+/// value when dropped. Useful for thread-safe (serial) unit tests that modify
+/// global environment state.
 #[derive(Debug)]
 pub struct EnvGuard {
     key: String,
@@ -1350,7 +1357,8 @@ mod tests {
         let found = find_box_data_recursive(&data, *b"test");
         assert_eq!(found.unwrap(), &[0, 1, 2, 3, 4, 5, 6, 7]);
 
-        // Case 1: Truncated extended size header (only 4 bytes of 8 bytes ext size present)
+        // Case 1: Truncated extended size header (only 4 bytes of 8 bytes ext size
+        // present)
         let mut data_trunc = vec![0, 0, 0, 1];
         data_trunc.extend_from_slice(b"test");
         data_trunc.extend_from_slice(&[0, 0, 0, 0]); // missing 4 bytes

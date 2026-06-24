@@ -181,7 +181,8 @@ impl CommandSpec {
 }
 
 fn smart_build_command_spec(project_root: &Path, force: bool) -> CommandSpec {
-    // Always use release profile for smart_build to ensure production-optimized builds
+    // Always use release profile for smart_build to ensure production-optimized
+    // builds
     let profile = "release";
     let sibling = project_root
         .join("target")
@@ -257,7 +258,8 @@ fn purge_postgres_full() -> Result<()> {
     run_pg_query(&query)?;
 
     println!(
-        "   {GREEN} PostgreSQL: analysis + inference-log caches truncated (training tables untouched)"
+        "   {GREEN} PostgreSQL: analysis + inference-log caches truncated (training tables \
+         untouched)"
     );
     Ok(())
 }
@@ -283,14 +285,16 @@ fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
         let escaped_pattern = pattern.replace('\'', "''");
 
         let q1 = format!(
-            "DELETE FROM path_index WHERE file_path = '{escaped_abs}' OR file_path LIKE '{escaped_pattern}';"
+            "DELETE FROM path_index WHERE file_path = '{escaped_abs}' OR file_path LIKE \
+             '{escaped_pattern}';"
         );
         let out1 = run_pg_query(&q1)?;
         total += parse_row_count(&out1)?;
 
         for table in &["analysis_records", "quality_records", "video_records"] {
             let q = format!(
-                "DELETE FROM {table} WHERE content_hash NOT IN (SELECT content_hash FROM path_index);"
+                "DELETE FROM {table} WHERE content_hash NOT IN (SELECT content_hash FROM \
+                 path_index);"
             );
             let out = run_pg_query(&q)?;
             total += parse_row_count(&out)?;
@@ -302,7 +306,8 @@ fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
 
         for table in &["analysis_records", "quality_records", "video_records"] {
             let q = format!(
-                "DELETE FROM {table} WHERE content_hash NOT IN (SELECT content_hash FROM path_index);"
+                "DELETE FROM {table} WHERE content_hash NOT IN (SELECT content_hash FROM \
+                 path_index);"
             );
             let out = run_pg_query(&q)?;
             total += parse_row_count(&out)?;
@@ -333,7 +338,8 @@ fn purge_postgres_inference_logs_for_path(target_path: &Path) -> Result<i32> {
             let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
             let escaped_pattern = pattern.replace('\'', "''");
             format!(
-                "DELETE FROM {table} WHERE source_path = '{escaped_abs}' OR source_path LIKE '{escaped_pattern}';"
+                "DELETE FROM {table} WHERE source_path = '{escaped_abs}' OR source_path LIKE \
+                 '{escaped_pattern}';"
             )
         } else {
             format!("DELETE FROM {table} WHERE source_path = '{escaped_abs}';")
@@ -365,15 +371,27 @@ fn purge_postgres_animation_cache() -> Result<i32> {
 
     // We can run these deletes in sequence
     let q_temp = format!(
-        "CREATE TEMP TABLE mfb_animation_cache_purge AS \
-         SELECT DISTINCT content_hash FROM path_index WHERE lower(file_path) LIKE ANY({array_str});"
+        "CREATE TEMP TABLE mfb_animation_cache_purge AS SELECT DISTINCT content_hash FROM \
+         path_index WHERE lower(file_path) LIKE ANY({array_str});"
     );
 
     let mut full_query = q_temp;
-    full_query.push_str("DELETE FROM analysis_records WHERE content_hash IN (SELECT content_hash FROM mfb_animation_cache_purge);");
-    full_query.push_str("DELETE FROM quality_records WHERE content_hash IN (SELECT content_hash FROM mfb_animation_cache_purge);");
-    full_query.push_str("DELETE FROM video_records WHERE content_hash IN (SELECT content_hash FROM mfb_animation_cache_purge);");
-    full_query.push_str("DELETE FROM path_index WHERE content_hash IN (SELECT content_hash FROM mfb_animation_cache_purge);");
+    full_query.push_str(
+        "DELETE FROM analysis_records WHERE content_hash IN (SELECT content_hash FROM \
+         mfb_animation_cache_purge);",
+    );
+    full_query.push_str(
+        "DELETE FROM quality_records WHERE content_hash IN (SELECT content_hash FROM \
+         mfb_animation_cache_purge);",
+    );
+    full_query.push_str(
+        "DELETE FROM video_records WHERE content_hash IN (SELECT content_hash FROM \
+         mfb_animation_cache_purge);",
+    );
+    full_query.push_str(
+        "DELETE FROM path_index WHERE content_hash IN (SELECT content_hash FROM \
+         mfb_animation_cache_purge);",
+    );
 
     for table in PG_INFERENCE_LOG_TABLES {
         full_query.push_str(&format!(
@@ -641,7 +659,8 @@ fn purge_mfb_store_blob_namespaces_full() -> Result<i32> {
     }
     if total > 0 {
         println!(
-            "   {GREEN} mfb_store.sqlite: purged {total} blob_store row(s) (path_tree/checkpoint/processed)"
+            "   {GREEN} mfb_store.sqlite: purged {total} blob_store row(s) \
+             (path_tree/checkpoint/processed)"
         );
     }
     Ok(total)
@@ -1005,7 +1024,8 @@ fn perform_session_state_cleanup(yes: bool) -> Result<()> {
     draw_header(true);
     show_stats(&cache_dir, &store_file, &log_dir, &progress_dir)?;
     println!(
-        "   {BOLD}Target:{RESET} {DIM}session state only (logs, progress, temp, stale locks){RESET}\n"
+        "   {BOLD}Target:{RESET} {DIM}session state only (logs, progress, temp, stale \
+         locks){RESET}\n"
     );
 
     if !yes && sys_stdin_stdout_isatty() {
@@ -1064,7 +1084,8 @@ fn perform_full_cleanup(yes: bool) -> Result<(bool, bool)> {
     println!("   - mfb_store.sqlite (path-tree, checkpoint, processed blobs)");
     println!("   - Batch resume state (~/.mfb_progress/, tmp/, stale locks)");
     println!(
-        "   {GREEN} - Training corpora (loop_samples, *_quality_samples, metadata) are preserved{RESET}"
+        "   {GREEN} - Training corpora (loop_samples, *_quality_samples, metadata) are \
+         preserved{RESET}"
     );
     println!("   {GREEN} - Training lane logs and local training SQLite are preserved{RESET}");
     println!();
@@ -1203,13 +1224,15 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let lock_file = tempdir.path().join("test.lock");
 
-        // If lock file doesn't exist or isn't locked, is_lock_stale should return false or handle gracefully
-        // Wait, is_lock_stale attempts to open the file read/write, which fails if the file doesn't exist:
+        // If lock file doesn't exist or isn't locked, is_lock_stale should return false
+        // or handle gracefully Wait, is_lock_stale attempts to open the file
+        // read/write, which fails if the file doesn't exist:
         assert!(!is_lock_stale(&lock_file));
 
         // Create the file:
         fs::write(&lock_file, b"").unwrap();
-        // Without an active lock, opening and locking succeeds, so flock returns 0, and unlocks, returning true (stale):
+        // Without an active lock, opening and locking succeeds, so flock returns 0, and
+        // unlocks, returning true (stale):
         assert!(is_lock_stale(&lock_file));
     }
 

@@ -1,4 +1,5 @@
-// Regression test: animated sources must never be scheduled for static JXL conversion.
+// Regression test: animated sources must never be scheduled for static JXL
+// conversion.
 
 #[test]
 fn animated_source_never_suggests_jxl() {

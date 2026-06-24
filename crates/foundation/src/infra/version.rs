@@ -1,18 +1,20 @@
-    //! 🔢 Unified Version Management
+//! 🔢 Unified Version Management
 //!
-//! This module provides a single source of truth for all version numbers in the project.
-//! All versions are automatically derived from `CARGO_PKG_VERSION` at compile time.
+//! This module provides a single source of truth for all version numbers in the
+//! project. All versions are automatically derived from `CARGO_PKG_VERSION` at
+//! compile time.
 //!
 //! ## Version Binding Strategy
 //!
-//! 1. **Program Version**: From `Cargo.toml` → `[workspace.package]` → `version`
+//! 1. **Program Version**: From `Cargo.toml` → `[workspace.package]` →
+//!    `version`
 //! 2. **Cache Algorithm Version**: Auto-calculated from program version
 //! 3. **Schema Versions**: Manually incremented only when structure changes
 //!
 //! ## Usage
 //!
 //! ```rust
-//! use foundation::version::{PROGRAM_VERSION, cache_algorithm, CACHE_SCHEMA_VERSION};
+//! use foundation::version::{CACHE_SCHEMA_VERSION, PROGRAM_VERSION, cache_algorithm};
 //!
 //! println!("Program: {}", PROGRAM_VERSION);
 //! println!("Cache Algorithm: {}", cache_algorithm());
@@ -32,18 +34,21 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
-/// This value is automatically calculated from `CARGO_PKG_VERSION` at program initialization.
-/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.11.1 → 1101)
+/// This value is automatically calculated from `CARGO_PKG_VERSION` at program
+/// initialization. Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g.,
+/// 0.11.1 → 1101)
 ///
 /// **Purpose**: Automatic cache invalidation on ANY program update
 ///
-/// **CRITICAL**: If version parsing fails, `cache_algorithm()` audits and returns `0`
-/// so mis-keyed caches are visible in logs rather than silently using a wrong code.
+/// **CRITICAL**: If version parsing fails, `cache_algorithm()` audits and
+/// returns `0` so mis-keyed caches are visible in logs rather than silently
+/// using a wrong code.
 ///
 /// **Version History**:
 /// - v1: Original HEIC lossless detection
 /// - v2: Fixed HEIC lossless detection + improved box parsing
-/// - v1060: Bound to program version 0.10.60 (automatic invalidation on updates)
+/// - v1060: Bound to program version 0.10.60 (automatic invalidation on
+///   updates)
 /// - v1061: Cache version binding mechanism
 /// - v1062: Dependency unification (GitHub nightly sources)
 /// - v1063: HEIC security limits increased (6GB, 10k ipco children)
@@ -53,10 +58,13 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1067: Log output debug metadata removed + file creation time preservation
 /// - v1068: Comprehensive metadata preservation (Windows/Linux/macOS)
 /// - v1069: Metadata preservation enabled by default + creation time fix
-/// - v1070: Creation time preservation fix + cache version auto-binding + unified version management
-/// - v1084: Perceived-speed scheduling, progress refresh, and louder runtime failure reporting
+/// - v1070: Creation time preservation fix + cache version auto-binding +
+///   unified version management
+/// - v1084: Perceived-speed scheduling, progress refresh, and louder runtime
+///   failure reporting
 /// - v1085: GUI/script launch hardening and narrow-terminal progress adaptation
-/// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
+/// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution
+///   guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
 /// - v1091: Documentation binding (removed in v1097)
 /// - v1102: Zero-warning state & EXR/JP2 detection (v0.10.102)
@@ -78,19 +86,23 @@ static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
 /// - Modifying table structure
 /// - Altering indexes
 ///
-/// **Migration**: Add migration logic in `analysis_cache.rs::check_and_migrate_schema()`
+/// **Migration**: Add migration logic in
+/// `analysis_cache.rs::check_and_migrate_schema()`
 ///
 /// **History**:
 /// - v1: Initial schema
 /// - v2: Added `algorithm_version` column + enhanced file signature tracking
-/// - v3: Added `content_fingerprint_hash` (BLOB) and `data_checksum` (INTEGER) for integrity verification
-/// - v4: Forced destructive cache cutover for strict `ImageAnalysis` payload changes
+/// - v3: Added `content_fingerprint_hash` (BLOB) and `data_checksum` (INTEGER)
+///   for integrity verification
+/// - v4: Forced destructive cache cutover for strict `ImageAnalysis` payload
+///   changes
 pub const CACHE_SCHEMA_VERSION: i32 = crate::constants::CACHE_SCHEMA_VERSION;
 
 /// 📊 Get cache algorithm version
 ///
-/// Returns the auto-calculated cache algorithm version based on program version.
-/// This function is lazy-initialized; parse failures are audited once at first use.
+/// Returns the auto-calculated cache algorithm version based on program
+/// version. This function is lazy-initialized; parse failures are audited once
+/// at first use.
 #[must_use]
 pub fn cache_algorithm() -> i32 {
     *CACHE_ALGORITHM_VERSION
@@ -100,7 +112,6 @@ pub fn cache_algorithm() -> i32 {
 ///
 /// Converts "MAJOR.MINOR.PATCH" to `MajorMinorPatch` integer.
 /// Example: "0.10.102" → 1102
-///
 fn try_parse_version_to_code(version: &str, context: &str) -> Result<i32, String> {
     let parts: Vec<&str> = version.split('.').collect();
 

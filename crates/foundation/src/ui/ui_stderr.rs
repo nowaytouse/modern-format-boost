@@ -1,13 +1,15 @@
 //! Central stderr presentation for the terminal UI layer (U7).
 //!
-//! All user-facing stderr lines should use [`line()`] / [`line_fmt`] with [`crate::modern_ui::symbols::pick`]
-//! rather than embedding emoji literals at call sites.
+//! All user-facing stderr lines should use [`line()`] / [`line_fmt`] with
+//! [`crate::modern_ui::symbols::pick`] rather than embedding emoji literals at
+//! call sites.
 
 use crate::modern_ui::symbols;
 use crate::progress_mode;
 use std::fmt::Display;
 
-/// Emit one stderr line with emoji or ASCII icon per [`progress_mode::is_plain_mode`].
+/// Emit one stderr line with emoji or ASCII icon per
+/// [`progress_mode::is_plain_mode`].
 pub fn line(icon_emoji: &str, icon_plain: &str, msg: impl Display) {
     let icon = symbols::pick(icon_emoji, icon_plain);
     progress_mode::emit_stderr(&format!("{icon} {msg}"));

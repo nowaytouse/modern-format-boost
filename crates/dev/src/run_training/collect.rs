@@ -10,8 +10,9 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 
-/// True when a file should be routed to `loop_intent` training (animated raster or video).
-/// Mirrors py `is_animated_for_static_quality_skip` + `passes_loop_raster_animation_gate`.
+/// True when a file should be routed to `loop_intent` training (animated raster
+/// or video). Mirrors py `is_animated_for_static_quality_skip` +
+/// `passes_loop_raster_animation_gate`.
 fn is_animated_for_loop_collect(path: &Path) -> bool {
     let ext = path
         .extension()
@@ -37,7 +38,8 @@ pub fn collect_plan_samples(args: &Args, rules: &RulesConfig) -> Result<Vec<Samp
     let mode = args.training_mode;
     if mode == TrainingMode::Static && args.label.as_deref() == Some("animated_loop") {
         bail!(
-            "--training-mode static is still-image only; remove --label animated_loop or use --training-mode loop"
+            "--training-mode static is still-image only; remove --label animated_loop or use \
+             --training-mode loop"
         );
     }
 
@@ -45,7 +47,8 @@ pub fn collect_plan_samples(args: &Args, rules: &RulesConfig) -> Result<Vec<Samp
         && (args.label.as_deref() == Some("high") || args.label.as_deref() == Some("low"))
     {
         bail!(
-            "--training-mode loop ingests loop_intent only; do not pass --label high/low. Use --loop-intent-label for loop overrides, or omit --label."
+            "--training-mode loop ingests loop_intent only; do not pass --label high/low. Use \
+             --loop-intent-label for loop overrides, or omit --label."
         );
     }
 
@@ -157,7 +160,8 @@ pub fn collect_plan_samples(args: &Args, rules: &RulesConfig) -> Result<Vec<Samp
                 && loop_group.sources.remote_apis.is_empty()
             {
                 bail!(
-                    "animated_image.loop_intent (or non_loop_intent for video lane) is required when strict_no_silent_fallbacks=true"
+                    "animated_image.loop_intent (or non_loop_intent for video lane) is required \
+                     when strict_no_silent_fallbacks=true"
                 );
             }
 
@@ -221,7 +225,8 @@ fn collect_static_local_unified(
             );
         }
         eprintln!(
-            "  [SKIP] static local collector: no local_dirs configured; refusing empty training corpus (debug empty fallback enabled)"
+            "  [SKIP] static local collector: no local_dirs configured; refusing empty training \
+             corpus (debug empty fallback enabled)"
         );
         return Ok(Vec::new());
     }
@@ -353,13 +358,16 @@ fn warn_corpus_tier_coverage(
         / foundation::numeric_cast::usize_to_f64(prefilter_pass);
     if classified == 0 {
         eprintln!(
-            "  [WARN] training_corpus_tier_coverage: classified=0 (prefilter_pass={prefilter_pass}, unclassified={tier_unclassified}, ambiguous_excluded={tier_ambiguous_excluded}); check training_tier_audit thresholds"
+            "  [WARN] training_corpus_tier_coverage: classified=0 \
+             (prefilter_pass={prefilter_pass}, unclassified={tier_unclassified}, \
+             ambiguous_excluded={tier_ambiguous_excluded}); check training_tier_audit thresholds"
         );
         return;
     }
     if ratio < CORPUS_MIN_CLASSIFIED_RATIO {
         eprintln!(
-            "  [WARN] training_corpus_tier_coverage: tier classification ratio ({:.2}%) is below {:.2}% minimum (high={}, low={}, unclassified={}, ambiguous_excluded={})",
+            "  [WARN] training_corpus_tier_coverage: tier classification ratio ({:.2}%) is below \
+             {:.2}% minimum (high={}, low={}, unclassified={}, ambiguous_excluded={})",
             ratio * 100.0,
             CORPUS_MIN_CLASSIFIED_RATIO * 100.0,
             tier_high,
@@ -524,7 +532,8 @@ fn sample_loop_intent_bucket(sample: &Sample, explicit_remote_bucket: Option<&st
                 sample.path_or_url
             );
             eprintln!(
-                "  [BALANCE] loop_probe_failed path={} error={e:#} debug_uncertain_fallback=enabled",
+                "  [BALANCE] loop_probe_failed path={} error={e:#} \
+                 debug_uncertain_fallback=enabled",
                 sample.path_or_url
             );
             "uncertain".to_string()
@@ -783,6 +792,9 @@ fn warn_static_balance_skew(
         return;
     }
     eprintln!(
-        "  [WARN] training_ingest_balance_skew: high={high_n} low={low_n} pair_target={pair_target} caps={max_high}/{max_low}; tier rules may under-classify low-quality stills or corpus lacks lows — see training_tier_audit / static_image.low_quality rules"
+        "  [WARN] training_ingest_balance_skew: high={high_n} low={low_n} \
+         pair_target={pair_target} caps={max_high}/{max_low}; tier rules may under-classify \
+         low-quality stills or corpus lacks lows — see training_tier_audit / \
+         static_image.low_quality rules"
     );
 }

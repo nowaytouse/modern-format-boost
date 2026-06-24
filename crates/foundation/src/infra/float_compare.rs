@@ -1,7 +1,8 @@
 //! Float Comparison Module
 //!
-//! Provides unified floating-point comparison utilities with consistent epsilon values.
-//! Unified floating-point comparison tools to avoid bugs caused by precision issues.
+//! Provides unified floating-point comparison utilities with consistent epsilon
+//! values. Unified floating-point comparison tools to avoid bugs caused by
+//! precision issues.
 
 pub const F64_EPSILON: f64 = crate::constants::F64_EPSILON;
 pub const F32_EPSILON: f32 = crate::constants::F32_EPSILON;
@@ -16,7 +17,8 @@ pub fn approx_eq_f64(a: f64, b: f64) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} (threshold={F64_EPSILON})"
+                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
+                     (threshold={F64_EPSILON})"
                 ),
             );
         }
@@ -35,7 +37,8 @@ pub fn approx_eq_f32(a: f32, b: f32) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} (threshold={F32_EPSILON})"
+                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
+                     (threshold={F32_EPSILON})"
                 ),
             );
         }
@@ -102,7 +105,8 @@ pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_msssim",
                 format!(
-                    "Perfunctory SSIM comparison passed: a={a}, b={b}, diff={diff} (threshold={SSIM_EPSILON})"
+                    "Perfunctory SSIM comparison passed: a={a}, b={b}, diff={diff} \
+                     (threshold={SSIM_EPSILON})"
                 ),
             );
         }
@@ -121,7 +125,8 @@ pub fn approx_eq_crf(a: f32, b: f32) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "Perfunctory CRF comparison passed: a={a}, b={b}, diff={diff} (threshold={CRF_EPSILON})"
+                    "Perfunctory CRF comparison passed: a={a}, b={b}, diff={diff} \
+                     (threshold={CRF_EPSILON})"
                 ),
             );
         }
@@ -140,7 +145,8 @@ pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
             crate::media_conversion_gate::delivery_numeric_fallback_audit(
                 "delivery_numeric",
                 format!(
-                    "Perfunctory PSNR comparison passed: a={a}, b={b}, diff={diff} (threshold={PSNR_EPSILON})"
+                    "Perfunctory PSNR comparison passed: a={a}, b={b}, diff={diff} \
+                     (threshold={PSNR_EPSILON})"
                 ),
             );
         }

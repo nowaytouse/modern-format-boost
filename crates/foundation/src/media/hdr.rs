@@ -120,13 +120,15 @@ impl Default for GainMapParams {
     }
 }
 
-/// Main entry point for converting a `HEIC` with Gainmap to an HDR `JXL` via intermediate format.
+/// Main entry point for converting a `HEIC` with Gainmap to an HDR `JXL` via
+/// intermediate format.
 ///
 /// Returns any HDR sidecar artifacts that must be committed next to the final
 /// output after the synthesized JXL itself has been finalized.
 ///
 /// # Errors
-/// Returns an error if the conversion fails due to invalid input or processing errors.
+/// Returns an error if the conversion fails due to invalid input or processing
+/// errors.
 pub fn convert_heic_with_gainmap_to_jxl(
     input: &Path,
     output: &Path,
@@ -313,7 +315,8 @@ pub fn convert_heic_with_gainmap_to_jxl(
 /// output after the synthesized JXL itself has been finalized.
 ///
 /// # Errors
-/// Returns an error if the conversion fails due to invalid input or processing errors.
+/// Returns an error if the conversion fails due to invalid input or processing
+/// errors.
 pub fn convert_ultrahdr_jpeg_to_jxl(
     input: &Path,
     output: &Path,
@@ -475,7 +478,8 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 }
 
 /// # Errors
-/// Returns an error if the conversion fails due to invalid input or processing errors.
+/// Returns an error if the conversion fails due to invalid input or processing
+/// errors.
 pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     input: &Path,
     output: &Path,
@@ -739,7 +743,8 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
 }
 
 /// # Errors
-/// Returns an error if the HDR synthesis fails due to invalid parameters or processing errors.
+/// Returns an error if the HDR synthesis fails due to invalid parameters or
+/// processing errors.
 pub fn synthesize(
     sdr: &DynamicImage,
     gain: &DynamicImage,
@@ -1119,7 +1124,8 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 }
 
 /// # Errors
-/// Returns an error if the HEVC bitstream extraction fails due to invalid input or processing errors.
+/// Returns an error if the HEVC bitstream extraction fails due to invalid input
+/// or processing errors.
 pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf> {
     let raw_hevc = temp_dir.join("raw.hevc");
     let status = crate::FfmpegBuilder::new()
@@ -1141,7 +1147,8 @@ pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf> 
 }
 
 /// # Errors
-/// Returns an error if the DV RPU extraction fails due to invalid input or processing errors.
+/// Returns an error if the DV RPU extraction fails due to invalid input or
+/// processing errors.
 pub fn extract_dv_rpu(raw_hevc: &Path, temp_dir: &Path, dv_profile: Option<u8>) -> Result<PathBuf> {
     let rpu_path = temp_dir.join("rpu.bin");
     let output = crate::tool_builders::DoviBuilder::new()
@@ -1171,7 +1178,8 @@ pub fn extract_dv_rpu(raw_hevc: &Path, temp_dir: &Path, dv_profile: Option<u8>) 
 }
 
 /// # Errors
-/// Returns an error if the HDR10+ metadata extraction fails due to invalid input or processing errors.
+/// Returns an error if the HDR10+ metadata extraction fails due to invalid
+/// input or processing errors.
 pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<PathBuf> {
     let json_path = temp_dir.join("hdr10plus.json");
     let output = crate::tool_builders::Hdr10PlusBuilder::new()
@@ -1187,7 +1195,8 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
         if stderr_lower.contains("error:") && stderr_lower.contains("invalid") {
             crate::media_conversion_gate::hdr_intensity_target_audit(
                 "hdr10plus_extract_validation_fallback",
-                "hdr10plus_tool exact extract validation failed, trying fallback with --skip-validation",
+                "hdr10plus_tool exact extract validation failed, trying fallback with \
+                 --skip-validation",
             );
             let fb_output = crate::tool_builders::Hdr10PlusBuilder::new()
                 .mode("extract")
@@ -1382,8 +1391,9 @@ fn has_hdr10_like_signal(
 
 /// Returns true when HDR10-family x265 metadata may be safely emitted.
 ///
-/// This is intentionally stricter than generic HDR detection. HLG and BT.2020 SDR are excluded
-/// because x265's HDR10 signaling parameters are only valid for BT.2020 + PQ style output.
+/// This is intentionally stricter than generic HDR detection. HLG and BT.2020
+/// SDR are excluded because x265's HDR10 signaling parameters are only valid
+/// for BT.2020 + PQ style output.
 #[must_use]
 pub fn should_emit_x265_hdr10_metadata(
     color_space: Option<&str>,
@@ -1397,10 +1407,12 @@ pub fn should_emit_x265_hdr10_metadata(
         && has_x265_hdr10_triplet(color_space, color_transfer, color_primaries)
 }
 
-/// Returns true only for HDR10-like output that can benefit from x265's HDR10 optimization.
+/// Returns true only for HDR10-like output that can benefit from x265's HDR10
+/// optimization.
 ///
-/// This intentionally excludes HLG and BT.2020 SDR. The optimization is only appropriate when the
-/// encoded output is 10-bit 4:2:0 with BT.2020 primaries, a BT.2020 matrix, and PQ transfer.
+/// This intentionally excludes HLG and BT.2020 SDR. The optimization is only
+/// appropriate when the encoded output is 10-bit 4:2:0 with BT.2020 primaries,
+/// a BT.2020 matrix, and PQ transfer.
 #[must_use]
 pub fn should_enable_x265_hdr10_opt(
     color_space: Option<&str>,
@@ -1424,11 +1436,13 @@ pub fn should_enable_x265_hdr10_opt(
     ) && has_hdr10_sampling
 }
 
-/// Append HDR10-family x265 parameters when the source metadata is compatible with HDR10 signaling.
+/// Append HDR10-family x265 parameters when the source metadata is compatible
+/// with HDR10 signaling.
 ///
-/// `hdr10=1` is emitted explicitly so HDR10+ remains signaled even when static HDR10 metadata is
-/// absent. `master-display` / `max-cll` are intentionally suppressed for non-PQ paths because x265
-/// treats them as HDR10 signaling knobs, which can mislabel HLG or BT.2020 SDR output.
+/// `hdr10=1` is emitted explicitly so HDR10+ remains signaled even when static
+/// HDR10 metadata is absent. `master-display` / `max-cll` are intentionally
+/// suppressed for non-PQ paths because x265 treats them as HDR10 signaling
+/// knobs, which can mislabel HLG or BT.2020 SDR output.
 pub fn append_x265_hdr10_params(
     params: &mut String,
     color_space: Option<&str>,
@@ -1484,10 +1498,11 @@ pub fn append_x265_hdr10_params(
     }
 }
 
-/// Merge pre-built x265 params with probe-derived HDR10 metadata once per explore session.
+/// Merge pre-built x265 params with probe-derived HDR10 metadata once per
+/// explore session.
 ///
-/// Used at GPU explore init so per-encode `inject_hdr_metadata` does not treat an empty base as a
-/// fallback path.
+/// Used at GPU explore init so per-encode `inject_hdr_metadata` does not treat
+/// an empty base as a fallback path.
 #[must_use]
 pub fn merge_hevc_x265_params_from_probe(
     base: Option<&str>,
@@ -1544,7 +1559,8 @@ pub fn infer_bt709_if_modern(mut info: ColorInfo, width: u32, height: u32, ext: 
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "hdr_bt709_cicp_inference",
                 format!(
-                    "{ext} {width}x{height}: missing CICP tags; inferred {} for encode (not measured ICC)",
+                    "{ext} {width}x{height}: missing CICP tags; inferred {} for encode (not \
+                     measured ICC)",
                     inferred.join(", ")
                 ),
             );

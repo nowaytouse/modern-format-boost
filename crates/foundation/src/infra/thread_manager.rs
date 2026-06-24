@@ -4,7 +4,8 @@
 //! - Maximizes performance on Apple Silicon chips
 //! - Prevents system overload during multi-instance scenarios
 //! - Reduces parallelism when system memory is low (avoids OOM kills)
-//! - Allows environment-based configuration (`MFB_LOW_MEMORY`, `MFB_MULTI_INSTANCE`)
+//! - Allows environment-based configuration (`MFB_LOW_MEMORY`,
+//!   `MFB_MULTI_INSTANCE`)
 
 use crate::{RsyncBuilder, ToolBuilder};
 use std::sync::OnceLock;
@@ -280,7 +281,8 @@ pub fn get_optimal_threads() -> usize {
     get_balanced_thread_config(WorkloadType::Image).parallel_tasks
 }
 
-/// Optional hint for logging when parallelism was reduced due to memory (e.g. "low memory: reduced parallelism").
+/// Optional hint for logging when parallelism was reduced due to memory (e.g.
+/// "low memory: reduced parallelism").
 #[must_use]
 pub fn memory_cap_hint() -> Option<&'static str> {
     if let Some(hint) = crate::performance_schedule::stability_cap_hint() {

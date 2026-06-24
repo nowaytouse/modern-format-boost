@@ -20,7 +20,8 @@ pub fn require_tool_on_path(tool: &str, contract_label: &str) {
     );
 }
 
-/// Returns false when `exiftool` is missing; panics in CI instead of silent skip.
+/// Returns false when `exiftool` is missing; panics in CI instead of silent
+/// skip.
 ///
 /// # Panics
 /// Panics when `CI` is set and `exiftool` is not on `PATH`.
@@ -65,7 +66,8 @@ pub fn require_ffmpeg_toolchain_in_ci(contract_label: &str) {
 /// Panics in CI when `libx265` is not exposed by the installed `ffmpeg`.
 ///
 /// # Panics
-/// Panics when `CI` is set and `ffmpeg` cannot be executed, or when `libx265` is unavailable.
+/// Panics when `CI` is set and `ffmpeg` cannot be executed, or when `libx265`
+/// is unavailable.
 pub fn require_libx265_encoder_in_ci(contract_label: &str) {
     if !is_ci() {
         return;

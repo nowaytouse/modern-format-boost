@@ -1,11 +1,14 @@
 //! Runtime toggles for algorithm-layer behavior (env-gated semantic features).
 //!
-//! **Tightened defaults:** HNSW quorum ≥2; loop/quality/exploration unit probabilities always
-//! clamp/reject non-finite in [`crate::algorithm_seal`]; structural sealing default **on** (disable via
-//! `MODERN_FORMAT_DISABLE_*_ALGORITHM_SEAL`); Layer 6 KNN default **on** unless disabled; loop
-//! `feature_stats` fail-closed (fail-open opt-in only); loop `inference_log` + audit-only default **on**; exploration
-//! SSIM-presence/threshold/size-target + confidence gates default **on**; strict corpus maturity default **on**; quality DB
-//! lookup/fusion and HDBSCAN fusion default **on** (disable via `MODERN_FORMAT_DISABLE_*`).
+//! **Tightened defaults:** HNSW quorum ≥2; loop/quality/exploration unit
+//! probabilities always clamp/reject non-finite in [`crate::algorithm_seal`];
+//! structural sealing default **on** (disable via `MODERN_FORMAT_DISABLE_*
+//! _ALGORITHM_SEAL`); Layer 6 KNN default **on** unless disabled; loop
+//! `feature_stats` fail-closed (fail-open opt-in only); loop `inference_log` +
+//! audit-only default **on**; exploration SSIM-presence/threshold/size-target +
+//! confidence gates default **on**; strict corpus maturity default **on**;
+//! quality DB lookup/fusion and HDBSCAN fusion default **on** (disable via
+//! `MODERN_FORMAT_DISABLE_*`).
 
 #[cfg(not(test))]
 use std::sync::OnceLock;
@@ -100,7 +103,8 @@ fn strict_algorithm_corpus_enabled() -> bool {
     !env_truthy(crate::constants::ENV_DISABLE_STRICT_ALGORITHM_CORPUS)
 }
 
-/// Active loop KNN minimum total samples (base or strict floor, optional env raise-only override).
+/// Active loop KNN minimum total samples (base or strict floor, optional env
+/// raise-only override).
 #[must_use]
 pub(crate) fn min_gif_samples_total() -> i64 {
     let floor = if strict_algorithm_corpus_enabled() {
@@ -154,8 +158,9 @@ pub fn loop_corpus_is_mature(total: i64, quality_class: i64, video_class: i64) -
 
 /// Non-negative loop samples still needed for maturity messaging.
 ///
-/// Uses `max(total_gap, sum(per_class_gaps))` so over-filled totals still report class
-/// shortfalls (fixes db-health showing `Need 0 more` or aborting on bad conversions).
+/// Uses `max(total_gap, sum(per_class_gaps))` so over-filled totals still
+/// report class shortfalls (fixes db-health showing `Need 0 more` or aborting
+/// on bad conversions).
 #[must_use]
 pub fn loop_corpus_samples_shortfall(total: i64, quality_class: i64, video_class: i64) -> i64 {
     let needed_total = (min_gif_samples_total() - total).max(0);
@@ -248,7 +253,8 @@ pub fn evaluate_training_corpus_maturity(
     }
 }
 
-/// HDBSCAN cluster fusion into KNN keep probability (default on). Catalog must exist and resolve.
+/// HDBSCAN cluster fusion into KNN keep probability (default on). Catalog must
+/// exist and resolve.
 #[must_use]
 pub(crate) fn loop_hdbscan_fusion_enabled() -> bool {
     #[cfg(test)]
@@ -264,7 +270,8 @@ pub(crate) fn loop_hdbscan_fusion_enabled() -> bool {
     }
 }
 
-/// Minimum in-radius HNSW neighbors before emitting a loop keep posterior (default `2`).
+/// Minimum in-radius HNSW neighbors before emitting a loop keep posterior
+/// (default `2`).
 #[must_use]
 pub(crate) fn loop_hnsw_min_weighted_neighbors() -> usize {
     #[cfg(test)]
@@ -288,28 +295,32 @@ pub(crate) fn loop_hnsw_min_weighted_neighbors() -> usize {
     }
 }
 
-/// KNN-vs-model disagreement fusion (default on; [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] kills all).
+/// KNN-vs-model disagreement fusion (default on;
+/// [`ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD`] kills all).
 #[must_use]
 pub(crate) fn quality_knn_disagreement_guard_enabled(pipeline: &str) -> bool {
     let _ = pipeline;
     !env_truthy(crate::constants::ENV_DISABLE_QUALITY_KNN_DISAGREE_GUARD)
 }
 
-/// Corrupt loop `feature_stats` bootstrap via env (removed — always fail-closed).
+/// Corrupt loop `feature_stats` bootstrap via env (removed — always
+/// fail-closed).
 #[cfg(test)]
 #[must_use]
 pub(crate) const fn loop_feature_stats_fail_open_on_parse_error() -> bool {
     false
 }
 
-/// Inference log writes for static quality when the quality DB stack is fully disabled.
+/// Inference log writes for static quality when the quality DB stack is fully
+/// disabled.
 #[must_use]
 pub(crate) fn static_quality_inference_logging_enabled() -> bool {
     !env_disable_flag_is_set(crate::constants::ENV_DISABLE_DB_FEEDBACK)
         && !env_disable_flag_is_set(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
 }
 
-/// Immature/fallback heuristic paths may insert into quality `inference_log` tables (default on).
+/// Immature/fallback heuristic paths may insert into quality `inference_log`
+/// tables (default on).
 #[must_use]
 pub(crate) fn quality_inference_log_heuristic_fallbacks_enabled() -> bool {
     #[cfg(test)]
@@ -348,7 +359,8 @@ pub(crate) fn quality_db_fusion_enabled(pipeline: &str) -> bool {
     }
 }
 
-/// Runtime Postgres quality lookup (default on; fusion-on pipelines always allow lookup).
+/// Runtime Postgres quality lookup (default on; fusion-on pipelines always
+/// allow lookup).
 #[must_use]
 pub(crate) fn quality_db_lookup_enabled(pipeline: &str) -> bool {
     if !quality_db_stack_globally_enabled() {
@@ -369,13 +381,15 @@ pub(crate) fn quality_db_lookup_enabled(pipeline: &str) -> bool {
     }
 }
 
-/// `img` convert path: forensic quality log via static DB (no score fusion at convert time).
+/// `img` convert path: forensic quality log via static DB (no score fusion at
+/// convert time).
 #[must_use]
 pub fn static_quality_db_lookup_enabled() -> bool {
     quality_db_lookup_enabled("img_lossless_convert")
 }
 
-/// Exploration/matcher output sealing before CRF and quality gates (default on).
+/// Exploration/matcher output sealing before CRF and quality gates (default
+/// on).
 #[must_use]
 pub(crate) fn exploration_algorithm_seal_enabled() -> bool {
     #[cfg(test)]
@@ -397,13 +411,15 @@ pub(crate) fn loop_intent_layer6_knn_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN)
 }
 
-/// Strict exploration delivery (default on). Disable via [`crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION`].
+/// Strict exploration delivery (default on). Disable via
+/// [`crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION`].
 #[must_use]
 pub(crate) fn strict_media_conversion_delivery_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION)
 }
 
-/// Reject `quality_passed` exploration when overall confidence is missing or below floor (default on).
+/// Reject `quality_passed` exploration when overall confidence is missing or
+/// below floor (default on).
 #[must_use]
 pub(crate) fn exploration_confidence_gate_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_EXPLORATION_CONFIDENCE_GATE)
@@ -415,19 +431,22 @@ pub(crate) fn exploration_ssim_presence_gate_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_EXPLORATION_SSIM_PRESENCE_GATE)
 }
 
-/// `quality_passed` requires measured SSIM ≥ `ExploreResult.actual_min_ssim` (default on).
+/// `quality_passed` requires measured SSIM ≥ `ExploreResult.actual_min_ssim`
+/// (default on).
 #[must_use]
 pub(crate) fn exploration_ssim_threshold_gate_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_EXPLORATION_SSIM_THRESHOLD_GATE)
 }
 
-/// `quality_passed` cannot coexist with an explicit `size_target_met` failure (default on).
+/// `quality_passed` cannot coexist with an explicit `size_target_met` failure
+/// (default on).
 #[must_use]
 pub(crate) fn exploration_size_target_gate_enabled() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_EXPLORATION_SIZE_TARGET_GATE)
 }
 
-/// Persist loop `inference_log` rows (default on; requires DB feedback not globally disabled).
+/// Persist loop `inference_log` rows (default on; requires DB feedback not
+/// globally disabled).
 #[must_use]
 pub(crate) fn loop_inference_telemetry_enabled() -> bool {
     if env_truthy(crate::constants::ENV_DISABLE_DB_FEEDBACK) {
@@ -446,13 +465,15 @@ pub(crate) fn loop_inference_telemetry_enabled() -> bool {
     }
 }
 
-/// Audit-only quality inference rows (default on): `final_verdict` is [`crate::constants::INFERENCE_TELEMETRY_ONLY_VERDICT`].
+/// Audit-only quality inference rows (default on): `final_verdict` is
+/// [`crate::constants::INFERENCE_TELEMETRY_ONLY_VERDICT`].
 #[must_use]
 pub(crate) fn quality_inference_audit_only_mode() -> bool {
     algorithm_gate_enabled(crate::constants::ENV_DISABLE_QUALITY_INFERENCE_AUDIT_ONLY)
 }
 
-/// Audit-only `inference_log` rows (default on): `final_verdict` is [`crate::constants::LOOP_INFERENCE_TELEMETRY_ONLY_VERDICT`].
+/// Audit-only `inference_log` rows (default on): `final_verdict` is
+/// [`crate::constants::LOOP_INFERENCE_TELEMETRY_ONLY_VERDICT`].
 #[must_use]
 pub(crate) fn loop_inference_audit_only_mode() -> bool {
     if !loop_inference_telemetry_enabled() {
@@ -462,7 +483,8 @@ pub(crate) fn loop_inference_audit_only_mode() -> bool {
         || algorithm_gate_enabled(crate::constants::ENV_DISABLE_LOOP_INTENT_INFERENCE_AUDIT_ONLY)
 }
 
-/// [`crate::image_quality_db::QualityScore::sealed`] and related inference field mutation (default on).
+/// [`crate::image_quality_db::QualityScore::sealed`] and related inference
+/// field mutation (default on).
 #[must_use]
 pub(crate) fn quality_algorithm_seal_enabled() -> bool {
     #[cfg(test)]
@@ -494,7 +516,8 @@ pub(crate) fn loop_intent_algorithm_seal_enabled() -> bool {
     }
 }
 
-/// Scenario (animated/video) tables use the same feedback + heuristic-log gates as static.
+/// Scenario (animated/video) tables use the same feedback + heuristic-log gates
+/// as static.
 #[must_use]
 pub(crate) fn scenario_quality_inference_logging_enabled(
     branch_logs_heuristic_fallback: bool,

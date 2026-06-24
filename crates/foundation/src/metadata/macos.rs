@@ -1,7 +1,8 @@
 //! macOS native metadata preservation
 //!
 //! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
-//! Invariants: `CStrings` and pointers are valid for the duration of each call; paths come from Rust `Path`.
+//! Invariants: `CStrings` and pointers are valid for the duration of each call;
+//! paths come from Rust `Path`.
 
 use crate::builder_base::ToolBuilder;
 use std::ffi::CString;
@@ -29,7 +30,8 @@ pub(super) fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     }
     let src_c = CString::new(src.as_os_str().as_bytes())?;
     let dst_c = CString::new(dst.as_os_str().as_bytes())?;
-    // SAFETY: CStrings are valid until the end of the block; copyfile does not capture pointers.
+    // SAFETY: CStrings are valid until the end of the block; copyfile does not
+    // capture pointers.
     let ret = unsafe {
         copyfile(
             src_c.as_ptr(),
@@ -102,7 +104,8 @@ pub(super) fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
         forkattr: 0,
     };
     let mut buf = [0_u8; GETATTRLIST_TIME_BUFFER_BYTES];
-    // SAFETY: c_path and &mut attr_list / &mut buf are valid; getattrlist is synchronous and does not retain pointers.
+    // SAFETY: c_path and &mut attr_list / &mut buf are valid; getattrlist is
+    // synchronous and does not retain pointers.
     let ret = unsafe {
         getattrlist(
             c_path.as_ptr(),
@@ -288,7 +291,8 @@ fn parse_getattrlist_time_buffer(buf: &[u8], label: &str) -> io::Result<std::tim
         .map_err(|e| io::Error::other(format!("Invalid {label} buffer size: {e}")))?;
     if reported_len < min_len {
         return Err(io::Error::other(format!(
-            "Invalid {label}: getattrlist reported {reported_len} bytes, expected at least {min_len}"
+            "Invalid {label}: getattrlist reported {reported_len} bytes, expected at least \
+             {min_len}"
         )));
     }
     let sec_start = GETATTRLIST_LENGTH_BYTES;
@@ -357,7 +361,8 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
             .ok_or_else(|| io::Error::other("Timestamp overflows i64"))?,
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
-    // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.
+    // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and
+    // does not retain pointers.
     let ret = unsafe {
         setattrlist(
             c_path.as_ptr(),
@@ -375,15 +380,17 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 
 /// Appends MFB branding to the macOS Finder comment (kMDItemFinderComment).
 ///
-/// This uses `AppleScript` to ensure we interact properly with the Finder's database,
-/// as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment' require
-/// complex binary plist encoding and may not trigger Spotlight index updates correctly.
+/// This uses `AppleScript` to ensure we interact properly with the Finder's
+/// database, as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment'
+/// require complex binary plist encoding and may not trigger Spotlight index
+/// updates correctly.
 ///
 /// # Errors
 /// Returns an `io::Result` if `AppleScript` execution fails.
 pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
     // Branding is disabled by default to minimize metadata pollution.
-    // To enable, set the environment variable: MODERN_FORMAT_BOOST_ENABLE_BRANDING=1
+    // To enable, set the environment variable:
+    // MODERN_FORMAT_BOOST_ENABLE_BRANDING=1
     if std::env::var(crate::constants::ENV_ENABLE_BRANDING).as_deref() != Ok("1") {
         return Ok(());
     }
@@ -394,7 +401,8 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
     // AppleScript logic:
     // 1. Get existing comment.
     // 2. If it contains the branding, skip.
-    // 3. Otherwise, prepend branding followed by a newline (if original comment existed).
+    // 3. Otherwise, prepend branding followed by a newline (if original comment
+    //    existed).
     let script = format!(
         "tell application \"Finder\"
             set theFile to (POSIX file \"{path}\" as alias)

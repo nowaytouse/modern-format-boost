@@ -1,8 +1,10 @@
-//! Single CI entrypoint for weakness inventory + closure (avoids per-milestone test sprawl).
+//! Single CI entrypoint for weakness inventory + closure (avoids per-milestone
+//! test sprawl).
 //!
-//! **Zero-fabrication policy:** gate audit / constants / 备案 do **not** exempt numeric
-//! injection into measurement or decision fields. Missing values use `NaN` or JSON `null`, never
-//! `0.0` / `1.0` posing as measured. `media_conversion_gate.rs` is scanned (not blanket-skipped).
+//! **Zero-fabrication policy:** gate audit / constants / 备案 do **not** exempt
+//! numeric injection into measurement or decision fields. Missing values use
+//! `NaN` or JSON `null`, never `0.0` / `1.0` posing as measured.
+//! `media_conversion_gate.rs` is scanned (not blanket-skipped).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,7 +139,8 @@ fn production_scope(content: &str) -> &str {
     }
 }
 
-/// Mirrors `algorithm_audit::tests::MODULES` + gate (gate is not an exemption umbrella).
+/// Mirrors `algorithm_audit::tests::MODULES` + gate (gate is not an exemption
+/// umbrella).
 const ALGORITHM_AUDIT_INFERENCE_MODULES: &[&str] = &[
     "crates/foundation/src/algorithm_seal.rs",
     "crates/foundation/src/algorithm_runtime.rs",
@@ -188,7 +191,8 @@ const PROJECT_DELIVERY_MODULES: &[&str] = &[
     "crates/img/src/analyzer.rs",
 ];
 
-/// Production must not call legacy `*_or_zero` helpers that used to fabricate `0`/`0.0` (use `*_optional`).
+/// Production must not call legacy `*_or_zero` helpers that used to fabricate
+/// `0`/`0.0` (use `*_optional`).
 const PRODUCTION_FORBIDDEN_LEGACY_OR_ZERO: &[&str] = &[
     "probe_idet_count_or_zero(",
     "gpu_compression_potential_adjustment_or_zero(",
@@ -200,10 +204,12 @@ const PRODUCTION_FORBIDDEN_LEGACY_OR_ZERO: &[&str] = &[
     "delivery_batch_relative_depth_or_zero(",
 ];
 
-/// `runtime_elapsed_secs_or_zero` is allowed only in the Ctrl-C watcher (audited non-measurement 0s).
+/// `runtime_elapsed_secs_or_zero` is allowed only in the Ctrl-C watcher
+/// (audited non-measurement 0s).
 const CTRLC_ALLOWED_LEGACY_OR_ZERO: &str = "runtime_elapsed_secs_or_zero(";
 
-/// AGENTS CAT-B: audited delivery/inference modules must route observability through SSOT macros.
+/// AGENTS CAT-B: audited delivery/inference modules must route observability
+/// through SSOT macros.
 const CAT_B_LOG_MARKERS: &[&str] = &[
     "tracing::",
     "delivery_runtime_batch_audit(",
@@ -216,7 +222,8 @@ const CAT_B_LOG_MARKERS: &[&str] = &[
     "symbols::pick(",
 ];
 
-/// Pure feature vectors, env toggles, or thin re-exports (logging lives in `foundation`).
+/// Pure feature vectors, env toggles, or thin re-exports (logging lives in
+/// `foundation`).
 const CAT_B_LOG_EXEMPT: &[&str] = &[
     "crates/foundation/src/algorithm_runtime.rs",
     "crates/foundation/src/scenario.rs",
@@ -234,7 +241,8 @@ const CAT_B_LOG_EXEMPT: &[&str] = &[
     "crates/vid/src/ffprobe.rs",
 ];
 
-/// AGENTS CAT-D: physics/geometry-heavy modules may use primitive casts; decision modules may not.
+/// AGENTS CAT-D: physics/geometry-heavy modules may use primitive casts;
+/// decision modules may not.
 const CAT_D_CAST_EXEMPT: &[&str] = &[
     "crates/foundation/src/numeric_cast.rs",
     "crates/foundation/src/real_physics.rs",
@@ -386,7 +394,8 @@ fn gate_or_zero_call_offenders(gate_src: &str) -> Vec<String> {
             && !line.contains("let scaled = quality_embedding_optional_f64_or_zero")
         {
             hits.push(format!(
-                "media_conversion_gate.rs:{}: internal call to quality_embedding_optional_f64_or_zero (prefer explicit NaN path)",
+                "media_conversion_gate.rs:{}: internal call to \
+                 quality_embedding_optional_f64_or_zero (prefer explicit NaN path)",
                 line_no + 1
             ));
         }
@@ -461,7 +470,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let iqd_prod = production_scope(&iqd);
     if !iqd_prod.contains("quality_embed_measured_dimension_f32") {
         inventory.push(
-            "A0 image_quality_db must use quality_embed_measured_dimension_f32 for optional measurements"
+            "A0 image_quality_db must use quality_embed_measured_dimension_f32 for optional \
+             measurements"
                 .into(),
         );
     }
@@ -486,7 +496,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     }
     if animated_prod.contains("pub reference_entropy: f64,") {
         inventory.push(
-            "A0 reference_entropy must be Option<f64>, not bare f64 (prevents 0.0/NAN posing as absent)"
+            "A0 reference_entropy must be Option<f64>, not bare f64 (prevents 0.0/NAN posing as \
+             absent)"
                 .into(),
         );
     }
@@ -532,7 +543,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     for label in ["jxl_frame_count", "heif_frame_count"] {
         if image_prod.contains(label) && image_prod.contains(".or(Some(1))") {
             inventory.push(format!(
-                "A0 image_detection must not `.or(Some(1))` after {label} (fabricated frame default)"
+                "A0 image_detection must not `.or(Some(1))` after {label} (fabricated frame \
+                 default)"
             ));
         }
     }
@@ -557,7 +569,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     }
     if vid_prod.contains("!is_animated || native_frames.is_none_or") {
         inventory.push(
-            "A0 vid static safeguard must require !is_animated AND measured/low fc (no OR with absent fc)"
+            "A0 vid static safeguard must require !is_animated AND measured/low fc (no OR with \
+             absent fc)"
                 .into(),
         );
     }
@@ -591,19 +604,22 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let jxl_explorer_prod = production_scope(&jxl_explorer);
     if jxl_explorer_prod.contains(".unwrap_or((f32::NAN, 0))") {
         inventory.push(
-            "A0 jxl_explorer must not unwrap_or fake (NAN,0) telemetry (use optional + candidate fields)"
+            "A0 jxl_explorer must not unwrap_or fake (NAN,0) telemetry (use optional + candidate \
+             fields)"
                 .into(),
         );
     }
     if jxl_explorer_prod.contains("jxl_best_telemetry_or_zero(") {
         inventory.push(
-            "A0 jxl_explorer must not use jxl_best_telemetry_or_zero (u64::MAX poisons screening result)"
+            "A0 jxl_explorer must not use jxl_best_telemetry_or_zero (u64::MAX poisons screening \
+             result)"
                 .into(),
         );
     }
     if !image_analyzer_prod.contains("resolve_jxl_canvas_from_ffprobe") {
         inventory.push(
-            "A0 image_analyzer must ffprobe-fallback after jxlinfo parse failure (no dead-end None)"
+            "A0 image_analyzer must ffprobe-fallback after jxlinfo parse failure (no dead-end \
+             None)"
                 .into(),
         );
     }
@@ -616,7 +632,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let gate_or_zero = gate_or_zero_call_offenders(&gate_src);
     if !gate_or_zero.is_empty() {
         inventory.push(format!(
-            "A0 gate must not call quality_embedding_optional_f64_or_zero except the definition:\n  {}",
+            "A0 gate must not call quality_embedding_optional_f64_or_zero except the \
+             definition:\n  {}",
             gate_or_zero.join("\n  ")
         ));
     }
@@ -635,7 +652,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
         || gate_prod.contains("unwrap_or((0, 0))")
     {
         inventory.push(
-            "A0 gate legacy *_or_zero helpers must not fabricate (0,0) dimensions (panic or optional)"
+            "A0 gate legacy *_or_zero helpers must not fabricate (0,0) dimensions (panic or \
+             optional)"
                 .into(),
         );
     }
@@ -646,7 +664,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
         let body = body.split("\npub fn ").next().unwrap_or(body);
         if body.contains("None => 0") {
             inventory.push(
-                "A0 explore_progress_time_millis_or_zero must panic on overflow, not fabricate millis 0"
+                "A0 explore_progress_time_millis_or_zero must panic on overflow, not fabricate \
+                 millis 0"
                     .into(),
             );
         }
@@ -660,7 +679,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let db_prod = production_scope(&db_src);
     if db_prod.contains("fill_missing_percentiles_from_moments") {
         inventory.push(
-            "A0 database production must not define fill_missing_percentiles_from_moments (test-only)"
+            "A0 database production must not define fill_missing_percentiles_from_moments \
+             (test-only)"
                 .into(),
         );
     }
@@ -714,7 +734,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let db_prod = production_scope(&db_src);
     if !db_prod.contains("is_knn_bootstrap_heuristic") {
         inventory.push(
-            "A0 LoopReferenceProfile must expose is_knn_bootstrap_heuristic (cold-start vs corpus-built)"
+            "A0 LoopReferenceProfile must expose is_knn_bootstrap_heuristic (cold-start vs \
+             corpus-built)"
                 .into(),
         );
     }
@@ -722,12 +743,16 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
         db_src.contains("#[cfg(test)]\nimpl Default for LoopReferenceProfile");
     if db_prod.contains("is_knn_bootstrap_heuristic: true") && !knn_default_test_only {
         inventory.push(
-            "A0 production database.rs must not ship KNN bootstrap Default (is_knn_bootstrap_heuristic: true only in #[cfg(test)])".into(),
+            "A0 production database.rs must not ship KNN bootstrap Default \
+             (is_knn_bootstrap_heuristic: true only in #[cfg(test)])"
+                .into(),
         );
     }
     if !db_prod.contains("loop_reference_profile_corpus_shell") {
         inventory.push(
-            "A0 database must build corpus profiles via loop_reference_profile_corpus_shell (not Default)".into(),
+            "A0 database must build corpus profiles via loop_reference_profile_corpus_shell (not \
+             Default)"
+                .into(),
         );
     }
     if db_prod.contains("db_numeric_stats_triple_or_zero(") {
@@ -764,7 +789,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
         && quality_db_prod.contains("StaticQualityDbBranch::FallbackKnnOnly")
     {
         inventory.push(
-            "B06 image_quality_db production must not deliver StaticQualityDbBranch::FallbackKnnOnly scores"
+            "B06 image_quality_db production must not deliver \
+             StaticQualityDbBranch::FallbackKnnOnly scores"
                 .into(),
         );
     }
@@ -776,7 +802,8 @@ fn check_tier_a_and_zero_tolerance(root: &Path, inventory: &mut Vec<String>) {
     let scenario_quality_prod = production_scope(&scenario_quality_src);
     if scenario_quality_prod.contains("knn_only_prediction(&") {
         inventory.push(
-            "B06 scenario_quality_lookup production must not call knn_only_prediction for decision scores"
+            "B06 scenario_quality_lookup production must not call knn_only_prediction for \
+             decision scores"
                 .into(),
         );
     }
@@ -974,7 +1001,8 @@ fn check_cat_d_numeric_casts(root: &Path, inventory: &mut Vec<String>) {
     );
     if !float_hits.is_empty() {
         inventory.push(format!(
-            "CAT-D production must not use direct `as f64`/`as f32` (use numeric_cast) ({} hits):\n  {}",
+            "CAT-D production must not use direct `as f64`/`as f32` (use numeric_cast) ({} \
+             hits):\n  {}",
             float_hits.len(),
             float_hits.join("\n  ")
         ));
@@ -987,7 +1015,8 @@ fn check_cat_d_numeric_casts(root: &Path, inventory: &mut Vec<String>) {
     );
     if !int_hits.is_empty() {
         inventory.push(format!(
-            "CAT-D production must not use direct integer `as` casts outside numeric_cast ({} hits):\n  {}",
+            "CAT-D production must not use direct integer `as` casts outside numeric_cast ({} \
+             hits):\n  {}",
             int_hits.len(),
             int_hits.join("\n  ")
         ));
@@ -1095,7 +1124,8 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
     }
     if !qrm.contains("sanitize_stale_quality_measurement_embed_slots") {
         inventory.push(
-            "C5 quality_regression_model LightGBM payload must sanitize embed 17/18 before inference"
+            "C5 quality_regression_model LightGBM payload must sanitize embed 17/18 before \
+             inference"
                 .into(),
         );
     }
@@ -1115,7 +1145,8 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
             || !normalize_rs.contains("PGVECTOR_MISSING_MEASUREMENT")
         {
             inventory.push(
-                "C3 normalize_stale_embed_measurement_slots.rs must rewrite optional slots to pgvector-safe sentinel"
+                "C3 normalize_stale_embed_measurement_slots.rs must rewrite optional slots to \
+                 pgvector-safe sentinel"
                     .into(),
             );
         }
@@ -1182,7 +1213,8 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
     }
     if !check_all.contains("normalize_stale_embed_measurement_slots.rs") {
         inventory.push(
-            "C4 check_all --ci must reference normalize_stale_embed_measurement_slots.rs (DB backfill SSOT)"
+            "C4 check_all --ci must reference normalize_stale_embed_measurement_slots.rs (DB \
+             backfill SSOT)"
                 .into(),
         );
     }

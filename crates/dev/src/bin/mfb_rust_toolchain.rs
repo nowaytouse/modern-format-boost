@@ -2,9 +2,9 @@
 //!
 //! Port of `crates/dev/scripts/mfb_rust_toolchain.py`.
 //!
-//! Locates the active rustup toolchain, resolves cargo/clippy/rustfmt paths, and
-//! prints toolchain info. Prepends the toolchain bin-dir when rustup shims are
-//! broken (Homebrew macOS issue documented in `repair_rustup_shims.rs`).
+//! Locates the active rustup toolchain, resolves cargo/clippy/rustfmt paths,
+//! and prints toolchain info. Prepends the toolchain bin-dir when rustup shims
+//! are broken (Homebrew macOS issue documented in `repair_rustup_shims.rs`).
 //!
 //! Usage:
 //!   cargo run --locked -p dev --bin mfb_rust_toolchain

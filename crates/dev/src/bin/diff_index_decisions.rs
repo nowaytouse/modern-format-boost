@@ -2,8 +2,9 @@
 
 //! Decision Diff Tool - Media Index System
 //!
-//! Compares two decision snapshots or compares a snapshot against live production audit data
-//! to detect "Decision Drift" during development or production runs.
+//! Compares two decision snapshots or compares a snapshot against live
+//! production audit data to detect "Decision Drift" during development or
+//! production runs.
 
 use foundation::{
     log_anomaly, log_corruption, log_debug, log_detail, log_failure, log_fatal, log_hint,
@@ -20,7 +21,8 @@ use std::path::PathBuf;
 #[command(
     author,
     version,
-    about = "Compares Media Index decision snapshots for version-to-version or mock-to-live diffing."
+    about = "Compares Media Index decision snapshots for version-to-version or mock-to-live \
+             diffing."
 )]
 struct Args {
     /// Path to the `media_index.sqlite`
@@ -31,11 +33,13 @@ struct Args {
     #[arg(name = "LEFT_TAG")]
     left: String,
 
-    /// Target tag to compare against. If omitted, and --live is set, compares against live audit.
+    /// Target tag to compare against. If omitted, and --live is set, compares
+    /// against live audit.
     #[arg(name = "RIGHT_TAG")]
     right: Option<String>,
 
-    /// Compare the `LEFT_TAG` against the `live_audit` table instead of another snapshot
+    /// Compare the `LEFT_TAG` against the `live_audit` table instead of another
+    /// snapshot
     #[arg(long)]
     live: bool,
 }
@@ -136,8 +140,9 @@ fn main() -> Result<()> {
 
 fn load_snapshot(index: &MediaIndex, tag: &str) -> Result<HashMap<String, Decision>> {
     let mut stmt = index.conn_prepare(
-"SELECT blake3, decided_format, decision_reason, decided_params_json FROM decision_snapshots WHERE version_tag = ?1"
-)?;
+        "SELECT blake3, decided_format, decision_reason, decided_params_json FROM \
+         decision_snapshots WHERE version_tag = ?1",
+    )?;
     let mut map = HashMap::new();
     let iter = stmt.query_map([tag], |row| {
         Ok((

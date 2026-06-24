@@ -3,7 +3,8 @@
 //! Provides:
 //! - Output file health (exists, non-empty, minimal size, readable)
 //! - Optional input vs output sanity (duration match, video codec present)
-//! - Integration with [`crate::checkpoint::verify_output_integrity`] and [`crate::ffprobe`].
+//! - Integration with [`crate::checkpoint::verify_output_integrity`] and
+//!   [`crate::ffprobe`].
 
 use crate::checkpoint::verify_output_integrity;
 use crate::ffprobe;
@@ -16,9 +17,11 @@ use std::path::Path;
 #[must_use]
 pub struct VerifyOptions {
     pub min_file_size: u64,
-    /// If true, require input and output duration to match within the configured slack.
+    /// If true, require input and output duration to match within the
+    /// configured slack.
     pub require_duration_match: bool,
-    /// Duration slack in seconds (input vs output). Used when [`Self::require_duration_match`] is true.
+    /// Duration slack in seconds (input vs output). Used when
+    /// [`Self::require_duration_match`] is true.
     pub duration_slack_secs: f64,
     /// If true, require output to have a video stream (ffprobe).
     pub require_video_stream: bool,
@@ -34,13 +37,14 @@ impl VerifyOptions {
         }
     }
 
-    /// Relaxed verification for animated images (GIF, WebP, AVIF) with variable frame delays.
-    /// Uses a larger duration slack to accommodate frame timing variations during conversion.
+    /// Relaxed verification for animated images (GIF, WebP, AVIF) with variable
+    /// frame delays. Uses a larger duration slack to accommodate frame
+    /// timing variations during conversion.
     pub const fn relaxed_animated_image() -> Self {
         Self {
             min_file_size: crate::constants::DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
-            duration_slack_secs: crate::constants::VERIFY_DURATION_TOLERANCE_RELAXED_ANIMATED, // More tolerant for GIF variable frame delays
+            duration_slack_secs: crate::constants::VERIFY_DURATION_TOLERANCE_RELAXED_ANIMATED, /* More tolerant for GIF variable frame delays */
             require_video_stream: true,
         }
     }
@@ -110,7 +114,8 @@ impl EnhancedVerifyResult {
 /// Does not require ffprobe.
 ///
 /// # Errors
-/// Returns an error if the output file is missing, empty, too small, or unreadable.
+/// Returns an error if the output file is missing, empty, too small, or
+/// unreadable.
 pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
     let size = if min_size == 0 {
         crate::constants::DEFAULT_MIN_FILE_SIZE
@@ -120,7 +125,8 @@ pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
     verify_output_integrity(output, size)
 }
 
-/// Run full enhanced verification: file health + optional duration/codec checks.
+/// Run full enhanced verification: file health + optional duration/codec
+/// checks.
 pub fn verify_after_encode(
     input: &Path,
     output: &Path,
@@ -241,7 +247,8 @@ fn run_probe_checks(
                             "duration check unverifiable: both probes lack duration; passing in absence of data"
                         );
                         details.push(
-                            "Duration unverifiable: both probes lack duration (passed in absence of data)"
+                            "Duration unverifiable: both probes lack duration (passed in absence \
+                             of data)"
                                 .to_string(),
                         );
                         (None, true)
@@ -259,7 +266,8 @@ fn run_probe_checks(
                                 None => (i - o).abs(),
                             };
                             format!(
-                                "Duration mismatch: {i:.2}s vs {o:.2}s (diff {d:.2}s > allowed drift {tol:.2}s)"
+                                "Duration mismatch: {i:.2}s vs {o:.2}s (diff {d:.2}s > allowed \
+                                 drift {tol:.2}s)"
                             )
                         }
                         (None, Some(o)) => {
@@ -419,7 +427,9 @@ mod tests {
         assert!(!r3.passed());
     }
 
-    /// Regression: use only temp copies (no original folder). When input/output are not valid video, probe fails and `enhanced_verify_fail_reason` is set.
+    /// Regression: use only temp copies (no original folder). When input/output
+    /// are not valid video, probe fails and `enhanced_verify_fail_reason` is
+    /// set.
     #[test]
     fn test_verify_after_encode_with_temp_copies_probe_fails() -> anyhow::Result<()> {
         let dir = std::env::temp_dir();

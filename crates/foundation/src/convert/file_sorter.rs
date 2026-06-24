@@ -26,7 +26,9 @@ impl FileInfo {
                     "delivery_runtime",
                     &path,
                     format!(
-                        "SORT AUDIT: Failed to read metadata for '{}' | Forensic: Error '{}'; preserving file in list with missing size to prevent data loss during processing sweep",
+                        "SORT AUDIT: Failed to read metadata for '{}' | Forensic: Error '{}'; \
+                         preserving file in list with missing size to prevent data loss during \
+                         processing sweep",
                         path.display(),
                         e
                     ),

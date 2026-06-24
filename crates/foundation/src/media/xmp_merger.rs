@@ -103,7 +103,8 @@ pub struct XmpMerger {
     config: Config,
 }
 
-/// CONTRACT: JXL + `Apple` compat uses nuclear `-all=` before streaming XMP (Brotli-safe path).
+/// CONTRACT: JXL + `Apple` compat uses nuclear `-all=` before streaming XMP
+/// (Brotli-safe path).
 #[must_use]
 fn should_jxl_xmp_apple_nuclear_strip(media_path: &Path, apple_compat: bool) -> bool {
     apple_compat
@@ -719,7 +720,9 @@ impl XmpMerger {
     ///
     /// # Errors
     /// Returns an error if searching fails.
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     pub fn find_media_file(&self, xmp_path: &Path) -> Result<(Option<PathBuf>, String)> {
         if matches!(self.config.log_level, LogLevel::Verbose) {
             crate::log_info!(
@@ -920,7 +923,8 @@ impl XmpMerger {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let is_minor_warning = stderr.contains("[minor]");
-            // Harden error detection: check for both explicit "Error:" and implied file errors
+            // Harden error detection: check for both explicit "Error:" and implied file
+            // errors
             let is_real_error = (stderr.contains("Error:")
                 || stderr.contains("Error opening")
                 || stderr.contains("File not found")
@@ -980,7 +984,8 @@ impl XmpMerger {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_XMP,
             &format!(
-                "Merge failed, attempting fallback: Temporary rename to .{original_ext} for merge..."
+                "Merge failed, attempting fallback: Temporary rename to .{original_ext} for \
+                 merge..."
             )
         );
 

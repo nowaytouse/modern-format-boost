@@ -1,4 +1,5 @@
-//! Training ingest / tier-probe entry guards (delegates to [`crate::entry_guard`]).
+//! Training ingest / tier-probe entry guards (delegates to
+//! [`crate::entry_guard`]).
 
 use crate::entry_guard::{
     self, CliEntryGuard, INVOKER_DIRECT, INVOKER_INTERNAL_REEXEC, INVOKER_RUN_TRAINING,
@@ -22,8 +23,8 @@ fn assert_tier_probe_invoker(api_name: &'static str) -> Result<()> {
     }
     if invoker.is_empty() {
         anyhow::bail!(
-            "refusing {api_name} without MFB_INVOKER or \
-             MFB_TRAINING_INVOKER (allowed: {}). Use: python3 crates/dev/scripts/run_training.py",
+            "refusing {api_name} without MFB_INVOKER or MFB_TRAINING_INVOKER (allowed: {}). Use: \
+             python3 crates/dev/scripts/run_training.py",
             INGEST_INVOKERS.join(", ")
         );
     }
@@ -37,7 +38,8 @@ fn assert_tier_probe_invoker(api_name: &'static str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`] fail.
+/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`]
+/// fail.
 pub fn assert_train_quality_entry() -> Result<()> {
     CliEntryGuard {
         expected_bin: "train_quality",
@@ -52,7 +54,8 @@ pub fn assert_train_quality_entry() -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`] fail.
+/// Returns an error when the entry guard checks in [`CliEntryGuard::assert`]
+/// fail.
 pub fn assert_train_knn_entry() -> Result<()> {
     CliEntryGuard {
         expected_bin: "train_knn",
@@ -73,8 +76,8 @@ pub fn assert_train_knn_entry() -> Result<()> {
 pub fn assert_tier_probe_c_api_entry(api_name: &'static str) -> Result<()> {
     if entry_guard::shell_wrapper_in_ancestry(6).is_some() {
         anyhow::bail!(
-            "refusing {api_name} via shell-wrapped process; invoke only from \
-             python3 crates/dev/scripts/run_training.py"
+            "refusing {api_name} via shell-wrapped process; invoke only from python3 \
+             crates/dev/scripts/run_training.py"
         );
     }
     assert_tier_probe_invoker(api_name)

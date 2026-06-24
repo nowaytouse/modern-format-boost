@@ -1,4 +1,5 @@
-//! `infra` — grouped implementation modules (crate root re-exports via `lib.rs`).
+//! `infra` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
 
 #[macro_use]
 pub mod static_logs;

@@ -1,6 +1,7 @@
 //! Unified Progress Bar System
 //!
-//! Provides a consistent experience for both batch processing and video exploration.
+//! Provides a consistent experience for both batch processing and video
+//! exploration.
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::Arc;
@@ -9,8 +10,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub mod templates {
     use crate::modern_ui::progress_style;
 
-    pub const BATCH: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {pos}/{len} * {elapsed_precise} * {msg}";
-    pub const EXPLORE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {elapsed_precise} * {msg}";
+    pub const BATCH: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] \
+                             {percent:>3}% * {pos}/{len} * {elapsed_precise} * {msg}";
+    pub const EXPLORE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] \
+                               {percent:>3}% * {elapsed_precise} * {msg}";
     pub const PROGRESS_CHARS: &str = progress_style::PROGRESS_CHARS;
     pub const SPINNER_CHARS: &str = progress_style::SPINNER_CHARS;
 }
@@ -84,9 +87,11 @@ impl Bar {
     pub fn inc(&self) {
         self.bar.inc(1);
     }
+
     pub fn set_position(&self, pos: u64) {
         self.bar.set_position(pos);
     }
+
     pub fn set_message(&self, msg: impl Into<String>) {
         let msg_str = msg.into();
         let term_width = crate::progress::terminal_columns();
@@ -96,6 +101,7 @@ impl Bar {
         let truncated = console::truncate_str(&msg_str, max_msg_len, "…").to_string();
         self.bar.set_message(truncated);
     }
+
     pub fn println(&self, msg: &str) {
         crate::progress_mode::emit_stderr(msg);
     }

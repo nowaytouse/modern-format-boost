@@ -1,6 +1,7 @@
 //! Resolve rustup toolchain `bin/` for broken `~/.cargo/bin` shims.
 //!
-//! Port of `crates/dev/scripts/ci/mfb_cargo_env.py` (Python retained as compat reference).
+//! Port of `crates/dev/scripts/ci/mfb_cargo_env.py` (Python retained as compat
+//! reference).
 
 use crate::infra::hardening::optional_env;
 use std::ffi::OsString;

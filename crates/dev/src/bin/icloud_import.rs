@@ -3,8 +3,9 @@
 //! Imports processed media into Apple Photos / iCloud via `osxphotos`.
 //!
 //! Two import modes:
-//!   Mode 1 (Optimized): ✨ emoji prefix + organised album structure (✨/{folder})
-//!   Mode 2 (Simple):    plain import organised by folder name, no emoji rename
+//!   Mode 1 (Optimized): ✨ emoji prefix + organised album structure
+//! (✨/{folder})   Mode 2 (Simple):    plain import organised by folder name,
+//! no emoji rename
 //!
 //! Behaviour parity:
 //!   - Process-lock (flock) prevents concurrent imports
@@ -99,7 +100,8 @@ fn release_import_lock(file: fs::File) {
     drop(file);
 }
 
-// ── osxphotos discovery ───────────────────────────────────────────────────────
+// ── osxphotos discovery
+// ───────────────────────────────────────────────────────
 
 const OSXPHOTOS_SEARCH_PATHS: &[&str] =
     &["/opt/homebrew/bin/osxphotos", "/usr/local/bin/osxphotos"];
@@ -137,7 +139,8 @@ fn find_osxphotos() -> Option<String> {
     })
 }
 
-// ── folder name helpers ───────────────────────────────────────────────────────
+// ── folder name helpers
+// ───────────────────────────────────────────────────────
 
 fn get_album_name(target: &Path) -> Result<String> {
     let name = target
@@ -167,7 +170,8 @@ fn simple_album_template(target: &Path) -> Result<String> {
     get_album_name(target)
 }
 
-// ── folder rename (Mode 1 only) ───────────────────────────────────────────────
+// ── folder rename (Mode 1 only)
+// ───────────────────────────────────────────────
 
 fn rename_with_emoji(target: &Path) -> Result<PathBuf> {
     let name = target
@@ -205,7 +209,8 @@ fn rename_with_emoji(target: &Path) -> Result<PathBuf> {
     }
 }
 
-// ── osxphotos subprocess runner ───────────────────────────────────────────────
+// ── osxphotos subprocess runner
+// ───────────────────────────────────────────────
 
 fn run_osxphotos(cmd_args: &[String]) -> Result<bool> {
     let mut child = Command::new(&cmd_args[0])
@@ -226,7 +231,8 @@ fn run_osxphotos(cmd_args: &[String]) -> Result<bool> {
     Ok(status.success())
 }
 
-// ── confirm helper ────────────────────────────────────────────────────────────
+// ── confirm helper
+// ────────────────────────────────────────────────────────────
 
 fn confirm(prompt: &str, yes: bool) -> bool {
     if yes {
@@ -239,7 +245,8 @@ fn confirm(prompt: &str, yes: bool) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-// ── Mode 1: optimized import ──────────────────────────────────────────────────
+// ── Mode 1: optimized import
+// ──────────────────────────────────────────────────
 
 fn run_optimized_import(target: &Path, osxphotos: &str, yes: bool) -> Result<bool> {
     println!(
@@ -304,7 +311,8 @@ fn run_optimized_import(target: &Path, osxphotos: &str, yes: bool) -> Result<boo
     Ok(ok)
 }
 
-// ── Mode 2: simple import ─────────────────────────────────────────────────────
+// ── Mode 2: simple import
+// ─────────────────────────────────────────────────────
 
 fn run_simple_import(target: &Path, osxphotos: &str, yes: bool) -> Result<bool> {
     println!(
@@ -361,7 +369,8 @@ fn run_simple_import(target: &Path, osxphotos: &str, yes: bool) -> Result<bool> 
     Ok(ok)
 }
 
-// ── interactive mode selection ────────────────────────────────────────────────
+// ── interactive mode selection
+// ────────────────────────────────────────────────
 
 fn select_import_mode() -> ImportMode {
     loop {
@@ -371,13 +380,15 @@ fn select_import_mode() -> ImportMode {
         );
         println!("{}", "─".repeat(50));
         println!(
-            "  1 - Optimized Import (Default)\n     • Auto-rename folder with {} emoji\n     • Organize into {}/{{folder_name}} albums\n     • Best for processed/final media",
+            "  1 - Optimized Import (Default)\n     • Auto-rename folder with {} emoji\n     • \
+             Organize into {}/{{folder_name}} albums\n     • Best for processed/final media",
             pick_symbol("✨", "[*]"),
             pick_symbol("✨", "[*]")
         );
         println!();
         println!(
-            "  2 - Simple Import\n     • Basic album organization by folder name\n     • No {} renaming",
+            "  2 - Simple Import\n     • Basic album organization by folder name\n     • No {} \
+             renaming",
             pick_symbol("✨", "[*]")
         );
         println!("{}", "─".repeat(50));
@@ -409,17 +420,15 @@ fn main() -> Result<()> {
     // 1. Check osxphotos
     let osxphotos = find_osxphotos().ok_or_else(|| {
         anyhow::anyhow!(
-            "'osxphotos' not found in PATH or common locations.\n\
-             Tried: ~/.local/bin, /opt/homebrew/bin, /usr/local/bin\n\
-             Install with: pip install osxphotos"
+            "'osxphotos' not found in PATH or common locations.\nTried: ~/.local/bin, \
+             /opt/homebrew/bin, /usr/local/bin\nInstall with: pip install osxphotos"
         )
     })?;
 
     // 2. Acquire process lock
     let lock = acquire_import_lock().ok_or_else(|| {
         anyhow::anyhow!(
-            "Another import operation is already in progress.\n\
-             If this is an error, delete: {}",
+            "Another import operation is already in progress.\nIf this is an error, delete: {}",
             lock_path().display()
         )
     })?;

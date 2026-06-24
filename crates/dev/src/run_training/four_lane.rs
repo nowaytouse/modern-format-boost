@@ -10,7 +10,8 @@ use std::process::Command;
 
 const TRAINING_LOG_LANES: &[&str] = &["static_high", "static_low", "loop_high", "loop_low"];
 
-/// Hardcoded caps matching Python `FOUR_LANE_STATIC_QUALITY_DB_CAP=1450`, `FOUR_LANE_LOOP_INTENT_DB_CAP=450`
+/// Hardcoded caps matching Python `FOUR_LANE_STATIC_QUALITY_DB_CAP=1450`,
+/// `FOUR_LANE_LOOP_INTENT_DB_CAP=450`
 const FOUR_LANE_SPECS: &[(&str, &[&str])] = &[
     (
         "static_high",
@@ -184,7 +185,8 @@ fn training_lane_pid_is_active(lane_dir: &Path) -> bool {
 fn ensure_reset_db_before_training(reset_db: bool, dry_run: bool) -> Result<()> {
     if !reset_db && !dry_run {
         bail!(
-            "  [ERROR] --reset-db is required before four-lane training; refusing to start with potentially polluted cross-run DB state"
+            "  [ERROR] --reset-db is required before four-lane training; refusing to start with \
+             potentially polluted cross-run DB state"
         );
     }
     Ok(())
@@ -272,7 +274,8 @@ fn ensure_db_training_closure_before_training() -> Result<()> {
         let text = fs::read_to_string(&path).unwrap_or_default();
         if !text.contains(marker) {
             bail!(
-                "  [ERROR] DB/train closure gate is not closed; refusing to start four-lane training. {filename} missing marker {marker}"
+                "  [ERROR] DB/train closure gate is not closed; refusing to start four-lane \
+                 training. {filename} missing marker {marker}"
             );
         }
     }

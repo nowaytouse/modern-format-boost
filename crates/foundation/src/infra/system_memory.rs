@@ -1,7 +1,8 @@
 //! System memory detection for intelligent concurrency control.
 //!
 //! Used by `thread_manager` to reduce `parallel_tasks` and `child_threads` when
-//! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder processes).
+//! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder
+//! processes).
 
 use crate::builder_base::ToolBuilder;
 
@@ -51,7 +52,8 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
     }
     let ratio =
         crate::numeric_cast::u64_to_f64(available_mb) / crate::numeric_cast::u64_to_f64(total_mb);
-    // More conservative thresholds to prevent OOM during cjxl/ImageMagick operations
+    // More conservative thresholds to prevent OOM during cjxl/ImageMagick
+    // operations
     let level = if ratio >= crate::constants::MEMORY_PRESSURE_LOW_RATIO
         && available_mb >= crate::constants::MEMORY_PRESSURE_LOW_MIN_MB
     {
@@ -99,7 +101,8 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
                     crate::media_conversion_gate::delivery_runtime_batch_audit(
                         "delivery_system",
                         format!(
-                            "SYSTEM AUDIT: Failed to parse macOS total memory from sysctl | Forensic: Error '{err}'"
+                            "SYSTEM AUDIT: Failed to parse macOS total memory from sysctl | \
+                             Forensic: Error '{err}'"
                         ),
                     );
                     None
@@ -109,7 +112,8 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
                     "delivery_system",
                     format!(
-                        "SYSTEM AUDIT: sysctl returned non-UTF-8 total memory output | Forensic: Error '{err}'"
+                        "SYSTEM AUDIT: sysctl returned non-UTF-8 total memory output | Forensic: \
+                         Error '{err}'"
                     ),
                 );
                 None
@@ -120,7 +124,8 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "delivery_progress",
                 format!(
-                    "SYSTEM AUDIT: sysctl hw.memsize returned non-zero status | Forensic: Stderr '{}'",
+                    "SYSTEM AUDIT: sysctl hw.memsize returned non-zero status | Forensic: Stderr \
+                     '{}'",
                     stderr.trim()
                 ),
             );
@@ -146,7 +151,9 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
                 } else {
                     crate::media_conversion_gate::delivery_runtime_batch_audit(
                         "delivery_system",
-                        "SYSTEM AUDIT: Failed to parse macOS available memory from vm_stat | Forensic: Output structure unrecognized; memory-based optimizations will be disabled",
+                        "SYSTEM AUDIT: Failed to parse macOS available memory from vm_stat | \
+                         Forensic: Output structure unrecognized; memory-based optimizations will \
+                         be disabled",
                     );
                     None
                 }
@@ -235,7 +242,8 @@ fn parse_vm_stat_value(line: &str) -> Option<u64> {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "delivery_system",
                 format!(
-                    "SYSTEM AUDIT: Failed to parse vm_stat value | Forensic: Input '{val_str}', Error '{e}'"
+                    "SYSTEM AUDIT: Failed to parse vm_stat value | Forensic: Input '{val_str}', \
+                     Error '{e}'"
                 ),
             );
             None
@@ -261,16 +269,17 @@ fn get_memory_linux() -> (Option<u64>, Option<u64>) {
             mem_available = line
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| {
-                    match s.parse::<u64>() {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_system",
-                format!("SYSTEM AUDIT: Failed to parse MemAvailable from /proc/meminfo | Forensic: Input '{s}', Error '{e}'"),
-            );
-                            None
-                        }
+                .and_then(|s| match s.parse::<u64>() {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        crate::media_conversion_gate::delivery_runtime_batch_audit(
+                            "delivery_system",
+                            format!(
+                                "SYSTEM AUDIT: Failed to parse MemAvailable from /proc/meminfo | \
+                                 Forensic: Input '{s}', Error '{e}'"
+                            ),
+                        );
+                        None
                     }
                 })
                 .map(|kb| kb / 1024);
@@ -278,16 +287,17 @@ fn get_memory_linux() -> (Option<u64>, Option<u64>) {
             mem_total = line
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| {
-                    match s.parse::<u64>() {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_system",
-                format!("SYSTEM AUDIT: Failed to parse MemTotal from /proc/meminfo | Forensic: Input '{s}', Error '{e}'"),
-            );
-                            None
-                        }
+                .and_then(|s| match s.parse::<u64>() {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        crate::media_conversion_gate::delivery_runtime_batch_audit(
+                            "delivery_system",
+                            format!(
+                                "SYSTEM AUDIT: Failed to parse MemTotal from /proc/meminfo | \
+                                 Forensic: Input '{s}', Error '{e}'"
+                            ),
+                        );
+                        None
                     }
                 })
                 .map(|kb| kb / 1024);
@@ -297,7 +307,8 @@ fn get_memory_linux() -> (Option<u64>, Option<u64>) {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_system",
             format!(
-                "SYSTEM AUDIT: Missing expected memory fields in /proc/meminfo | Forensic: has_mem_available={}, has_mem_total={}",
+                "SYSTEM AUDIT: Missing expected memory fields in /proc/meminfo | Forensic: \
+                 has_mem_available={}, has_mem_total={}",
                 mem_available.is_some(),
                 mem_total.is_some()
             ),
@@ -306,13 +317,15 @@ fn get_memory_linux() -> (Option<u64>, Option<u64>) {
     if mem_available.is_none() {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_system",
-            "SYSTEM AUDIT: 'MemAvailable' missing from /proc/meminfo | Forensic: memory-based optimizations will be disabled",
+            "SYSTEM AUDIT: 'MemAvailable' missing from /proc/meminfo | Forensic: memory-based \
+             optimizations will be disabled",
         );
     }
     if mem_total.is_none() {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_system",
-            "SYSTEM AUDIT: 'MemTotal' missing from /proc/meminfo | Forensic: memory statistics unavailable",
+            "SYSTEM AUDIT: 'MemTotal' missing from /proc/meminfo | Forensic: memory statistics \
+             unavailable",
         );
     }
     let available = mem_available;
@@ -320,10 +333,12 @@ fn get_memory_linux() -> (Option<u64>, Option<u64>) {
     (available, total)
 }
 
-/// Returns available bytes on the filesystem containing `path`. None if detection fails.
+/// Returns available bytes on the filesystem containing `path`. None if
+/// detection fails.
 #[must_use]
 pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
-    // Resolve to an existing ancestor (the path itself may not exist yet, e.g. output dir).
+    // Resolve to an existing ancestor (the path itself may not exist yet, e.g.
+    // output dir).
     let existing = {
         let mut p = path;
         loop {
@@ -337,7 +352,8 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
                     "delivery_system",
                     path,
                     format!(
-                        "SYSTEM AUDIT: No existing ancestor found for disk-space probe | Forensic: Path '{}'",
+                        "SYSTEM AUDIT: No existing ancestor found for disk-space probe | \
+                         Forensic: Path '{}'",
                         path.display()
                     ),
                 );
@@ -355,7 +371,8 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
                     "delivery_system",
                     format!(
-                        "SYSTEM AUDIT: Failed to prepare path for statvfs | Forensic: Path '{}', Error '{}'",
+                        "SYSTEM AUDIT: Failed to prepare path for statvfs | Forensic: Path '{}', \
+                         Error '{}'",
                         existing.display(),
                         err
                     ),
@@ -366,7 +383,8 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) };
         if ret == 0 {
-            // f_bavail / f_frsize field widths differ by OS; widen via u128 before narrowing to u64.
+            // f_bavail / f_frsize field widths differ by OS; widen via u128 before
+            // narrowing to u64.
             let blocks = u128::from(stat.f_bavail);
             let frsize = u128::from(stat.f_frsize);
             let avail_u128 = blocks.saturating_mul(frsize);
@@ -377,7 +395,8 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_system",
             format!(
-                "SYSTEM AUDIT: statvfs failed during disk-space probe | Forensic: Path '{}', Errno '{}'",
+                "SYSTEM AUDIT: statvfs failed during disk-space probe | Forensic: Path '{}', \
+                 Errno '{}'",
                 existing.display(),
                 std::io::Error::last_os_error()
             ),

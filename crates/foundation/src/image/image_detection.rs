@@ -1,7 +1,8 @@
 //! Detection API Module
 //!
-//! Pure analysis layer - detects image properties without trusting file extensions.
-//! Uses magic bytes and actual file content for accurate format detection.
+//! Pure analysis layer - detects image properties without trusting file
+//! extensions. Uses magic bytes and actual file content for accurate format
+//! detection.
 //!
 //! Enhanced PNG Quantization Detection
 //!
@@ -10,39 +11,58 @@
 //!
 //! 1. **Structural Analysis**: IHDR color type, bit depth, PLTE/tRNS chunks
 //! 2. **Metadata Analysis**: tEXt/iTXt chunks for tool signatures
-//! 3. **Statistical Analysis**: Color distribution, gradient smoothness, dithering patterns
-//! 4. **Heuristic Analysis**: File size vs dimensions ratio, compression efficiency
+//! 3. **Statistical Analysis**: Color distribution, gradient smoothness,
+//!    dithering patterns
+//! 4. **Heuristic Analysis**: File size vs dimensions ratio, compression
+//!    efficiency
 //!
 //! Each factor contributes a weighted score, and the final decision is based on
 //! the aggregate score with confidence level.
 //!
 //! ## Reliability and limitations
 //!
-//! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, `TinyPNG`). 16-bit and
-//!   truecolor PNG without tool signature are treated as lossless. Indexed PNG uses a
-//!   **conservative threshold (`DETECTION_LOSSY_THRESHOLD`)**: only scores ≥ threshold are marked lossy; gray zone
-//!   [`DETECTION_LOSSLESS_THRESHOLD`, `DETECTION_LOSSY_THRESHOLD`] is treated as lossless to reduce false positives (e.g. natural palette art).
-//!   Heuristic score includes **palette-index frequency entropy** for indexed images and
-//!   **per-channel RGB entropy** for others. Tool signatures include zTXt decompression.
-//!   We do *not* detect "PNG exported from a lossy source" (e.g. JPEG→PNG screenshot).
-//! - **WebP**: VP8L vs VP8 chunk; animated WebP traverses all ANMF frames (any VP8→lossy).
-//! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy, others→lossless.
-//!   Supports both standard TIFF and `BigTIFF` (0x002B). No tag → assumed lossless.
-//! - **AVIF**: Multi-dimension (av1C chroma 4:2:0/4:2:2→lossy; 4:4:4 + colr Identity MC u16[8..9]/pixi/high bit depth→lossless; 4:4:4 ambiguous→Err). Err when av1C missing or 4:4:4 without definitive indicators.
-//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy; Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; `RExt` without 4:4:4→Err). Err when hvcC missing.
-//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan); codestream `xyb_encoded→lossy/modular`; Err only when no jbrd and header unparseable.
+//! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, `TinyPNG`).
+//!   16-bit and truecolor PNG without tool signature are treated as lossless.
+//!   Indexed PNG uses a **conservative threshold
+//!   (`DETECTION_LOSSY_THRESHOLD`)**: only scores ≥ threshold are marked lossy;
+//!   gray zone [`DETECTION_LOSSLESS_THRESHOLD`, `DETECTION_LOSSY_THRESHOLD`] is
+//!   treated as lossless to reduce false positives (e.g. natural palette art).
+//!   Heuristic score includes **palette-index frequency entropy** for indexed
+//!   images and **per-channel RGB entropy** for others. Tool signatures include
+//!   zTXt decompression. We do *not* detect "PNG exported from a lossy source"
+//!   (e.g. JPEG→PNG screenshot).
+//! - **WebP**: VP8L vs VP8 chunk; animated WebP traverses all ANMF frames (any
+//!   VP8→lossy).
+//! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy,
+//!   others→lossless. Supports both standard TIFF and `BigTIFF` (0x002B). No
+//!   tag → assumed lossless.
+//! - **AVIF**: Multi-dimension (av1C chroma 4:2:0/4:2:2→lossy; 4:4:4 + colr
+//!   Identity MC u16[8..9]/pixi/high bit depth→lossless; 4:4:4 ambiguous→Err).
+//!   Err when av1C missing or 4:4:4 without definitive indicators.
+//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy;
+//!   Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; `RExt` without
+//!   4:4:4→Err). Err when hvcC missing.
+//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan);
+//!   codestream `xyb_encoded→lossy/modular`; Err only when no jbrd and header
+//!   unparseable.
 //! - **JPEG**: Always lossy; JXL transcoding does not require quality judgment.
-//! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless; PXR24/B44/B44A/DWAA/DWAB→lossy).
-//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: COD marker wavelet transform (9/7 irreversible→lossy, 5/3 reversible→lossless); fallback lossy if COD not found.
-//! - **ICO**: Parses directory entries; embedded PNG checked for quantization (tRNS + indexed, tool signatures). BMP/DIB entries → lossless.
+//! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless;
+//!   PXR24/B44/B44A/DWAA/DWAB→lossy).
+//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: COD marker wavelet
+//!   transform (9/7 irreversible→lossy, 5/3 reversible→lossless); fallback
+//!   lossy if COD not found.
+//! - **ICO**: Parses directory entries; embedded PNG checked for quantization
+//!   (tRNS + indexed, tool signatures). BMP/DIB entries → lossless.
 //! - **TGA, PSD, DDS**: Treated as lossless.
-//! - **Format detection**: `mif1`/`msf1` major brand scans `compatible_brands` to disambiguate AVIF vs HEIC.
+//! - **Format detection**: `mif1`/`msf1` major brand scans `compatible_brands`
+//!   to disambiguate AVIF vs HEIC.
 //!
 //! ## Quality judgment reliability audit (conclusion)
 //!
-//! **Overall**: Format-by-format parsing + multi-dimension container/codestream logic; Err only when
-//! key boxes/headers are missing (AVIF/HEIC/JXL). PNG uses a scored heuristic with conservative
-//! gray zone; no format silently "guesses" lossy when uncertain — either deterministic or Err.
+//! **Overall**: Format-by-format parsing + multi-dimension container/codestream
+//! logic; Err only when key boxes/headers are missing (AVIF/HEIC/JXL). PNG uses
+//! a scored heuristic with conservative gray zone; no format silently "guesses"
+//! lossy when uncertain — either deterministic or Err.
 //!
 //! | Format | Reliability | Deterministic? | When uncertain |
 //! |--------|-------------|----------------|----------------|
@@ -60,8 +80,11 @@
 //! | ICO    | Medium      | Partial       | Embedded PNG checked for quantization. |
 //! | TGA/PSD/DDS | Assumed | N/A         | Treated as lossless. |
 //!
-//! **Call chain**: `analyze_image` → format (HEIC/JXL/AVIF/…) → `detect_lossless` / `detect_compression` → `Result<CompressionType>`.\
-//! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
+//! **Call chain**: `analyze_image` → format (HEIC/JXL/AVIF/…) →
+//! `detect_lossless` / `detect_compression` → `Result<CompressionType>`.\
+//! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in
+//! `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion
+//! path fails loudly with path in message.
 
 use crate::Rational;
 use crate::io_utils::ByteSliceExt;
@@ -77,9 +100,9 @@ use std::path::Path;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
 ///
-/// Increases `max_alloc` from default ~512MB to 2GB for legitimate large images.
-/// Still protects against malicious images (2GB is reasonable for 100MP+ images).
-/// Open image with security limits (max dimensions).
+/// Increases `max_alloc` from default ~512MB to 2GB for legitimate large
+/// images. Still protects against malicious images (2GB is reasonable for
+/// 100MP+ images). Open image with security limits (max dimensions).
 ///
 /// # Errors
 /// Returns an error if the image exceeds limits or is corrupted.
@@ -305,7 +328,9 @@ pub struct DetectionResult {
     pub precision: PrecisionMetadata,
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 /// Detect image format by inspecting magic bytes.
 ///
 /// # Errors
@@ -422,10 +447,11 @@ pub fn detect_animation(
     }
 
     // 🚀 Stage 2: libavformat / ffprobe for Complex Containers
-    // Third-party libraries like libavformat have years of fuzzing, fixes, and edge-case
-    // coverage for complex ISOBMFF containers (AVIF, HEIC). Hand-written box-level parsing
-    // is prone to false positives (e.g., seeing 'avis' brand but missing 'hdlr' or 'iloc' links)
-    // and false negatives. We trust ffprobe natively here.
+    // Third-party libraries like libavformat have years of fuzzing, fixes, and
+    // edge-case coverage for complex ISOBMFF containers (AVIF, HEIC).
+    // Hand-written box-level parsing is prone to false positives (e.g., seeing
+    // 'avis' brand but missing 'hdlr' or 'iloc' links) and false negatives. We
+    // trust ffprobe natively here.
     let mut fps = None;
     if crate::ffprobe::is_ffprobe_available() {
         match crate::ffprobe::probe_video(path) {
@@ -443,8 +469,10 @@ pub fn detect_animation(
                     if fc > 1 {
                         return Ok((true, Some(fc), fps));
                     }
-                    // fc == 1: ffprobe may be probing a cover/thumbnail stream on multi-item ISOBMFF.
-                    // Do not declare static here — fall through to packet count / ISOBMFF checks.
+                    // fc == 1: ffprobe may be probing a cover/thumbnail stream
+                    // on multi-item ISOBMFF. Do not declare
+                    // static here — fall through to packet count / ISOBMFF
+                    // checks.
                 } else if probe
                     .duration
                     .is_some_and(|d| d > crate::constants::VIDEO_NEGLIGIBLE_DURATION_SECS)
@@ -491,9 +519,11 @@ pub fn detect_animation(
                 if !sequence {
                     return Ok((false, Some(1), fps));
                 }
-                // `avis` / `msf1` sequence brands: do not treat demux fc==1 on stub/cover as static.
+                // `avis` / `msf1` sequence brands: do not treat demux fc==1 on
+                // stub/cover as static.
             }
-            // HEIC/HEIF/JXL/AVIF: single demuxed packet or fc==1 may still be cover — continue.
+            // HEIC/HEIF/JXL/AVIF: single demuxed packet or fc==1 may still be
+            // cover — continue.
         }
     }
 
@@ -528,12 +558,15 @@ pub fn detect_animation(
     Ok((is_animated, frame_count, fps))
 }
 
-/// Positive proof that an animatable-capable file is a **true** single static item (`img` may proceed).
+/// Positive proof that an animatable-capable file is a **true** single static
+/// item (`img` may proceed).
 ///
-/// Examples that return `true`: a GIF container with exactly one raster and no animation control
-/// extensions; a static HEIC/AVIF after ISOBMFF + demux checks with no cover/thumbnail stream conflict.
+/// Examples that return `true`: a GIF container with exactly one raster and no
+/// animation control extensions; a static HEIC/AVIF after ISOBMFF + demux
+/// checks with no cover/thumbnail stream conflict.
 ///
-/// Returns `false` when animation is confirmed, frame count &gt; 1, or multi-stream cover ambiguity remains.
+/// Returns `false` when animation is confirmed, frame count &gt; 1, or
+/// multi-stream cover ambiguity remains.
 ///
 /// # Errors
 /// Returns an error when container verification cannot be completed.
@@ -587,7 +620,8 @@ pub fn animatable_format_confirmed_static_only(
     }
 }
 
-/// GIF with exactly one image and no graphic-control extension → static still on `img`.
+/// GIF with exactly one image and no graphic-control extension → static still
+/// on `img`.
 fn gif_confirmed_static_only(path: &Path) -> Result<bool> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -604,8 +638,9 @@ fn gif_confirmed_static_only(path: &Path) -> Result<bool> {
     {
         return Ok(false);
     }
-    // Lone raster may still carry GIF89a Graphic Control Extension (delay/disposal);
-    // multifaceted static proof is frame count == 1 plus penetration, not GCE presence.
+    // Lone raster may still carry GIF89a Graphic Control Extension
+    // (delay/disposal); multifaceted static proof is frame count == 1 plus
+    // penetration, not GCE presence.
     if let crate::media_penetration::PenetrationResult::Verified(real) =
         crate::media_penetration::detect_real_frame_count(path, Some(1))
         && real > 1
@@ -783,13 +818,15 @@ fn measured_bit_depth_for_format(path: &Path, format: &DetectedFormat) -> Option
     }
 }
 
-/// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
-/// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
+/// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence
+/// (animated). Checks `major_brand` and `compatible_brands` for known sequence
+/// brand codes.
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or ftyp box is malformed.
 pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
-    // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
+    // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated
+    // HEIC/AVIF)
     use crate::constants::ISOBMFF_ANIMATED_BRANDS;
 
     let mut file = File::open(path)?;
@@ -836,7 +873,8 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
 }
 
 /// Returns true if the JXL file contains animation.
-/// JXL stores animation natively in its container; we use ffprobe to check duration > 0.
+/// JXL stores animation natively in its container; we use ffprobe to check
+/// duration > 0.
 fn detect_jxl_animation_via_jxlinfo(path: &Path) -> Result<Option<bool>> {
     use crate::ToolBuilder;
     if !JxlinfoBuilder::new().check_available() {
@@ -907,10 +945,11 @@ fn parse_jxlinfo_animation_hint(output: &str) -> Option<bool> {
     None
 }
 
-/// Uses `jxlinfo` metadata when available, then falls back to `djxl -> ffprobe`.
+/// Uses `jxlinfo` metadata when available, then falls back to `djxl ->
+/// ffprobe`.
 fn is_jxl_animated_via_ffprobe(path: &Path) -> Result<bool> {
-    // FFmpeg's jpegxl_anim decoder is incomplete and cannot properly detect JXL animation.
-    // We need to convert to APNG first, then check frame count.
+    // FFmpeg's jpegxl_anim decoder is incomplete and cannot properly detect JXL
+    // animation. We need to convert to APNG first, then check frame count.
 
     use crate::ToolBuilder;
     if let Some(is_animated) = detect_jxl_animation_via_jxlinfo(path)? {
@@ -921,7 +960,8 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> Result<bool> {
         crate::media_conversion_gate::probe_detection_recovery_audit(
             "jxl_animation_tools_missing",
             format!(
-                "djxl/jxlinfo unavailable for {}; treating animation as unverified static (no fabricated frame count)",
+                "djxl/jxlinfo unavailable for {}; treating animation as unverified static (no \
+                 fabricated frame count)",
                 path.display()
             ),
         );
@@ -1028,7 +1068,8 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> Result<bool> {
     Ok(nb_frames > 1)
 }
 
-/// Detect if an image is lossy or lossless based on its format and internal structure.
+/// Detect if an image is lossy or lossless based on its format and internal
+/// structure.
 ///
 /// # Errors
 /// Returns an error if file access fails or format-specific analysis fails.
@@ -1114,7 +1155,8 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
 /// # Errors
 /// Returns an error if the file is not a valid PNG or cannot be read.
 /// Specifically, `ImgQualityError::IoError` if file operations fail, or
-/// `ImgQualityError::AnalysisError` if the PNG structure is invalid or corrupted.
+/// `ImgQualityError::AnalysisError` if the PNG structure is invalid or
+/// corrupted.
 pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> {
     let file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
     let mut reader = std::io::BufReader::new(file);
@@ -1463,7 +1505,8 @@ impl PngQuantizationSession {
                     .color_count_anomaly
                     .max(crate::constants::PNG_ANOMALY_SCORE_CRITICAL);
                 self.explanations.push(format!(
-                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong quantization indicator"
+                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong \
+                     quantization indicator"
                 ));
             } else if sampled_uniques <= 512 {
                 self.factors.color_count_anomaly = self
@@ -1471,7 +1514,8 @@ impl PngQuantizationSession {
                     .color_count_anomaly
                     .max(crate::constants::PNG_ANOMALY_SCORE_MEDIUM);
                 self.explanations.push(format!(
-                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
+                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible \
+                     quantization"
                 ));
             }
         }
@@ -1541,7 +1585,8 @@ impl PngQuantizationSession {
                 .clamp(0.0, crate::constants::ENTROPY_ANOMALY_UPPER_CLAMP);
             if self.factors.entropy_anomaly > crate::constants::PNG_ENTROPY_ANOMALY_THRESHOLD_LOW {
                 self.explanations.push(format!(
-                    "Low palette entropy ratio ({entropy_ratio:.2}, max {:.2}) — quantization indicator",
+                    "Low palette entropy ratio ({entropy_ratio:.2}, max {:.2}) — quantization \
+                     indicator",
                     1.0_f64
                 ));
             }
@@ -1591,7 +1636,8 @@ impl PngQuantizationSession {
                 }
                 _ => {
                     crate::progress_mode::emit_stderr(
-                        "☢️ [ANOMALY] Compression ratio calculation failed due to overflow. Refusing to forge anomaly.",
+                        "☢️ [ANOMALY] Compression ratio calculation failed due to overflow. \
+                         Refusing to forge anomaly.",
                     );
                     1.0_f64
                 }
@@ -1672,7 +1718,8 @@ impl PngQuantizationSession {
 
         if std::env::var(crate::constants::ENV_DEBUG).is_ok() {
             crate::log_debug!(
-                "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
+                "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} \
+                 (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
             );
         }
 
@@ -1703,7 +1750,8 @@ impl PngQuantizationSession {
                 factor_scores: self.factors.clone(),
                 detected_tool: None,
                 explanation: format!(
-                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely pngquant-style quantization"
+                    "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely \
+                     pngquant-style quantization"
                 ),
             }));
         }
@@ -1713,7 +1761,8 @@ impl PngQuantizationSession {
                 .color_count_anomaly
                 .max(crate::constants::IMAGE_DETECTION_COLOR_COUNT_ANOMALY_MAX);
             self.explanations.push(format!(
-                "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
+                "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible \
+                 quantization"
             ));
         }
         Ok(None)
@@ -1749,7 +1798,8 @@ impl PngQuantizationSession {
             factor_scores: self.factors.clone(),
             detected_tool: None,
             explanation: format!(
-                "Truecolor quantization detected (freq={freq_signal:.2}, entropy={entropy_signal:.2}, band={banding_signal:.2})"
+                "Truecolor quantization detected (freq={freq_signal:.2}, \
+                 entropy={entropy_signal:.2}, band={banding_signal:.2})"
             ),
         }
     }
@@ -1834,7 +1884,8 @@ impl PngQuantizationSession {
 
         if std::env::var(crate::constants::ENV_DEBUG).is_ok() {
             crate::log_debug!(
-                "         Structural: {structural_score:.2} (indexed_alpha={indexed_alpha:.2}, large_palette={large_palette:.2}) × {weight:.2} = {total:.3}",
+                "         Structural: {structural_score:.2} (indexed_alpha={indexed_alpha:.2}, \
+                 large_palette={large_palette:.2}) × {weight:.2} = {total:.3}",
                 indexed_alpha = self.factors.indexed_with_alpha,
                 large_palette = self.factors.large_palette,
                 weight = weights.structural,
@@ -1846,7 +1897,8 @@ impl PngQuantizationSession {
                 total = metadata_score * weights.metadata
             );
             crate::log_debug!(
-                "         Statistical: {statistical_score:.2} (dither={dither:.2}, color={color:.2}, band={band:.2}, freq={freq:.2}) × {weight:.2} = {total:.3}",
+                "         Statistical: {statistical_score:.2} (dither={dither:.2}, \
+                 color={color:.2}, band={band:.2}, freq={freq:.2}) × {weight:.2} = {total:.3}",
                 dither = self.factors.dithering_detected,
                 color = self.factors.color_count_anomaly,
                 band = self.factors.gradient_banding,
@@ -1860,7 +1912,8 @@ impl PngQuantizationSession {
                 total = heuristic_score * weights.heuristic
             );
             crate::log_debug!(
-                "         FINAL SCORE: {final_score:.3} (threshold: {:.2} for lossy, gray zone: [{:.2}, {:.2}] → lossless)",
+                "         FINAL SCORE: {final_score:.3} (threshold: {:.2} for lossy, gray zone: \
+                 [{:.2}, {:.2}] → lossless)",
                 crate::constants::PNG_QUANT_THRESHOLD_HIGH,
                 crate::constants::PNG_QUANT_THRESHOLD_LOW,
                 crate::constants::PNG_QUANT_THRESHOLD_HIGH
@@ -1944,8 +1997,8 @@ struct PngQuantizationWeights {
 }
 
 /// # Errors
-/// Returns an error if the file cannot be read or if the PNG structure is corrupted.
-/// Specifically, `ImgQualityError::IoError` for file operations and
+/// Returns an error if the file cannot be read or if the PNG structure is
+/// corrupted. Specifically, `ImgQualityError::IoError` for file operations and
 /// `ImgQualityError::AnalysisError` for parsing issues.
 ///
 /// # Panics
@@ -2190,7 +2243,8 @@ fn detect_dithering_pattern(img: &DynamicImage) -> anyhow::Result<f64> {
             }
 
             let center = rgba.get_pixel(x, y);
-            // 8-neighbor check: cardinal + diagonal catches Floyd-Steinberg diagonal artifacts
+            // 8-neighbor check: cardinal + diagonal catches Floyd-Steinberg diagonal
+            // artifacts
             let neighbors = [
                 rgba.get_pixel(x - 1, y),
                 rgba.get_pixel(x + 1, y),
@@ -2242,7 +2296,8 @@ fn detect_dithering_pattern(img: &DynamicImage) -> anyhow::Result<f64> {
     let floyd_steinberg_score =
         (dithering_ratio * crate::constants::DITHER_FLOYD_STEINBERG_MULTIPLIER).min(1.0);
 
-    // Bayer/ordered dithering: 2x2 checkerboard — diagonal pairs similar, cross pairs differ
+    // Bayer/ordered dithering: 2x2 checkerboard — diagonal pairs similar, cross
+    // pairs differ
     let mut bayer_count = 0u64;
     let mut bayer_total = 0u64;
     for y in (1..height.saturating_sub(1)).step_by(2) {
@@ -2295,7 +2350,8 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
     let dr = f64::from(a[0]) - f64::from(b[0]);
     let dg = f64::from(a[1]) - f64::from(b[1]);
     let db = f64::from(a[2]) - f64::from(b[2]);
-    // Weights shift with mean red: redder pixels → more red weight, bluer → more blue weight
+    // Weights shift with mean red: redder pixels → more red weight, bluer → more
+    // blue weight
     let wr =
         crate::constants::COLOR_DIFF_WEIGHT_R_BASE + rmean / crate::constants::COLOR_DIFF_DIVISOR;
     let wg = crate::constants::COLOR_DIFF_WEIGHT_G;
@@ -2307,8 +2363,9 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
 }
 
 /// Sample image pixels (grid-subsample) and count unique quantized colors.
-/// Uses a small quantization (5 bits per channel) to approximate palette variety
-/// without full quantization work. Returns number of unique colors observed.
+/// Uses a small quantization (5 bits per channel) to approximate palette
+/// variety without full quantization work. Returns number of unique colors
+/// observed.
 fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> anyhow::Result<usize> {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -2355,10 +2412,11 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> anyhow::
     Ok(set.len())
 }
 
-/// Block-based random sampling — divides image into grid cells and randomly samples from each,
-/// avoiding the systematic bias of stride sampling (which creates periodic blind spots on
-/// structured images like game UI screenshots). Quantized images have concentrated color
-/// distributions; stride sampling can miss local color clusters.
+/// Block-based random sampling — divides image into grid cells and randomly
+/// samples from each, avoiding the systematic bias of stride sampling (which
+/// creates periodic blind spots on structured images like game UI screenshots).
+/// Quantized images have concentrated color distributions; stride sampling can
+/// miss local color clusters.
 const fn lcg_next(state: &mut u64) -> u32 {
     // Simple 64-bit LCG; return high bits for better distribution
     *state = state
@@ -2482,7 +2540,8 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> anyhow::Result<f64
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
             // Calculate coordinates using high-precision arithmetic to prevent overflow
-            // Calculate coordinates using u64 to prevent overflow (sufficient for any practical image)
+            // Calculate coordinates using u64 to prevent overflow (sufficient for any
+            // practical image)
             let px = {
                 let x = crate::numeric_cast::usize_to_u64(bx)
                     * crate::numeric_cast::usize_to_u64(block_size)
@@ -2550,7 +2609,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> anyhow::Result<f64
     Ok(score)
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -2770,8 +2831,8 @@ fn try_measure_entropy_via_ffmpeg(path: &Path) -> Result<f64> {
 }
 
 /// # Errors
-/// Returns an error if the image data is corrupted and pixels cannot be accessed.
-/// # Panics
+/// Returns an error if the image data is corrupted and pixels cannot be
+/// accessed. # Panics
 /// Panics if the image data is corrupted and pixels cannot be accessed.
 pub fn calculate_entropy(img: &DynamicImage) -> anyhow::Result<f64> {
     let gray = img.to_luma8();
@@ -2809,9 +2870,10 @@ pub fn calculate_entropy(img: &DynamicImage) -> anyhow::Result<f64> {
 /// Palette-index frequency entropy for indexed PNG.
 ///
 /// Counts how many pixels use each palette index (`0..palette_size`), computes
-/// Shannon entropy H = -Σ freq\[i\]*log2(freq\[i\]), and returns (H, `max_H`, ratio).
-/// Quantized images have uneven palette usage (few dominant entries) → low ratio.
-/// Natural palette art uses entries more uniformly → ratio close to 1.0.
+/// Shannon entropy H = -Σ freq\[i\]*log2(freq\[i\]), and returns (H, `max_H`,
+/// ratio). Quantized images have uneven palette usage (few dominant entries) →
+/// low ratio. Natural palette art uses entries more uniformly → ratio close to
+/// 1.0.
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -2825,8 +2887,9 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     }
 
     // Map each pixel to its nearest palette index by building a color→index lookup.
-    // Since we don't have direct access to the raw index buffer through the `image` crate
-    // (it decodes to RGBA), we approximate by quantizing to unique RGBA values and counting.
+    // Since we don't have direct access to the raw index buffer through the `image`
+    // crate (it decodes to RGBA), we approximate by quantizing to unique RGBA
+    // values and counting.
     let mut color_freq: HashMap<[u8; 4], u64> = HashMap::new();
     for pixel in rgba.pixels() {
         let key = pixel.0;
@@ -2895,11 +2958,14 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     (er + eg + eb) / crate::constants::CHANNELS_COUNT_F64
 }
 
-/// Perform comprehensive image detection — format, compression, animation, and quality.
+/// Perform comprehensive image detection — format, compression, animation, and
+/// quality.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Returns an error if the file cannot be read, the format is unrecognized, or
+/// analysis fails.
+// Rationale: This function handles complex, sequential initialization or business logic where
+// further fragmentation would hinder readability and maintainability.
 /// Detects the media type and characteristics of an image file.
 ///
 /// # Panics
@@ -2922,7 +2988,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 "probe_image_detection",
                 path,
                 format!(
-                    "IMAGE DECODE AUDIT: Primary decode failed for '{}' | Forensic: Error '{}'; attempting secondary recovery via direct bitstream analysis (identify/ffprobe fallback)",
+                    "IMAGE DECODE AUDIT: Primary decode failed for '{}' | Forensic: Error '{}'; \
+                     attempting secondary recovery via direct bitstream analysis \
+                     (identify/ffprobe fallback)",
                     path.display(),
                     e
                 ),
@@ -2962,7 +3030,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         let (Some(channel_type), Some(depth)) = (media_info.channel_type, media_info.bit_depth)
         else {
             return Err(ImgQualityError::AnalysisError(format!(
-                "Secondary recovery produced only partial metadata for {}: dimensions were available but channel_type/bit_depth were not measured",
+                "Secondary recovery produced only partial metadata for {}: dimensions were \
+                 available but channel_type/bit_depth were not measured",
                 path.display()
             )));
         };
@@ -3021,8 +3090,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         DetectedFormat::TIFF => {
             let comp = detect_tiff_compression(path)?;
             precision.is_lossless_deterministic = comp == CompressionType::Lossless;
-            // TIFF bit depth is usually in Tag 258, but Image crate handles basic ones.
-            // For now, we flag deterministic lossless.
+            // TIFF bit depth is usually in Tag 258, but Image crate handles
+            // basic ones. For now, we flag deterministic lossless.
         }
         DetectedFormat::WebP => {
             precision.bit_depth = Some(8);
@@ -3041,7 +3110,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                                 "checkpoint_progress",
                                 path,
                                 format!(
-                                    "WEBP QUALITY AUDIT: Failed to estimate quality for '{}' | Forensic: Error '{}'; refusing to forge data; information invalidated to prevent downstream precision loss",
+                                    "WEBP QUALITY AUDIT: Failed to estimate quality for '{}' | \
+                                     Forensic: Error '{}'; refusing to forge data; information \
+                                     invalidated to prevent downstream precision loss",
                                     path.display(),
                                     e
                                 ),
@@ -3073,7 +3144,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                         "checkpoint_progress",
                         path,
                         format!(
-                            "JPEG QUALITY AUDIT: Failed to estimate quality for '{}' | Forensic: Error '{}'; refusing to forge data; information invalidated to prevent downstream precision loss",
+                            "JPEG QUALITY AUDIT: Failed to estimate quality for '{}' | Forensic: \
+                             Error '{}'; refusing to forge data; information invalidated to \
+                             prevent downstream precision loss",
                             path.display(),
                             e
                         ),
@@ -3115,7 +3188,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                     "delivery_db_metadata",
                     path,
                     format!(
-                        "ANIMATION AUDIT: Lossy animated image is missing frame_count at '{}' | Forensic: Mandatory metadata missing; refusing to forge data to prevent upstream calculation forgery",
+                        "ANIMATION AUDIT: Lossy animated image is missing frame_count at '{}' | \
+                         Forensic: Mandatory metadata missing; refusing to forge data to prevent \
+                         upstream calculation forgery",
                         path.display()
                     ),
                 );
@@ -3146,7 +3221,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 "delivery_db_numeric",
                 path,
                 format!(
-                    "ANIMATION AUDIT: Animated image missing frame_count/fps at '{}' | Forensic: Duration calculation impossible without both; skipping to prevent numeric forgery",
+                    "ANIMATION AUDIT: Animated image missing frame_count/fps at '{}' | Forensic: \
+                     Duration calculation impossible without both; skipping to prevent numeric \
+                     forgery",
                     path.display()
                 ),
             );
@@ -3253,7 +3330,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
 fn verify_transparency_claim(path: &Path, result: &mut DetectionResult) {
     // Transparency penetration requires duration for stratified sampling.
-    // Static images (duration=None) skip this check entirely - their alpha is always real.
+    // Static images (duration=None) skip this check entirely - their alpha is
+    // always real.
     let Some(duration) = result.duration else {
         return;
     };
@@ -3276,7 +3354,9 @@ fn frame_count_claim_for_penetration(path: &Path, frame_count: Option<u32>) -> O
             "delivery_db_metadata",
             path,
             format!(
-                "ANIMATION AUDIT: Missing frame_count for '{}' before penetration check | Forensic: Value is None; preserving unknown claim and forcing exhaustive bitstream verification",
+                "ANIMATION AUDIT: Missing frame_count for '{}' before penetration check | \
+                 Forensic: Value is None; preserving unknown claim and forcing exhaustive \
+                 bitstream verification",
                 path.display()
             ),
         );
@@ -3384,7 +3464,8 @@ fn estimate_png_quantized_quality(
     let result = crate::numeric_cast::f64_to_u8_strict(q.round(), "png_estimated_quality")
         .ok_or_else(|| {
             ImgQualityError::AnalysisError(format!(
-                "Cannot estimate PNG quantized quality: rounded quality {q} is not representable as u8"
+                "Cannot estimate PNG quantized quality: rounded quality {q} is not representable \
+                 as u8"
             ))
         })?;
     let min_quality =
@@ -3418,13 +3499,14 @@ fn estimate_lossy_quality_fallback(
     let pixels = u64::from(width) * u64::from(height);
     if pixels == 0 || file_size == 0 {
         crate::progress_mode::emit_stderr(&format!(
-            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and heuristic fallback is impossible.\x1b[0m\n\
-               \x1b[31m      File: {}\x1b[0m\n\
-               \x1b[31m      Refusing to invent a hardcoded quality value.\x1b[0m",
+            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and \
+                 heuristic fallback is impossible.\x1b[0m\n\x1b[31m      File: \
+                 {}\x1b[0m\n\x1b[31m      Refusing to invent a hardcoded quality value.\x1b[0m",
             path.display()
         ));
         return Err(ImgQualityError::AnalysisError(format!(
-            "Cannot estimate quality for lossy {}: invalid dimensions ({width}x{height}) or empty file",
+            "Cannot estimate quality for lossy {}: invalid dimensions ({width}x{height}) or empty \
+             file",
             format.as_str()
         )));
     }
@@ -3434,8 +3516,9 @@ fn estimate_lossy_quality_fallback(
     // (AVIF/HEIC at 3.0x efficiency). Refuse rather than forge a verdict.
     let Some(entropy) = entropy.filter(|e| e.is_finite() && *e > 0.0) else {
         crate::progress_mode::emit_stderr(&format!(
-            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed; entropy is unmeasurable so heuristic refuses to invent a value.\x1b[0m\n\
-               \x1b[31m      File: {}\x1b[0m",
+            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed; entropy \
+             is unmeasurable so heuristic refuses to invent a value.\x1b[0m\n\x1b[31m      File: \
+             {}\x1b[0m",
             path.display()
         ));
         return Err(ImgQualityError::AnalysisError(format!(
@@ -3487,15 +3570,16 @@ fn estimate_lossy_quality_fallback(
     let Some(bpp_quality) = crate::numeric_cast::f64_to_u8_strict(clamped_quality, "bpp_quality")
     else {
         return Err(ImgQualityError::AnalysisError(format!(
-            "Cannot estimate quality for lossy {}: clamped heuristic value {clamped_quality} is not representable as u8",
+            "Cannot estimate quality for lossy {}: clamped heuristic value {clamped_quality} is \
+             not representable as u8",
             format.as_str()
         )));
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
-           \x1b[33m      File: {}\x1b[0m\n\
-           \x1b[33m      Heuristic: BPP={:.3}, Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
+        "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} \
+         codec.\x1b[0m\n\x1b[33m      File: {}\x1b[0m\n\x1b[33m      Heuristic: BPP={:.3}, \
+         Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
         format.as_str(),
         path.display(),
         raw_bpp,
@@ -3601,7 +3685,8 @@ pub(crate) fn apng_timing_stats_from_bytes(data: &[u8]) -> Option<ApngTimingStat
     })
 }
 
-/// Minimal animated PNG with two `fcTL` frames (10 ms + 20 ms) for unit tests only.
+/// Minimal animated PNG with two `fcTL` frames (10 ms + 20 ms) for unit tests
+/// only.
 #[cfg(test)]
 pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
     fn png_chunk(chunk_type: &[u8], payload: &[u8]) -> Vec<u8> {
@@ -3677,7 +3762,9 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
             }
             crate::media_conversion_gate::probe_layer_batch_audit(
                 "delivery_db_numeric",
-                "PNG DECODE AUDIT: acTL chunk found but num_frames data is missing/truncated! | Forensic: Malformed APNG bitstream; refusing to forge frame count to prevent downstream numeric corruption",
+                "PNG DECODE AUDIT: acTL chunk found but num_frames data is missing/truncated! | \
+                 Forensic: Malformed APNG bitstream; refusing to forge frame count to prevent \
+                 downstream numeric corruption",
             );
             return (true, 0); // Honest report: it's animated, but count is unknown
         }
@@ -3698,7 +3785,8 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
 // Enhanced Format-Specific Lossless Detection
 // ============================================================================
 
-/// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
+/// Detect WebP animated compression by traversing all ANMF (animation frame)
+/// chunks.
 fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
     if crate::image_formats::webp::detect_webp_animation_is_lossless(data)? {
         Ok(CompressionType::Lossless)
@@ -3707,7 +3795,8 @@ fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
     }
 }
 
-/// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and `BigTIFF`.
+/// Detect TIFF compression type — traverses ALL IFDs. Supports both standard
+/// TIFF and `BigTIFF`.
 fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
     if crate::image_formats::tiff::is_lossless(path)? {
         Ok(CompressionType::Lossless)
@@ -3750,9 +3839,9 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
 
 /// Detect ICO compression by inspecting embedded image entries.
 ///
-/// ICO directory: header\[6\] + entries[16 each]. Each entry has an offset to image data.
-/// If image data starts with PNG magic → recursively check PNG quantization.
-/// Any quantized PNG entry → Lossy. Otherwise → Lossless.
+/// ICO directory: header\[6\] + entries[16 each]. Each entry has an offset to
+/// image data. If image data starts with PNG magic → recursively check PNG
+/// quantization. Any quantized PNG entry → Lossy. Otherwise → Lossless.
 fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
@@ -3778,7 +3867,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                 "delivery_db_metadata",
                 path,
                 format!(
-                    "ICO DECODE AUDIT: Failed to seek to entry {} at offset {} for '{}' | Forensic: IO failure during directory traversal; breaking loop to prevent corrupt metadata emission",
+                    "ICO DECODE AUDIT: Failed to seek to entry {} at offset {} for '{}' | \
+                     Forensic: IO failure during directory traversal; breaking loop to prevent \
+                     corrupt metadata emission",
                     i,
                     entry_offset,
                     path.display()
@@ -3793,7 +3884,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                 "probe_image_detection",
                 path,
                 format!(
-                    "ICO DECODE AUDIT: Truncated entry {} at offset {} for '{}' | Forensic: Unexpected EOF during directory parse; breaking loop to prevent out-of-bounds access",
+                    "ICO DECODE AUDIT: Truncated entry {} at offset {} for '{}' | Forensic: \
+                     Unexpected EOF during directory parse; breaking loop to prevent \
+                     out-of-bounds access",
                     i,
                     entry_offset,
                     path.display()
@@ -3819,8 +3912,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                         // Seek back to start of image data for full analysis
                         file.seek(SeekFrom::Start(img_offset))?;
                         let mut img_reader = (&file).take(img_size);
-                        // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't provide it easily,
-                        // we read the PNG part into memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
+                        // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't
+                        // provide it easily, we read the PNG part into
+                        // memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
                         // This is infinitely safer than loading the whole 64MB ICO.
                         let Some(png_capacity) =
                             crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
@@ -3829,7 +3923,9 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                                 "delivery_db_numeric",
                                 path,
                                 format!(
-                                    "ICO DECODE AUDIT: Image size {} in '{}' overflows usize | Forensic: Magnitude exceeds platform pointer width; skipping entry to prevent OOM panic",
+                                    "ICO DECODE AUDIT: Image size {} in '{}' overflows usize | \
+                                     Forensic: Magnitude exceeds platform pointer width; skipping \
+                                     entry to prevent OOM panic",
                                     img_size,
                                     path.display()
                                 ),
@@ -3868,16 +3964,18 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 
 /// Detect `OpenEXR` compression type by parsing the header attributes.
 ///
-/// EXR header: magic (76 2F 31 01) + version (4 bytes) + attributes until empty name.
-/// Each attribute: null-terminated name + null-terminated type + size (u32 LE) + value.
-/// The "compression" attribute value byte:
+/// EXR header: magic (76 2F 31 01) + version (4 bytes) + attributes until empty
+/// name. Each attribute: null-terminated name + null-terminated type + size
+/// (u32 LE) + value. The "compression" attribute value byte:
 ///   0=NONE, 1=RLE, 2=ZIPS, 3=ZIP, 4=PIZ → lossless
 ///   5=PXR24, 6=B44, 7=B44A, 8=DWAA, 9=DWAB → lossy
 ///
-/// EXR 2.0 multi-part: version bit 9 = 1. Each part has independent header with its own
-/// compression. Parts separated by empty name; all parts end with two consecutive empty names.
-/// Any lossy part → Lossy overall.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// EXR 2.0 multi-part: version bit 9 = 1. Each part has independent header with
+/// its own compression. Parts separated by empty name; all parts end with two
+/// consecutive empty names. Any lossy part → Lossy overall.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4017,17 +4115,18 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
 
 /// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.
 ///
-/// COD (Coding style Default, FF 52) contains default `SPcod` parameters; the last byte
-/// is the wavelet transform type:
+/// COD (Coding style Default, FF 52) contains default `SPcod` parameters; the
+/// last byte is the wavelet transform type:
 ///   - 0 = 9/7 irreversible (lossy)
 ///   - 1 = 5/3 reversible (lossless)
 ///
-/// COC (Component-specific coding style, FF 53) can override COD for specific components.
-/// For multi-component images (e.g. DICOM-JP2), if COD=9/7 but COC overrides to 5/3 for
-/// a component, we need to check all components. Any lossy component → Lossy overall.
+/// COC (Component-specific coding style, FF 53) can override COD for specific
+/// components. For multi-component images (e.g. DICOM-JP2), if COD=9/7 but COC
+/// overrides to 5/3 for a component, we need to check all components. Any lossy
+/// component → Lossy overall.
 ///
-/// For JP2 container: find the codestream inside "jp2c" box, then scan for COD/COC.
-/// For raw codestream (FF 4F FF 51): scan directly.
+/// For JP2 container: find the codestream inside "jp2c" box, then scan for
+/// COD/COC. For raw codestream (FF 4F FF 51): scan directly.
 fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4054,7 +4153,8 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     };
 
     // Scan for COD and COC markers in the codestream header area
-    // COD/COC must appear before the first tile-part, so limit scan to first 4KB of codestream
+    // COD/COC must appear before the first tile-part, so limit scan to first 4KB of
+    // codestream
     let scan_end = (cs_start + 4096).min(data.len());
     let cs = data.get(cs_start..scan_end).ok_or_else(|| {
         ImgQualityError::AnalysisError("Required byte slice missing (out of bounds)".to_string())
@@ -4110,7 +4210,8 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     Ok(CompressionType::Lossy)
 }
 
-/// Find the offset of the jp2c (contiguous codestream) box payload in a JP2 container.
+/// Find the offset of the jp2c (contiguous codestream) box payload in a JP2
+/// container.
 fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
@@ -4148,15 +4249,16 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     None
 }
 
-/// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform types.
-/// Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
-/// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible (lossless).
-/// COC: component-specific overrides.
+/// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform
+/// types. Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
+/// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible
+/// (lossless). COC: component-specific overrides.
 fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
     let mut cod_wavelet: Option<u8> = None;
     let mut coc_wavelets: Vec<(u16, u8)> = Vec::new();
 
-    // Walk markers: each marker is FF xx, followed by 2-byte length (except SOC=FF4F, SOD=FF93)
+    // Walk markers: each marker is FF xx, followed by 2-byte length (except
+    // SOC=FF4F, SOD=FF93)
     let mut pos = 0;
     while pos + 2 <= cs.len() {
         if cs.get(pos) != Some(&0xFF) {
@@ -4216,7 +4318,8 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
             // We'll assume 1 byte for simplicity (most common case)
-            // SPcoc layout is same as SPcod: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
+            // SPcoc layout is same as SPcod: NL(1) + cb_width(1) + cb_height(1) +
+            // cb_style(1) + transform(1)
             let component_offset = pos + 4;
             let spcoc_offset = component_offset + 1; // Ccoc (1 byte) + Scoc (1 byte) = 2 bytes before SPcoc
             let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform

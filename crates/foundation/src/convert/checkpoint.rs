@@ -1,6 +1,7 @@
 //! Checkpoint & Resume Module (Progress Tracking)
 //!
-//! Provides atomic operation protection and resume capability for all conversion tools:
+//! Provides atomic operation protection and resume capability for all
+//! conversion tools:
 //! - Progress tracking: Record completed files for resume after interruption
 //! - Atomic delete: Verify output integrity before deleting original
 //! - Lock file: Prevent concurrent processing of same directory
@@ -29,7 +30,11 @@
 //!     }
 //!
 //!     // Safe delete with integrity check
-//!     foundation::checkpoint::safe_delete_original(&input, &output, foundation::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
+//!     foundation::checkpoint::safe_delete_original(
+//!         &input,
+//!         &output,
+//!         foundation::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+//!     )?;
 //!     Ok(())
 //! }
 //! ```
@@ -45,7 +50,8 @@ use std::time::UNIX_EPOCH;
 
 use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
 
-/// The central location for all MFB progress tracking to avoid polluting user directories.
+/// The central location for all MFB progress tracking to avoid polluting user
+/// directories.
 ///
 /// # Errors
 /// Returns an error if no usable home/progress root can be determined.
@@ -88,7 +94,8 @@ const LOCK_STALE_TIMEOUT_SECS: u64 = crate::constants::LOCK_STALE_TIMEOUT_SECS;
 /// old checkpoint files and force regeneration.
 const CHECKPOINT_FORMAT_VERSION: u32 = crate::constants::CHECKPOINT_FORMAT_VERSION;
 
-/// Wall-clock duration for checkpoint headers (M29 SSOT; never used to fabricate file mtimes).
+/// Wall-clock duration for checkpoint headers (M29 SSOT; never used to
+/// fabricate file mtimes).
 fn checkpoint_wall_clock_duration_since_epoch() -> io::Result<std::time::Duration> {
     crate::media_conversion_gate::unix_duration_since_epoch_optional().ok_or_else(|| {
         io::Error::other("checkpoint wall-clock SSOT unavailable (SystemTime before UNIX_EPOCH)")
@@ -397,7 +404,8 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
                         crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                             "checkpoint_process",
                             format!(
-                                "failed to read wall-clock while computing process start for PID {pid}: {e}"
+                                "failed to read wall-clock while computing process start for PID \
+                                 {pid}: {e}"
                             ),
                         );
                         None
@@ -504,8 +512,9 @@ fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
 
 /// Gets the hostname of the current machine.
 ///
-/// Uses system commands to retrieve the hostname, with fallbacks for different platforms.
-/// Returns "unknown" if hostname cannot be determined or is not valid UTF-8.
+/// Uses system commands to retrieve the hostname, with fallbacks for different
+/// platforms. Returns "unknown" if hostname cannot be determined or is not
+/// valid UTF-8.
 ///
 /// # Returns
 /// Hostname string, or "unknown" if unavailable
@@ -560,28 +569,32 @@ pub struct Manager {
 impl Manager {
     /// # Errors
     ///
-    /// Returns an error if the progress directory cannot be created or if initialization fails.
+    /// Returns an error if the progress directory cannot be created or if
+    /// initialization fails.
     pub fn new(target_dir: &Path) -> io::Result<Self> {
         Self::new_with_context(target_dir, None)
     }
 
     /// # Errors
     ///
-    /// Returns an error if the progress directory cannot be created or if initialization fails.
+    /// Returns an error if the progress directory cannot be created or if
+    /// initialization fails.
     pub fn new_resuming(target_dir: &Path) -> io::Result<Self> {
         Self::new_resuming_with_context(target_dir, None)
     }
 
     /// # Errors
     ///
-    /// Returns an error if the progress directory cannot be created or if initialization fails.
+    /// Returns an error if the progress directory cannot be created or if
+    /// initialization fails.
     pub fn new_with_context(target_dir: &Path, output_root: Option<&Path>) -> io::Result<Self> {
         Self::new_with_context_inner(target_dir, output_root, false)
     }
 
     /// # Errors
     ///
-    /// Returns an error if the progress directory cannot be created or if initialization fails.
+    /// Returns an error if the progress directory cannot be created or if
+    /// initialization fails.
     pub fn new_resuming_with_context(
         target_dir: &Path,
         output_root: Option<&Path>,
@@ -591,7 +604,8 @@ impl Manager {
 
     /// # Errors
     ///
-    /// Returns an error if the progress directory cannot be created or if initialization fails.
+    /// Returns an error if the progress directory cannot be created or if
+    /// initialization fails.
     fn new_with_context_inner(
         target_dir: &Path,
         output_root: Option<&Path>,
@@ -628,7 +642,8 @@ impl Manager {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     format!(
-                        "Failed to remove invalidated checkpoint blob for key {checkpoint_key}: {err}"
+                        "Failed to remove invalidated checkpoint blob for key {checkpoint_key}: \
+                         {err}"
                     ),
                 );
             }
@@ -664,14 +679,16 @@ impl Manager {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     format!(
-                        "Resume disabled by default; discarded {rows} saved checkpoint row(s) for fresh media conversion run."
+                        "Resume disabled by default; discarded {rows} saved checkpoint row(s) for \
+                         fresh media conversion run."
                     ),
                 );
             }
             Ok(_) => {}
             Err(err) => {
                 let message = format!(
-                    "Resume disabled by default, but failed to discard checkpoint blob for key {checkpoint_key}: {err}"
+                    "Resume disabled by default, but failed to discard checkpoint blob for key \
+                     {checkpoint_key}: {err}"
                 );
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
@@ -683,7 +700,9 @@ impl Manager {
         Ok(())
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     /// # Errors
     ///
     /// Returns an error if the lock file cannot be read.
@@ -787,7 +806,8 @@ impl Manager {
                                 "checkpoint_lock",
                                 &self.lock_file,
                                 format!(
-                                    "Unable to verify process start time for PID {}; preserving active lock",
+                                    "Unable to verify process start time for PID {}; preserving \
+                                     active lock",
                                     lock_info.pid
                                 ),
                             );
@@ -890,7 +910,8 @@ impl Manager {
 
     /// # Errors
     ///
-    /// Returns an error if the lock cannot be acquired or if the lock file exists and is not stale.
+    /// Returns an error if the lock cannot be acquired or if the lock file
+    /// exists and is not stale.
     pub fn acquire_lock(&self) -> io::Result<()> {
         const MAX_LOCK_RETRIES: u32 = crate::constants::LOCK_MAX_RETRIES;
         let lock_info = LockInfo::new()?;
@@ -976,7 +997,8 @@ impl Manager {
                         "checkpoint_lock",
                         &self.lock_file,
                         format!(
-                            "Failed to remove stale checkpoint entry for {}: {}. Reprocessing continues, but checkpoint state may be stale.",
+                            "Failed to remove stale checkpoint entry for {}: {}. Reprocessing \
+                             continues, but checkpoint state may be stale.",
                             path.display(),
                             err
                         ),
@@ -1001,7 +1023,8 @@ impl Manager {
 
     /// # Errors
     ///
-    /// Returns an error if the file metadata cannot be read or if the progress file cannot be written.
+    /// Returns an error if the file metadata cannot be read or if the progress
+    /// file cannot be written.
     pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
         let entry = CheckpointEntry::from_path(path)?;
         let key = entry.path.clone();
@@ -1067,7 +1090,9 @@ impl Manager {
         crate::media_conversion_gate::delivery_checkpoint_batch_audit(
             "checkpoint_fallback",
             format!(
-                "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+                "Found {} saved resume entries, but output root {} is missing. Assuming the \
+                 optimized folder was intentionally removed; clearing old resume state and \
+                 restarting full processing.",
                 completed,
                 output_root.display()
             ),
@@ -1134,7 +1159,9 @@ impl Manager {
         }
     }
 
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or
+    // business logic where further fragmentation would hinder readability and
+    // maintainability.
     fn load_progress(checkpoint_key: &str) -> io::Result<LoadedCheckpointState> {
         let loaded = load_progress_from_sqlite(checkpoint_key)?;
         Ok(match loaded {
@@ -1158,7 +1185,11 @@ impl Manager {
             return (
                 HashMap::new(),
                 false,
-                Some("Checkpoint entries were found without a header. Clearing invalid resume state.".to_string()),
+                Some(
+                    "Checkpoint entries were found without a header. Clearing invalid resume \
+                     state."
+                        .to_string(),
+                ),
             );
         };
 
@@ -1167,7 +1198,8 @@ impl Manager {
                 HashMap::new(),
                 false,
                 Some(format!(
-                    "Checkpoint context changed (target/output/cache version mismatch). Clearing stale resume state for {}.",
+                    "Checkpoint context changed (target/output/cache version mismatch). Clearing \
+                     stale resume state for {}.",
                     expected_header.target_dir
                 )),
             );
@@ -1181,7 +1213,9 @@ impl Manager {
                 HashMap::new(),
                 false,
                 Some(format!(
-                    "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+                    "Found {} saved resume entries, but output root {} is missing. Assuming the \
+                     optimized folder was intentionally removed; clearing old resume state and \
+                     restarting full processing.",
                     loaded.entries.len(),
                     output_root.display()
                 )),
@@ -1209,7 +1243,9 @@ impl Manager {
                 HashMap::new(),
                 false,
                 Some(format!(
-                    "All saved checkpoint entries became invalid during startup validation (changed: {changed}, missing: {missing}, unreadable: {unreadable}). Clearing stale resume state."
+                    "All saved checkpoint entries became invalid during startup validation \
+                     (changed: {changed}, missing: {missing}, unreadable: {unreadable}). Clearing \
+                     stale resume state."
                 )),
             );
         }
@@ -1218,7 +1254,8 @@ impl Manager {
             crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                 "checkpoint_lock",
                 format!(
-                    "Dropped stale resume entries during validation (changed: {changed}, missing: {missing}, unreadable: {unreadable})."
+                    "Dropped stale resume entries during validation (changed: {changed}, missing: \
+                     {missing}, unreadable: {unreadable})."
                 ),
             );
         }
@@ -1271,7 +1308,8 @@ impl Drop for Manager {
 
 /// # Errors
 ///
-/// Returns an error if the output file is missing, empty, or smaller than `min_size`.
+/// Returns an error if the output file is missing, empty, or smaller than
+/// `min_size`.
 pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), String> {
     if !output.exists() {
         return Err("Output file does not exist".to_string());
@@ -1311,7 +1349,8 @@ pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), Strin
 ///
 /// # Errors
 ///
-/// Returns an error if the source file does not exist, is not a regular file, or is protected.
+/// Returns an error if the source file does not exist, is not a regular file,
+/// or is protected.
 pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -> io::Result<()> {
     if let Err(reason) = verify_output_integrity(output, min_output_size) {
         crate::media_conversion_gate::delivery_checkpoint_path_audit(

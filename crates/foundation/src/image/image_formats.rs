@@ -7,14 +7,17 @@ pub mod tiff {
     use std::fs;
     use std::path::Path;
 
-    /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and `BigTIFF`.
-    /// Check if the image at `path` is lossless.
+    /// Detect TIFF compression type — traverses ALL IFDs. Supports both
+    /// standard TIFF and `BigTIFF`. Check if the image at `path` is
+    /// lossless.
     ///
     /// # Errors
     /// Returns an error if the file is missing or the format is unsupported.
-    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or business logic where
+    // further fragmentation would hinder readability and maintainability.
     /// # Panics
-    /// Panics if the file is fundamentally corrupted in a way that prevents basic header reading.
+    /// Panics if the file is fundamentally corrupted in a way that prevents
+    /// basic header reading.
     pub fn is_lossless(path: &Path) -> Result<bool> {
         const MAX_IFD_COUNT: u32 = 100;
 
@@ -147,7 +150,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: BigTIFF IFD #{} at offset {} truncated (need 8 bytes for entry count, have {})",
+                            "TIFF Analysis: BigTIFF IFD #{} at offset {} truncated (need 8 bytes \
+                             for entry count, have {})",
                             ifd_count,
                             ifd_pos,
                             data.len().saturating_sub(ifd_pos)
@@ -168,11 +172,13 @@ pub mod tiff {
                 })?;
 
                 // Validate entry count doesn't cause overflow
-                let entries_end = ifd_pos.checked_add(8)
+                let entries_end = ifd_pos
+                    .checked_add(8)
                     .and_then(|start| start.checked_add(n.checked_mul(20)?))
                     .ok_or_else(|| {
                         ImgQualityError::AnalysisError(format!(
-                            "BigTIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes size overflow"
+                            "BigTIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes \
+                             size overflow"
                         ))
                     })?;
 
@@ -180,7 +186,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: BigTIFF IFD #{ifd_count} at offset {ifd_pos} claims {n} entries but data truncated"
+                            "TIFF Analysis: BigTIFF IFD #{ifd_count} at offset {ifd_pos} claims \
+                             {n} entries but data truncated"
                         ),
                     );
                 }
@@ -192,7 +199,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: IFD #{} at offset {} truncated (need 2 bytes for entry count, have {})",
+                            "TIFF Analysis: IFD #{} at offset {} truncated (need 2 bytes for \
+                             entry count, have {})",
                             ifd_count,
                             ifd_pos,
                             data.len().saturating_sub(ifd_pos)
@@ -205,11 +213,13 @@ pub mod tiff {
                     .ok_or_else(|| anyhow!("TIFF IFD entry count missing at offset {ifd_pos}"))?;
 
                 // Validate entry count doesn't cause overflow
-                let entries_end = ifd_pos.checked_add(2)
+                let entries_end = ifd_pos
+                    .checked_add(2)
                     .and_then(|start| start.checked_add(n.checked_mul(12)?))
                     .ok_or_else(|| {
                         ImgQualityError::AnalysisError(format!(
-                            "TIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes size overflow"
+                            "TIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes \
+                             size overflow"
                         ))
                     })?;
 
@@ -217,7 +227,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: IFD #{ifd_count} at offset {ifd_pos} claims {n} entries but data truncated"
+                            "TIFF Analysis: IFD #{ifd_count} at offset {ifd_pos} claims {n} \
+                             entries but data truncated"
                         ),
                     );
                 }
@@ -232,7 +243,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: IFD #{} bitstream truncated at entry {}/{} (offset {}, need {} bytes, have {})",
+                            "TIFF Analysis: IFD #{} bitstream truncated at entry {}/{} (offset \
+                             {}, need {} bytes, have {})",
                             ifd_count,
                             entries_scanned,
                             num_entries,
@@ -253,7 +265,8 @@ pub mod tiff {
                     // Validate compression offset is within bounds
                     if compression_offset + 2 > data.len() {
                         return Err(ImgQualityError::AnalysisError(format!(
-                            "TIFF: Compression tag at IFD #{} entry {} offset {} out of bounds (need 2 bytes, have {})",
+                            "TIFF: Compression tag at IFD #{} entry {} offset {} out of bounds \
+                             (need 2 bytes, have {})",
                             ifd_count,
                             entries_scanned,
                             compression_offset,
@@ -263,7 +276,8 @@ pub mod tiff {
 
                     let compression = read_u16(compression_offset).ok_or_else(|| {
                         ImgQualityError::AnalysisError(format!(
-                            "TIFF: Failed to read compression tag at IFD #{} entry {} offset {} in {}",
+                            "TIFF: Failed to read compression tag at IFD #{} entry {} offset {} \
+                             in {}",
                             ifd_count,
                             entries_scanned,
                             compression_offset,
@@ -299,7 +313,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: BigTIFF IFD #{} next offset truncated at {} (need 8 bytes, have {})",
+                            "TIFF Analysis: BigTIFF IFD #{} next offset truncated at {} (need 8 \
+                             bytes, have {})",
                             ifd_count,
                             next_offset_pos,
                             data.len().saturating_sub(next_offset_pos)
@@ -315,7 +330,8 @@ pub mod tiff {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
                         format!(
-                            "TIFF Analysis: IFD #{} next offset truncated at {} (need 4 bytes, have {})",
+                            "TIFF Analysis: IFD #{} next offset truncated at {} (need 4 bytes, \
+                             have {})",
                             ifd_count,
                             next_offset_pos,
                             data.len().saturating_sub(next_offset_pos)
@@ -334,7 +350,8 @@ pub mod tiff {
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_heic",
                 format!(
-                    "TIFF Analysis: Stopped after {} IFDs (safety limit) in {}. File may contain more IFDs.",
+                    "TIFF Analysis: Stopped after {} IFDs (safety limit) in {}. File may contain \
+                     more IFDs.",
                     MAX_IFD_COUNT,
                     path.display()
                 ),
@@ -365,7 +382,8 @@ pub mod webp {
     use std::fs;
     use std::path::Path;
 
-    /// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
+    /// Detect WebP animated compression by traversing all ANMF (animation
+    /// frame) chunks.
     ///
     /// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
     /// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
@@ -379,7 +397,9 @@ pub mod webp {
         // Walk top-level chunks to find ANMF frames
         if data.len() < 12 {
             return Err(ImgQualityError::AnalysisError(
-                "WebP: data too small for format identification (need at least 12 bytes for RIFF header)".to_string(),
+                "WebP: data too small for format identification (need at least 12 bytes for RIFF \
+                 header)"
+                    .to_string(),
             ));
         }
 
@@ -480,17 +500,20 @@ pub mod webp {
                         || sub_chunk_size > payload_end - sub_payload_start
                     {
                         return Err(ImgQualityError::AnalysisError(format!(
-                            "WebP: ANMF sub-chunk at offset {frame_data_pos} claims size {sub_chunk_size} but exceeds ANMF boundary"
+                            "WebP: ANMF sub-chunk at offset {frame_data_pos} claims size \
+                             {sub_chunk_size} but exceeds ANMF boundary"
                         )));
                     }
 
                     if sub_chunk_id == b"VP8 " {
                         return Ok(false); // Lossy frame detected
                     } else if sub_chunk_id == b"VP8L" {
-                        // Lossless frame detected, continue checking other frames/sub-chunks
+                        // Lossless frame detected, continue checking other
+                        // frames/sub-chunks
                     } else if sub_chunk_id != b"ALPH" {
                         return Err(ImgQualityError::AnalysisError(format!(
-                            "Format Audit: WebP unknown frame type at offset {}: {:?}. Expected VP8 or VP8L.",
+                            "Format Audit: WebP unknown frame type at offset {}: {:?}. Expected \
+                             VP8 or VP8L.",
                             frame_data_pos,
                             String::from_utf8_lossy(sub_chunk_id)
                         )));
@@ -527,7 +550,9 @@ pub mod webp {
                 Ok(false)
             } else {
                 Err(ImgQualityError::AnalysisError(
-                    "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine compression".to_string()
+                    "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine \
+                     compression"
+                        .to_string(),
                 ))
             }
         }
@@ -537,7 +562,8 @@ pub mod webp {
     /// Estimate quality from raw image bytes.
     ///
     /// # Errors
-    /// Returns an error if the format is unsupported, data is corrupted, or bounds are violated.
+    /// Returns an error if the format is unsupported, data is corrupted, or
+    /// bounds are violated.
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
         if data.len() < 12 {
             return Err(ImgQualityError::AnalysisError(
@@ -590,7 +616,8 @@ pub mod webp {
             // Validate chunk size doesn't overflow buffer
             if payload_start > data.len() || chunk_size > data.len() - payload_start {
                 return Err(ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: chunk at offset {pos} claims size {chunk_size} but only {} bytes remain",
+                    "WebP quality estimation: chunk at offset {pos} claims size {chunk_size} but \
+                     only {} bytes remain",
                     data.len().saturating_sub(payload_start)
                 )));
             }
@@ -606,7 +633,8 @@ pub mod webp {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_image_format",
                         format!(
-                            "WebP quality estimation: VP8 chunk at offset {pos} too small ({chunk_size} bytes, need at least 11); skipping"
+                            "WebP quality estimation: VP8 chunk at offset {pos} too small \
+                             ({chunk_size} bytes, need at least 11); skipping"
                         ),
                     );
                     // Continue to next chunk instead of failing
@@ -620,17 +648,25 @@ pub mod webp {
                             // Convert QI to quality: quality = (127 - QI) * 100 / 127
                             let quality = (u32::from(127 - y_ac_qi) * 100)
                                 .checked_div(127)
-                                .and_then(|q| crate::numeric_cast::u32_to_u8_strict(q.min(100), "webp_quality"))
+                                .and_then(|q| {
+                                    crate::numeric_cast::u32_to_u8_strict(
+                                        q.min(100),
+                                        "webp_quality",
+                                    )
+                                })
                                 .ok_or_else(|| {
                                     ImgQualityError::AnalysisError(
-                                        "WebP quality estimation: quality calculation overflow or division error".to_string(),
+                                        "WebP quality estimation: quality calculation overflow or \
+                                         division error"
+                                            .to_string(),
                                     )
                                 })?;
                             return Ok(quality);
                         }
                     }
-                    // VP8 frame tag signature mismatch or QI byte missing - continue scanning
-                    // This handles non-standard VP8 variants or multi-chunk files
+                    // VP8 frame tag signature mismatch or QI byte missing -
+                    // continue scanning This handles
+                    // non-standard VP8 variants or multi-chunk files
                 }
             }
 
@@ -638,7 +674,8 @@ pub mod webp {
             let padded = (chunk_size + 1) & !1;
             pos = payload_start.checked_add(padded).ok_or_else(|| {
                 ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: position overflow when advancing past chunk at offset {payload_start}"
+                    "WebP quality estimation: position overflow when advancing past chunk at \
+                     offset {payload_start}"
                 ))
             })?;
 
@@ -721,7 +758,8 @@ pub mod webp {
         data.windows(4).any(|w| w == b"ANIM")
     }
 
-    /// Canvas dimensions from RIFF/WebP chunk headers (VP8 / VP8L / VP8X / ANMF).
+    /// Canvas dimensions from RIFF/WebP chunk headers (VP8 / VP8L / VP8X /
+    /// ANMF).
     #[must_use]
     pub fn dimensions_from_bytes(data: &[u8]) -> Option<(u32, u32)> {
         fn read_vp8x(payload: &[u8]) -> Option<(u32, u32)> {
@@ -826,7 +864,8 @@ pub mod webp {
         best_canvas
     }
 
-    /// Read up to 1MiB and parse WebP canvas dimensions when ffprobe reports 0×0.
+    /// Read up to 1MiB and parse WebP canvas dimensions when ffprobe reports
+    /// 0×0.
     ///
     /// # Errors
     /// Returns an error if the file cannot be opened or read.
@@ -856,8 +895,8 @@ pub mod webp {
 
     /// Canvas dimensions for animated/static WebP when ffprobe returns 0×0.
     ///
-    /// Tries a 1MiB prefix first, then a full-file parse for Safari-style exports where
-    /// canvas size only appears in a late ANMF chunk.
+    /// Tries a 1MiB prefix first, then a full-file parse for Safari-style
+    /// exports where canvas size only appears in a late ANMF chunk.
     ///
     /// # Errors
     /// Returns an error if the file cannot be opened or read.
@@ -881,12 +920,13 @@ pub mod webp {
 
     /// Count ANMF animation frames using RIFF-aware chunk traversal.
     ///
-    /// The previous implementation used `data.windows(4).filter(ANMF)` which can
-    /// false-positive on ANMF byte sequences inside VP8 payload data.
+    /// The previous implementation used `data.windows(4).filter(ANMF)` which
+    /// can false-positive on ANMF byte sequences inside VP8 payload data.
     /// RIFF traversal follows chunk boundaries exactly.
     ///
     /// # Errors
-    /// Returns an error if a chunk size value overflows usize or data is malformed.
+    /// Returns an error if a chunk size value overflows usize or data is
+    /// malformed.
     pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
         if data.len() < 12 {
             return Ok(0);
@@ -937,7 +977,8 @@ pub mod webp {
                 crate::media_conversion_gate::probe_image_format_batch_audit(
                     "probe_image_format",
                     format!(
-                        "WebP frame count: chunk at offset {pos} claims size {chunk_size} but only {} bytes remain; stopping traversal",
+                        "WebP frame count: chunk at offset {pos} claims size {chunk_size} but \
+                         only {} bytes remain; stopping traversal",
                         data.len().saturating_sub(payload_start)
                     ),
                 );
@@ -959,7 +1000,8 @@ pub mod webp {
                 crate::media_conversion_gate::probe_image_format_batch_audit(
                     "probe_image_format",
                     format!(
-                        "WebP frame count: position overflow at offset {pos} with chunk size {chunk_size}"
+                        "WebP frame count: position overflow at offset {pos} with chunk size \
+                         {chunk_size}"
                     ),
                 );
                 break;
@@ -975,10 +1017,12 @@ pub mod webp {
         Ok(count)
     }
 
-    /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.
+    /// Parse animated WebP RIFF/ANMF chunks and return total duration in
+    /// seconds.
     ///
-    /// ANMF payload: 24-byte header, bytes 12..15 = frame duration in ms (24-bit LE).
-    /// Returns None if not animated WebP or no ANMF chunks with valid durations.
+    /// ANMF payload: 24-byte header, bytes 12..15 = frame duration in ms
+    /// (24-bit LE). Returns None if not animated WebP or no ANMF chunks
+    /// with valid durations.
     #[must_use]
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
         const MAX_FRAME_DURATION_MS: u32 = 60_000; // 60 seconds per frame is absurd
@@ -1044,14 +1088,16 @@ pub mod webp {
                 crate::media_conversion_gate::probe_image_format_batch_audit(
                     "probe_image_format",
                     format!(
-                        "WebP duration: chunk at offset {pos} claims size {chunk_size} but only {} bytes remain",
+                        "WebP duration: chunk at offset {pos} claims size {chunk_size} but only \
+                         {} bytes remain",
                         data.len().saturating_sub(payload_start)
                     ),
                 );
                 break;
             }
 
-            // ANMF frame header is 24 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
+            // ANMF frame header is 24 bytes. Duration is a 24-bit little-endian integer at
+            // offset 12..15.
             if chunk_id == b"ANMF" && payload_start + 15 <= data.len() {
                 // Explicit bounds check for duration bytes
                 if let Some(dur_bytes) = data.get(payload_start + 12..payload_start + 15) {
@@ -1068,7 +1114,8 @@ pub mod webp {
                             crate::media_conversion_gate::probe_image_format_batch_audit(
                                 "probe_image_format",
                                 format!(
-                                    "WebP duration: total duration {total_ms} ms exceeds sanity limit {MAX_TOTAL_DURATION_MS} ms"
+                                    "WebP duration: total duration {total_ms} ms exceeds sanity \
+                                     limit {MAX_TOTAL_DURATION_MS} ms"
                                 ),
                             );
                             return None;
@@ -1089,7 +1136,8 @@ pub mod webp {
             pos = p;
         }
 
-        // If RIFF traversal failed (common for Safari exports), fall back to marker scan
+        // If RIFF traversal failed (common for Safari exports), fall back to marker
+        // scan
         if total_ms == 0 {
             for idx in data
                 .windows(4)
@@ -1132,7 +1180,8 @@ pub mod webp {
         pub fps: f64,
     }
 
-    /// Aggregate animation timing from ANMF frame delays (same source as [`duration_secs_from_bytes`]).
+    /// Aggregate animation timing from ANMF frame delays (same source as
+    /// [`duration_secs_from_bytes`]).
     ///
     /// # Errors
     /// Returns an error if RIFF frame traversal fails.
@@ -1164,7 +1213,8 @@ pub mod webp {
     /// Detects if a WebP file is lossless by reading it from disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read or if the WebP header is corrupted.
+    /// Returns an error if the file cannot be read or if the WebP header is
+    /// corrupted.
     pub fn is_lossless(path: &Path) -> Result<bool> {
         let b = fs::read(path)?;
         Ok(is_lossless_from_bytes(&b))
@@ -1173,13 +1223,15 @@ pub mod webp {
     /// Detects if a WebP file is animated by reading it from disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read or if the WebP header is corrupted.
+    /// Returns an error if the file cannot be read or if the WebP header is
+    /// corrupted.
     pub fn is_animated(path: &Path) -> Result<bool> {
         let b = fs::read(path)?;
         Ok(is_animated_from_bytes(&b))
     }
 
-    /// Minimal animated WebP with two ANMF frames (100 ms + 200 ms) for unit tests only.
+    /// Minimal animated WebP with two ANMF frames (100 ms + 200 ms) for unit
+    /// tests only.
     #[cfg(test)]
     pub(crate) fn synthetic_two_frame_animated_webp_for_test() -> Vec<u8> {
         fn anmf_chunk(duration_ms: u32) -> Vec<u8> {
@@ -1259,7 +1311,8 @@ pub mod gif {
         Ok(count)
     }
 
-    /// Parse GIF frame delays from raw bytes and return aggregate timing statistics.
+    /// Parse GIF frame delays from raw bytes and return aggregate timing
+    /// statistics.
     ///
     /// # Errors
     /// Returns an error if GIF decoding fails.
@@ -1328,9 +1381,9 @@ pub mod gif {
         }))
     }
 
-    /// Parse GIF Graphic Control Extension (GCE) blocks and return total duration in seconds.
-    /// Returns None if no GCE blocks found or data is truncated.
-    /// # Errors
+    /// Parse GIF Graphic Control Extension (GCE) blocks and return total
+    /// duration in seconds. Returns None if no GCE blocks found or data is
+    /// truncated. # Errors
     /// Returns an error if GIF timing parsing fails.
     pub fn duration_secs_from_bytes(data: &[u8]) -> crate::unified_error::Result<Option<f32>> {
         Ok(timing_stats_from_bytes(data)?
@@ -1358,14 +1411,16 @@ pub mod gif {
     }
 
     /// # Errors
-    /// Returns an error if the file cannot be read or animation detection fails.
+    /// Returns an error if the file cannot be read or animation detection
+    /// fails.
     pub fn is_animated(path: &Path) -> crate::unified_error::Result<bool> {
         let b = fs::read(path)?;
         is_animated_from_bytes(&b)
     }
 
     /// # Errors
-    /// Returns an error if the file cannot be read or frame count detection fails.
+    /// Returns an error if the file cannot be read or frame count detection
+    /// fails.
     pub fn get_frame_count(path: &Path) -> crate::unified_error::Result<usize> {
         let b = fs::read(path)?;
         let count = count_frames_from_bytes(&b)?;
@@ -1469,7 +1524,8 @@ pub mod avif {
                 } else {
                     crate::media_conversion_gate::probe_image_format_batch_audit(
                         "probe_heic",
-                        "AVIF Analysis: pixi depth unavailable; preserving unknown precision instead of defaulting to 8-bit for lossless detection",
+                        "AVIF Analysis: pixi depth unavailable; preserving unknown precision \
+                         instead of defaulting to 8-bit for lossless detection",
                     );
                 }
             }
@@ -1495,8 +1551,8 @@ pub mod avif {
     /// Detects if an AVIF file is lossless by reading it from disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read, or if the AVIF header is missing
-    /// critical property markers.
+    /// Returns an error if the file cannot be read, or if the AVIF header is
+    /// missing critical property markers.
     pub fn is_lossless(path: &Path) -> Result<bool> {
         let b = fs::read(path)?;
         is_lossless_from_bytes(&b, path)

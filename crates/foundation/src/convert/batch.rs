@@ -23,7 +23,8 @@ use walkdir::{DirEntry, WalkDir};
 struct CachedDirectoryState {
     /// The absolute path to the directory.
     path: PathBuf,
-    /// The last modification time of the directory in Unix seconds (`None` when unavailable).
+    /// The last modification time of the directory in Unix seconds (`None` when
+    /// unavailable).
     modified_unix_secs: Option<u64>,
 }
 
@@ -48,9 +49,10 @@ struct CachedImageSortEntry {
 
 /// Complete snapshot of the image tree structure and metadata.
 ///
-/// This represents the cached state of all directories and files in a path tree,
-/// including the configuration parameters used to generate it. The snapshot
-/// can be serialized and deserialized to persist the cache between runs.
+/// This represents the cached state of all directories and files in a path
+/// tree, including the configuration parameters used to generate it. The
+/// snapshot can be serialized and deserialized to persist the cache between
+/// runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedImageTreeSnapshot {
     /// The schema version of this cache format.
@@ -92,9 +94,10 @@ struct CachedVideoSortEntry {
 
 /// Complete snapshot of the video tree structure and metadata.
 ///
-/// This represents the cached state of all directories and video files in a path tree,
-/// including the configuration parameters used to generate it. The snapshot
-/// can be serialized and deserialized to persist the cache between runs.
+/// This represents the cached state of all directories and video files in a
+/// path tree, including the configuration parameters used to generate it. The
+/// snapshot can be serialized and deserialized to persist the cache between
+/// runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedVideoTreeSnapshot {
     /// The schema version of this cache format.
@@ -127,7 +130,8 @@ fn is_safe_entry(entry: &DirEntry) -> bool {
         // avoid silent canonicalize fallbacks in production.
         let canonical = crate::media_conversion_gate::canonicalize_for_tool_input(entry.path());
         if canonical.as_os_str().is_empty() {
-            // Treat empty canonicalization as unsafe (unresolvable symlink / policy rejection).
+            // Treat empty canonicalization as unsafe (unresolvable symlink / policy
+            // rejection).
             return false;
         }
         if canonical.exists() {
@@ -198,7 +202,8 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
                     "delivery_pipeline_batch",
                     dir,
                     format!(
-                        "Batch Audit: Failed to collect assets for processing under {dir_path}: {err}",
+                        "Batch Audit: Failed to collect assets for processing under {dir_path}: \
+                         {err}",
                         dir_path = dir.display(),
                     ),
                 );
@@ -575,7 +580,8 @@ fn codec_matches_requested_extensions(
 /// * `path` - The file or directory path
 ///
 /// # Returns
-/// Last modification time as Unix seconds (`None` when metadata is unavailable).
+/// Last modification time as Unix seconds (`None` when metadata is
+/// unavailable).
 fn path_modified_unix_secs(path: &Path) -> Option<u64> {
     crate::media_conversion_gate::delivery_path_modified_unix_secs_optional(path)
 }
@@ -638,7 +644,8 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
                 path,
                 "delivery_pipeline_batch",
                 format!(
-                    "Batch Audit: Pixel count overflow during estimation for {path_display} ({width}x{height})",
+                    "Batch Audit: Pixel count overflow during estimation for {path_display} \
+                     ({width}x{height})",
                     path_display = path.display(),
                 ),
             )
@@ -706,8 +713,8 @@ fn float_ord_key(value: f64) -> Option<u64> {
 
 /// Compares two cached image sort entries for ordering.
 ///
-/// Implements the sorting logic for batch operations based on multiple criteria:
-/// depth, format priority, size, and pixel count.
+/// Implements the sorting logic for batch operations based on multiple
+/// criteria: depth, format priority, size, and pixel count.
 ///
 /// # Arguments
 /// * `left` - First sort entry
@@ -762,7 +769,8 @@ fn build_cached_image_entry(
 /// Loads a cached image tree snapshot from the path-tree store.
 ///
 /// Attempts to read and deserialize a previously cached image tree.
-/// Returns None if the cache file doesn't exist, is corrupted, or schema version mismatch.
+/// Returns None if the cache file doesn't exist, is corrupted, or schema
+/// version mismatch.
 ///
 /// # Arguments
 /// * `dir` - The root directory path
@@ -823,7 +831,8 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
 /// Loads a cached video tree snapshot from the path-tree store.
 ///
 /// Attempts to read and deserialize a previously cached video tree.
-/// Returns None if the cache file doesn't exist, is corrupted, or schema version mismatch.
+/// Returns None if the cache file doesn't exist, is corrupted, or schema
+/// version mismatch.
 ///
 /// # Arguments
 /// * `dir` - The root directory path
@@ -881,7 +890,8 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
     .map_err(io::Error::other)
 }
 
-/// Validates that a cached image tree snapshot matches the expected configuration.
+/// Validates that a cached image tree snapshot matches the expected
+/// configuration.
 ///
 /// Checks schema version, root directory, recursive flag, and extensions
 /// to ensure the cache is still valid for the current request.
@@ -918,7 +928,8 @@ fn validate_cached_image_tree(
     })
 }
 
-/// Validates that a cached video tree snapshot matches the expected configuration.
+/// Validates that a cached video tree snapshot matches the expected
+/// configuration.
 ///
 /// Checks schema version, root directory, recursive flag, and extensions
 /// to ensure the cache is still valid for the current request.
@@ -1009,7 +1020,9 @@ fn scan_image_tree_snapshot(
                                     "delivery_pipeline_batch",
                                     path,
                                     format!(
-                                        "METADATA AUDIT: Failed to read metadata for image entry '{}' during batch scan | Forensic: Error '{}'; skipping entry in path-tree cache",
+                                        "METADATA AUDIT: Failed to read metadata for image entry \
+                                         '{}' during batch scan | Forensic: Error '{}'; skipping \
+                                         entry in path-tree cache",
                                         path.display(),
                                         e
                                     ),
@@ -1027,7 +1040,9 @@ fn scan_image_tree_snapshot(
                     "delivery_pipeline_batch",
                     &root,
                     format!(
-                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while building path-tree cache | Forensic: Error '{err}'; skipping entry to maintain cache build continuity",
+                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
+                         building path-tree cache | Forensic: Error '{err}'; skipping entry to \
+                         maintain cache build continuity",
                         root.display(),
                     ),
                 );
@@ -1092,7 +1107,9 @@ fn scan_image_tree_snapshot_from_files(
                     "delivery_pipeline_batch",
                     &root,
                     format!(
-                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while building path-tree cache | Forensic: Error '{err}'; skipping entry to maintain cache build continuity",
+                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
+                         building path-tree cache | Forensic: Error '{err}'; skipping entry to \
+                         maintain cache build continuity",
                         root.display(),
                     ),
                 );
@@ -1110,7 +1127,8 @@ fn scan_image_tree_snapshot_from_files(
                         "delivery_pipeline_batch",
                         &path,
                         format!(
-                            "METADATA AUDIT: Failed to read metadata for image entry '{}' during batch scan | Forensic: Error '{}'; skipping entry in path-tree cache",
+                            "METADATA AUDIT: Failed to read metadata for image entry '{}' during \
+                             batch scan | Forensic: Error '{}'; skipping entry in path-tree cache",
                             path.display(),
                             e
                         ),
@@ -1154,7 +1172,9 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
             path,
             "delivery_pipeline_cli",
             format!(
-                "NUMERIC ANOMALY: Video pixel-count multiplication overflowed for '{}' ({}x{}) | Forensic: u64 overflow during video metric calculation; pixel count metric unavailable",
+                "NUMERIC ANOMALY: Video pixel-count multiplication overflowed for '{}' ({}x{}) | \
+                 Forensic: u64 overflow during video metric calculation; pixel count metric \
+                 unavailable",
                 path.display(),
                 probe.width,
                 probe.height
@@ -1183,8 +1203,8 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
 
 /// Compares two cached video sort entries for ordering.
 ///
-/// Implements the sorting logic for batch operations based on multiple criteria:
-/// depth, estimated work, duration, and other video-specific metrics.
+/// Implements the sorting logic for batch operations based on multiple
+/// criteria: depth, estimated work, duration, and other video-specific metrics.
 ///
 /// # Arguments
 /// * `left` - First sort entry
@@ -1232,7 +1252,8 @@ fn build_cached_video_entry(root: &Path, path: &Path) -> Option<CachedVideoSortE
                 "delivery_pipeline_batch",
                 path,
                 format!(
-                    "METADATA AUDIT: Failed to read metadata for video entry '{}' during batch scan | Forensic: Error '{}'; skipping entry in video path-tree cache",
+                    "METADATA AUDIT: Failed to read metadata for video entry '{}' during batch \
+                     scan | Forensic: Error '{}'; skipping entry in video path-tree cache",
                     path.display(),
                     e
                 ),
@@ -1298,7 +1319,8 @@ fn scan_video_tree_snapshot(
                         identify_source_codec_for_batch(path, "scan_video_tree_snapshot")
                         && codec_matches_requested_extensions(codec, extensions)
                     {
-                        // Admission: it's a video OR it's an animated image candidate for the 'vid' tool
+                        // Admission: it's a video OR it's an animated image candidate for the 'vid'
+                        // tool
                         if (codec.is_video() || codec.can_be_animated())
                             && let Some(file_entry) = build_cached_video_entry(&root, path)
                         {
@@ -1312,7 +1334,9 @@ fn scan_video_tree_snapshot(
                     "delivery_pipeline_batch",
                     &root,
                     format!(
-                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while building video path-tree cache | Forensic: Error '{err}'; skipping entry to maintain cache build continuity",
+                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
+                         building video path-tree cache | Forensic: Error '{err}'; skipping entry \
+                         to maintain cache build continuity",
                         root.display(),
                     ),
                 );

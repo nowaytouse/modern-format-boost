@@ -162,7 +162,8 @@ pub fn check_video() -> Vec<ToolCheck> {
     ]
 }
 
-/// Minimum version requirements for external tools to ensure compatibility with modern features.
+/// Minimum version requirements for external tools to ensure compatibility with
+/// modern features.
 const MIN_VERSIONS: &[(&str, &str)] = &[
     ("ffmpeg", "6.1"),
     ("exiftool", "12.70"),
@@ -170,10 +171,12 @@ const MIN_VERSIONS: &[(&str, &str)] = &[
     ("cjxl", "0.9.0"),
 ];
 
-/// Ensure that the specified tools are available in the system PATH and meet version requirements.
+/// Ensure that the specified tools are available in the system PATH and meet
+/// version requirements.
 ///
 /// # Errors
-/// Returns an error message if any of the specified tools are missing or out of date.
+/// Returns an error message if any of the specified tools are missing or out of
+/// date.
 pub fn require(tool_names: &[&str]) -> Result<(), String> {
     let mut missing = Vec::new();
     let mut outdated = Vec::new();
@@ -336,8 +339,9 @@ mod tests {
         assert!(!is_version_at_least("11.85", "12.70"));
     }
 
-    /// Integration test: Actually invoke tools and verify version detection works
-    /// This catches issues like exiftool's non-standard --version behavior
+    /// Integration test: Actually invoke tools and verify version detection
+    /// works This catches issues like exiftool's non-standard --version
+    /// behavior
     #[test]
     fn test_get_tool_version_integration() {
         if !crate::common_utils::is_command_available("exiftool") {

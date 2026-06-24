@@ -1,17 +1,23 @@
 //! Fast JPEG-only image pipeline utilities.
 //!
-//! Implements §Detection, §Codec, §Integrity, §Orientation, §Import, §Delete Safety
-//! from `mfb_fast_img_mode_spec part 2.md`.
+//! Implements §Detection, §Codec, §Integrity, §Orientation, §Import, §Delete
+//! Safety from `mfb_fast_img_mode_spec part 2.md`.
 //!
 //! # Open decisions
-//! - \[D2\] chose: abort+rollback — safest; no partial state on destructive delete
+//! - \[D2\] chose: abort+rollback — safest; no partial state on destructive
+//!   delete
 //! - \[D4\] chose: Rust-only — no Python img module
 //! - \[D5\] chose: subcommand in main.rs — matches existing Commands enum
 //! - \[D6\] chose: verified source delete is mandatory after Gate 1/3 pass
-//! - \[D7\] revised by Part 5: shared magic-byte detection is the admission source of truth
-//! - \[D8\] chose: decode-probe-only for AVIF — roundtrip hash valid only for JXL lossless transcode
-//! - \[I1\] chose: shortest-path import uses Photos `AppleScript` UUID import plus osxphotos query verifier and fails closed
-//! - \[I2\] chose: default verifier proves Photos local custody; iCloud upload completion polling is explicit opt-in to avoid pressuring Photos/cloud daemons
+//! - \[D7\] revised by Part 5: shared magic-byte detection is the admission
+//!   source of truth
+//! - \[D8\] chose: decode-probe-only for AVIF — roundtrip hash valid only for
+//!   JXL lossless transcode
+//! - \[I1\] chose: shortest-path import uses Photos `AppleScript` UUID import
+//!   plus osxphotos query verifier and fails closed
+//! - \[I2\] chose: default verifier proves Photos local custody; iCloud upload
+//!   completion polling is explicit opt-in to avoid pressuring Photos/cloud
+//!   daemons
 
 use crate::pipeline::verification::{
     Blake3Entry, LibraryAssetRecord, LibraryHandle, WorkingCopyMarker, write_marker_atomic,
@@ -32,32 +38,35 @@ use std::time::Instant;
 /// Returns `true` when `path` has true JPEG magic bytes.
 ///
 /// Content detection is never extension-only (§Detection). Deep forensic tool
-/// validation is exposed separately by `format_detect` for audit flows; fast-img
-/// admission does not revalidate a file already identified by JPEG magic.
+/// validation is exposed separately by `format_detect` for audit flows;
+/// fast-img admission does not revalidate a file already identified by JPEG
+/// magic.
 ///
 /// # Errors
-/// Propagates I/O errors from [`crate::image::format_detect::detect_true_format`].
+/// Propagates I/O errors from
+/// [`crate::image::format_detect::detect_true_format`].
 pub fn is_true_jpeg(path: &Path) -> Result<bool> {
     use crate::image::format_detect::{FormatKind, detect_true_format};
     Ok(detect_true_format(path)? == FormatKind::Jpeg)
 }
 
-/// Roundtrip BLAKE3 integrity check for a raw JXL lossless transcode (§Integrity).
+/// Roundtrip BLAKE3 integrity check for a raw JXL lossless transcode
+/// (§Integrity).
 ///
 /// Decodes `jxl_output` back to a JPEG via `djxl`, then compares
 /// `BLAKE3(decoded.jpg) == BLAKE3(source_jpeg)`.
 ///
 /// This is bit-exact proof the raw JXL container faithfully preserves the JPEG
 /// bitstream before delivery metadata edits. Final fast-img delivery uses
-/// [`verify_final_jxl_delivery_integrity`] because EXIF/XMP rewrites and upstream
-/// JXL Orientation exclusion can legitimately rewrite container metadata after
-/// the raw transcode proof.
+/// [`verify_final_jxl_delivery_integrity`] because EXIF/XMP rewrites and
+/// upstream JXL Orientation exclusion can legitimately rewrite container
+/// metadata after the raw transcode proof.
 ///
 /// Fails closed when `djxl` is unavailable; a JXL integrity proof requires
 /// a decoded roundtrip hash, not a non-empty output file.
 ///
-/// \[D8\] AVIF: roundtrip hash not valid (encoder may silently degrade to lossy);
-/// for AVIF outputs call `verify_decode_probe` instead.
+/// \[D8\] AVIF: roundtrip hash not valid (encoder may silently degrade to
+/// lossy); for AVIF outputs call `verify_decode_probe` instead.
 ///
 /// # Errors
 /// Returns an error if the roundtrip hash mismatches or decoding fails.
@@ -150,7 +159,8 @@ pub fn verify_jxl_roundtrip_integrity(
 
     if decoded_hash != source_hash {
         return Err(ImgQualityError::AnalysisError(format!(
-            "integrity FAIL: roundtrip hash mismatch for {} (src={source_hash}, decoded={decoded_hash})",
+            "integrity FAIL: roundtrip hash mismatch for {} (src={source_hash}, \
+             decoded={decoded_hash})",
             jxl_output.display()
         )));
     }
@@ -164,9 +174,9 @@ pub fn verify_jxl_roundtrip_integrity(
 /// Pixel-equivalence integrity proof for JPEG→JXL transcodes without JBRD.
 ///
 /// This is used for `cjxl --lossless_jpeg=1 --allow_jpeg_reconstruction=0`
-/// and sanitized-tail retries. Those outputs preserve decoded pixels/DCT-derived
-/// image content but cannot reconstruct the original JPEG byte stream, so the
-/// BLAKE3 roundtrip proof is intentionally not applicable.
+/// and sanitized-tail retries. Those outputs preserve decoded
+/// pixels/DCT-derived image content but cannot reconstruct the original JPEG
+/// byte stream, so the BLAKE3 roundtrip proof is intentionally not applicable.
 ///
 /// # Errors
 /// Returns an error if `djxl`/pixel proof is unavailable or mismatches.
@@ -236,13 +246,14 @@ pub fn verify_jxl_pixel_equivalence_integrity(
     })
 }
 
-/// Verify a final delivered JXL is safe to use as the sole retained JPEG-derived asset.
+/// Verify a final delivered JXL is safe to use as the sole retained
+/// JPEG-derived asset.
 ///
-/// The final JXL may no longer decode back to a byte-identical JPEG after metadata
-/// preservation and Orientation tag cleanup. This check therefore proves the
-/// mechanically verifiable post-delivery state: current source hash, current output
-/// hash, non-empty output, decoder readability, orientation-correct pixels, and no
-/// residual output Orientation tag.
+/// The final JXL may no longer decode back to a byte-identical JPEG after
+/// metadata preservation and Orientation tag cleanup. This check therefore
+/// proves the mechanically verifiable post-delivery state: current source hash,
+/// current output hash, non-empty output, decoder readability,
+/// orientation-correct pixels, and no residual output Orientation tag.
 ///
 /// # Errors
 /// Returns an error if any proof step fails.
@@ -291,7 +302,8 @@ pub fn verify_final_jxl_delivery_integrity(
         }
         PixelDiffResult::Mismatch { max_delta, channel } => {
             return Err(ImgQualityError::AnalysisError(format!(
-                "final-integrity: orientation proof failed for {}: max_delta={max_delta} channel={channel}",
+                "final-integrity: orientation proof failed for {}: max_delta={max_delta} \
+                 channel={channel}",
                 jxl_output.display()
             )));
         }
@@ -399,7 +411,8 @@ pub enum IntegrityResult {
         source_hash: String,
         output_hash: String,
     },
-    /// Final delivery JXL passed source/output hash, decode, metadata, and orientation proofs.
+    /// Final delivery JXL passed source/output hash, decode, metadata, and
+    /// orientation proofs.
     FinalJxlDelivery {
         source_hash: String,
         output_hash: String,
@@ -408,7 +421,8 @@ pub enum IntegrityResult {
     DecodeProbePassed { output_hash: String },
 }
 
-/// Delete source JPEG with §Integrity as gate 1, then output-exists + size > 0 (§Delete Safety).
+/// Delete source JPEG with §Integrity as gate 1, then output-exists + size > 0
+/// (§Delete Safety).
 ///
 /// Gates (all atomic — abort without deletion if any fail):
 /// 1. §Integrity passed (caller provides the `IntegrityResult`).
@@ -430,8 +444,9 @@ pub fn safe_delete_jpeg_source(
     use crate::common_utils::calculate_blake3_hash;
     use crate::io_utils::safe_remove_file;
 
-    // @ANCHOR:delete-gate — delete iff integrity_passed && output_size>0 && blake3_logged; atomic
-    // Gate 1: §Integrity must have passed (caller provides proof)
+    // @ANCHOR:delete-gate — delete iff integrity_passed && output_size>0 &&
+    // blake3_logged; atomic Gate 1: §Integrity must have passed (caller
+    // provides proof)
     let (claimed_source_hash, claimed_output_hash) = match integrity {
         IntegrityResult::RoundtripMatch {
             source_hash,
@@ -476,7 +491,8 @@ pub fn safe_delete_jpeg_source(
                 "delete-gate 1 FAIL: decode-probe-only integrity is not sufficient for deletion"
             );
             return Err(ImgQualityError::AnalysisError(
-                "delete-gate 1 FAIL: final JXL delivery proof or raw roundtrip proof is required before deleting source JPEG"
+                "delete-gate 1 FAIL: final JXL delivery proof or raw roundtrip proof is required \
+                 before deleting source JPEG"
                     .to_string(),
             ));
         }
@@ -548,8 +564,9 @@ pub fn safe_delete_jpeg_source(
     Ok(())
 }
 
-/// Delete the XMP sidecar that matches a source JPEG after the caller has already
-/// verified the source JPEG is gone and the JXL output proof is still current.
+/// Delete the XMP sidecar that matches a source JPEG after the caller has
+/// already verified the source JPEG is gone and the JXL output proof is still
+/// current.
 ///
 /// # Errors
 /// Returns an error if a matching sidecar exists but cannot be removed.
@@ -593,7 +610,8 @@ fn delete_matching_xmp_sidecar_path(
     );
     safe_remove_file(xmp_sidecar).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
-            "delete-gate sidecar FAIL: failed to delete matching XMP sidecar {} for {} (output preserved at {}): {err}",
+            "delete-gate sidecar FAIL: failed to delete matching XMP sidecar {} for {} (output \
+             preserved at {}): {err}",
             xmp_sidecar.display(),
             source.display(),
             output.display()
@@ -678,10 +696,10 @@ impl PhotosImportStrategy {
 /// `.JXL` at the CLI media-type layer before Photos.app sees the file. Instead,
 /// Photos `AppleScript` performs the import and returns machine-readable UUIDs;
 /// `osxphotos query` remains the verifier for local asset path and BLAKE3.
-/// iCloud upload completion is deliberately not required by default because that
-/// can apply sustained pressure to Photos/cloud daemons. Local custody proof
-/// still uses a small bounded retry because Photos can return from import before
-/// every new asset is query-visible. Set
+/// iCloud upload completion is deliberately not required by default because
+/// that can apply sustained pressure to Photos/cloud daemons. Local custody
+/// proof still uses a small bounded retry because Photos can return from import
+/// before every new asset is query-visible. Set
 /// `MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF=1` only when the caller explicitly
 /// accepts that cost. If the selected proof cannot be established,
 /// shortest-path mode fails closed while preserving the JXL-only output
@@ -923,7 +941,9 @@ where
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     if imported_assets.len() != expected_output_count {
         return Err(ImgQualityError::AnalysisError(format!(
-            "Photos AppleScript import established {} verified assets for {} JXL outputs (marker expected {}). The importer checkpoints each verified window and resumes pending assets on rerun.",
+            "Photos AppleScript import established {} verified assets for {} JXL outputs (marker \
+             expected {}). The importer checkpoints each verified window and resumes pending \
+             assets on rerun.",
             imported_assets.len(),
             output_paths.len(),
             expected_output_count
@@ -985,7 +1005,8 @@ where
         };
         if library_asset != &entry.out {
             return Err(ImgQualityError::AnalysisError(format!(
-                "Photos import checkpoint hash drift for {source_rel}: output={} library={library_asset}",
+                "Photos import checkpoint hash drift for {source_rel}: output={} \
+                 library={library_asset}",
                 entry.out
             )));
         }
@@ -1208,7 +1229,8 @@ where
             &entry.rel_path,
             &entry.blake3_entry.out,
             &entry.path,
-            "Import aborted before checkpoint because Photos library bytes do not match the working copy.",
+            "Import aborted before checkpoint because Photos library bytes do not match the \
+             working copy.",
         )?;
         records.push(LibraryAssetRecord {
             rel_path: entry.rel_path.clone(),
@@ -1278,7 +1300,8 @@ fn remove_matching_library_probe_by_hash(
             "Photos imported bytes diverged from working copy"
         );
         return Err(ImgQualityError::AnalysisError(format!(
-            "Photos verifier BLAKE3 mismatch for {rel_path}: output={expected_hash} library={} output_path={} library_path={}. {error_suffix}",
+            "Photos verifier BLAKE3 mismatch for {rel_path}: output={expected_hash} library={} \
+             output_path={} library_path={}. {error_suffix}",
             candidate.blake3,
             output_path.display(),
             candidate.probe.path.display()
@@ -1286,7 +1309,8 @@ fn remove_matching_library_probe_by_hash(
     }
 
     Err(ImgQualityError::AnalysisError(format!(
-        "Photos verifier missing library probe for {rel_path}: output={expected_hash} output_path={}",
+        "Photos verifier missing library probe for {rel_path}: output={expected_hash} \
+         output_path={}",
         output_path.display()
     )))
 }
@@ -1487,12 +1511,11 @@ fn run_photos_import_applescript_session(
         let timeout = photos_import_session_timeout(batch_count)?;
 
         let output = crate::process_runner::ManagedProcess::spawn(&mut command)
-            .and_then(|process| {
-                process.wait_timeout(timeout, "Photos AppleScript import chunk")
-            })
+            .and_then(|process| process.wait_timeout(timeout, "Photos AppleScript import chunk"))
             .map_err(|e| {
                 ImgQualityError::AnalysisError(format!(
-                    "Photos AppleScript {media_kind} import chunk {chunk_number}/{} failed via {}: {e}",
+                    "Photos AppleScript {media_kind} import chunk {chunk_number}/{} failed via \
+                     {}: {e}",
                     chunks.len(),
                     osascript.display()
                 ))
@@ -2086,15 +2109,19 @@ fn photos_applescript_import_chunk_error(
 ) -> ImgQualityError {
     let stderr = stderr.trim();
     let context = photos_zero_import_context(stderr);
-    let advice = if stderr.contains("-1743")
-        || stderr.contains("Not authorized to send Apple events")
-    {
-        " ❌ Import Failed: Missing AppleScript Automation Privilege! Please open macOS System Settings -> Privacy & Security -> Automation, check 'Photos' under your terminal app (or Modern Format Boost), and try again."
-    } else if context.is_some() {
-        " Photos returned success with an empty import result for this file; this usually means the Photos/iCloud Photos library session is unhealthy or rejected the item before creating an asset. The verifier fails closed and preserves sources until destructive cleanup gates pass."
-    } else {
-        " The verifier fails closed and preserves sources until destructive cleanup gates pass."
-    };
+    let advice =
+        if stderr.contains("-1743") || stderr.contains("Not authorized to send Apple events") {
+            " ❌ Import Failed: Missing AppleScript Automation Privilege! Please open macOS System \
+             Settings -> Privacy & Security -> Automation, check 'Photos' under your terminal app \
+             (or Modern Format Boost), and try again."
+        } else if context.is_some() {
+            " Photos returned success with an empty import result for this file; this usually \
+             means the Photos/iCloud Photos library session is unhealthy or rejected the item \
+             before creating an asset. The verifier fails closed and preserves sources until \
+             destructive cleanup gates pass."
+        } else {
+            " The verifier fails closed and preserves sources until destructive cleanup gates pass."
+        };
     let detail = if let Some(context) = context {
         format!("{stderr} ({context})")
     } else if stderr.is_empty() {
@@ -2112,7 +2139,8 @@ fn photos_applescript_import_chunk_error(
         "Photos AppleScript import chunk failed"
     );
     ImgQualityError::AnalysisError(format!(
-        "Photos AppleScript {media_kind} import chunk {chunk_number}/{total_chunks} ({batch_count} batches) failed: {detail}.{advice}"
+        "Photos AppleScript {media_kind} import chunk {chunk_number}/{total_chunks} \
+         ({batch_count} batches) failed: {detail}.{advice}"
     ))
 }
 
@@ -2233,7 +2261,10 @@ fn fast_img_pairs_from_photos_import_ids(
         .collect();
     if ids.len() != output_paths.len() {
         return Err(ImgQualityError::AnalysisError(format!(
-            "Photos AppleScript import returned {} IDs for {} JXL outputs (marker expected {}). The osxphotos import CLI is not used because osxphotos import filters .JXL before Photos sees it; if this persists, the current Photos/iCloud environment cannot import JXL with a machine-readable UUID.",
+            "Photos AppleScript import returned {} IDs for {} JXL outputs (marker expected {}). \
+             The osxphotos import CLI is not used because osxphotos import filters .JXL before \
+             Photos sees it; if this persists, the current Photos/iCloud environment cannot \
+             import JXL with a machine-readable UUID.",
             ids.len(),
             output_paths.len(),
             full_expected_count
@@ -2597,7 +2628,8 @@ fn library_handle_from_marker_import_proof_with(
     let expected_output_count = marker.expected_output_count();
     if proof_count != marker.blake3_log.len() || proof_count != expected_output_count {
         return Err(ImgQualityError::AnalysisError(format!(
-            "fast-img marker has partial Photos import proof: {proof_count}/{expected_output_count} entries"
+            "fast-img marker has partial Photos import proof: \
+             {proof_count}/{expected_output_count} entries"
         )));
     }
 
@@ -2611,7 +2643,8 @@ fn library_handle_from_marker_import_proof_with(
         };
         if entry.out != *library_asset {
             return Err(ImgQualityError::AnalysisError(format!(
-                "fast-img marker import proof hash drift for {source_rel}: output={} library={library_asset}",
+                "fast-img marker import proof hash drift for {source_rel}: output={} \
+                 library={library_asset}",
                 entry.out
             )));
         }
@@ -2803,12 +2836,14 @@ const FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP: usize = 100;
 const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_INTERVAL_FILES: usize = 500; // Increased from 250 to reduce restart frequency
 
 /// Session-level cache for adaptive osxphotos query timeout.
-/// Shared across all three timeout functions to avoid the "same name, different storage" bug.
+/// Shared across all three timeout functions to avoid the "same name, different
+/// storage" bug.
 static OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(120);
 
 /// Session-level flag tracking whether osxphotos has been proven responsive.
-/// First successful query sets this to true, enabling faster subsequent queries.
+/// First successful query sets this to true, enabling faster subsequent
+/// queries.
 static OSXPHOTOS_WARMED_UP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 const FAST_IMG_PHOTOS_IMPORT_BATCH_DELAY_MS: u64 = 2_000;
@@ -2827,9 +2862,9 @@ const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_OPEN_ATTEMPTS: usize = 3;
 #[cfg(all(target_os = "macos", not(test)))]
 const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_OPEN_RETRY_SECS: u64 = 5;
 
-/// ENV: Disable periodic Photos relaunch for extreme edge cases where relaunch is unstable.
-/// WARNING: May cause Photos to accumulate state and eventually poison the session.
-/// Only use if relaunch timeout is consistently fatal.
+/// ENV: Disable periodic Photos relaunch for extreme edge cases where relaunch
+/// is unstable. WARNING: May cause Photos to accumulate state and eventually
+/// poison the session. Only use if relaunch timeout is consistently fatal.
 const FAST_IMG_DISABLE_PERIODIC_RELAUNCH_ENV: &str = "MFB_FAST_IMG_DISABLE_PERIODIC_RELAUNCH";
 const FAST_IMG_PHOTOS_IMPORT_LOCK_FILE: &str = "photos_import.lock";
 
@@ -2956,7 +2991,8 @@ fn fast_img_icloud_upload_verify_delay() -> Duration {
 /// Adaptive timeout for osxphotos query based on library warm state.
 ///
 /// Strategy: Start conservative (2 min), extend on timeout to 8 min max.
-/// This avoids penalizing small/fast libraries while remaining safe for large ones.
+/// This avoids penalizing small/fast libraries while remaining safe for large
+/// ones.
 fn fast_img_osxphotos_query_timeout(item_count: usize) -> Duration {
     use std::sync::atomic::Ordering;
 
@@ -3231,7 +3267,8 @@ where
     }
 
     Err(ImgQualityError::AnalysisError(format!(
-        "Photos verifier has {} asset(s) without required proof after {attempts} batch query attempt(s): {}",
+        "Photos verifier has {} asset(s) without required proof after {attempts} batch query \
+         attempt(s): {}",
         targets.len().saturating_sub(verified.len()),
         format_pending_upload_states(targets, &verified, &last_states)
     )))
@@ -3282,7 +3319,9 @@ fn resolve_osxphotos_command() -> Result<PathBuf> {
         return Ok(path);
     }
     Err(ImgQualityError::AnalysisError(
-        "osxphotos not found; tried ~/.local/bin, ~/.cargo/bin, /opt/homebrew/bin, /usr/local/bin, and PATH. Install osxphotos or ensure its directory is visible to the app launch environment."
+        "osxphotos not found; tried ~/.local/bin, ~/.cargo/bin, /opt/homebrew/bin, \
+         /usr/local/bin, and PATH. Install osxphotos or ensure its directory is visible to the \
+         app launch environment."
             .to_string(),
     ))
 }
@@ -3301,8 +3340,9 @@ impl Drop for PhotosImportLock {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // SAFETY: `file` is an open lock-file descriptor owned by this guard; unlocking an
-            // advisory flock on drop is side-effect isolated to this descriptor.
+            // SAFETY: `file` is an open lock-file descriptor owned by this guard; unlocking
+            // an advisory flock on drop is side-effect isolated to this
+            // descriptor.
             let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
         }
     }
@@ -3338,8 +3378,9 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
         })?;
     #[cfg(unix)]
     {
-        // SAFETY: `file` is a valid open descriptor for the process-local Photos import lock.
-        // `flock` is advisory and does not outlive the file descriptor held by `PhotosImportLock`.
+        // SAFETY: `file` is a valid open descriptor for the process-local Photos import
+        // lock. `flock` is advisory and does not outlive the file descriptor
+        // held by `PhotosImportLock`.
         let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result != 0 {
             let err = std::io::Error::last_os_error();
@@ -3593,7 +3634,8 @@ mod tests {
 
     #[test]
     fn photos_zero_import_session_error_names_library_session_and_preserves_sources() {
-        let stderr = "1359:1452: execution error: Photos returned 0 imported items for /tmp/IMG_7564.JXL (batch 294) (-2700)";
+        let stderr = "1359:1452: execution error: Photos returned 0 imported items for \
+                      /tmp/IMG_7564.JXL (batch 294) (-2700)";
 
         let err = photos_applescript_import_chunk_error("JXL", 49, 531, 10, stderr);
         let message = err.to_string();
@@ -3614,7 +3656,8 @@ mod tests {
 
     #[test]
     fn photos_zero_import_session_error_handles_multi_file_batch() {
-        let stderr = "1359:1452: execution error: Photos returned 0 imported items for batch starting /tmp/a.JXL (expected 50, batch 63) (-2700)";
+        let stderr = "1359:1452: execution error: Photos returned 0 imported items for batch \
+                      starting /tmp/a.JXL (expected 50, batch 63) (-2700)";
 
         let err = photos_applescript_import_chunk_error("JXL", 1, 64, 100, stderr);
         let message = err.to_string();
@@ -5065,7 +5108,8 @@ mod tests {
         extend_osxphotos_query_timeout();
         // Base now: 480 (capped)
 
-        // Third query: 480 + 180 = 660s (11min) - exceeds 8min base but cold buffer adds more
+        // Third query: 480 + 180 = 660s (11min) - exceeds 8min base but cold buffer
+        // adds more
         let timeout3 = fast_img_osxphotos_query_timeout(64);
         assert_eq!(timeout3, Duration::from_mins(11));
 

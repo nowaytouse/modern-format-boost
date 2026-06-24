@@ -1,4 +1,5 @@
-//! Rich-style terminal panels (zero extra deps; mirrors Python `rich.Panel` / `Table`).
+//! Rich-style terminal panels (zero extra deps; mirrors Python `rich.Panel` /
+//! `Table`).
 
 use crate::infra::process_stream::ProcessorStats;
 use crate::infra::ui_tokens::{colors_enabled, pick_symbol};
@@ -50,7 +51,9 @@ pub fn draw_banner(version: &str) {
         );
         println!("{BORDER}│{RESET}  {DIM}PREMIUM MEDIA OPTIMIZER{RESET}{BORDER}│{RESET}");
         println!(
-            "{BORDER}│{RESET}  {GREEN}-{RESET} {DIM}No Data Loss{RESET}   {GREEN}-{RESET} {DIM}Smart Conversion{RESET}   {GREEN}-{RESET} {DIM}Auto-Repair{RESET}{BORDER}│{RESET}"
+            "{BORDER}│{RESET}  {GREEN}-{RESET} {DIM}No Data Loss{RESET}   {GREEN}-{RESET} \
+             {DIM}Smart Conversion{RESET}   {GREEN}-{RESET} \
+             {DIM}Auto-Repair{RESET}{BORDER}│{RESET}"
         );
         println!("{BORDER}╰{}╯{RESET}", "─".repeat(width.saturating_sub(2)));
     } else {
@@ -76,7 +79,8 @@ pub fn draw_separator(title: &str) {
     flush();
 }
 
-/// Runtime configuration dashboard (mirrors Rich `Panel` + `Table` before processing).
+/// Runtime configuration dashboard (mirrors Rich `Panel` + `Table` before
+/// processing).
 #[derive(Debug, Clone)]
 pub struct RuntimeDashboard {
     pub target_path: String,
@@ -177,12 +181,14 @@ fn print_panel_table(
         }
         if let Some(cpu) = cpu_percent {
             println!(
-                "{BORDER}│{RESET} {DIM}{temp_icon}  CPU Load{RESET:>14}  {BRAND}{BOLD}{cpu:.0}%{RESET}"
+                "{BORDER}│{RESET} {DIM}{temp_icon}  CPU Load{RESET:>14}  \
+                 {BRAND}{BOLD}{cpu:.0}%{RESET}"
             );
         }
         if let Some(mem) = memory_percent {
             println!(
-                "{BORDER}│{RESET} {DIM}{stats_icon} RAM Usage{RESET:>13}  {BRAND}{BOLD}{mem:.0}%{RESET}"
+                "{BORDER}│{RESET} {DIM}{stats_icon} RAM Usage{RESET:>13}  \
+                 {BRAND}{BOLD}{mem:.0}%{RESET}"
             );
         }
         if let Some(disk) = disk_free_gb {
@@ -219,7 +225,8 @@ pub struct PipelineSummary {
     pub fast_img_session_source_bytes: Option<u64>,
     /// Parsed from fast-img `[SIZE]` lines (session-scoped output bytes).
     pub fast_img_session_output_bytes: Option<u64>,
-    /// Post-delivery size override for drag summary when output dir is cleaned (Shortest Path).
+    /// Post-delivery size override for drag summary when output dir is cleaned
+    /// (Shortest Path).
     pub fast_img_size_after_override: Option<u64>,
 }
 
@@ -255,7 +262,8 @@ impl PipelineSummary {
     }
 }
 
-/// Optimization summary report (mirrors Python end-of-run Rich table + success bar).
+/// Optimization summary report (mirrors Python end-of-run Rich table + success
+/// bar).
 pub fn print_summary_report(summary: &PipelineSummary) {
     draw_separator("Task Completed");
 
@@ -374,7 +382,8 @@ pub fn print_critical_error_panel(processor: &str, exit_code: i32) {
             "{RED}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}"
         );
         println!(
-            "{RED}{BOLD}│  🚨 CRITICAL ERROR — '{processor}' exited with code {exit_code}  │{RESET}"
+            "{RED}{BOLD}│  🚨 CRITICAL ERROR — '{processor}' exited with code {exit_code}  \
+             │{RESET}"
         );
         println!(
             "{RED}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}"
@@ -384,14 +393,16 @@ pub fn print_critical_error_panel(processor: &str, exit_code: i32) {
         );
     } else {
         println!(
-            "[CRITICAL ERROR] The '{processor}' processor exited unexpectedly with code {exit_code}."
+            "[CRITICAL ERROR] The '{processor}' processor exited unexpectedly with code \
+             {exit_code}."
         );
         println!("Review the terminal output above for the specific error message.\n");
     }
     flush();
 }
 
-/// Hold terminal open after GUI/double-click failures (mirrors Python keypress wait).
+/// Hold terminal open after GUI/double-click failures (mirrors Python keypress
+/// wait).
 pub fn pause_before_gui_exit() {
     let gui = std::env::var("MFB_GUI_LAUNCH")
         .map(|v| !v.trim().is_empty() && v != "0")

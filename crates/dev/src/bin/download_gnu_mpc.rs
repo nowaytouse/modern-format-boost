@@ -13,9 +13,8 @@ const MIRRORS: &[&str] = &[
 ];
 
 const fn help_text() -> &'static str {
-    "Download GNU MPC 1.4.1 with mirror fallbacks.\n\n\
-Usage: download_gnu_mpc [OUTPUT]\n\n\
-Arguments:\n  OUTPUT    Target tarball path [default: mpc.tar.xz]"
+    "Download GNU MPC 1.4.1 with mirror fallbacks.\n\nUsage: download_gnu_mpc \
+     [OUTPUT]\n\nArguments:\n  OUTPUT    Target tarball path [default: mpc.tar.xz]"
 }
 
 fn print_help() {

@@ -54,9 +54,9 @@ mod numeric_cast_safety_tests {
         // UNSAFE pattern (what we're preventing):
         // let result = unsafe_pattern_division(grid_size);
         // fn unsafe_pattern_division(grid_size: u32) -> usize {
-        //     1000 / numeric_cast::u32_to_usize_strict(grid_size * grid_size, "BAD")
-        //                        ^^^^^^^^^^^^^^^^^ hides arithmetic
-        // }
+        //     1000 / numeric_cast::u32_to_usize_strict(grid_size * grid_size,
+        // "BAD")                        ^^^^^^^^^^^^^^^^^ hides
+        // arithmetic }
     }
 
     /// Verify width * height calculations don't overflow pre-cast
@@ -74,11 +74,13 @@ mod numeric_cast_safety_tests {
 
         // UNSAFE pattern (what we're preventing):
         // let bad = width * height; // Already overflowed at u32
-        // let result = numeric_cast::u64_to_usize_strict(u64::from(bad), "total_pixels");
-        //                                                        ^^^ garbage input
+        // let result = numeric_cast::u64_to_usize_strict(u64::from(bad),
+        // "total_pixels");
+        // ^^^ garbage input
     }
 
-    /// Verify `u32_to_usize_strict`, `u64_to_usize_strict` handle `None` properly
+    /// Verify `u32_to_usize_strict`, `u64_to_usize_strict` handle `None`
+    /// properly
     #[test]
     fn test_numeric_cast_strict_none_handling() {
         // These functions return Option and MUST be handled
@@ -95,8 +97,8 @@ mod numeric_cast_safety_tests {
         // Overflow case on u64→usize (when usize is u32)
         let large: u64 = u64::from(u32::MAX) + 1;
         let _result_large = numeric_cast::u64_to_usize_strict(large, "large_value");
-        // Result depends on platform, but must respect actual conversion semantics
-        // Never: unwrap_or(0) or unwrap_or(usize::MAX)
+        // Result depends on platform, but must respect actual conversion
+        // semantics Never: unwrap_or(0) or unwrap_or(usize::MAX)
     }
 
     /// Verify division patterns don't use default values

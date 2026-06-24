@@ -46,7 +46,8 @@ fn beijing_time_now() -> String {
         crate::media_conversion_gate::delivery_gpu_batch_audit(
             "delivery_gpu",
             format!(
-                "TIMEZONE ANOMALY: Beijing offset {}s rejected by chrono; falling back to UTC label",
+                "TIMEZONE ANOMALY: Beijing offset {}s rejected by chrono; falling back to UTC \
+                 label",
                 crate::constants::BEIJING_TIME_OFFSET_SECS
             ),
         );
@@ -118,7 +119,8 @@ impl StderrCapture {
                         crate::media_conversion_gate::delivery_gpu_batch_audit(
                             "delivery_gpu",
                             format!(
-                                "GPU AUDIT: Failed to read GPU encoder stderr | Forensic: Error '{err}'"
+                                "GPU AUDIT: Failed to read GPU encoder stderr | Forensic: Error \
+                                 '{err}'"
                             ),
                         );
                         break;
@@ -275,7 +277,8 @@ impl CachedGpuAccel {
 
 static GPU_ACCEL: OnceLock<Mutex<CachedGpuAccel>> = OnceLock::new();
 
-/// Maximum concurrent GPU encode tasks (probe/encode); follows `performance_schedule` when env unset.
+/// Maximum concurrent GPU encode tasks (probe/encode); follows
+/// `performance_schedule` when env unset.
 fn gpu_concurrency_max() -> usize {
     crate::media_conversion_gate::gpu_concurrency_max_or_default()
 }
@@ -349,8 +352,9 @@ fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     format!("{suffix}.{ext}")
 }
 
-/// Returns a temp extension string (e.g. "`gpu_temp.mp4`") for the given output path.
-/// Used by callers and by warmup encoding internally via `temp_extension_for`(_, "warmup").
+/// Returns a temp extension string (e.g. "`gpu_temp.mp4`") for the given output
+/// path. Used by callers and by warmup encoding internally via
+/// `temp_extension_for`(_, "warmup").
 #[must_use]
 pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
     temp_extension_for(output, "gpu_temp")
@@ -386,7 +390,8 @@ impl std::fmt::Display for GpuType {
     }
 }
 
-/// Represents a specific GPU hardware encoder with its configuration parameters.
+/// Represents a specific GPU hardware encoder with its configuration
+/// parameters.
 #[derive(Debug, Clone)]
 pub struct GpuEncoder {
     /// The GPU type this encoder belongs to.
@@ -418,7 +423,8 @@ impl GpuEncoder {
     /// For non-CRF encoders, falls back to bitrate-based arguments.
     #[must_use = "Result must be checked"]
     /// # Errors
-    /// Returns an error if constructing encoder arguments fails (invalid CRF or unsupported codec conversions).
+    /// Returns an error if constructing encoder arguments fails (invalid CRF or
+    /// unsupported codec conversions).
     pub fn get_crf_args(&self, crf: f32) -> anyhow::Result<Vec<String>> {
         if self.supports_crf {
             let quality_value = if self.gpu_type == GpuType::Apple {
@@ -474,9 +480,10 @@ impl Default for GpuAccel {
 impl GpuAccel {
     /// Detects available GPU acceleration and returns a cached snapshot.
     ///
-    /// Successful probes stay cached. Failed probes are soft-cached and automatically retried
-    /// after a short TTL so transient startup or device-busy failures do not latch CPU mode for
-    /// the lifetime of the process.
+    /// Successful probes stay cached. Failed probes are soft-cached and
+    /// automatically retried after a short TTL so transient startup or
+    /// device-busy failures do not latch CPU mode for the lifetime of the
+    /// process.
     #[must_use]
     pub fn detect() -> Self {
         let cached = Self::cached_state();
@@ -486,8 +493,8 @@ impl GpuAccel {
         cached.accel
     }
 
-    /// Detects available GPU acceleration and forces an immediate re-probe if the cached state is
-    /// currently unavailable.
+    /// Detects available GPU acceleration and forces an immediate re-probe if
+    /// the cached state is currently unavailable.
     #[must_use]
     pub fn detect_with_retry() -> Self {
         let cached = Self::cached_state();
@@ -518,10 +525,12 @@ impl GpuAccel {
         let diagnostics = Self::last_probe_diagnostics();
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
-                // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
+                // Log to file only (stderr layer filters out target "gpu_detection" for less
+                // terminal noise).
                 info!(target: "gpu_detection", "  GPU: {gpu_type}", gpu_type = self.gpu_type);
             } else {
-                // Surface why detection failed so the user has context without needing --verbose.
+                // Surface why detection failed so the user has context without needing
+                // --verbose.
                 let reason =
                     crate::media_conversion_gate::delivery_gpu_probe_failure_reason_or_default(
                         &diagnostics,
@@ -988,7 +997,8 @@ impl GpuAccel {
 
 /// Gets the list of available video encoders from `FFmpeg`.
 ///
-/// Executes `ffmpeg -encoders` and filters for video encoders (lines starting with " V").
+/// Executes `ffmpeg -encoders` and filters for video encoders (lines starting
+/// with " V").
 ///
 /// # Returns
 /// Vector of available video encoder names, or error string if command fails
@@ -1176,7 +1186,8 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> anyhow::Result<u32> {
     .ok_or_else(|| anyhow::anyhow!("Failed to estimate bitrate for CRF {crf} and codec {codec}"))
 }
 
-/// Result of a smart sampling strategy for selecting representative video segments.
+/// Result of a smart sampling strategy for selecting representative video
+/// segments.
 #[derive(Debug, Clone)]
 pub struct SmartSampleResult {
     /// The `FFmpeg` filter string for the smart sample, if applicable.
@@ -1265,7 +1276,8 @@ pub fn calculate_smart_sample(
     })
 }
 
-/// A quality score combining SSIM, compression ratio, and a weighted combined score.
+/// A quality score combining SSIM, compression ratio, and a weighted combined
+/// score.
 #[derive(Debug, Clone, Copy)]
 pub struct QualityScore {
     /// The SSIM (Structural Similarity Index) score.
@@ -1354,7 +1366,8 @@ pub fn calculate_quality_score(
     score
 }
 
-/// Returns whether the new quality score is meaningfully better than the old one.
+/// Returns whether the new quality score is meaningfully better than the old
+/// one.
 #[must_use]
 pub fn is_quality_better(
     new_score: &QualityScore,
@@ -1408,10 +1421,12 @@ fn estimate_cpu_search_center_dynamic_impl(
     center
 }
 
-/// Estimates the center of the CPU search range based on a GPU boundary CRF and GPU type.
+/// Estimates the center of the CPU search range based on a GPU boundary CRF and
+/// GPU type.
 ///
-/// `codec` is reserved for future codec-specific GPU→CPU CRF mapping; it is accepted for API
-/// stability and intentionally ignored until tuning data exists.
+/// `codec` is reserved for future codec-specific GPU→CPU CRF mapping; it is
+/// accepted for API stability and intentionally ignored until tuning data
+/// exists.
 #[must_use]
 pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary: f32,
@@ -1423,7 +1438,8 @@ pub fn estimate_cpu_search_center_dynamic(
     estimate_cpu_search_center_dynamic_impl(gpu_boundary, gpu_type, compression_potential)
 }
 
-/// Estimates a CPU search range from a GPU range, adjusting for GPU type and codec.
+/// Estimates a CPU search range from a GPU range, adjusting for GPU type and
+/// codec.
 #[must_use]
 pub fn estimate_cpu_search_range(
     gpu_range: (f32, f32),
@@ -1467,7 +1483,8 @@ pub fn gpu_boundary_to_cpu_range(
     (cpu_low, cpu_high)
 }
 
-/// Converts a GPU CRF to an estimated CPU CRF (deprecated, use `estimate_cpu_search_center`).
+/// Converts a GPU CRF to an estimated CPU CRF (deprecated, use
+/// `estimate_cpu_search_center`).
 #[deprecated(since = "5.0.1", note = "use estimate_cpu_search_center instead")]
 #[must_use]
 pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
@@ -1479,7 +1496,8 @@ pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
 pub struct GpuCoarseResult {
     /// The CRF value at the compression boundary found by the GPU search.
     pub gpu_boundary_crf: Option<f32>,
-    /// The output file size (bytes) at the best CRF found, if any compression point was found.
+    /// The output file size (bytes) at the best CRF found, if any compression
+    /// point was found.
     pub gpu_best_size: Option<u64>,
     /// The SSIM score at the best CRF found, if measured.
     pub gpu_best_ssim: Option<f64>,
@@ -2191,7 +2209,8 @@ impl FinalGpuOutcome {
                 let (cpu_center, cpu_low, cpu_high) =
                     mapping.gpu_to_cpu_range(boundary_crf, config.min_crf, config.max_crf);
                 messages.push(format!(
-                    "   {} CPU Search Range: [{cpu_low:.1}, {cpu_high:.1}] (center: {cpu_center:.1})",
+                    "   {} CPU Search Range: [{cpu_low:.1}, {cpu_high:.1}] (center: \
+                     {cpu_center:.1})",
                     crate::media_conversion_gate::ui_icon_pick("📊", "[STATS]")
                 ));
             }
@@ -2786,7 +2805,8 @@ fn encode_gpu_sample(
                                 crate::media_conversion_gate::delivery_gpu_batch_audit(
                                     "gpu_progress_time_parse_failed",
                                     format!(
-                                        "failed to parse GPU ffmpeg out_time_us token {val:?}: {err}"
+                                        "failed to parse GPU ffmpeg out_time_us token {val:?}: \
+                                         {err}"
                                     ),
                                 );
                                 continue;
@@ -2843,7 +2863,8 @@ fn encode_gpu_sample(
                                     crate::media_conversion_gate::delivery_gpu_batch_audit(
                                         "gpu_progress_metadata_unavailable",
                                         format!(
-                                            "metadata unavailable for {}: {err}; using linear estimate",
+                                            "metadata unavailable for {}: {err}; using linear \
+                                             estimate",
                                             output.display()
                                         ),
                                     );
@@ -2911,7 +2932,8 @@ fn encode_gpu_sample(
             stderr_lines.join("\n")
         };
         bail!(
-            "GPU encoding failed (exit code: {:?})\nInput: {}\nOutput: {}\nEncoder: {}\nCRF: {:.1}\nSample duration: {:.1}s\nStderr:\n{}",
+            "GPU encoding failed (exit code: {:?})\nInput: {}\nOutput: {}\nEncoder: {}\nCRF: \
+             {:.1}\nSample duration: {:.1}s\nStderr:\n{}",
             status.code(),
             input.display(),
             output.display(),
@@ -3192,7 +3214,8 @@ where
 
     if ultimate_mode {
         validation.messages.push(format!(
-            "      {} Ultimate mode: skipping final GPU SSIM (3D quality gate owns perceptual validation)",
+            "      {} Ultimate mode: skipping final GPU SSIM (3D quality gate owns perceptual \
+             validation)",
             crate::media_conversion_gate::ui_icon_pick("ℹ️", "[INFO]")
         ));
         return validation;
@@ -3225,7 +3248,8 @@ where
                         }
                         Ok(None) => {
                             validation.messages.push(format!(
-                                "      {} Final GPU SSIM unavailable: unable to parse ffmpeg SSIM output",
+                                "      {} Final GPU SSIM unavailable: unable to parse ffmpeg SSIM \
+                                 output",
                                 crate::modern_ui::symbols::styled_warning_icon()
                             ));
                             None
@@ -3414,7 +3438,8 @@ where
             "      CRF range: {crf_range:.1} → Initial step: {initial_step:.1}"
         ));
         messages.push(format!(
-            "      Strategy: step × {gpu_decay_factor:.1} per wall hit, max {gpu_max_wall_hits} hits"
+            "      Strategy: step × {gpu_decay_factor:.1} per wall hit, max {gpu_max_wall_hits} \
+             hits"
         ));
 
         let mut stagnation_count = 0u32;
@@ -3486,7 +3511,8 @@ where
 
                         if stagnation_count >= 3 {
                             messages.push(format!(
-                                "   {} [GPU] Size plateau detected ({stagnation_count} stagnant iterations). Stopping Stage 1A.",
+                                "   {} [GPU] Size plateau detected ({stagnation_count} stagnant \
+                                 iterations). Stopping Stage 1A.",
                                 crate::media_conversion_gate::ui_icon_pick("⚡", "[FAST]")
                             ));
                             break;
@@ -3508,7 +3534,8 @@ where
 
                         if wall_hits >= gpu_max_wall_hits {
                             messages.push(format!(
-                                "   {} MAX WALL HITS ({gpu_max_wall_hits})! Stopping at CRF {last_compressible_crf:.1}",
+                                "   {} MAX WALL HITS ({gpu_max_wall_hits})! Stopping at CRF \
+                                 {last_compressible_crf:.1}",
                                 crate::media_conversion_gate::ui_icon_pick("🧱", "[FIX]")
                             ));
                             state.boundary_high = test_crf;
@@ -3529,7 +3556,8 @@ where
                             format!("decay ×{gpu_decay_factor:.1}^{wall_hits}")
                         };
                         messages.push(format!(
-                            "   {} Curve backtrack: step {current_step:.1} → {new_step:.1} ({phase_info})",
+                            "   {} Curve backtrack: step {current_step:.1} → {new_step:.1} \
+                             ({phase_info})",
                             crate::media_conversion_gate::ui_icon_pick("↩️", "<")
                         ));
 
@@ -3653,8 +3681,9 @@ where
         }
     }
 
-    // Tighten the unexplored gap for Stage2: every CRF at or above the last wall hit
-    // is a known non-compressing point, so binary refinement need not revisit it.
+    // Tighten the unexplored gap for Stage2: every CRF at or above the last wall
+    // hit is a known non-compressing point, so binary refinement need not
+    // revisit it.
     if state.found_compress_point && last_fail_crf < state.boundary_high {
         state.boundary_high = last_fail_crf;
     }
@@ -3770,7 +3799,8 @@ where
             }
             Err(err) => {
                 messages.push(format!(
-                    "   {} Encoding failed at CRF {test_crf:.1} ({err}), stopping binary refinement",
+                    "   {} Encoding failed at CRF {test_crf:.1} ({err}), stopping binary \
+                     refinement",
                     crate::modern_ui::symbols::styled_warning_icon()
                 ));
                 break;
@@ -3900,7 +3930,8 @@ where
                                         )
                                     ));
                                     messages.push(format!(
-                                        "      └─ CRF {ceiling_crf:.1}, PSNR {ceiling_psnr:.2}dB (PSNR plateau)"
+                                        "      └─ CRF {ceiling_crf:.1}, PSNR {ceiling_psnr:.2}dB \
+                                         (PSNR plateau)"
                                     ));
                                     messages.push(
                                         "      └─ Further CRF reduction won't improve quality"
@@ -3925,7 +3956,8 @@ where
                             if improvement < 0.5_f64 {
                                 consecutive_small_improvements += 1_i32;
                                 messages.push(format!(
-                                    "      {} Small improvement ({consecutive_small_improvements}/2)",
+                                    "      {} Small improvement \
+                                     ({consecutive_small_improvements}/2)",
                                     crate::modern_ui::symbols::styled_warning_icon()
                                 ));
                                 if consecutive_small_improvements >= 2_i32 {
@@ -4024,7 +4056,9 @@ fn finalize_gpu_search_result(
     (outcome.into_result(encoder), messages)
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 /// Performs GPU coarse search with detailed logging.
 ///
 /// Implements the main GPU acceleration testing logic with comprehensive
@@ -4519,9 +4553,8 @@ mod tests {
     #[test]
     fn test_summarize_ffmpeg_failure_line_prefers_specific_diagnostic() {
         let stderr = "\
-Error while opening encoder - maybe incorrect parameters\n\
-[hevc_videotoolbox @ 0x123] Cannot create compression session: -12908\n\
-Conversion failed!";
+Error while opening encoder - maybe incorrect parameters\n[hevc_videotoolbox @ 0x123] Cannot \
+                      create compression session: -12908\nConversion failed!";
 
         assert_eq!(
             summarize_ffmpeg_failure_line(stderr),

@@ -1,7 +1,7 @@
 //! File Copier Module
 //!
-//! Ensures the output directory contains all files by copying unsupported formats
-//! while skipping converted files and merged XMP sidecars.
+//! Ensures the output directory contains all files by copying unsupported
+//! formats while skipping converted files and merged XMP sidecars.
 
 use crate::quality_matcher::SourceCodec;
 use std::path::{Path, PathBuf};
@@ -85,7 +85,8 @@ fn prescan_copy_candidates(input_dir: &Path, recursive: bool) -> usize {
                     "delivery_io_copy",
                     input_dir,
                     format!(
-                        "COPY AUDIT: Failed to inspect directory entry during pre-scan | Forensic: Directory '{}', Error '{}'",
+                        "COPY AUDIT: Failed to inspect directory entry during pre-scan | \
+                         Forensic: Directory '{}', Error '{}'",
                         input_dir.display(),
                         err
                     ),
@@ -113,7 +114,8 @@ fn record_walkdir_failure(input_dir: &Path, err: &walkdir::Error, result: &mut C
         "delivery_io_copy",
         &path,
         format!(
-            "COPY AUDIT: Directory traversal failed during batch copy | Forensic: Path '{}', Error '{err}'",
+            "COPY AUDIT: Directory traversal failed during batch copy | Forensic: Path '{}', \
+             Error '{err}'",
             path.display(),
         ),
     );
@@ -204,8 +206,9 @@ fn ensure_destination_parent(path: &Path, dest: &Path, result: &mut CopyResult) 
 
 fn handle_copied_file_success(path: &Path, dest: &Path, result: &mut CopyResult) {
     // Bytes are already on disk via std::fs::copy in copy_candidate_file.
-    // Do not call metadata::copy() here — it merges XMP and re-applies timestamps, and
-    // handle_copied_file_xmp() would repeat both (duplicate audit noise on .psd/.pdf).
+    // Do not call metadata::copy() here — it merges XMP and re-applies timestamps,
+    // and handle_copied_file_xmp() would repeat both (duplicate audit noise on
+    // .psd/.pdf).
     if let Err(e) = crate::metadata::preserve(path, dest) {
         let error_msg = format!(
             "Copied file but failed to preserve metadata from {} to {}: {}",
@@ -261,7 +264,8 @@ fn handle_copied_file_xmp(path: &Path, dest: &Path) {
                 "delivery_io_copy",
                 path,
                 format!(
-                    "XMP AUDIT: XMP merge failed, trying to copy sidecar as fallback | Forensic: File '{}', Error '{}'",
+                    "XMP AUDIT: XMP merge failed, trying to copy sidecar as fallback | Forensic: \
+                     File '{}', Error '{}'",
                     path.display(),
                     err
                 ),
@@ -335,7 +339,9 @@ fn copy_candidate_file(path: &Path, input_dir: &Path, output_dir: &Path, result:
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+// Rationale: This function handles complex, sequential initialization or
+// business logic where further fragmentation would hinder readability and
+// maintainability.
 pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bool) -> CopyResult {
     let mut result = CopyResult::new();
 
@@ -385,7 +391,8 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         crate::media_conversion_gate::delivery_io_batch_audit(
             "delivery_io_copy",
             format!(
-                "COPY AUDIT: Some files failed to copy during batch operation | Forensic: FailedCount={}",
+                "COPY AUDIT: Some files failed to copy during batch operation | Forensic: \
+                 FailedCount={}",
                 result.failed
             ),
         );
@@ -435,7 +442,8 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
                             "delivery_io_copy",
                             xmp_path,
                             format!(
-                                "Copied XMP sidecar bytes but failed to preserve metadata {} -> {}: {e}",
+                                "Copied XMP sidecar bytes but failed to preserve metadata {} -> \
+                                 {}: {e}",
                                 xmp_path.display(),
                                 xmp_dest,
                             ),
@@ -506,7 +514,8 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
                 crate::media_conversion_gate::delivery_io_batch_audit(
                     "delivery_io_copy",
                     format!(
-                        "COPY AUDIT: Failed to inspect directory entry while counting files | Forensic: Directory '{}', Error '{}'",
+                        "COPY AUDIT: Failed to inspect directory entry while counting files | \
+                         Forensic: Directory '{}', Error '{}'",
                         dir.display(),
                         err
                     ),
@@ -587,8 +596,9 @@ pub fn verify_output_completeness_for_domain(
         VerifyDomain::ImagesAndPassthrough => input_stats.images + input_stats.others,
         VerifyDomain::VideosAndPassthrough => input_stats.videos + input_stats.others,
     };
-    // Compare like-for-like: do not treat output sidecars/videos as "extra" when the
-    // domain only expects images + passthrough files (matches Rust verify integrity scope).
+    // Compare like-for-like: do not treat output sidecars/videos as "extra" when
+    // the domain only expects images + passthrough files (matches Rust verify
+    // integrity scope).
     let actual = match domain {
         VerifyDomain::All => output_stats.expected_output(),
         VerifyDomain::ImagesAndPassthrough => output_stats.images + output_stats.others,
@@ -617,7 +627,8 @@ pub fn verify_output_completeness_for_domain(
         std::cmp::Ordering::Greater => (
             false,
             format!(
-                "{err} Verification FAILED: missing {diff} files! (expected {expected}, got {actual})"
+                "{err} Verification FAILED: missing {diff} files! (expected {expected}, got \
+                 {actual})"
             ),
         ),
         std::cmp::Ordering::Less => (

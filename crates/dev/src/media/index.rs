@@ -1,7 +1,8 @@
 //! 🗄 Media Index System - `SQLite` Backend (Dev-only)
 //!
-//! Accelerates development by flattening physical conversion costs into a structured DB.
-//! Relocated to crates/dev to separate development auditing from production code.
+//! Accelerates development by flattening physical conversion costs into a
+//! structured DB. Relocated to crates/dev to separate development auditing from
+//! production code.
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
@@ -18,7 +19,8 @@ impl MediaIndex {
     /// Opens or creates the media index database at the specified path.
     ///
     /// # Errors
-    /// Returns an error if the database cannot be opened or schema initialization fails.
+    /// Returns an error if the database cannot be opened or schema
+    /// initialization fails.
     pub fn open(db_path: &Path) -> Result<Self> {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open MediaIndex at {}", db_path.display()))?;
@@ -47,7 +49,8 @@ impl MediaIndex {
     fn init_schema(conn: &Connection) -> Result<()> {
         foundation::log_info!(
             "MediaIndex",
-            "Initializing SQLite development schema; verifying 'media_entries' table and indices..."
+            "Initializing SQLite development schema; verifying 'media_entries' table and \
+             indices..."
         );
         conn.execute(
             "CREATE TABLE IF NOT EXISTS media_entries (
@@ -115,11 +118,13 @@ impl MediaIndex {
 
         foundation::log_success!(
             "MediaIndex",
-            "Development schema verification complete; media_entries and audit tables are ready for caching."
+            "Development schema verification complete; media_entries and audit tables are ready \
+             for caching."
         );
 
         Ok(())
     }
+
     /// Upserts a raw extraction record (only overwrites immutable features).
     ///
     /// # Errors
@@ -249,7 +254,8 @@ WHERE blake3 = ?1",
         self.conn.prepare(sql)
     }
 
-    /// Snapshots all CURRENT decisions from `media_entries` into `decision_snapshots` under a tag.
+    /// Snapshots all CURRENT decisions from `media_entries` into
+    /// `decision_snapshots` under a tag.
     ///
     /// # Errors
     /// Returns an error if the database update fails.
@@ -300,7 +306,8 @@ blake3, session_id, actual_format, actual_params_json, vmaf_score, audit_at
 #[must_use]
 /// # Panics
 ///
-/// Panics if the current system time is out of range for a 64-bit signed integer.
+/// Panics if the current system time is out of range for a 64-bit signed
+/// integer.
 pub fn now_unix() -> i64 {
     i64::try_from(
         SystemTime::now()

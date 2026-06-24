@@ -1,7 +1,8 @@
 //! Delivery metadata policy (M23 CONTRACT).
 //!
-//! Conversion **must not** fail solely because the source lacks EXIF, xattrs, or sidecars.
-//! Layers audit and continue; [`MetadataDeliveryReport`] makes the outcome explicit.
+//! Conversion **must not** fail solely because the source lacks EXIF, xattrs,
+//! or sidecars. Layers audit and continue; [`MetadataDeliveryReport`] makes the
+//! outcome explicit.
 
 use std::io;
 use std::path::Path;
@@ -13,9 +14,11 @@ pub enum MetadataLayerOutcome {
     /// Layer ran and completed without a recorded soft failure.
     #[default]
     Applied,
-    /// Tool missing (e.g. `exiftool` not on `PATH`) — non-blocking for delivery.
+    /// Tool missing (e.g. `exiftool` not on `PATH`) — non-blocking for
+    /// delivery.
     SkippedNoTool,
-    /// Source had no corresponding metadata (empty tags, no xattrs, unsupported xattr API).
+    /// Source had no corresponding metadata (empty tags, no xattrs, unsupported
+    /// xattr API).
     SkippedNoSourceMetadata,
     /// Partial failure audited; delivery continues.
     PartialAudit,
@@ -73,7 +76,8 @@ pub(in crate::metadata) fn exiftool_combined_output_indicates_no_source_tags(
         || s.contains("file not contain metadata")
 }
 
-/// CONTRACT: `ExifTool` process output indicates absence-only (not structural corruption).
+/// CONTRACT: `ExifTool` process output indicates absence-only (not structural
+/// corruption).
 #[must_use]
 pub(in crate::metadata) fn exiftool_output_indicates_no_source_tags(output: &Output) -> bool {
     let combined = format!(
@@ -84,7 +88,8 @@ pub(in crate::metadata) fn exiftool_output_indicates_no_source_tags(output: &Out
     exiftool_combined_output_indicates_no_source_tags(&combined)
 }
 
-/// CONTRACT: I/O error text from a metadata layer is soft for delivery (audit + continue).
+/// CONTRACT: I/O error text from a metadata layer is soft for delivery (audit +
+/// continue).
 #[must_use]
 pub(in crate::metadata) fn is_metadata_delivery_soft_error(err: &io::Error) -> bool {
     if is_xattr_api_absence(err) {
@@ -93,12 +98,14 @@ pub(in crate::metadata) fn is_metadata_delivery_soft_error(err: &io::Error) -> b
     exiftool_combined_output_indicates_no_source_tags(&err.to_string())
 }
 
-/// Best-effort metadata preservation for conversion delivery (never blocks on empty source tags).
+/// Best-effort metadata preservation for conversion delivery (never blocks on
+/// empty source tags).
 ///
 /// # Errors
-/// Returns an error only when the destination cannot be accessed for preservation
-/// (missing output, permission denied on `dst`, etc.). A missing or unreadable `src`
-/// yields [`MetadataDeliveryReport`] with skipped layers and `Ok`.
+/// Returns an error only when the destination cannot be accessed for
+/// preservation (missing output, permission denied on `dst`, etc.). A missing
+/// or unreadable `src` yields [`MetadataDeliveryReport`] with skipped layers
+/// and `Ok`.
 pub fn preserve_for_delivery(src: &Path, dst: &Path) -> io::Result<MetadataDeliveryReport> {
     let mut report = MetadataDeliveryReport::default();
 
@@ -131,10 +138,12 @@ pub fn preserve_for_delivery(src: &Path, dst: &Path) -> io::Result<MetadataDeliv
     Ok(report)
 }
 
-/// Best-effort timestamp sync after delivery mutations (audit only on partial failure).
+/// Best-effort timestamp sync after delivery mutations (audit only on partial
+/// failure).
 ///
 /// # Errors
-/// Does not propagate errors; partial timestamp failures are audited into `report`.
+/// Does not propagate errors; partial timestamp failures are audited into
+/// `report`.
 pub fn apply_file_timestamps_for_delivery(
     src: &Path,
     dst: &Path,

@@ -25,7 +25,8 @@ fn manual_debug_scan_debug_dir_only() {
     // Disabled by default to avoid accidental scans of private media.
     if std::env::var("MFB_RUN_DEBUG_SCAN").is_err() {
         log_detail!(
-            "Skipped manual debug scan. To run set MFB_RUN_DEBUG_SCAN=1 and optionally MFB_DEBUG_DIR=debug/media",
+            "Skipped manual debug scan. To run set MFB_RUN_DEBUG_SCAN=1 and optionally \
+             MFB_DEBUG_DIR=debug/media",
         );
         return;
     }

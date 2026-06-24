@@ -119,7 +119,8 @@ impl SamplingConfig {
             crate::media_conversion_gate::delivery_msssim_fallback_audit(
                 "delivery_msssim",
                 format!(
-                    "Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
+                    "Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM \
+                     only).",
                     self.duration_secs
                 ),
             );
@@ -127,7 +128,8 @@ impl SamplingConfig {
             let Some(rate) = self.strategy.sampling_rate() else {
                 crate::media_conversion_gate::delivery_msssim_fallback_audit(
                     "delivery_msssim",
-                    "Quality verification sampling rate unavailable; continuing without MS-SSIM sampling detail.",
+                    "Quality verification sampling rate unavailable; continuing without MS-SSIM \
+                     sampling detail.",
                 );
                 return;
             };

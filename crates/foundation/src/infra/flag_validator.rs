@@ -1,8 +1,10 @@
-//! Flag Combination Validator - Simplified logic, supporting recommended combinations only.
+//! Flag Combination Validator - Simplified logic, supporting recommended
+//! combinations only.
 //!
 //! Only one valid combination (all enabled by default):
-//! - `explore + match_quality + compress` (optional `--ultimate`)
-//!   All other combinations are Invalid; no longer compatible with legacy individual or partial combinations.
+//! - `explore + match_quality + compress` (optional `--ultimate`) All other
+//!   combinations are Invalid; no longer compatible with legacy individual or
+//!   partial combinations.
 
 use std::fmt;
 
@@ -80,9 +82,11 @@ pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> Fla
 pub fn validate_flags_with_ultimate(request: FlagRequest) -> FlagValidation {
     if !request.base.explore || !request.base.match_quality || !request.base.compress {
         return FlagValidation::Invalid(format!(
-            "{}\n   {} Omit flags to use defaults, or do not turn off explore/match-quality/compress.",
+            "{}\n   {} Omit flags to use defaults, or do not turn off \
+             explore/match-quality/compress.",
             crate::media_conversion_gate::ui_user_facing_error(
-                "Only the recommended flag combination is supported: explore + match-quality + compress (all on by default)."
+                "Only the recommended flag combination is supported: explore + match-quality + \
+                 compress (all on by default)."
             ),
             crate::modern_ui::symbols::pick("💡", "[HINT]")
         ));
@@ -122,10 +126,10 @@ pub fn validate_flags_result_with_ultimate(request: FlagRequest) -> Result<FlagM
 pub fn print_flag_help() {
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_METADATA,
-        "Flag (simplified): Only the recommended combination is supported.\n\
-           Default: explore + match-quality + compress (all on).\n\
-           Optional: --ultimate for tighter 3D quality plateau search.\n\
-           To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance"
+        "Flag (simplified): Only the recommended combination is supported.\nDefault: explore + \
+         match-quality + compress (all on).\nOptional: --ultimate for tighter 3D quality plateau \
+         search.\nTo disable optional features only: --no-apple-compat, --no-recursive, \
+         --no-allow-size-tolerance"
     );
 }
 

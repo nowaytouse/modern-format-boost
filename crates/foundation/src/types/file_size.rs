@@ -1,6 +1,7 @@
 //! `FileSize` Type-Safe Wrapper
 //!
-//! Provides type-safe file size operations to prevent overflow and negative values.
+//! Provides type-safe file size operations to prevent overflow and negative
+//! values.
 
 use std::fmt;
 
@@ -14,11 +15,10 @@ pub use crate::constants::{
 pub struct FileSize(u64);
 
 impl FileSize {
-    pub const ZERO: Self = Self(0);
-
+    pub const GB: u64 = crate::constants::GB;
     pub const KB: u64 = crate::constants::KB;
     pub const MB: u64 = crate::constants::MB;
-    pub const GB: u64 = crate::constants::GB;
+    pub const ZERO: Self = Self(0);
 
     #[inline]
     #[must_use]

@@ -197,7 +197,8 @@ pub mod gradients {
     }
 }
 
-// ─── Logging Infrastructure (Moved from terminal_logging.rs & enhanced_logging.rs) ───
+// ─── Logging Infrastructure (Moved from terminal_logging.rs &
+// enhanced_logging.rs) ───
 
 /// Color Manager - Ensures colors are correctly closed
 pub struct ColorGuard {
@@ -794,7 +795,8 @@ impl UpstreamToolLogger {
             );
         } else {
             crate::progress_mode::emit_stderr(&format!(
-                "\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m [{}] exited with non-zero code: {exit_code}",
+                "\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m [{}] exited with non-zero code: \
+                 {exit_code}",
                 self.tool_name
             ));
             tracing::error!(
@@ -809,7 +811,8 @@ impl UpstreamToolLogger {
 ///
 /// # Errors
 ///
-/// Returns an error if an IO error or configuration error occurs during initialization.
+/// Returns an error if an IO error or configuration error occurs during
+/// initialization.
 pub fn init_enhanced_logging(
     program_name: &str,
     log_level: LogLevel,
@@ -1040,7 +1043,8 @@ pub mod symbols {
         }
     }
 
-    /// Inline success/failure label with optional console color (JXL retry lines, etc.).
+    /// Inline success/failure label with optional console color (JXL retry
+    /// lines, etc.).
     #[must_use]
     pub fn styled_ok_fail_label(ok: bool) -> String {
         if crate::progress_mode::is_plain_mode() {
@@ -1087,13 +1091,15 @@ pub mod symbols {
 
 /// Brand palette for cross-language launchers (Python Rich, docs).
 pub mod brand {
-    /// MFB blue `#43a0ff` — matches [`crate::modern_ui::colors::MFB_BLUE`] RGB (67, 160, 255).
+    /// MFB blue `#43a0ff` — matches [`crate::modern_ui::colors::MFB_BLUE`] RGB
+    /// (67, 160, 255).
     pub const HEX_BLUE: &str = "#43a0ff";
 }
 
 /// Constants that define the appearance of progress bars and spinners.
 pub mod progress_style {
-    /// Characters used to represent filled, boundary, and empty portions of a progress bar.
+    /// Characters used to represent filled, boundary, and empty portions of a
+    /// progress bar.
     pub const PROGRESS_CHARS: &str = "=#-";
 
     /// Default width of the progress bar in characters.
@@ -1104,14 +1110,18 @@ pub mod progress_style {
     /// Character displayed at the right edge of the progress bar.
     pub const BAR_RIGHT: &str = "]";
 
-    /// Characters used for the animated spinner frames (dash, forward slash, pipe, backslash).
+    /// Characters used for the animated spinner frames (dash, forward slash,
+    /// pipe, backslash).
     pub const SPINNER_CHARS: &str = "-/|\\";
 
     /// Template string for batch-processing progress (used with `indicatif`).
-    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {pos}/{len} * {elapsed_precise} (ETA: {eta}) * {msg}";
+    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] \
+                                      {percent:>3}% * {pos}/{len} * {elapsed_precise} (ETA: \
+                                      {eta}) * {msg}";
 
     /// Template string for explore-mode progress (used with `indicatif`).
-    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {elapsed} * {msg}";
+    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} \
+                                        [{bar:35.green/black}] {percent:>3}% * {elapsed} * {msg}";
 
     /// Template string for compact progress display (used with `indicatif`).
     pub const COMPACT_TEMPLATE: &str =
@@ -1126,7 +1136,8 @@ const SPINNER_DOTS: &[&str] = &["*", ".", "o", "O"];
 
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 
-/// Returns the next spinner animation frame (rotating through dash, slash, pipe, backslash).
+/// Returns the next spinner animation frame (rotating through dash, slash,
+/// pipe, backslash).
 pub fn spinner_frame() -> &'static str {
     let raw = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed);
     let frame =
@@ -1142,7 +1153,8 @@ pub fn spinner_frame() -> &'static str {
     )
 }
 
-/// Returns the next spinner dots animation frame (rotating through asterisk, dot, small o, capital O).
+/// Returns the next spinner dots animation frame (rotating through asterisk,
+/// dot, small o, capital O).
 pub fn spinner_dots() -> &'static str {
     let raw = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed);
     let frame =
@@ -1171,7 +1183,8 @@ pub enum ProgressStyle {
 /// `progress` is clamped to the range `0.0..=1.0`, where `1.0` represents 100%.
 /// The visual appearance is determined by the `style` variant.
 /// # Errors
-/// Returns an error if the progress bar cannot be rendered due to invalid parameters.
+/// Returns an error if the progress bar cannot be rendered due to invalid
+/// parameters.
 pub fn render_progress_bar(
     progress: f64,
     width: usize,
@@ -1225,11 +1238,13 @@ pub fn render_progress_bar(
     }
 }
 
-/// Renders a progress bar with color-coded segments based on completion percentage.
+/// Renders a progress bar with color-coded segments based on completion
+/// percentage.
 ///
 /// The bar color transitions from red (low) to yellow, cyan, and green (high).
 /// # Errors
-/// Returns an error if the colored progress bar cannot be rendered due to invalid parameters.
+/// Returns an error if the colored progress bar cannot be rendered due to
+/// invalid parameters.
 pub fn render_colored_progress(
     progress: f64,
     width: usize,
@@ -1240,10 +1255,12 @@ pub fn render_colored_progress(
     let Some(pct) = crate::numeric_cast::f64_to_u32_strict(progress * 100.0, "progress_pct") else {
         // Critical error: Progress calculation failed strictly.
         // Since the function returns (), we cannot propagate an error.
-        // Defaulting to 0 for UI display as a fallback, but this is not ideal and logs the issue.
-        // This indicates a problem with the input 'progress' value (NaN, Inf, negative, or out of range).
+        // Defaulting to 0 for UI display as a fallback, but this is not ideal and logs
+        // the issue. This indicates a problem with the input 'progress' value
+        // (NaN, Inf, negative, or out of range).
         error!(
-            "Strict progress calculation failed for pct. Progress value was likely invalid. Defaulting to 0% for UI display."
+            "Strict progress calculation failed for pct. Progress value was likely invalid. \
+             Defaulting to 0% for UI display."
         );
         return Err(crate::unified_error::ImgQualityError::NumericError(
             "Progress calculation failed".to_string(),
@@ -1263,7 +1280,8 @@ pub fn render_colored_progress(
     Ok(format!("{color}{bar}{RESET}"))
 }
 
-/// Tracks the state of a CRF exploration progress, displaying real-time updates.
+/// Tracks the state of a CRF exploration progress, displaying real-time
+/// updates.
 pub struct ExploreProgressState {
     /// Current stage label (e.g., "Exploring", "Finalizing").
     pub stage: String,
@@ -1296,8 +1314,8 @@ impl ExploreProgressState {
         }
     }
 
-    /// Updates the state with new CRF, size percentage, and optional SSIM values,
-    /// then prints the updated progress to stderr.
+    /// Updates the state with new CRF, size percentage, and optional SSIM
+    /// values, then prints the updated progress to stderr.
     pub fn update(&mut self, crf: f32, size_pct: f64, ssim: Option<f64>) {
         self.crf = crf;
         self.size_pct = size_pct;
@@ -1311,7 +1329,8 @@ impl ExploreProgressState {
         self.display();
     }
 
-    /// Displays the current progress inline on stderr, overwriting the previous line.
+    /// Displays the current progress inline on stderr, overwriting the previous
+    /// line.
     pub fn display(&self) {
         use colors::{BRIGHT_GREEN, BRIGHT_YELLOW, CYAN, DIM, RESET};
         use symbols::{BULLET, SAVE, WARNING};
@@ -1371,7 +1390,8 @@ impl ExploreProgressState {
         let _ = io::stderr().flush();
     }
 
-    /// Prints a final summary of the exploration results, including quality rating.
+    /// Prints a final summary of the exploration results, including quality
+    /// rating.
     pub fn finish(&self, final_crf: f32, final_size_pct: f64, final_ssim: Option<f64>) {
         use colors::{BRIGHT_GREEN, BRIGHT_YELLOW, RESET};
         use symbols::{CHECK, SAVE, SUCCESS, WARNING};
@@ -1418,7 +1438,8 @@ impl ExploreProgressState {
     }
 }
 
-/// Prints a boxed result with a decorative border, centered title, and content lines.
+/// Prints a boxed result with a decorative border, centered title, and content
+/// lines.
 pub fn print_result_box(title: &str, lines: &[&str]) {
     use colors::{BOLD, MFB_BLUE, RESET};
 
@@ -1762,7 +1783,8 @@ pub fn print_separator() {
     ));
 }
 
-/// Formats a byte count into a human-readable string with appropriate units (B, KB, MB, GB).
+/// Formats a byte count into a human-readable string with appropriate units (B,
+/// KB, MB, GB).
 #[must_use]
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -1806,7 +1828,8 @@ pub fn format_size_change(pct: f64) -> String {
     }
 }
 
-/// Formats a signed byte difference into a human-readable string with a sign prefix.
+/// Formats a signed byte difference into a human-readable string with a sign
+/// prefix.
 #[must_use]
 pub fn format_size_diff(diff_bytes: i64) -> String {
     const KB: u64 = 1024;

@@ -299,7 +299,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
     if data.len() < 2 || data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
-            "JPEG AUDIT: Invalid signature | Forensic: Missing SOI marker (FFD8); refusing to parse non-JPEG data",
+            "JPEG AUDIT: Invalid signature | Forensic: Missing SOI marker (FFD8); refusing to \
+             parse non-JPEG data",
         );
         return Err("Not a valid JPEG file".to_string());
     }
@@ -323,7 +324,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Truncated marker at position {pos} | Forensic: Expected marker byte after 0xFF-padding; EOF reached"
+                    "JPEG CORRUPTION AUDIT: Truncated marker at position {pos} | Forensic: \
+                     Expected marker byte after 0xFF-padding; EOF reached"
                 )
             );
             return Err(format!("Truncated JPEG at position {pos}: expected marker"));
@@ -338,7 +340,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Truncated segment header at position {pos} | Forensic: Expected 2-byte length field; EOF reached"
+                    "JPEG CORRUPTION AUDIT: Truncated segment header at position {pos} | \
+                     Forensic: Expected 2-byte length field; EOF reached"
                 )
             );
             return Err(format!(
@@ -350,7 +353,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Truncated length byte at position {pos} | Forensic: Failed to read segment length high byte"
+                    "JPEG CORRUPTION AUDIT: Truncated length byte at position {pos} | Forensic: \
+                     Failed to read segment length high byte"
                 )
             );
             return Err("Failed to read segment length high byte".to_string());
@@ -359,7 +363,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Truncated length byte at position {} | Forensic: Failed to read segment length low byte",
+                    "JPEG CORRUPTION AUDIT: Truncated length byte at position {} | Forensic: \
+                     Failed to read segment length low byte",
                     pos + 1
                 )
             );
@@ -380,7 +385,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     crate::log_corruption!(
                         crate::infra::static_logs::messages::LABEL_JPEG,
                         &format!(
-                            "JPEG CORRUPTION AUDIT: Truncated DQT segment at position {seg_pos} | Forensic: Unexpected EOF during quantization table property scan"
+                            "JPEG CORRUPTION AUDIT: Truncated DQT segment at position {seg_pos} | \
+                             Forensic: Unexpected EOF during quantization table property scan"
                         )
                     );
                     return Err(format!("Truncated DQT segment at position {seg_pos}"));
@@ -443,7 +449,8 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
     if tables.is_empty() {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
-            "JPEG AUDIT: Empty DQT set | Forensic: SOS reached without any valid DQT segments found; quality estimation impossible",
+            "JPEG AUDIT: Empty DQT set | Forensic: SOS reached without any valid DQT segments \
+             found; quality estimation impossible",
         );
         return Err("No quantization tables found in JPEG".to_string());
     }
@@ -457,10 +464,12 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
-/// Returns true if the JPEG data is complete (starts with SOI and contains EOI).
+/// Returns true if the JPEG data is complete (starts with SOI and contains
+/// EOI).
 ///
-/// This implementation is robust against trailing metadata (common in mobile captures like Vivo/Samsung)
-/// by searching for the EOI marker (FF D9) in the data.
+/// This implementation is robust against trailing metadata (common in mobile
+/// captures like Vivo/Samsung) by searching for the EOI marker (FF D9) in the
+/// data.
 #[must_use]
 pub fn is_jpeg_complete(data: &[u8]) -> bool {
     if data.len() < 4 {
@@ -491,9 +500,9 @@ pub fn is_jpeg_complete(data: &[u8]) -> bool {
 /// Returns an error if the JPEG data is invalid or DQT markers are missing.
 ///
 /// # Panics
-/// Panics if the generated standard quantization table contains out-of-range values.
-/// This is considered a logic error as the IJG standard tables and quality scaling
-/// should always result in valid 16-bit table entries.
+/// Panics if the generated standard quantization table contains out-of-range
+/// values. This is considered a logic error as the IJG standard tables and
+/// quality scaling should always result in valid 16-bit table entries.
 pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> {
     let tables = extract_quantization_tables(data)?;
 
@@ -577,7 +586,8 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_JPEG,
         &format!(
-            "JPEG quality analysis complete: quality={}, confidence={:.2}, standard={}, luma_sse={:.2}, complete={}",
+            "JPEG quality analysis complete: quality={}, confidence={:.2}, standard={}, \
+             luma_sse={:.2}, complete={}",
             final_quality, confidence, is_standard_table, luma_estimate.sse, is_complete
         )
     );
@@ -594,7 +604,8 @@ pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, 
     analyze_jpeg_quality(&data)
 }
 
-/// Detect Google `UltraHDR` JPEG (gainmap embedded via MPF + XMP `hdrgm:` namespace).
+/// Detect Google `UltraHDR` JPEG (gainmap embedded via MPF + XMP `hdrgm:`
+/// namespace).
 ///
 /// `UltraHDR` JPEGs contain:
 /// - APP2 segment with XMP containing `hdrgm:` or `GainMap` namespace
@@ -694,13 +705,13 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
             && payload.len() > 29
         {
-            let xmp = String::from_utf8_lossy(
-                crate::media_conversion_gate::probe_jpeg_buffer_slice(
+            let xmp =
+                String::from_utf8_lossy(crate::media_conversion_gate::probe_jpeg_buffer_slice(
                     payload,
                     29..payload.len(),
-                    "APP1 XMP payload truncated before namespace offset (XMP metadata will be lost)",
-                ),
-            );
+                    "APP1 XMP payload truncated before namespace offset (XMP metadata will be \
+                     lost)",
+                ));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
             }
@@ -713,7 +724,8 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
         pos += seg_len;
     }
 
-    // UltraHDR requires BOTH the XMP metadata parameters AND the MPF-linked secondary image
+    // UltraHDR requires BOTH the XMP metadata parameters AND the MPF-linked
+    // secondary image
     has_gainmap_xmp && has_mpf
 }
 
@@ -829,7 +841,8 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 ///
 /// # Errors
 ///
-/// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
+/// Returns an error if the JPEG is malformed, base image cannot be decoded, or
+/// MPF/GainMap is missing.
 pub struct UltraHdrJpegPayload {
     pub base_image: DynamicImage,
     pub gainmap_image: DynamicImage,
@@ -841,7 +854,8 @@ pub struct UltraHdrJpegPayload {
 ///
 /// # Errors
 ///
-/// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
+/// Returns an error if the JPEG is malformed, base image cannot be decoded, or
+/// MPF/GainMap is missing.
 pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload, String> {
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_JPEG,
@@ -868,13 +882,14 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Invalid signature during gainmap extraction | Forensic: Expected FFD8, got {b0:02X}{b1:02X}; len={}",
+                "JPEG AUDIT: Invalid signature during gainmap extraction | Forensic: Expected \
+                 FFD8, got {b0:02X}{b1:02X}; len={}",
                 data.len()
             ),
         );
         return Err(format!(
-            "Invalid JPEG signature: expected FFD8, got {b0:02X}{b1:02X}. \
-             File size: {len} bytes. This is not a valid JPEG file.",
+            "Invalid JPEG signature: expected FFD8, got {b0:02X}{b1:02X}. File size: {len} bytes. \
+             This is not a valid JPEG file.",
             len = data.len()
         ));
     }
@@ -884,8 +899,10 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_jpeg",
                 format!(
-                    "JPEG AUDIT: Failed to create base JPEG reader | Forensic: {}. File size={}; likely truncated or I/O error",
-                    e, data.len()
+                    "JPEG AUDIT: Failed to create base JPEG reader | Forensic: {}. File size={}; \
+                     likely truncated or I/O error",
+                    e,
+                    data.len()
                 ),
             );
             format!("Failed to create JPEG reader: {e}")
@@ -893,8 +910,8 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         .decode()
         .map_err(|e| {
             format!(
-                "Failed to decode base JPEG image: {}. \
-                 File size: {} bytes. The file may be corrupted or truncated.",
+                "Failed to decode base JPEG image: {}. File size: {} bytes. The file may be \
+                 corrupted or truncated.",
                 e,
                 data.len()
             )
@@ -906,13 +923,14 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Invalid base dimensions | Forensic: {}x{} (must be > 0x0); UltraHDR metadata cannot be mapped to empty canvas",
+                "JPEG AUDIT: Invalid base dimensions | Forensic: {}x{} (must be > 0x0); UltraHDR \
+                 metadata cannot be mapped to empty canvas",
                 base_dims.0, base_dims.1
             ),
         );
         return Err(format!(
-            "Invalid base image dimensions: {}x{} (must be > 0x0). \
-             This indicates a corrupted JPEG file or decoder bug.",
+            "Invalid base image dimensions: {}x{} (must be > 0x0). This indicates a corrupted \
+             JPEG file or decoder bug.",
             base_dims.0, base_dims.1
         ));
     }
@@ -946,8 +964,10 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_jpeg",
                 format!(
-                    "JPEG AUDIT: Failed to create gainmap JPEG reader | Forensic: {}. Extracted size={}; likely truncated or I/O error",
-                    e, gainmap_data.len()
+                    "JPEG AUDIT: Failed to create gainmap JPEG reader | Forensic: {}. Extracted \
+                     size={}; likely truncated or I/O error",
+                    e,
+                    gainmap_data.len()
                 ),
             );
             format!("Failed to create gainmap JPEG reader: {e}")
@@ -956,28 +976,35 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         .map_err(|e| {
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_jpeg",
-                format!("JPEG AUDIT: Gainmap decoding failure | Forensic: {}. Extracted size={} bytes; potential bitstream corruption or unsupported codec sub-profile", e, gainmap_data.len()),
+                format!(
+                    "JPEG AUDIT: Gainmap decoding failure | Forensic: {}. Extracted size={} \
+                     bytes; potential bitstream corruption or unsupported codec sub-profile",
+                    e,
+                    gainmap_data.len()
+                ),
             );
             format!(
-                "Failed to decode gainmap image: {}. \
-                 Extracted data: {} bytes. The gainmap may be corrupted.",
+                "Failed to decode gainmap image: {}. Extracted data: {} bytes. The gainmap may be \
+                 corrupted.",
                 e,
                 gainmap_data.len()
             )
-        })?.0;
+        })?
+        .0;
 
     let gainmap_dims = gainmap_image.dimensions();
     if gainmap_dims.0 == 0 || gainmap_dims.1 == 0 {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Invalid gainmap dimensions | Forensic: {}x{} (must be > 0x0); refusing to process empty gainmap canvas",
+                "JPEG AUDIT: Invalid gainmap dimensions | Forensic: {}x{} (must be > 0x0); \
+                 refusing to process empty gainmap canvas",
                 gainmap_dims.0, gainmap_dims.1
             ),
         );
         return Err(format!(
-            "Invalid gainmap dimensions: {}x{} (must be > 0x0). \
-             This indicates a corrupted gainmap or decoder bug.",
+            "Invalid gainmap dimensions: {}x{} (must be > 0x0). This indicates a corrupted \
+             gainmap or decoder bug.",
             gainmap_dims.0, gainmap_dims.1
         ));
     }
@@ -988,7 +1015,8 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). Difference: {:.4}. This may indicate incorrect gainmap extraction.",
+                "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). Difference: \
+                 {:.4}. This may indicate incorrect gainmap extraction.",
                 base_aspect,
                 base_dims.0,
                 base_dims.1,
@@ -1019,7 +1047,8 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
 ///
 /// # Errors
 ///
-/// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
+/// Returns an error if the JPEG is malformed, base image cannot be decoded, or
+/// MPF/GainMap is missing.
 pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicImage), String> {
     let payload = extract_ultrahdr_jpeg_payload(data)?;
     Ok((payload.base_image, payload.gainmap_image))
@@ -1029,7 +1058,8 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
 mod mpf {
     // MPF identifier: "MPF\0"
     pub(super) const MPF_IDENTIFIER: &[u8] = crate::constants::JPEG_MPF_IDENTIFIER;
-    // Some devices use a non-standard APP2 identifier while keeping the MPF TIFF layout.
+    // Some devices use a non-standard APP2 identifier while keeping the MPF TIFF
+    // layout.
     pub(super) const XMPF_IDENTIFIER: &[u8] = crate::constants::JPEG_XMPF_IDENTIFIER;
 
     // TIFF big-endian marker: "MM\0*"
@@ -1421,7 +1451,8 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             crate::media_conversion_gate::probe_image_format_batch_audit(
                 "probe_jpeg",
                 format!(
-                    "JPEG AUDIT: Segment sync failure | Forensic: Expected marker 0xFF at position {pos}, found {found:02X}; bitstream may be misaligned"
+                    "JPEG AUDIT: Segment sync failure | Forensic: Expected marker 0xFF at \
+                     position {pos}, found {found:02X}; bitstream may be misaligned"
                 ),
             );
             return Err(format!(
@@ -1453,7 +1484,8 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Truncated segment header | Forensic: Expected length field at position {pos}; EOF reached"
+                    "JPEG CORRUPTION AUDIT: Truncated segment header | Forensic: Expected length \
+                     field at position {pos}; EOF reached"
                 )
             );
             return Err(format!("Truncated segment at position {pos}"));
@@ -1481,7 +1513,8 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
                 &format!(
-                    "JPEG CORRUPTION AUDIT: Invalid segment length | Forensic: len={seg_len} at position {pos} (marker 0x{marker:02X}) exceeds EOF; bitstream is truncated"
+                    "JPEG CORRUPTION AUDIT: Invalid segment length | Forensic: len={seg_len} at \
+                     position {pos} (marker 0x{marker:02X}) exceeds EOF; bitstream is truncated"
                 )
             );
             return Err(format!(
@@ -1561,7 +1594,8 @@ fn extract_gainmap_from_mpf(
             "mpf endian b3",
         );
         return Err(format!(
-            "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {b0:02X} {b1:02X} {b2:02X} {b3:02X}",
+            "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {b0:02X} {b1:02X} \
+             {b2:02X} {b3:02X}",
         ));
     };
 
@@ -1592,20 +1626,25 @@ fn extract_gainmap_from_mpf(
     );
 
     // Navigate to first IFD
-    // first_ifd_offset is u32 from read_u32(); usize::try_from only fails if u32 > usize::MAX,
-    // which cannot happen on 64-bit targets. Return Err rather than panic on 32-bit overflow.
+    // first_ifd_offset is u32 from read_u32(); usize::try_from only fails if u32 >
+    // usize::MAX, which cannot happen on 64-bit targets. Return Err rather than
+    // panic on 32-bit overflow.
     let first_ifd_start = usize::try_from(first_ifd_offset).map_err(|_| {
         crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_jpeg",
-                format!("JPEG AUDIT: MPF offset overflow | Forensic: IFD offset {first_ifd_offset} exceeds usize; refusing to parse malformed bitstream"),
-            );
+            "probe_jpeg",
+            format!(
+                "JPEG AUDIT: MPF offset overflow | Forensic: IFD offset {first_ifd_offset} \
+                 exceeds usize; refusing to parse malformed bitstream"
+            ),
+        );
         format!("MPF first IFD offset {first_ifd_offset} exceeds usize — file is anomalous")
     })?;
     if first_ifd_start + 2 > mpf_data.len() {
         crate::log_corruption!(
             crate::infra::static_logs::messages::LABEL_JPEG,
             &format!(
-                "JPEG CORRUPTION AUDIT: Invalid MPF IFD offset | Forensic: Offset {} exceeds MPF segment size {}; bitstream is truncated",
+                "JPEG CORRUPTION AUDIT: Invalid MPF IFD offset | Forensic: Offset {} exceeds MPF \
+                 segment size {}; bitstream is truncated",
                 first_ifd_offset,
                 mpf_data.len()
             )
@@ -1622,7 +1661,12 @@ fn extract_gainmap_from_mpf(
         mpf_data.get(first_ifd_start..).ok_or_else(|| {
             crate::log_corruption!(
                 crate::infra::static_logs::messages::LABEL_JPEG,
-                &format!("JPEG CORRUPTION AUDIT: MPF IFD range error | Forensic: start={} out of range len={}; refusing to probe further", first_ifd_start, mpf_data.len())
+                &format!(
+                    "JPEG CORRUPTION AUDIT: MPF IFD range error | Forensic: start={} out of range \
+                     len={}; refusing to probe further",
+                    first_ifd_start,
+                    mpf_data.len()
+                )
             );
             format!(
                 "MPF IFD offset {first_ifd_start} out of range {}",
@@ -1743,17 +1787,19 @@ fn extract_gainmap_from_mpf(
 
     let mp_entry_offset = mp_entry_offset.ok_or_else(|| {
         crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_jpeg",
-                "JPEG AUDIT: Missing MPEntry tag | Forensic: Tag 0xB002 missing from MPF IFD; UltraHDR gainmap resolution impossible",
-            );
+            "probe_jpeg",
+            "JPEG AUDIT: Missing MPEntry tag | Forensic: Tag 0xB002 missing from MPF IFD; \
+             UltraHDR gainmap resolution impossible",
+        );
         "MPEntry tag (0xB002) not found in IFD. This is not a valid MPF structure.".to_string()
     })?;
 
     let num_images = num_images.ok_or_else(|| {
         crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_jpeg",
-                "JPEG AUDIT: Missing NumberOfImages tag | Forensic: Tag 0xB001 missing from MPF IFD; refusing to guess asset count",
-            );
+            "probe_jpeg",
+            "JPEG AUDIT: Missing NumberOfImages tag | Forensic: Tag 0xB001 missing from MPF IFD; \
+             refusing to guess asset count",
+        );
         "NumberOfImages tag (0xB001) not found in IFD.".to_string()
     })?;
 
@@ -1761,11 +1807,13 @@ fn extract_gainmap_from_mpf(
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Insufficient MPF images | Forensic: Found {num_images} image(s); UltraHDR requires at least 2 (base + gainmap)"
+                "JPEG AUDIT: Insufficient MPF images | Forensic: Found {num_images} image(s); \
+                 UltraHDR requires at least 2 (base + gainmap)"
             ),
         );
         return Err(format!(
-            "MPF contains only {num_images} image(s). UltraHDR requires at least 2 images (base + gainmap)."
+            "MPF contains only {num_images} image(s). UltraHDR requires at least 2 images (base + \
+             gainmap)."
         ));
     }
 
@@ -1781,7 +1829,8 @@ fn extract_gainmap_from_mpf(
         crate::log_corruption!(
             crate::infra::static_logs::messages::LABEL_JPEG,
             &format!(
-                "JPEG CORRUPTION AUDIT: MPF entry array out of bounds | Forensic: Offset {} exceeds segment size {}; bitstream is truncated",
+                "JPEG CORRUPTION AUDIT: MPF entry array out of bounds | Forensic: Offset {} \
+                 exceeds segment size {}; bitstream is truncated",
                 mp_entry_array_offset,
                 mpf_data.len()
             )
@@ -1805,7 +1854,8 @@ fn extract_gainmap_from_mpf(
         crate::log_corruption!(
             crate::infra::static_logs::messages::LABEL_JPEG,
             &format!(
-                "JPEG CORRUPTION AUDIT: Gainmap MP entry out of bounds | Forensic: Offset {} exceeds segment size {}; bitstream is truncated",
+                "JPEG CORRUPTION AUDIT: Gainmap MP entry out of bounds | Forensic: Offset {} \
+                 exceeds segment size {}; bitstream is truncated",
                 gainmap_entry_offset,
                 mpf_data.len()
             )
@@ -1856,7 +1906,8 @@ fn extract_gainmap_from_mpf(
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_JPEG,
         &format!(
-            "Gainmap entry: attributes=0x{attributes:08X}, length={gainmap_length}, offset={gainmap_offset}"
+            "Gainmap entry: attributes=0x{attributes:08X}, length={gainmap_length}, \
+             offset={gainmap_offset}"
         )
     );
 
@@ -1864,7 +1915,8 @@ fn extract_gainmap_from_mpf(
     if gainmap_length == 0 {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
-            "JPEG AUDIT: Zero-length gainmap | Forensic: MP entry reports 0 bytes; refusing to forge empty output",
+            "JPEG AUDIT: Zero-length gainmap | Forensic: MP entry reports 0 bytes; refusing to \
+             forge empty output",
         );
         return Err("Gainmap length is 0. Invalid MPF structure.".to_string());
     }
@@ -1876,7 +1928,8 @@ fn extract_gainmap_from_mpf(
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "Gainmap length {} exceeds JPEG file size {}; attempting recovery from available bytes",
+                "Gainmap length {} exceeds JPEG file size {}; attempting recovery from available \
+                 bytes",
                 gainmap_length,
                 jpeg_data.len()
             ),
@@ -1896,7 +1949,8 @@ fn extract_gainmap_from_mpf(
     .ok_or_else(|| {
         let relative_start = mpf_base_pos.saturating_add(gainmap_offset_usize);
         format!(
-            "Gainmap data at calculated position {} (offset {}, base {}) with length {} could not be recovered from JPEG file size {}",
+            "Gainmap data at calculated position {} (offset {}, base {}) with length {} could not \
+             be recovered from JPEG file size {}",
             relative_start,
             gainmap_offset,
             mpf_base_pos,
@@ -1912,7 +1966,8 @@ fn extract_gainmap_from_mpf(
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "Recovered gainmap using MPF fallback candidate: start={}, source={:?}, repaired_eoi={}, decoded={}, aspect_diff={}",
+                "Recovered gainmap using MPF fallback candidate: start={}, source={:?}, \
+                 repaired_eoi={}, decoded={}, aspect_diff={}",
                 gainmap_candidate.start,
                 gainmap_candidate.source,
                 gainmap_candidate.repaired_eoi,
@@ -1989,7 +2044,8 @@ fn read_u16(data: &[u8], big_endian: bool) -> Result<u16, String> {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Insufficient bytes for u16 read | Forensic: Expected 2 bytes, found {}; bitstream is truncated or misaligned",
+                "JPEG AUDIT: Insufficient bytes for u16 read | Forensic: Expected 2 bytes, found \
+                 {}; bitstream is truncated or misaligned",
                 data.len()
             ),
         );
@@ -2012,7 +2068,8 @@ fn read_u32(data: &[u8], big_endian: bool) -> Result<u32, String> {
         crate::media_conversion_gate::probe_image_format_batch_audit(
             "probe_jpeg",
             format!(
-                "JPEG AUDIT: Insufficient bytes for u32 read | Forensic: Expected 4 bytes, found {}; bitstream is truncated or misaligned",
+                "JPEG AUDIT: Insufficient bytes for u32 read | Forensic: Expected 4 bytes, found \
+                 {}; bitstream is truncated or misaligned",
                 data.len()
             ),
         );
@@ -2411,7 +2468,8 @@ mod tests {
 
     #[test]
     fn test_extract_gainmap_absolute_fallback() {
-        // [GIVEN] A JPEG with an MPF segment where the offset is absolute but not relative
+        // [GIVEN] A JPEG with an MPF segment where the offset is absolute but not
+        // relative
         let mut data = vec![0xFF, 0xD8]; // SOI
 
         // 1. APP1 XMP (simplified but must contain hdrgm:)

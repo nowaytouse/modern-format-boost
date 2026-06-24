@@ -1,6 +1,7 @@
 /// Test that missing VMAF baseline values don't cause panics
 /// This is a regression test for: "Required floating point value missing"
-/// Root cause: `gpu_coarse_search.rs` used `expect()` on `tracking.best_vmaf` Option
+/// Root cause: `gpu_coarse_search.rs` used `expect()` on `tracking.best_vmaf`
+/// Option
 #[cfg(test)]
 mod vmaf_baseline_tests {
     use vid::{ConversionOutput, ConversionStrategy, TargetVideoFormat};

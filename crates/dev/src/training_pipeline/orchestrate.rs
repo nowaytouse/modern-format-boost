@@ -1,4 +1,5 @@
-//! Runtime asset finalization orchestration (mirrors `training_pipeline.py` finalize paths).
+//! Runtime asset finalization orchestration (mirrors `training_pipeline.py`
+//! finalize paths).
 
 use crate::infra::corpus_thresholds::{
     min_loop_samples_per_class, min_loop_samples_total, min_quality_samples_per_class,
@@ -24,8 +25,8 @@ pub fn refresh_loop_stats(connstr: &str) -> Result<i32> {
 
 pub fn repair_loop_probe_metadata(connstr: &str) -> Result<i32> {
     eprintln!(
-        "[WARN] repair-loop-probe-metadata re-reads media files on disk; \
-         this is NOT run_training / full re-ingest."
+        "[WARN] repair-loop-probe-metadata re-reads media files on disk; this is NOT run_training \
+         / full re-ingest."
     );
     let root = project_root()?;
     run_foundation_bin(&root, "repair_loop_probe", &[], connstr)

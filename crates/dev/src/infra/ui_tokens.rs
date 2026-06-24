@@ -4,7 +4,8 @@ use std::io::{IsTerminal, stdout};
 
 pub const BRAND_BLUE: &str = "#43a0ff";
 
-/// Returns true if colors should be enabled based on standard env variables and TTY status.
+/// Returns true if colors should be enabled based on standard env variables and
+/// TTY status.
 #[must_use]
 pub fn colors_enabled() -> bool {
     if std::env::var("NO_COLOR").is_ok() {
@@ -22,7 +23,8 @@ pub fn colors_enabled() -> bool {
     stdout().is_terminal()
 }
 
-/// Returns true if plain mode is requested (no emojis/special unicode characters).
+/// Returns true if plain mode is requested (no emojis/special unicode
+/// characters).
 #[must_use]
 pub fn plain_mode_enabled() -> bool {
     match std::env::var("MODERN_FORMAT_PLAIN_UI") {
@@ -65,7 +67,8 @@ mod tests {
         unsafe {
             std::env::set_var("MODERN_FORMAT_PLAIN_UI", "0");
         }
-        // plain_mode_enabled() fallback depends on stdout().is_terminal(), but pick_symbol should return something.
+        // plain_mode_enabled() fallback depends on stdout().is_terminal(), but
+        // pick_symbol should return something.
         let sym = pick_symbol("🚀", "[START]");
         assert!(sym == "🚀" || sym == "[START]");
 
