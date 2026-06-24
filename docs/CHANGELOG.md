@@ -13,6 +13,29 @@ All notable changes to this project will be documented in this file.
   - **Full UX Parity**: PTY streaming, signal handling, watch mode, session audit trails, integrity verification, handoff preservation, and metadata protection.
   - **Pipeline Routing**: All workflows (img/vid/fastmode/collect/merge_xmp/icloud_import/diagnostic/maintenance) now route through Rust CLI.
 - **Launcher Packaging Hardening**: Tightened macOS app-bundle binary discovery, added Vue/Tauri quality gates to `check_all`, and refreshed dependency metadata/lockfiles for the split workspace layout.
+- **Tauri Build Optimization**: Added `.cargo/config.toml` to redirect Tauri/Cargo build output to workspace root target directory, preventing duplicate 5GB target trees in `src-tauri/`.
+
+### Fast-Img & Media Pipeline
+
+- **UltraHDR Fast-Img Skip**: UltraHDR JPEGs are now explicitly skipped in fast-img delivery mode (`REQUIRE_OUTPUT_DELIVERY`) because HDR synthesis cannot reconstruct the original SDR JPEG bitstream, violating the reversibility contract. Sources remain unmodified with proper audit logging.
+- **Photos Import Hardening**:
+  - Increased import timeout from 3600s to 86400s (24 hours) for large batch operations.
+  - Enhanced poison detection with specific reasons: `zero_import_items`, `invalid_connection`, `appleevent_timeout`.
+  - Improved recovery logging with automatic retry on recoverable session failures.
+- **Stale-Proof Retranscode**: Fixed marker output path collision handling during retranscode. When source hash changes (stale proof), the system now honors the marker's recorded `out_rel` via `reserve_output_path` instead of treating existing outputs as foreign collisions.
+- **AppleScript Album Naming**: Improved nested folder album naming to use `✨TopLevel/SubLevel` format instead of just sublevel names, preserving hierarchy in Photos library.
+- **osxphotos Permission Handling**: Added fatal auth error detection for database permission issues (`OperationalError`, `unable to open database file`, `Operation not permitted`) to fail closed rather than retry indefinitely.
+
+### Desktop UI (Vue 3 + Tauri)
+
+- **Motion Preference Support**: Added `prefers-reduced-motion` media query support to disable animations for users who prefer reduced motion.
+- **Ambient Background Static Mode**: Added `ambient-bg--static` class to disable background animations when motion reduction is preferred.
+- **Cleanup Improvements**: Enhanced component unmounting with proper event listener cleanup for motion media queries and Tauri event unlisteners.
+
+### Testing & Hardening
+
+- **UltraHDR Unit Test**: Added `ultrahdr_jpeg_in_fast_img_mode_yields_skip_not_jxl` test to verify UltraHDR JPEGs are skipped (not converted) in fast-img mode with proper skip reason and no JXL output.
+- **Retranscode Unit Tests**: Added `resume_reused_fast_img_output_keeps_recorded_collision_path` and `stale_proof_retranscode_keeps_marker_out_rel_path` tests to verify marker output path preservation during retranscode scenarios.
 
 ## [0.11.3] - 2026-06-16
 
