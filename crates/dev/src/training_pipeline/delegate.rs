@@ -145,12 +145,12 @@ pub fn run_foundation_bin(root: &Path, bin: &str, args: &[&str], connstr: &str) 
 }
 
 pub fn run_dev_bin(root: &Path, bin: &str, args: &[&str]) -> Result<i32> {
-    let debug = debug_bin(root, bin);
-    let mut cmd = if debug.is_file() {
-        Command::new(debug)
+    let release = release_bin(root, bin);
+    let mut cmd = if release.is_file() {
+        Command::new(release)
     } else {
         let mut c = Command::new("cargo");
-        c.args(["run", "--locked", "-p", "dev", "--bin", bin, "--"]);
+        c.args(["run", "--locked", "--release", "-p", "dev", "--bin", bin, "--"]);
         c
     };
     cmd.args(args).current_dir(root);
@@ -183,14 +183,15 @@ pub fn run_python_script(
 
 pub fn run_run_training_batch(root: &Path, connstr: &str) -> Result<i32> {
     eprintln!("Legacy `train` → run_training (Rust) --use-api --fill-runtime-assets");
-    let debug = debug_bin(root, "run_training");
-    let mut cmd = if debug.is_file() {
-        Command::new(debug)
+    let release = release_bin(root, "run_training");
+    let mut cmd = if release.is_file() {
+        Command::new(release)
     } else {
         let mut c = Command::new("cargo");
         c.args([
             "run",
             "--locked",
+            "--release",
             "-p",
             "dev",
             "--bin",

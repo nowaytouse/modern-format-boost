@@ -1,4 +1,4 @@
-//! 🔢 Unified Version Management
+    //! 🔢 Unified Version Management
 //!
 //! This module provides a single source of truth for all version numbers in the project.
 //! All versions are automatically derived from `CARGO_PKG_VERSION` at compile time.

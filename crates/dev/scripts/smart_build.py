@@ -419,7 +419,7 @@ def build_and_sync_gui():
     print(f"\n{BOLD}{CYAN} Building Tauri GUI...{NC}")
     vue_dir = os.path.join(PROJECT_ROOT, "crates", "dev", "src", "vue")
 
-    result = subprocess.run(["npm", "run", "tauri", "build", "--", "--release"], cwd=vue_dir)
+    result = subprocess.run(["npm", "run", "tauri", "build"], cwd=vue_dir)
     if result.returncode != 0:
         print(f"{RED}Tauri build failed.{NC}")
         sys.exit(1)
