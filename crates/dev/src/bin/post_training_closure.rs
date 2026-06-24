@@ -235,7 +235,7 @@ fn write_runtime_evidence(
 }
 
 fn training_pipeline_cmd(repo_root: &Path, subcommand: &str, conn_str: &str) -> Command {
-    let bin = repo_root.join("target/debug/training_pipeline");
+    let bin = repo_root.join("target/release/training_pipeline");
     let mut cmd = if bin.is_file() {
         Command::new(bin)
     } else {
@@ -243,6 +243,7 @@ fn training_pipeline_cmd(repo_root: &Path, subcommand: &str, conn_str: &str) -> 
         c.args([
             "run",
             "--locked",
+            "--release",
             "-p",
             "dev",
             "--bin",

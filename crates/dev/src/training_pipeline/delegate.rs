@@ -80,23 +80,23 @@ pub fn ensure_python_training_requirements(root: &Path, install_missing: bool) -
     Ok(())
 }
 
-fn debug_bin(root: &Path, name: &str) -> PathBuf {
-    root.join("target/debug").join(name)
+fn release_bin(root: &Path, name: &str) -> PathBuf {
+    root.join("target/release").join(name)
 }
 
 fn foundation_bin(root: &Path, name: &str, stale: bool) -> Command {
-    let bin = debug_bin(root, name);
+    let bin = release_bin(root, name);
     if !stale && bin.is_file() {
         Command::new(bin)
     } else {
         let mut cmd = Command::new("cargo");
-        cmd.args(["run", "--locked", "-p", "foundation", "--bin", name, "--"]);
+        cmd.args(["run", "--locked", "--release", "-p", "foundation", "--bin", name, "--"]);
         cmd
     }
 }
 
 pub fn training_pipeline_command(root: &Path) -> Command {
-    let bin = debug_bin(root, "training_pipeline");
+    let bin = release_bin(root, "training_pipeline");
     if bin.is_file() {
         Command::new(bin)
     } else {
@@ -104,6 +104,7 @@ pub fn training_pipeline_command(root: &Path) -> Command {
         cmd.args([
             "run",
             "--locked",
+            "--release",
             "-p",
             "dev",
             "--bin",

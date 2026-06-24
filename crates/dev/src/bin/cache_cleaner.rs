@@ -440,13 +440,14 @@ fn purge_sqlite_blob_namespace_under(namespace: &str, target_path: &Path) -> Res
 
 fn invoke_purge_path_tree_cache(cli_args: &[&str]) -> Result<i32> {
     let project_root = get_project_root()?;
-    let bin_path = project_root.join("target/debug/purge_path_tree_cache");
+    let bin_path = project_root.join("target/release/purge_path_tree_cache");
 
     let mut cmd = if bin_path.is_file() {
         Command::new(bin_path)
     } else {
         let mut c = Command::new("cargo");
         c.arg("run")
+            .arg("--release")
             .arg("-p")
             .arg("foundation")
             .arg("--bin")

@@ -88,7 +88,7 @@ pub fn assert_product_cli_entry(expected_bin: &str) -> Result<()> {
     CliEntryGuard {
         expected_bin,
         allowed_invokers: PRODUCT_INVOKERS,
-        production_hint: "invoke directly: cargo run -p img -- … or target/debug/img",
+        production_hint: "invoke directly: cargo run -p img -- … or target/release/img",
         require_invoker: false,
     }
     .assert()

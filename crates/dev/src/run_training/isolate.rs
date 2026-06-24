@@ -281,7 +281,7 @@ fn ingest_quality_group(
 
     let train_bin = match std::env::current_dir() {
         Ok(d) => {
-            let candidate = d.join("target/debug/train_quality");
+            let candidate = d.join("target/release/train_quality");
             if candidate.exists() {
                 Some(candidate)
             } else {
@@ -469,7 +469,7 @@ fn ingest_loop_group(
 
     let train_bin = match std::env::current_dir() {
         Ok(d) => {
-            let candidate = d.join("target/debug/train_knn");
+            let candidate = d.join("target/release/train_knn");
             if candidate.exists() {
                 Some(candidate)
             } else {

@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file.
   - Python scripts: drag_and_drop_processor.py, cache_cleaner.py (removed debug profile fallback for verify binary)
   - Rust binaries: drag_and_drop_processor.rs, cache_cleaner.rs
   - Tauri GUI builds: smart_build.rs, smart_build.py (added `--release` to npm tauri build)
+  - Training pipeline: cache_cleaner.rs, post_training_closure.rs, isolate.rs, delegate.rs (changed target/debug to target/release)
+  - Entry guard: foundation/src/infra/entry_guard.rs (updated production hint to target/release)
   - Removed debug_assertions conditional in favor of always using release profile
 
 ### Fast-Img & Media Pipeline
