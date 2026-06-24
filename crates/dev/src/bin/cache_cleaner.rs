@@ -181,11 +181,8 @@ impl CommandSpec {
 }
 
 fn smart_build_command_spec(project_root: &Path, force: bool) -> CommandSpec {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
+    // Always use release profile for smart_build to ensure production-optimized builds
+    let profile = "release";
     let sibling = project_root
         .join("target")
         .join(profile)
@@ -196,6 +193,7 @@ fn smart_build_command_spec(project_root: &Path, force: bool) -> CommandSpec {
     } else {
         args.extend([
             "run".to_string(),
+            "--release".to_string(),
             "--locked".to_string(),
             "-p".to_string(),
             "dev".to_string(),

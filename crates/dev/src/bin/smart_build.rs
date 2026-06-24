@@ -1067,6 +1067,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         .arg("tauri")
         .arg("build")
         .arg("--")
+        .arg("--release")
         .arg("--bundles")
         .arg("app")
         .current_dir(&vue_dir)
