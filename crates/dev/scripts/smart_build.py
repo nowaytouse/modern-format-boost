@@ -313,7 +313,7 @@ def build_project(project_dir, binary_name, retry_count, args):
         print_error(project_dir)
         return False
 
-    if args.verify_timestamps:
+    if True:  # Always verify timestamps (flag removed)
         binary_path = get_binary_path(project_dir, binary_name)
         time.sleep(1)  # wait for filesystem sync
 
@@ -363,17 +363,12 @@ def decide_build_action(project_dir, binary_name, args):
 def resolve_projects_to_build(args) -> list[str]:
     projects_to_build: list[str] = []
     if args.all:
-        projects_to_build = list(ALL_PROJECTS.keys())
+        projects_to_build = ["crates/img", "crates/vid", "crates/dev"]
     else:
         if args.img:
             projects_to_build.append("crates/img")
         if args.vid:
             projects_to_build.append("crates/vid")
-        if args.hevc or args.av1:
-            if "crates/img" not in projects_to_build:
-                projects_to_build.append("crates/img")
-            if "crates/vid" not in projects_to_build:
-                projects_to_build.append("crates/vid")
 
     if not projects_to_build:
         projects_to_build = list(DEFAULT_PROJECTS)
@@ -430,9 +425,10 @@ def build_and_sync_gui():
         sys.exit(1)
 
     print(f"{DIM}Syncing App bundle...{NC}")
+    # Tauri build output is redirected to the workspace root target via
+    # src-tauri/.cargo/config.toml (target-dir = "../../../../../target").
     src_bundle = os.path.join(
-        vue_dir,
-        "src-tauri",
+        PROJECT_ROOT,
         "target",
         "release",
         "bundle",
@@ -464,55 +460,52 @@ def main():
 
     guard_main("smart_build.py")
     parser = argparse.ArgumentParser(
-        description="Smart Build System v0.11.3 (Python Edition)"
+        description="Smart Build System — incremental Rust + Tauri builder",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Default (no flags): build img + vid + verify if sources are newer than binaries.
+
+Examples:
+  smart_build.py                  # incremental build img + vid + verify
+  smart_build.py --all            # build everything including Tauri GUI
+  smart_build.py --gui            # build Tauri GUI only
+  smart_build.py --img --force    # force-rebuild img binary
+  smart_build.py --clean --all    # clean + full rebuild
+  smart_build.py --update         # update deps then build""",
     )
     parser.add_argument(
-        "--force", "-f", action="store_true", help="Force rebuild all selected projects"
+        "--force", "-f", action="store_true", help="Force rebuild even when up-to-date"
     )
     parser.add_argument(
         "--clean",
         "-c",
         action="store_true",
-        help="Clean build artifacts before compiling",
+        help="Clean stale deps and run kondo before building",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Show detailed output"
+        "--verbose", "-v", action="store_true", help="Show binary size and mtime after build"
     )
     parser.add_argument(
-        "--no-clean-old",
-        dest="clean_old",
-        action="store_false",
-        help="Don't clean old binary files",
+        "--all", "-a", action="store_true", help="Build everything: img + vid + verify + GUI"
     )
-    parser.add_argument("--all", "-a", action="store_true", help="Build all projects")
-    parser.add_argument("--img", action="store_true", help="Build image tools")
-    parser.add_argument("--vid", action="store_true", help="Build video tools")
-    parser.add_argument("--hevc", action="store_true", help="Support for HEVC codecs")
-    parser.add_argument("--av1", action="store_true", help="Support for AV1 codecs")
-    parser.add_argument(
-        "--kondo", action="store_true", help="Perform deep project cleanup using kondo"
-    )
-    parser.add_argument(
-        "--no-verify-timestamps",
-        dest="verify_timestamps",
-        action="store_false",
-        help="Disable timestamp verification after build",
-    )
+    parser.add_argument("--img", action="store_true", help="Build image tools (img binary)")
+    parser.add_argument("--vid", action="store_true", help="Build video tools (vid binary)")
     parser.add_argument(
         "--quiet",
         "-q",
         action="store_true",
-        help="No output when all selected binaries are already up-to-date",
+        help="No output when all binaries are already up-to-date",
     )
     parser.add_argument(
         "--update",
+        "-u",
         action="store_true",
-        help="Run dependency updates (cargo update, topgrade, brew, etc.)",
+        help="Update dependencies first (brew, cargo, pip, rustup)",
     )
     parser.add_argument(
         "--gui",
         action="store_true",
-        help="Build the Tauri Vue GUI and replace the App bundle",
+        help="Build the Tauri Vue GUI and sync the .app bundle",
     )
 
     args = parser.parse_args()
@@ -529,8 +522,8 @@ def main():
 
     print(f"{CYAN}Building:{NC} {BOLD}{' '.join(projects_to_build)}{NC}\n")
 
-    if args.clean_old:
-        clean_old_binaries()
+    # Always remove stale binaries left over from previous build locations.
+    clean_old_binaries()
 
     if args.clean:
         print(f"{YELLOW}Cleaning build artifacts...{NC}")
@@ -541,10 +534,8 @@ def main():
         print()
         clean_with_kondo()
 
-    if args.kondo and not args.clean:
-        clean_with_kondo()
-
-    if args.gui:
+    # GUI build: triggered by --gui flag or --all
+    if args.gui or args.all:
         build_and_sync_gui()
 
     rebuilt = 0

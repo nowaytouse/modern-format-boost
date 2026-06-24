@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "anyhow"
 version = "1.0.102"
-source = "git+https://github.com/dtolnay/anyhow#d9dc3faf78b8647fdb5b8c5b53abb85e05e13d42"
+source = "git+https://github.com/dtolnay/anyhow#917a16932009c1957f53c2ea325663948add2153"
 
 [[package]]
 name = "arbitrary"
@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif#1fb0b62c38e39ecd88d4a31768564c996f20f44a"
+source = "git+https://github.com/console-rs/indicatif#cbd070dd6eed853e583d0991544374322088fb59"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1290,7 +1290,7 @@ checksum = "0b0b36cbb4e6704f12f5b5d7b01dac593982c6550859ebd5a66fb15c9ea27fd5"
 [[package]]
 name = "jpegxl-rs"
 version = "0.14.0+libjxl-0.11.2"
-source = "git+https://github.com/inflation/jpegxl-rs#0babe724c67671a853a55d7c9594a138a621901d"
+source = "git+https://github.com/inflation/jpegxl-rs#700356597239af78b03a23f34104912d0464bdd8"
 dependencies = [
  "bon",
  "byteorder",
@@ -1302,7 +1302,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.11.4"
-source = "git+https://github.com/inflation/jpegxl-rs#0babe724c67671a853a55d7c9594a138a621901d"
+source = "git+https://github.com/inflation/jpegxl-rs#700356597239af78b03a23f34104912d0464bdd8"
 dependencies = [
  "cmake",
 ]
@@ -1310,7 +1310,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.12.1+libjxl-0.11.2"
-source = "git+https://github.com/inflation/jpegxl-rs#0babe724c67671a853a55d7c9594a138a621901d"
+source = "git+https://github.com/inflation/jpegxl-rs#700356597239af78b03a23f34104912d0464bdd8"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -2730,7 +2730,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror#4178c4a0e1cb17473d95f42f5e441ef92d13d172"
+source = "git+https://github.com/dtolnay/thiserror#ec42ea70852f8db43e971700d1ccc184957d1b32"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2738,7 +2738,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror#4178c4a0e1cb17473d95f42f5e441ef92d13d172"
+source = "git+https://github.com/dtolnay/thiserror#ec42ea70852f8db43e971700d1ccc184957d1b32"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -2258,7 +2258,24 @@ pub fn convert_jpeg_to_jxl(
     }
 
     // UltraHDR JPEGs must follow the HDR synthesis path, not the legacy lossless transcode path.
+    // Exception: fast-img delivery mode (require_output_delivery) requires bit-exact JPEG
+    // reconstruction. UltraHDR synthesis produces a HDR-merged JXL that cannot reconstruct
+    // the original SDR JPEG bitstream, violating fast-img's reversibility contract.
+    // Skip and leave the source unmodified, identical to the truncated-JPEG guard above.
     if foundation::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input)? {
+        if options.require_output_delivery() {
+            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                "ultrahdr_fast_img_skip",
+                input,
+                "UltraHDR JPEG cannot be reversibly transcoded in fast-img mode; source remains unmodified",
+            );
+            return Ok(TaskResult::skipped_custom(
+                input,
+                input_size,
+                "Skipped: UltraHDR JPEG cannot be reversibly transcoded; source remains unmodified",
+                JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
+            ));
+        }
         log_detail!(&format!(
             "{} 🌈 UltraHDR detected: {} - delegating to native HDR synthesis pipeline",
             foundation::infra::static_logs::messages::LABEL_PHASE_5,
@@ -5107,4 +5124,120 @@ mod tests {
             "display must disclose unavailable ratio"
         );
     }
+
+    /// Build a minimal byte sequence that satisfies both `is_jpeg_complete` and
+    /// `is_ultra_hdr_jpeg_file`: SOI + APP1 XMP with `hdrgm:` keyword + APP2 MPF
+    /// identifier + SOS + EOI.  No actual image data is needed — detection and
+    /// completeness checks only parse the header region.
+    #[cfg(test)]
+    fn make_fake_ultrahdr_jpeg() -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        // SOI
+        buf.extend_from_slice(&[0xFF, 0xD8]);
+
+        // APP1 (0xE1) — XMP segment with hdrgm: namespace
+        // Header: "http://ns.adobe.com/xap/1.0/\0" (29 bytes) + XMP body
+        let xmp_ns: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+        let xmp_body: &[u8] = b"<x:xmpmeta xmlns:hdrgm=\"http://ns.google.com/photos/1.0/camera/\"><hdrgm:Version>1.0</hdrgm:Version></x:xmpmeta>";
+        let app1_payload_len = xmp_ns.len() + xmp_body.len();
+        let app1_seg_len = (app1_payload_len + 2) as u16; // includes length field itself
+        buf.extend_from_slice(&[0xFF, 0xE1]);
+        buf.extend_from_slice(&app1_seg_len.to_be_bytes());
+        buf.extend_from_slice(xmp_ns);
+        buf.extend_from_slice(xmp_body);
+
+        // APP2 (0xE2) — MPF segment: "MPF\0" identifier + minimal padding
+        let mpf_id: &[u8] = b"MPF\0";
+        let mpf_padding: &[u8] = &[0u8; 8]; // minimal non-zero tail so length field is valid
+        let app2_seg_len = (mpf_id.len() + mpf_padding.len() + 2) as u16;
+        buf.extend_from_slice(&[0xFF, 0xE2]);
+        buf.extend_from_slice(&app2_seg_len.to_be_bytes());
+        buf.extend_from_slice(mpf_id);
+        buf.extend_from_slice(mpf_padding);
+
+        // SOS (Start of Scan) — stops header parsing; must precede EOI for is_jpeg_complete
+        buf.extend_from_slice(&[0xFF, 0xDA]);
+
+        // EOI — satisfies is_jpeg_complete's "EOI after SOS" invariant
+        buf.extend_from_slice(&[0xFF, 0xD9]);
+
+        buf
+    }
+
+    /// Contract: fast-img mode (REQUIRE_OUTPUT_DELIVERY) must skip UltraHDR JPEGs
+    /// rather than running HDR synthesis, which cannot reconstruct the original
+    /// JPEG bitstream and violates the reversibility contract.
+    ///
+    /// Assertions:
+    /// - result is skipped (no JXL output path)
+    /// - skip_reason == JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON
+    /// - no .JXL file was created on disk
+    /// - source bytes are byte-identical after the call
+    #[test]
+    fn ultrahdr_jpeg_in_fast_img_mode_yields_skip_not_jxl() {
+        use foundation::image_jpeg_analysis::{is_jpeg_complete, is_ultra_hdr_jpeg};
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("tempdir");
+        let src = tmp.path().join("fake_ultrahdr.jpg");
+        let jxl = tmp.path().join("fake_ultrahdr.JXL");
+
+        let fake = make_fake_ultrahdr_jpeg();
+
+        // Preconditions: fixture must satisfy both guards in convert_jpeg_to_jxl
+        assert!(
+            is_jpeg_complete(&fake),
+            "fixture must pass is_jpeg_complete (truncated-JPEG guard)"
+        );
+        assert!(
+            is_ultra_hdr_jpeg(&fake),
+            "fixture must be detected as UltraHDR"
+        );
+
+        std::fs::write(&src, &fake).expect("write fixture");
+        let source_bytes_before = std::fs::read(&src).expect("read before");
+
+        clear_processed_list();
+        let mut options = ConvertOptions::default();
+        options.flags.set(ConvertFlags::FORCE, true);
+        options
+            .flags
+            .set(ConvertFlags::REQUIRE_OUTPUT_DELIVERY, true);
+        options.output_dir = Some(tmp.path().to_path_buf());
+
+        let result = convert_jpeg_to_jxl(&src, &options, None)
+            .expect("convert_jpeg_to_jxl must not error; UltraHDR fast-img skip is not an error");
+
+        // Skip asserted
+        assert!(
+            result.skipped,
+            "UltraHDR JPEG in fast-img mode must be skipped, got: {:?}",
+            result.message
+        );
+        assert!(
+            result.output_path.is_none(),
+            "fast-img skip must not produce an output path"
+        );
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some(JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON),
+            "skip_reason must match the canonical unavailable reason so the \
+             fast-img dispatch layer recognises it as a known skip"
+        );
+
+        // No JXL created on disk
+        assert!(
+            !jxl.exists(),
+            "fast-img UltraHDR skip must not create a JXL file"
+        );
+
+        // Source bytes untouched
+        let source_bytes_after = std::fs::read(&src).expect("read after");
+        assert_eq!(
+            source_bytes_before, source_bytes_after,
+            "source JPEG must be byte-identical after fast-img skip"
+        );
+    }
 }
+

@@ -88,80 +88,46 @@ impl Style {
     }
 }
 
+/// Smart Build — builds img / vid / verify (crates/dev) and optionally the Tauri GUI.
+///
+/// Default (no flags): build img + vid + verify if sources are newer than binaries.
 #[derive(Parser, Debug)]
-#[command(
-    name = "smart_build",
-    about = "Smart Build System for Modern Format Boost"
-)]
+#[command(about = "Smart Build System — incremental Rust + Tauri builder")]
 struct Args {
-    #[arg(
-        long = "force",
-        short = 'f',
-        help = "Force rebuild all selected projects"
-    )]
+    /// Force rebuild even when binaries are up-to-date
+    #[arg(long, short = 'f')]
     force: bool,
 
-    #[arg(
-        long = "clean",
-        short = 'c',
-        help = "Clean build artifacts before compiling"
-    )]
+    /// Clean stale deps and run kondo before building
+    #[arg(long, short = 'c')]
     clean: bool,
 
-    #[arg(long = "verbose", short = 'v', help = "Show detailed output")]
+    /// Show binary size and mtime after build
+    #[arg(long, short = 'v')]
     verbose: bool,
 
-    #[arg(
-        long = "no-clean-old",
-        default_value_t = true,
-        action = clap::ArgAction::SetFalse,
-        help = "Don't clean old binary files"
-    )]
-    clean_old: bool,
-
-    #[arg(long = "all", short = 'a', help = "Build all projects")]
+    /// Build everything: img + vid + verify + Tauri GUI
+    #[arg(long, short = 'a')]
     all: bool,
 
-    #[arg(long = "img", help = "Build image tools")]
+    /// Build image tools only (img binary)
+    #[arg(long)]
     img: bool,
 
-    #[arg(long = "vid", help = "Build video tools")]
+    /// Build video tools only (vid binary)
+    #[arg(long)]
     vid: bool,
 
-    #[arg(long = "hevc", help = "Support for HEVC codecs")]
-    hevc: bool,
-
-    #[arg(long = "av1", help = "Support for AV1 codecs")]
-    av1: bool,
-
-    #[arg(long = "kondo", help = "Perform deep project cleanup using kondo")]
-    kondo: bool,
-
-    #[arg(
-        long = "no-verify-timestamps",
-        default_value_t = true,
-        action = clap::ArgAction::SetFalse,
-        help = "Disable timestamp verification after build"
-    )]
-    verify_timestamps: bool,
-
-    #[arg(
-        long = "quiet",
-        short = 'q',
-        help = "No output when all selected binaries are already up-to-date"
-    )]
+    /// No output when all binaries are already up-to-date
+    #[arg(long, short = 'q')]
     quiet: bool,
 
-    #[arg(
-        long = "update",
-        help = "Run dependency updates (cargo update, topgrade, brew, etc.)"
-    )]
+    /// Update dependencies first (brew, cargo, pip, rustup)
+    #[arg(long, short = 'u')]
     update: bool,
 
-    #[arg(
-        long = "gui",
-        help = "Build the Tauri Vue GUI and replace the App bundle"
-    )]
+    /// Build the Tauri Vue GUI and sync the .app bundle
+    #[arg(long)]
     gui: bool,
 }
 
@@ -190,8 +156,9 @@ fn vue_dir(project_root: &Path) -> PathBuf {
 }
 
 fn tauri_app_bundle_path(project_root: &Path) -> PathBuf {
-    vue_dir(project_root)
-        .join("src-tauri")
+    // Tauri build output is redirected to the workspace root target via
+    // src-tauri/.cargo/config.toml (target-dir = "../../../../../target").
+    project_root
         .join("target")
         .join("release")
         .join("bundle")
@@ -665,7 +632,9 @@ fn build_project(
         return Ok(false);
     }
 
-    if args.verify_timestamps {
+    // Always verify timestamps: a mismatched mtime means Cargo reused a cached
+    // binary without recompiling, which would silently deploy stale code.
+    {
         let binary_path = get_binary_path(project_root, binary_name);
         std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -1168,14 +1137,6 @@ fn main() -> Result<()> {
         if args.vid {
             projects_to_build.push("crates/vid");
         }
-        if args.hevc || args.av1 {
-            if !projects_to_build.contains(&"crates/img") {
-                projects_to_build.push("crates/img");
-            }
-            if !projects_to_build.contains(&"crates/vid") {
-                projects_to_build.push("crates/vid");
-            }
-        }
     }
 
     if projects_to_build.is_empty() {
@@ -1226,10 +1187,9 @@ fn main() -> Result<()> {
         style.reset
     );
 
-    if args.clean_old {
-        let targets = vec!["img", "vid"];
-        clean_old_binaries(&project_root, &targets, style)?;
-    }
+    // Always remove stale binaries left over from previous build locations.
+    let targets = vec!["img", "vid"];
+    clean_old_binaries(&project_root, &targets, style)?;
 
     if args.clean {
         println!("{}Cleaning build artifacts...{}", style.yellow, style.reset);
@@ -1242,11 +1202,8 @@ fn main() -> Result<()> {
         clean_with_kondo(&project_root, style)?;
     }
 
-    if args.kondo && !args.clean {
-        clean_with_kondo(&project_root, style)?;
-    }
-
-    if args.gui {
+    // GUI build: triggered by --gui flag or --all
+    if args.gui || args.all {
         build_and_sync_gui(&project_root, &style)?;
     }
 
@@ -1391,16 +1348,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tauri_app_bundle_path_matches_vue_src_tauri_target() {
+    fn test_tauri_app_bundle_path_matches_workspace_root_target() {
         let project_root = Path::new("/tmp/mfb");
         assert_eq!(
             tauri_app_bundle_path(project_root),
             Path::new("/tmp/mfb")
-                .join("crates")
-                .join("dev")
-                .join("src")
-                .join("vue")
-                .join("src-tauri")
                 .join("target")
                 .join("release")
                 .join("bundle")
