@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
   - Tauri GUI builds: smart_build.rs, smart_build.py (added `--release` to npm tauri build)
   - Training pipeline: cache_cleaner.rs, post_training_closure.rs, isolate.rs, delegate.rs (changed target/debug to target/release)
   - Entry guard: foundation/src/infra/entry_guard.rs (updated production hint to target/release)
+  - Foundation dylib: mfb_dylib.py (changed target/debug to target/release, added --release to cargo rustc)
   - Removed debug_assertions conditional in favor of always using release profile
 
 ### Fast-Img & Media Pipeline

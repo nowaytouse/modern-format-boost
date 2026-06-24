@@ -1,6 +1,6 @@
 """Stable ``foundation`` dylib for training lanes (``python_api`` ctypes).
 
-Copies ``target/debug`` → ``.modern_format_boost/artifacts/`` when missing or
+Copies ``target/release`` → ``.modern_format_boost/artifacts/`` when missing or
 stale so lane workers never keep running an old build after ``cargo rustc -p
 foundation``.
 """
@@ -26,8 +26,8 @@ def rust_dylib_filename() -> str:
     return "libfoundation.so"
 
 
-def target_debug_dylib() -> Path:
-    return ROOT / "target" / "debug" / rust_dylib_filename()
+def target_release_dylib() -> Path:
+    return ROOT / "target" / "release" / rust_dylib_filename()
 
 
 def artifact_dylib() -> Path:
@@ -44,7 +44,7 @@ def ensure_foundation_dylib(*, force_rebuild: bool = False) -> str:
     """Return path to stable dylib; rebuild/copy when missing or stale."""
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     artifact = artifact_dylib()
-    built = target_debug_dylib()
+    built = target_release_dylib()
 
     if force_rebuild or not built.is_file() or _artifact_stale(artifact, built):
         print(
@@ -56,6 +56,7 @@ def ensure_foundation_dylib(*, force_rebuild: bool = False) -> str:
             [
                 "cargo",
                 "rustc",
+                "--release",
                 "-p",
                 "foundation",
                 "--lib",
