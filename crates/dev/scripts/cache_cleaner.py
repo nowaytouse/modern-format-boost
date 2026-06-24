@@ -1237,7 +1237,7 @@ def main():
                 sys.exit(1)
         except (EOFError, KeyboardInterrupt):
             print(
-                f"\n{YELLOW}Rebuild interrupted. Run: python3 crates/dev/scripts/smart_build.py --force{RESET}"
+                f"\n{YELLOW}Rebuild interrupted. Run: cargo run --locked --release -p dev --bin smart_build -- --force{RESET}"
             )
             sys.exit(130)
 

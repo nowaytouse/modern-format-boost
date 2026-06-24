@@ -822,7 +822,7 @@ def check_tools():
 def rebuild_tools():
     """Attempt to rebuild tools automatically"""
     print(f"\n{YELLOW}Attempting automatic rebuild...{RESET}")
-    cmd = ["cargo", "run", "--locked", "-p", "dev", "--bin", "smart_build", "--"]
+    cmd = ["cargo", "run", "--locked", "--release", "-p", "dev", "--bin", "smart_build", "--"]
     if PROCESSING_MODE == "images_only":
         cmd.append("--img")
     elif PROCESSING_MODE == "videos_only":
@@ -1539,7 +1539,7 @@ def select_mode():
                                 f"\n{RED}{ICO_ERR} Cleanup or rebuild failed (exit {clean_res.returncode}).{RESET}"
                             )
                             print(
-                                f"{YELLOW}   Manual rebuild: cargo run --locked -p dev --bin smart_build -- --force{RESET}\n"
+                                f"{YELLOW}   Manual rebuild: cargo run --locked --release -p dev --bin smart_build -- --force{RESET}\n"
                             )
                         else:
                             print(f"\n{GREEN}{ICO_OK} Cleanup complete.{RESET}")
@@ -2516,7 +2516,7 @@ def process_images():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: cargo run --locked -p dev --bin smart_build{RESET}"
+                f"{YELLOW}   Manual rebuild required: cargo run --locked --release -p dev --bin smart_build{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)
@@ -2597,7 +2597,7 @@ def process_videos():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: cargo run --locked -p dev --bin smart_build{RESET}"
+                f"{YELLOW}   Manual rebuild required: cargo run --locked --release -p dev --bin smart_build{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)

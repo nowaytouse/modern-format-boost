@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - **Tauri Build Optimization**: Added `.cargo/config.toml` to redirect Tauri/Cargo build output to workspace root target directory, preventing duplicate 5GB target trees in `src-tauri/`.
 - **SmartBuild Rust Implementation**: Fully migrated to Rust-based `smart_build` binary for all build operations, replacing Python scripts and ensuring release profile usage for production builds.
 - **Vue Frontend Recompilation**: Integrated Vue frontend build process into smart_build workflow, ensuring frontend assets are always current with Rust backend changes.
+- **Uniform Release Profile**: Fixed all smart_build invocations to consistently use `--release` flag, ensuring production-optimized builds across all contexts (drag_and_drop_processor, cache_cleaner, and manual calls).
 
 ### Fast-Img & Media Pipeline
 
