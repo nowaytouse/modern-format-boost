@@ -35,7 +35,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-05-23
+          toolchain: nightly-2026-06-20
           targets: ${{ matrix.target }}
 
       - name: Install dependencies (Homebrew)
@@ -132,7 +132,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-05-23
+          toolchain: nightly-2026-06-20
           targets: x86_64-unknown-linux-gnu
 
       - name: Install dependencies
@@ -265,7 +265,7 @@ jobs:
             > /tmp/nightly_release_notes.md
 
       - name: Publish nightly release
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly-latest
           name: Nightly Build

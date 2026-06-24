@@ -1241,12 +1241,19 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.15s ease;
   font-size: 1rem;
   font-weight: 600;
 }
 .icon-btn:hover {
   background: rgba(128, 128, 128, 0.15);
+  transform: scale(1.05);
+}
+.icon-btn:active {
+  transform: scale(0.95);
 }
 .text-icon {
   font-size: 0.75rem;
@@ -1377,9 +1384,15 @@ body {
     background-color 0.2s ease,
     color 0.2s ease,
     box-shadow 0.2s ease,
-    transform 0.2s ease;
+    transform 0.15s ease;
   color: var(--text-muted);
   position: relative;
+}
+.segment:hover {
+  transform: translateY(-1px);
+}
+.segment:active {
+  transform: translateY(0);
 }
 .segment input {
   display: none;
@@ -1390,6 +1403,7 @@ body {
   box-shadow:
     0 2px 8px rgba(0, 0, 0, 0.1),
     inset 0 1px 1px var(--glass-highlight);
+  transform: translateY(-1px);
 }
 .seg-icon {
   font-size: 1.2rem;
@@ -1416,9 +1430,26 @@ body {
   outline: none;
   cursor: pointer;
   box-shadow: inset 0 1px 1px var(--glass-highlight);
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
 }
 [data-theme="light"] .liquid-select {
   background: rgba(0, 0, 0, 0.05);
+}
+.liquid-select:hover {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 1px var(--glass-highlight),
+    0 0 0 3px rgba(10, 132, 255, 0.1);
+}
+.liquid-select:focus {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 1px var(--glass-highlight),
+    0 0 0 3px rgba(10, 132, 255, 0.2);
 }
 
 /* Switch Toggles */
@@ -1437,10 +1468,11 @@ body {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color 0.2s ease, transform 0.15s ease;
 }
 .toggle-row:hover {
   background: rgba(128, 128, 128, 0.1);
+  transform: translateX(2px);
 }
 .toggle-text {
   font-size: 0.85rem;
@@ -1470,7 +1502,7 @@ body {
   background: rgba(128, 128, 128, 0.3);
   border-radius: 10px;
   position: relative;
-  transition: background 0.3s;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .switch input {
@@ -1484,14 +1516,18 @@ body {
   height: 16px;
   background: #fff;
   border-radius: 50%;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.switch:hover {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2), 0 0 0 3px rgba(52, 199, 89, 0.1);
 }
 .switch.on {
   background: var(--success);
 }
 .switch.on .switch-knob {
   transform: translateX(16px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 .panel-footer {
@@ -1592,6 +1628,10 @@ body {
   filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.2));
   position: relative;
   z-index: 2;
+  transition: transform 0.3s ease;
+}
+.drop-icon-container:hover .huge-icon {
+  transform: scale(1.05);
 }
 .ripple-ring {
   position: absolute;
@@ -1599,6 +1639,10 @@ body {
   border-radius: 50%;
   border: 2px dashed var(--glass-border);
   animation: spin-slow 10s linear infinite;
+  transition: border-color 0.3s ease;
+}
+.drop-icon-container:hover .ripple-ring {
+  border-color: var(--accent);
 }
 @keyframes spin-slow {
   100% {
@@ -1639,7 +1683,8 @@ body {
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 50% 50%;
-  transition: stroke-dashoffset 0.1s linear;
+  transition: stroke-dashoffset 0.1s linear, stroke 0.3s ease;
+  filter: drop-shadow(0 0 6px rgba(10, 132, 255, 0.3));
 }
 .progress-text {
   position: absolute;
@@ -1674,13 +1719,19 @@ body {
   background: var(--accent);
   border-radius: 2px;
   animation: sweep 1.5s infinite ease-in-out;
+  filter: drop-shadow(0 0 8px rgba(10, 132, 255, 0.5));
 }
 @keyframes sweep {
   0% {
     transform: translateX(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
   }
   100% {
     transform: translateX(300%);
+    opacity: 0;
   }
 }
 .proc-status {

@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
   - **Pipeline Routing**: All workflows (img/vid/fastmode/collect/merge_xmp/icloud_import/diagnostic/maintenance) now route through Rust CLI.
 - **Launcher Packaging Hardening**: Tightened macOS app-bundle binary discovery, added Vue/Tauri quality gates to `check_all`, and refreshed dependency metadata/lockfiles for the split workspace layout.
 - **Tauri Build Optimization**: Added `.cargo/config.toml` to redirect Tauri/Cargo build output to workspace root target directory, preventing duplicate 5GB target trees in `src-tauri/`.
+- **SmartBuild Rust Implementation**: Fully migrated to Rust-based `smart_build` binary for all build operations, replacing Python scripts and ensuring release profile usage for production builds.
+- **Vue Frontend Recompilation**: Integrated Vue frontend build process into smart_build workflow, ensuring frontend assets are always current with Rust backend changes.
 
 ### Fast-Img & Media Pipeline
 

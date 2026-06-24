@@ -185,11 +185,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-05-23
+          toolchain: nightly-2026-06-20
           components: rustfmt, clippy, miri, rust-src, llvm-tools
 
       - name: Ensure required nightly components on pinned toolchain
-        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-05-23
+        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-06-20
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -389,7 +389,7 @@ jobs:
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-05-23
+          toolchain: nightly-2026-06-20
           components: clippy, rustfmt, miri, rust-src, llvm-tools
 
       - name: Install system dependencies
