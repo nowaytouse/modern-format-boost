@@ -17,7 +17,7 @@ All notable changes to this project will be documented in this file.
 - **SmartBuild Rust Implementation**: Fully migrated to Rust-based `smart_build` binary for all build operations, replacing Python scripts and ensuring release profile usage for production builds.
 - **Vue Frontend Recompilation**: Integrated Vue frontend build process into smart_build workflow, ensuring frontend assets are always current with Rust backend changes.
 - **Uniform Release Profile**: Fixed all smart_build invocations to consistently use `--release` flag, ensuring production-optimized builds across all contexts:
-  - Python scripts: drag_and_drop_processor.py, cache_cleaner.py
+  - Python scripts: drag_and_drop_processor.py, cache_cleaner.py (removed debug profile fallback for verify binary)
   - Rust binaries: drag_and_drop_processor.rs, cache_cleaner.rs
   - Tauri GUI builds: smart_build.rs, smart_build.py (added `--release` to npm tauri build)
   - Removed debug_assertions conditional in favor of always using release profile

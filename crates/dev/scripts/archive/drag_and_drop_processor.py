@@ -3136,8 +3136,6 @@ def load_fast_img_marker_for_optimized(
 ) -> tuple[dict | None, Path | None, str | None]:
     verify_src = PROJECT_ROOT / "crates" / "dev" / "src" / "bin" / "verify.rs"
     verify_bin = PROJECT_ROOT / "target" / "release" / "verify"
-    if not verify_bin.is_file():
-        verify_bin = PROJECT_ROOT / "target" / "debug" / "verify"
     if (
         verify_bin.is_file()
         and verify_src.is_file()
@@ -3149,6 +3147,7 @@ def load_fast_img_marker_for_optimized(
             "cargo",
             "run",
             "--locked",
+            "--release",
             "-p",
             "dev",
             "--bin",
