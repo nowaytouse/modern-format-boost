@@ -227,14 +227,14 @@ fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
 ///
 /// # Returns
 /// A unique output path that doesn't conflict with other reservations.
-fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
+fn reserve_unique_output_path(input: &Path, candidate: &Path) -> PathBuf {
     let input_key = stable_path_key(input);
     let mut reservations = crate::media_conversion_gate::mutex_guard_or_recover(
         "reserved_output_paths_lock",
         RESERVED_OUTPUT_PATHS.lock(),
     );
 
-    let mut resolved = candidate.clone();
+    let mut resolved = candidate.to_path_buf();
     let mut collision_index = crate::constants::COLLISION_INDEX_START;
 
     loop {
@@ -249,7 +249,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
         };
 
         if should_collide {
-            resolved = path_with_collision_suffix(&candidate, collision_index);
+            resolved = path_with_collision_suffix(candidate, collision_index);
             collision_index += 1;
 
             if collision_index > 10_000 {
@@ -278,7 +278,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
                     },
                     None => collision_index,
                 };
-                resolved = path_with_collision_suffix(&candidate, collision_index + suffix_addend);
+                resolved = path_with_collision_suffix(candidate, collision_index + suffix_addend);
                 break;
             }
         } else {
@@ -293,7 +293,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
 
 #[must_use]
 pub fn reserve_output_path(input: &Path, candidate: &Path) -> PathBuf {
-    reserve_unique_output_path(input, candidate.to_path_buf())
+    reserve_unique_output_path(input, candidate)
 }
 
 /// Pre-claims an output path for a known input→output pair from a previous run,
@@ -1303,7 +1303,7 @@ pub fn determine_output_path(
 
     validate_output_path(&output, None)?;
 
-    Ok(reserve_unique_output_path(input, output))
+    Ok(reserve_unique_output_path(input, &output))
 }
 
 /// Determine the output path with a base directory.
@@ -1369,7 +1369,7 @@ pub fn determine_output_path_with_base(
 
     validate_output_path(&output, Some(base_dir))?;
 
-    Ok(reserve_unique_output_path(input, output))
+    Ok(reserve_unique_output_path(input, &output))
 }
 
 /// # Errors
