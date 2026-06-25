@@ -101,12 +101,21 @@ const XATTR_EXACT_COPY_SOURCE_SKIP_KEYS: &[&str] = &[
     "com.apple.cscachefs",
     "com.apple.metadata:kMDItemContentCreationDate",
     "com.apple.provenance",
+    // MAC label injected by sandboxed apps — non-transferable, skip on both sides.
+    "com.apple.macl",
 ];
 
 #[cfg(target_os = "macos")]
 const XATTR_EXACT_COPY_DESTINATION_GENERATED_KEYS: &[&str] = &[
+    // Spotlight re-indexes new files and may stamp a fresh creation date.
     "com.apple.metadata:kMDItemContentCreationDate",
+    // macOS provenance tracking; written to new files by the OS.
     "com.apple.provenance",
+    // Mandatory-Access-Control label injected by the macOS sandbox when any
+    // sandboxed process (e.g. Photos, Preview) opens the destination file.
+    // Never present on the source at copy time, so it must not be flagged as
+    // an "unexpected" xattr during exact-copy verification.
+    "com.apple.macl",
 ];
 
 #[cfg(target_os = "macos")]

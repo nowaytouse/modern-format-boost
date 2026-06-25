@@ -48,7 +48,7 @@ os.chdir(PROJECT_ROOT)
 
 def print_header():
     print()
-    print(f"{CYAN}{BOLD}Smart Build System v0.11.3 (Python Edition){NC}")
+    print(f"{CYAN}{BOLD}Smart Build System v0.12.0 (Python Edition){NC}")
     print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
 
 
@@ -272,7 +272,12 @@ def verify_binary_timestamp(binary_path, compile_start_time):
     if binary_mtime < (compile_start_time - 2.0):
         print(f"{RED}FAILURE: TIMESTAMP VERIFICATION FAILED{NC}")
         print(f"{YELLOW}Binary timestamp is older than compile time!{NC}")
+        mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(binary_mtime))
+        print(f"{DIM}   binary mtime : {mtime_str}{NC}")
+        print(f"{DIM}   compile start: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(compile_start_time))}{NC}")
         return False
+    mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(binary_mtime))
+    print(f"   {GREEN}✓ timestamp OK{NC}  {DIM}{mtime_str}{NC}")
     return True
 
 
@@ -462,13 +467,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Smart Build System — incremental Rust + Tauri builder",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog="""\
 Default (no flags): build img + vid + verify if sources are newer than binaries.
 
 Examples:
   smart_build.py                  # incremental build img + vid + verify
+  smart_build.py -p               # patch-cycle: force+rust-only+verbose (after a code edit)
+  smart_build.py -p --img         # patch-cycle, img binary only
   smart_build.py --all            # build everything including Tauri GUI
   smart_build.py --gui            # build Tauri GUI only
+  smart_build.py --rust-only -f   # force-rebuild all Rust, skip GUI
   smart_build.py --img --force    # force-rebuild img binary
   smart_build.py --clean --all    # clean + full rebuild
   smart_build.py --update         # update deps then build""",
@@ -507,8 +515,28 @@ Examples:
         action="store_true",
         help="Build the Tauri Vue GUI and sync the .app bundle",
     )
+    parser.add_argument(
+        "--rust-only", "-r",
+        action="store_true",
+        help="Build Rust binaries only — skip Tauri/Vue GUI step",
+    )
+    parser.add_argument(
+        "--patch", "-p",
+        action="store_true",
+        help=(
+            "Patch-cycle shortcut: --force + --rust-only + --verbose. "
+            "Use after small source edits to rebuild and verify timestamps immediately."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # --patch implies --force + --rust-only + --verbose
+    if args.patch:
+        args.force = True
+        args.rust_only = True
+        args.verbose = True
+        print(f"{CYAN}{BOLD}[patch mode]{NC} force + rust-only + verbose")
 
     projects_to_build = resolve_projects_to_build(args)
 
@@ -534,8 +562,8 @@ Examples:
         print()
         clean_with_kondo()
 
-    # GUI build: triggered by --gui flag or --all
-    if args.gui or args.all:
+    # GUI build: triggered by --gui flag or --all, but not when --rust-only / --patch
+    if (args.gui or args.all) and not getattr(args, 'rust_only', False):
         build_and_sync_gui()
 
     rebuilt = 0

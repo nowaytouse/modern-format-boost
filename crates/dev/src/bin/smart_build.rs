@@ -132,6 +132,15 @@ struct Args {
     /// Build the Tauri Vue GUI and sync the .app bundle
     #[arg(long)]
     gui: bool,
+
+    /// Build Rust binaries only — skip Tauri/Vue GUI step
+    #[arg(long, short = 'r')]
+    rust_only: bool,
+
+    /// Patch-cycle shortcut: --force + --rust-only + --verbose.
+    /// Use after small source edits to rebuild and verify timestamps immediately.
+    #[arg(long, short = 'p')]
+    patch: bool,
 }
 
 fn command_exists(cmd: &str) -> bool {
@@ -686,6 +695,16 @@ fn build_project(
             );
             return Ok(false);
         }
+        // Timestamp verified — print confirmation matching Python smart_build output.
+        let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs_f64(binary_mtime))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .into();
+        let mtime_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+        println!(
+            "   {}\u{2713} timestamp OK{}  {}{}{}",
+            style.green, style.reset, style.dim, mtime_str, style.reset
+        );
     }
 
     Ok(true)
@@ -1070,7 +1089,6 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         .arg("tauri")
         .arg("build")
         .arg("--")
-        .arg("--release")
         .arg("--bundles")
         .arg("app")
         .current_dir(&vue_dir)
@@ -1114,10 +1132,21 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
     let _ = setup_logger("mfb.smart_build");
     let project_root = get_project_root()?;
     let style = Style::current();
+
+    // --patch implies --force + --rust-only + --verbose
+    if args.patch {
+        args.force = true;
+        args.rust_only = true;
+        args.verbose = true;
+        println!(
+            "{}{}[patch mode]{} force + rust-only + verbose",
+            style.cyan, style.bold, style.reset
+        );
+    }
 
     if args.update {
         perform_updates(&project_root, &style, args.force)?;
@@ -1172,7 +1201,7 @@ fn main() -> Result<()> {
     // Print header
     println!();
     println!(
-        "{}{}{} Smart Build System v0.11.3 (Rust Edition){}",
+        "{}{}{} Smart Build System v0.12.0 (Rust Edition){}",
         style.cyan,
         style.bold,
         pick_symbol("📦", "[BUILD]"),
@@ -1206,8 +1235,8 @@ fn main() -> Result<()> {
         clean_with_kondo(&project_root, style)?;
     }
 
-    // GUI build: triggered by --gui flag or --all
-    if args.gui || args.all {
+    // GUI build: triggered by --gui flag or --all, but not when --rust-only / --patch
+    if (args.gui || args.all) && !args.rust_only {
         build_and_sync_gui(&project_root, &style)?;
     }
 
