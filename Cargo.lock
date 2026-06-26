@@ -111,8 +111,8 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
-source = "git+https://github.com/dtolnay/anyhow#917a16932009c1957f53c2ea325663948add2153"
+version = "1.0.103"
+source = "git+https://github.com/dtolnay/anyhow#5bdb0e24db3994be119d42f18fe2d655e1f68f4a"
 
 [[package]]
 name = "arbitrary"
@@ -2186,7 +2186,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.40.1"
-source = "git+https://github.com/tafia/quick-xml#9aaea9281d346ec0249c679639a15eef8f9cbb18"
+source = "git+https://github.com/tafia/quick-xml#7ca25266e94987210daa864889ab15c9332c8a2a"
 dependencies = [
  "memchr",
 ]
@@ -2718,7 +2718,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#e6a4c67a58ef50725dfdd79d6bd69eb2c1b45632"
+source = "git+https://github.com/Stebalien/tempfile#55294bfdfea2d12840b7bf566bcea7b2cc3af152"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",
