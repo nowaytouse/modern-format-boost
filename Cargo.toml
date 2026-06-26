@@ -54,7 +54,9 @@ categories = ["multimedia", "command-line-utilities"]
 # Override crates.io with git sources for dependencies that require upstream fixes.
 anyhow = { git = "https://github.com/dtolnay/anyhow" }
 thiserror = { git = "https://github.com/dtolnay/thiserror" }
+thiserror-impl = { git = "https://github.com/dtolnay/thiserror" }
 tracing = { git = "https://github.com/tokio-rs/tracing" }
+tracing-attributes = { git = "https://github.com/tokio-rs/tracing" }
 tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
 tracing-appender = { git = "https://github.com/tokio-rs/tracing" }
 clap = { git = "https://github.com/clap-rs/clap" }
@@ -84,6 +86,10 @@ exr = { git = "https://github.com/johannesvollmer/exrs" }
 jpegxl-rs = { git = "https://github.com/inflation/jpegxl-rs" }
 rug = { git = "https://gitlab.com/tspiteri/rug" }
 paste = { git = "https://github.com/dtolnay/paste" }
+zerocopy = { git = "https://github.com/google/zerocopy" }
+zerocopy-derive = { git = "https://github.com/google/zerocopy" }
+equator = { git = "https://github.com/sarah-quinones/equator" }
+equator-macro = { git = "https://github.com/sarah-quinones/equator" }
 
 [workspace.dependencies]
 # Core error handling

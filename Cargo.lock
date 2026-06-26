@@ -3504,8 +3504,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce1022995ff5ff5d841ad7d994facc23098cd40152f2c1d11cd607c6f530653f"
+source = "git+https://github.com/google/zerocopy#3b29d25ae1d7bcb12321eef9016721612c6724f7"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3513,8 +3512,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
+source = "git+https://github.com/google/zerocopy#3b29d25ae1d7bcb12321eef9016721612c6724f7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3550,3 +3548,13 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "equator"
+version = "0.5.0"
+source = "git+https://github.com/sarah-quinones/equator#572df6071c33cd4ce3298b8ba851774b0645b8a5"
+
+[[patch.unused]]
+name = "equator-macro"
+version = "0.5.0"
+source = "git+https://github.com/sarah-quinones/equator#572df6071c33cd4ce3298b8ba851774b0645b8a5"
