@@ -2750,6 +2750,8 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
     let mut command = std::process::Command::new(&osxphotos);
     command
         .arg("query")
+        .arg("--db")
+        .arg(crate::common_utils::photos_library_path()?)
         .arg("--uuid-from-file")
         .arg(uuid_file.path())
         .arg("--mute")

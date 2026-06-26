@@ -1123,7 +1123,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#c4354eed06acf03a917817c3b7986bf36fc4e13f"
+source = "git+https://github.com/image-rs/image#86e7792285a05049e43f68a7fd55de66ca88e5ab"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif#cbd070dd6eed853e583d0991544374322088fb59"
+source = "git+https://github.com/console-rs/indicatif#692705d66d35cfef8e926cc02be27491b383706c"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2131,8 +2131,7 @@ dependencies = [
 [[package]]
 name = "profiling"
 version = "1.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+source = "git+https://github.com/aclysma/profiling?rev=da44bd1c5497c665c0f00e5d70594fc14d390b4b#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
 dependencies = [
  "profiling-procmacros",
 ]
@@ -2140,8 +2139,7 @@ dependencies = [
 [[package]]
 name = "profiling-procmacros"
 version = "1.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
+source = "git+https://github.com/aclysma/profiling?rev=da44bd1c5497c665c0f00e5d70594fc14d390b4b#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
 dependencies = [
  "quote",
  "syn",
@@ -2730,7 +2728,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror#ec42ea70852f8db43e971700d1ccc184957d1b32"
+source = "git+https://github.com/dtolnay/thiserror?rev=ec42ea70852f8db43e971700d1ccc184957d1b32#ec42ea70852f8db43e971700d1ccc184957d1b32"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2738,7 +2736,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror#ec42ea70852f8db43e971700d1ccc184957d1b32"
+source = "git+https://github.com/dtolnay/thiserror?rev=ec42ea70852f8db43e971700d1ccc184957d1b32#ec42ea70852f8db43e971700d1ccc184957d1b32"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2908,7 +2906,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -2918,7 +2916,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -2930,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2940,7 +2938,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "valuable",
 ]
@@ -2948,7 +2946,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "log",
  "once_cell",
@@ -2958,7 +2956,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "serde",
  "tracing-core",
@@ -2967,7 +2965,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -3504,7 +3502,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.52"
-source = "git+https://github.com/google/zerocopy#3b29d25ae1d7bcb12321eef9016721612c6724f7"
+source = "git+https://github.com/google/zerocopy?rev=3b29d25ae1d7bcb12321eef9016721612c6724f7#3b29d25ae1d7bcb12321eef9016721612c6724f7"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3512,7 +3510,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.52"
-source = "git+https://github.com/google/zerocopy#3b29d25ae1d7bcb12321eef9016721612c6724f7"
+source = "git+https://github.com/google/zerocopy?rev=3b29d25ae1d7bcb12321eef9016721612c6724f7#3b29d25ae1d7bcb12321eef9016721612c6724f7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3548,13 +3546,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "equator"
-version = "0.5.0"
-source = "git+https://github.com/sarah-quinones/equator#572df6071c33cd4ce3298b8ba851774b0645b8a5"
-
-[[patch.unused]]
-name = "equator-macro"
-version = "0.5.0"
-source = "git+https://github.com/sarah-quinones/equator#572df6071c33cd4ce3298b8ba851774b0645b8a5"

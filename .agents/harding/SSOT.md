@@ -1355,7 +1355,7 @@ size cap. This addendum does not claim whole-project closure.
 
 Isolated source:
 `/private/tmp/mfb_e11_live_5t7i0d/input/source.jpeg` copied from
-`/Users/nyamiiko/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`; original was not
+`/Users/*/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`; original was not
 modified.
 
 Command:
@@ -1473,7 +1473,7 @@ cargo test -p img restore_jpeg --bin img -- --test-threads=1
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out
 
 # temp-copy smoke of reported failing JXL:
-# /Users/nyamiiko/Downloads/redone/生活/0059eb6c18994dbb437418034aadf607.jxl
+# /Users/*/Downloads/redone/生活/0059eb6c18994dbb437418034aadf607.jxl
 [SCAN    ] Found 1 true JXL files in /tmp/mfb_restore_reported_jxl_smoke_20260611/src
 [DONE    ] restored 1 JPEGs to /tmp/mfb_restore_reported_jxl_smoke_20260611/out (0 existing outputs skipped) source JXLs deleted=1
 source_jxl_absent=yes
@@ -1990,7 +1990,7 @@ Confirmed matrix evidence:
 - Live single-file smoke: passed with `MFB_HOME_ROOT=/private/tmp/...` and
   deleted the copied source JPEG after Gate 1.
 - Reported JPEG smoke: 100% clean for the fast-img route on a `/private/tmp`
-  copy of `/Users/nyamiiko/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`.
+  copy of `/Users/*/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`.
   Evidence:
 
 ```text
@@ -2189,29 +2189,29 @@ crates/.modern_format_boost/.venv/bin/python crates/dev/scripts/run_training.py 
   [RESET-DB] Clearing training tables before run…
       cleared multi_scenario_metadata: 4 rows
   [RESET-DB] Done — 4 rows removed across all tables.
-  [DYLIB] synced /Users/nyamiiko/Downloads/GitHub/modern_format_boost/.mfb_artifacts/libfoundation.dylib
-  [LAUNCH] stamp=20260609_205918 log_root=/Users/nyamiiko/.modern_format_boost/logs
-  [OK] static_high pid=75585 log=/Users/nyamiiko/.modern_format_boost/logs/static_high/run_training_20260609_205918.log
-  [OK] static_low pid=75787 log=/Users/nyamiiko/.modern_format_boost/logs/static_low/run_training_20260609_205918.log
-  [OK] loop_high pid=75987 log=/Users/nyamiiko/.modern_format_boost/logs/loop_high/run_training_20260609_205918.log
-  [OK] loop_low pid=76179 log=/Users/nyamiiko/.modern_format_boost/logs/loop_low/run_training_20260609_205918.log
+  [DYLIB] synced /Users/*/Downloads/GitHub/modern_format_boost/.mfb_artifacts/libfoundation.dylib
+  [LAUNCH] stamp=20260609_205918 log_root=/Users/*/.modern_format_boost/logs
+  [OK] static_high pid=75585 log=/Users/*/.modern_format_boost/logs/static_high/run_training_20260609_205918.log
+  [OK] static_low pid=75787 log=/Users/*/.modern_format_boost/logs/static_low/run_training_20260609_205918.log
+  [OK] loop_high pid=75987 log=/Users/*/.modern_format_boost/logs/loop_high/run_training_20260609_205918.log
+  [OK] loop_low pid=76179 log=/Users/*/.modern_format_boost/logs/loop_low/run_training_20260609_205918.log
 ```
 
 - Direct process verification after that restart showed all four lanes alive:
 
 ```text
 ps aux | grep -E 'run_training.py|start_training_four.py|static_high|static_low|loop_high|loop_low' | grep -v grep
-nyamiiko 75787 ... run_training.py --training-mode static --label low --no-loop --max-low 1450
-nyamiiko 75585 ... run_training.py --training-mode static --label high --no-loop --max-high 1450
-nyamiiko 75987 ... run_training.py --training-mode loop --loop-intent-label high --max-loop 450
-nyamiiko 76179 ... run_training.py --training-mode loop --loop-intent-label low --max-loop 450
+* 75787 ... run_training.py --training-mode static --label low --no-loop --max-low 1450
+* 75585 ... run_training.py --training-mode static --label high --no-loop --max-high 1450
+* 75987 ... run_training.py --training-mode loop --loop-intent-label high --max-loop 450
+* 76179 ... run_training.py --training-mode loop --loop-intent-label low --max-loop 450
 ```
 
 - Immediate hard-error grep over those four logs returned no output:
 
 ```text
 rg -n "Batch ingestion failed|feature vector missing|required field|loop_stats_motion_periodicity|TRAINING-EXIT|\[FINISH\]|\[FAIL\] Training ingest|Error:" \
-  /Users/nyamiiko/.modern_format_boost/logs/{loop_high,loop_low,static_high,static_low}/run_training_20260609_205918.log
+  /Users/*/.modern_format_boost/logs/{loop_high,loop_low,static_high,static_low}/run_training_20260609_205918.log
 <no output>
 ```
 
@@ -2358,7 +2358,7 @@ already_absent=0 empty_dirs_pruned=0`.
 TODO:
 
 - Default-home fast-img smoke under `~/.modern_format_boost` in this sandbox.
-- Full rerun on `/Users/nyamiiko/Downloads/Final 3` after the metadata patch.
+- Full rerun on `/Users/*/Downloads/Final 3` after the metadata patch.
 - Cross-platform runtime verification outside macOS.
 
 ## 5. Log File Size Cap
@@ -3335,11 +3335,11 @@ $ crates/.modern_format_boost/.venv/bin/python crates/dev/scripts/run_training.p
       cleared multi_scenario_metadata: 4 rows
       cleared path_tree_snapshots: 2 rows
   [RESET-DB] Done — 24 rows removed across all tables.
-  [LAUNCH] stamp=20260608_205352 log_root=/Users/nyamiiko/.modern_format_boost/logs
-  [OK] static_high pid=23334 log=/Users/nyamiiko/.modern_format_boost/logs/static_high/run_training_20260608_205352.log
-  [OK] static_low pid=23472 log=/Users/nyamiiko/.modern_format_boost/logs/static_low/run_training_20260608_205352.log
-  [OK] loop_high pid=23627 log=/Users/nyamiiko/.modern_format_boost/logs/loop_high/run_training_20260608_205352.log
-  [OK] loop_low pid=23788 log=/Users/nyamiiko/.modern_format_boost/logs/loop_low/run_training_20260608_205352.log
+  [LAUNCH] stamp=20260608_205352 log_root=/Users/*/.modern_format_boost/logs
+  [OK] static_high pid=23334 log=/Users/*/.modern_format_boost/logs/static_high/run_training_20260608_205352.log
+  [OK] static_low pid=23472 log=/Users/*/.modern_format_boost/logs/static_low/run_training_20260608_205352.log
+  [OK] loop_high pid=23627 log=/Users/*/.modern_format_boost/logs/loop_high/run_training_20260608_205352.log
+  [OK] loop_low pid=23788 log=/Users/*/.modern_format_boost/logs/loop_low/run_training_20260608_205352.log
 ```
 
 ```text
@@ -3439,7 +3439,7 @@ $ MFB_HOME_ROOT=/private/tmp/mfb_home_metadata_fresh.SHseFP cargo run -p img -- 
 Reported-file runtime smoke:
 
 ```text
-$ cp '/Users/nyamiiko/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg' /private/tmp/mfb_reported_jpeg_fast_img.hUdARE/source.jpeg
+$ cp '/Users/*/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg' /private/tmp/mfb_reported_jpeg_fast_img.hUdARE/source.jpeg
 $ MFB_HOME_ROOT=/private/tmp/mfb_home_reported_jpeg_fast_img.8TZMCX cargo run -p img -- fast-img /private/tmp/mfb_reported_jpeg_fast_img.hUdARE --retry
 [SCAN    ] Found 1 true JPEGs in /private/tmp/mfb_reported_jpeg_fast_img.hUdARE
 [stderr] Encoding [JPEG, lossless transcode, effort: 7]
@@ -3502,7 +3502,7 @@ TODO, not promoted to 100%: audit any independent third-party log writers
 outside `foundation::logging` and `progress_mode`.
 
 TODO, not promoted to 100%: rerun the original full corpus
-`/Users/nyamiiko/Downloads/Final 3`, run `verify.py --fast-img-delivery` on that
+`/Users/*/Downloads/Final 3`, run `verify.py --fast-img-delivery` on that
 delivery batch, and repeat the default-home smoke under `~/.modern_format_boost`
 outside this sandbox's writable-root limitation.
 
@@ -6526,7 +6526,7 @@ Operational evidence:
 ```text
 crates/.modern_format_boost/.venv/bin/python crates/dev/scripts/run_training.py --four-lane --reset-db --rebuild-dylib
 [RESET-DB] Done — 4 rows removed across all tables.
-[LAUNCH] stamp=20260609_205918 log_root=/Users/nyamiiko/.modern_format_boost/logs
+[LAUNCH] stamp=20260609_205918 log_root=/Users/*/.modern_format_boost/logs
 [OK] static_high pid=75585 ...
 [OK] static_low pid=75787 ...
 [OK] loop_high pid=75987 ...
@@ -10370,7 +10370,7 @@ Confirmed matrix evidence:
 - Live single-file smoke: passed with `MFB_HOME_ROOT=/private/tmp/...` and
   deleted the copied source JPEG after Gate 1.
 - Reported JPEG smoke: 100% clean for the fast-img route on a `/private/tmp`
-  copy of `/Users/nyamiiko/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`.
+  copy of `/Users/*/Downloads/Final 3/𝕏/ｕ on Twitter.jpeg`.
   Evidence:
 
 ```text
@@ -10656,7 +10656,7 @@ already_absent=0 empty_dirs_pruned=0`.
 TODO:
 
 - Default-home fast-img smoke under `~/.modern_format_boost` in this sandbox.
-- Full rerun on `/Users/nyamiiko/Downloads/Final 3` after the metadata patch.
+- Full rerun on `/Users/*/Downloads/Final 3` after the metadata patch.
 - Cross-platform runtime verification outside macOS.
 
 ## 5. Log File Size Cap

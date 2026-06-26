@@ -4443,15 +4443,15 @@ mod tests {
         super::clear_reserved_output_paths_for_test();
 
         // 1. First reservation
-        let path1 = super::reserve_unique_output_path(&input1, candidate.clone());
+        let path1 = super::reserve_unique_output_path(&input1, &candidate);
         assert_eq!(path1, candidate);
 
         // 2. Same input, same candidate (should return the same, no collision)
-        let path1_again = super::reserve_unique_output_path(&input1, candidate.clone());
+        let path1_again = super::reserve_unique_output_path(&input1, &candidate);
         assert_eq!(path1_again, candidate);
 
         // 3. Different input, same candidate (memory collision)
-        let path2 = super::reserve_unique_output_path(&input2, candidate.clone());
+        let path2 = super::reserve_unique_output_path(&input2, &candidate);
         assert_eq!(path2, super::path_with_collision_suffix(&candidate, 1));
 
         // 4. Simulate a disk collision from a past run
@@ -4459,7 +4459,7 @@ mod tests {
         std::fs::write(&candidate_disk, "dummy").unwrap();
 
         let input3 = temp_dir_path.join("input3.jpg");
-        let path3 = super::reserve_unique_output_path(&input3, candidate_disk.clone());
+        let path3 = super::reserve_unique_output_path(&input3, &candidate_disk);
         // Should detect disk file and append -1
         assert_eq!(path3, super::path_with_collision_suffix(&candidate_disk, 1));
 
@@ -4468,7 +4468,7 @@ mod tests {
         let candidate_exist = temp_dir_path.join("output_exist.jxl");
 
         // First reserve it
-        let path4 = super::reserve_unique_output_path(&input4, candidate_exist.clone());
+        let path4 = super::reserve_unique_output_path(&input4, &candidate_exist);
         assert_eq!(path4, candidate_exist);
 
         // Now simulate creating the file on disk
@@ -4476,7 +4476,7 @@ mod tests {
 
         // Reserving AGAIN for the SAME input should return the original path,
         // because owner == input_key supersedes the disk check.
-        let path4_again = super::reserve_unique_output_path(&input4, candidate_exist.clone());
+        let path4_again = super::reserve_unique_output_path(&input4, &candidate_exist);
         assert_eq!(path4_again, candidate_exist);
 
         // 6. Multi-level collision test (3+ inputs colliding on the same candidate)
@@ -4486,16 +4486,16 @@ mod tests {
         let input6 = temp_dir_path.join("input6.jpg");
         let multi_candidate = temp_dir_path.join("multi_output.jxl");
 
-        let path_multi_1 = super::reserve_unique_output_path(&input4, multi_candidate.clone());
+        let path_multi_1 = super::reserve_unique_output_path(&input4, &multi_candidate);
         assert_eq!(path_multi_1, multi_candidate); // Claimed by input4
 
-        let path_multi_2 = super::reserve_unique_output_path(&input5, multi_candidate.clone());
+        let path_multi_2 = super::reserve_unique_output_path(&input5, &multi_candidate);
         assert_eq!(
             path_multi_2,
             super::path_with_collision_suffix(&multi_candidate, 1)
         ); // -1
 
-        let path_multi_3 = super::reserve_unique_output_path(&input6, multi_candidate.clone());
+        let path_multi_3 = super::reserve_unique_output_path(&input6, &multi_candidate);
         assert_eq!(
             path_multi_3,
             super::path_with_collision_suffix(&multi_candidate, 2)

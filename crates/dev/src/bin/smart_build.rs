@@ -592,7 +592,7 @@ fn build_project(
     project_dir: &str,
     binary_name: &str,
     retry_count: i32,
-    args: &Args,
+    _args: &Args,
     style: Style,
 ) -> Result<bool> {
     let compile_start_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -685,7 +685,7 @@ fn build_project(
                     project_dir,
                     binary_name,
                     retry_count + 1,
-                    args,
+                    _args,
                     style,
                 );
             }
@@ -911,27 +911,27 @@ fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()
         );
     }
 
-    if let Some(channel) = pinned_rust_channel(project_root) {
-        if command_exists("rustup") {
-            let ok = run_update_step(
-                &format!("rustup toolchain install {channel}"),
-                Command::new("rustup")
-                    .args(["toolchain", "install", &channel])
-                    .current_dir(project_root),
-                style,
-                true,
-            );
-            if ok {
-                for component in rust_toolchain_components(project_root) {
-                    run_update_step(
-                        &format!("rustup component add {component}"),
-                        Command::new("rustup")
-                            .args(["component", "add", &component, "--toolchain", &channel])
-                            .current_dir(project_root),
-                        style,
-                        false,
-                    );
-                }
+    if let Some(channel) = pinned_rust_channel(project_root)
+        && command_exists("rustup")
+    {
+        let ok = run_update_step(
+            &format!("rustup toolchain install {channel}"),
+            Command::new("rustup")
+                .args(["toolchain", "install", &channel])
+                .current_dir(project_root),
+            style,
+            true,
+        );
+        if ok {
+            for component in rust_toolchain_components(project_root) {
+                run_update_step(
+                    &format!("rustup component add {component}"),
+                    Command::new("rustup")
+                        .args(["component", "add", &component, "--toolchain", &channel])
+                        .current_dir(project_root),
+                    style,
+                    false,
+                );
             }
         }
     }

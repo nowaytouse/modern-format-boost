@@ -111,10 +111,11 @@ fn run(connstr: &str, dry_run: bool) -> Result<(usize, usize)> {
                 return Err(anyhow!("unexpected psql row for {table}: {line:?}"));
             };
             let vec = parse_pgvector(embedding_text)?;
-            let max_slot = match EMBED_SLOT_INDICES.iter().copied().max() {
-                Some(v) => v,
-                None => 0,
-            };
+            let max_slot = EMBED_SLOT_INDICES
+                .iter()
+                .copied()
+                .max()
+                .ok_or_else(|| anyhow!("EMBED_SLOT_INDICES cannot be empty"))?;
             if vec.len() < max_slot + 1 {
                 continue;
             }

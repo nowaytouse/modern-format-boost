@@ -463,9 +463,11 @@ fn finalize_conversion_output(
     if config.preserve_metadata() {
         preserve_metadata(input_path, output_path)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    }
-
-    if config.preserve_timestamps() {
+    } else if config.preserve_timestamps() {
+        // Only run standalone timestamp sync when preserve_metadata is disabled;
+        // foundation::metadata::copy (called by preserve_metadata) already
+        // applies apply_file_timestamps as its final step, so running it again
+        // here would duplicate the sync and produce redundant log entries.
         preserve_timestamps(input_path, output_path)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     }

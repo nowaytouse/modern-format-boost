@@ -13,7 +13,7 @@ rustflags = ["-C", "overflow-checks=on"]
 
 
 [env]
-MACOSX_DEPLOYMENT_TARGET = "26.0"
+MACOSX_DEPLOYMENT_TARGET = "27.0"
 CMAKE_PREFIX_PATH = "/opt/homebrew/opt/aom:/opt/homebrew/opt/libjpeg-turbo:/opt/homebrew"
 C_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
 CPLUS_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
@@ -112,8 +112,10 @@ codegen-units = 1
 # Abort on panic (reduces binary size and improves performance where unwinding isn't needed)
 panic = "abort"
 
-# Strip all symbols to minimize binary footprint (essential for CLI distribution)
-strip = "symbols"
+# Strip disabled: macOS 27 dyld enforces strict LINKEDIT page-alignment.
+# LLVM strip (Cargo) mis-aligns proc-macro dylibs → dlopen fails.
+# smart_build.py uses macOS native `strip` on final binaries instead.
+strip = "none"
 
 # -----------------------------------------------------------------------------
 # Profiling Configuration - Used for performance tuning

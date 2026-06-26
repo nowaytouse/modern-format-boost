@@ -591,7 +591,10 @@ fn parse_exif_orientation_stdout(path: &Path, stdout: &[u8]) -> Result<u8> {
             ))
         })?;
     if orientation == 0 {
-        tracing::warn!(
+        // Orientation=0 is invalid per EXIF spec but is common in stripped or
+        // non-compliant JPEG files (e.g. iOS cache images). Treat as 1 (normal)
+        // without warning — this is a known-safe, handled edge case.
+        tracing::debug!(
             target: "orientation_pixel_diff",
             source = %path.display(),
             "pixel-diff: EXIF Orientation=0 is invalid; treating as orientation=1 for visual proof"

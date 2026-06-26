@@ -1649,10 +1649,10 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn parses_installed_nightly_components_exactly() {
         let components = parse_installed_rustup_components(
-            "clippy-x86_64-apple-darwin\nrustfmt-x86_64-apple-darwin\nrust-src\\
-             nllvm-tools-x86_64-apple-darwin\n",
+            "clippy-x86_64-apple-darwin\nrustfmt-x86_64-apple-darwin\nrust-src\nllvm-tools-x86_64-apple-darwin\n",
         );
         assert!(components.toolchain);
         assert!(components.clippy);

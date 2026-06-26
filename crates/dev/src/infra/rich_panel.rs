@@ -270,11 +270,7 @@ pub fn print_summary_report(summary: &PipelineSummary) {
     let effective_s = summary.total_succeeded();
     let effective_f = summary.total_failed();
     let rate_denominator = effective_s + effective_f;
-    let success_rate = if rate_denominator > 0 {
-        (effective_s * 100) / rate_denominator
-    } else {
-        100
-    };
+    let success_rate = (effective_s * 100).checked_div(rate_denominator).unwrap_or(100);
 
     if colors_enabled() {
         println!("{BOLD}{GRAY}Optimization Summary Report{RESET}");
@@ -404,9 +400,10 @@ pub fn print_critical_error_panel(processor: &str, exit_code: i32) {
 /// Hold terminal open after GUI/double-click failures (mirrors Python keypress
 /// wait).
 pub fn pause_before_gui_exit() {
-    let gui = std::env::var("MFB_GUI_LAUNCH")
-        .map(|v| !v.trim().is_empty() && v != "0")
-        .unwrap_or(false);
+    let gui = match std::env::var("MFB_GUI_LAUNCH") {
+        Ok(v) => !v.trim().is_empty() && v != "0",
+        Err(_) => false,
+    };
     if gui && io::stdin().is_terminal() {
         let _ = write!(
             io::stdout(),

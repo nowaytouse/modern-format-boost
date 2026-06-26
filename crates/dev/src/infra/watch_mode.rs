@@ -117,17 +117,17 @@ where
 }
 
 fn is_relevant_watch_event(event: &Event) -> bool {
-    match event.kind {
+    matches!(
+        event.kind,
         EventKind::Any
-        | EventKind::Create(CreateKind::Any)
-        | EventKind::Modify(ModifyKind::Any)
-        | EventKind::Remove(RemoveKind::Any) => true,
-        EventKind::Create(CreateKind::File)
-        | EventKind::Modify(ModifyKind::Data(_))
-        | EventKind::Modify(ModifyKind::Name(_))
-        | EventKind::Remove(RemoveKind::File) => true,
-        _ => false,
-    }
+            | EventKind::Create(CreateKind::Any)
+            | EventKind::Modify(ModifyKind::Any)
+            | EventKind::Remove(RemoveKind::Any)
+            | EventKind::Create(CreateKind::File)
+            | EventKind::Modify(ModifyKind::Data(_))
+            | EventKind::Modify(ModifyKind::Name(_))
+            | EventKind::Remove(RemoveKind::File)
+    )
 }
 
 /// Video file extensions that trigger reprocessing.

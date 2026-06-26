@@ -10661,9 +10661,13 @@ fn media_conversion_analysis_cache_video_algorithm_m132() {
         cache.contains("cache_record_algorithm_current"),
         "cache hits must gate algorithm_version (M132)"
     );
+    let has_algorithm_version_query = cache
+        .contains("r.algorithm_version, p.ctime, p.btime, p.content_hash")
+        || cache.contains("r.algorithm_version, p.ctime, p.btime, \\\n             p.content_hash")
+        || cache.contains("r.algorithm_version, p.ctime, p.btime, \n             p.content_hash")
+        || cache.contains("r.algorithm_version, p.ctime, p.btime, \n              p.content_hash");
     assert!(
-        cache.contains("r.algorithm_version, p.ctime, p.btime, p.content_hash")
-            && cache.contains("algorithm_version FROM video_records"),
+        has_algorithm_version_query && cache.contains("algorithm_version FROM video_records"),
         "video path/hash queries must read algorithm_version (M132)"
     );
 }
@@ -11720,7 +11724,11 @@ fn media_conversion_static_low_tier_any_logic_m157() {
         "low tier must use ANY (M157)"
     );
     assert!(
-        tier_rs.contains("dead zone must not veto dimension-only lows (M157)"),
+        tier_rs.contains("dead zone must not veto dimension-only lows (M157)")
+            || tier_rs
+                .contains("dead zone must not veto dimension-only lows\n            // (M157)")
+            || tier_rs
+                .contains("dead zone must not veto dimension-only lows\n             // (M157)"),
         "ANY path must document dead-zone exception (M157)"
     );
 
@@ -16214,7 +16222,9 @@ fn media_conversion_strict_ssot_entry_m99() {
         );
     }
     assert!(
-        gate.contains("Call only from [`delivery_strict_path_audit`]"),
+        gate.contains("Call only from [`delivery_strict_path_audit`]")
+            || gate.contains("Call only from\n/// [`delivery_strict_path_audit`]")
+            || gate.contains("Call only from\n    /// [`delivery_strict_path_audit`]"),
         "delivery_path_audit must document emitter-only contract (M99)"
     );
 }

@@ -24,6 +24,86 @@ pub fn get_extension_lowercase(path: &Path) -> String {
     crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path)
 }
 
+/// Resolve the Apple Photos library path for use with `osxphotos query --db`.
+///
+/// This bypasses macOS TCC/sandbox restrictions on direct container directory access.
+/// It attempts to find the Photos library through standard macOS APIs and returns
+/// the library path in a format compatible with the `--db` argument.
+///
+/// # Returns
+/// A `PathBuf` representing the Photos library path
+///
+/// # Errors
+/// Returns an error if the Photos library path cannot be determined.
+pub fn photos_library_path() -> anyhow::Result<PathBuf> {
+    // Check environment variable override first
+    if let std::result::Result::Ok(env_path) = std::env::var("MFB_PHOTOS_LIBRARY_PATH") {
+        let path = PathBuf::from(env_path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => PathBuf::from(h),
+        Err(e) => {
+            let err = anyhow::anyhow!("HOME environment variable not set: {e}");
+            tracing::error!("{}", err);
+            return Err(err);
+        }
+    };
+
+    let pictures_dir = home.join("Pictures");
+    let mut candidates = Vec::new();
+
+    if let std::result::Result::Ok(entries) = std::fs::read_dir(&pictures_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("photoslibrary") {
+                let db_path = path.join("database/Photos.sqlite");
+                if db_path.exists()
+                    && let std::result::Result::Ok(metadata) = std::fs::metadata(&db_path)
+                    && let std::result::Result::Ok(modified) = metadata.modified()
+                {
+                    candidates.push((path, modified));
+                }
+            }
+        }
+    }
+
+    // Sort candidates by modification time, newest first
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+    if let Some((best_path, _)) = candidates.first() {
+        return Ok(best_path.clone());
+    }
+
+    // Common macOS Photos library paths as fallback
+    let default_paths = [
+        home.join("Pictures/Photos Library.photoslibrary"),
+        home.join("Pictures/Photos.photoslibrary"),
+        home.join("Pictures/My Photolibrary.photoslibrary"),
+    ];
+
+    // Test each potential path
+    for path in &default_paths {
+        if path.exists() && path.is_dir() {
+            return Ok(path.clone());
+        }
+    }
+
+    let err = anyhow::anyhow!(
+        "Photos library path not found; tried:\n{}",
+        default_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    tracing::error!("{}", err);
+    Err(err)
+}
+
 /// Returns the current processing history (version and timestamp)
 #[must_use]
 pub fn get_current_history() -> ProcessHistory {

@@ -40,15 +40,13 @@ pub fn ingest_stats_line(stats: &mut ProcessorStats, line: &str) {
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() >= 2 {
         let is_target = matches!(parts[0], "Succeeded:" | "Skipped:" | "Ignored:" | "Failed:");
-        if is_target {
-            if let Some(n) = parse_stats_count(parts[1]) {
-                match parts[0] {
-                    "Succeeded:" => stats.succeeded = n,
-                    "Skipped:" => stats.skipped = n,
-                    "Ignored:" => stats.ignored = n,
-                    "Failed:" => stats.failed = n,
-                    _ => {}
-                }
+        if is_target && let Some(n) = parse_stats_count(parts[1]) {
+            match parts[0] {
+                "Succeeded:" => stats.succeeded = n,
+                "Skipped:" => stats.skipped = n,
+                "Ignored:" => stats.ignored = n,
+                "Failed:" => stats.failed = n,
+                _ => {}
             }
         }
     }
@@ -175,17 +173,11 @@ fn push_chunk_log_lines<F: FnMut(&str)>(
 fn pty_winsize() -> libc::winsize {
     let mut winsize: libc::winsize = unsafe { std::mem::zeroed() };
     let lines = match std::env::var("LINES") {
-        Ok(raw) => match raw.trim().parse::<u16>() {
-            Ok(v) => v,
-            Err(_) => 45u16,
-        },
+        Ok(raw) => raw.trim().parse::<u16>().unwrap_or(45u16),
         Err(_) => 45u16,
     };
     let columns = match std::env::var("COLUMNS") {
-        Ok(raw) => match raw.trim().parse::<u16>() {
-            Ok(v) => v,
-            Err(_) => 45u16,
-        },
+        Ok(raw) => raw.trim().parse::<u16>().unwrap_or(45u16),
         Err(_) => 45u16,
     };
     winsize.ws_row = lines;

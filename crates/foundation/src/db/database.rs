@@ -6558,8 +6558,10 @@ mod tests {
     #[test]
     #[ignore = "requires local QQ APNG corpus path"]
     fn apng_sample_from_path_populates_delay_var_for_qq_png() {
-        use std::path::Path;
-        let path = Path::new("/Users/nyamiiko/Downloads/优化/3 三批/QQ/1695006091.png");
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path_buf =
+            std::path::PathBuf::from(home).join("Downloads/优化/3 三批/QQ/1695006091.png");
+        let path = path_buf.as_path();
         if !path.exists() {
             return;
         }

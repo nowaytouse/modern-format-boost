@@ -2564,6 +2564,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
     #[test]
     #[serial]
+    #[rustfmt::skip]
     fn test_fast_img_restore_check_accepts_manifest_verified_deleted_sources() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
@@ -2577,9 +2578,9 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         let output_hash = actual_hash.unwrap();
 
         let manifest_content = format!(
-            "source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted\\
-             n6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\\
-             tsource-blake3\t{output_hash}\ttrue\n"
+            "source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted\n\
+             6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\t\
+             source-blake3\t{output_hash}\ttrue\n"
         );
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2601,6 +2602,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
     #[test]
     #[serial]
+    #[rustfmt::skip]
     fn test_fast_img_restore_check_rejects_manifest_claim_when_source_still_exists() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
@@ -2622,8 +2624,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
-                                toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2641,6 +2642,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
     #[test]
     #[serial]
+    #[rustfmt::skip]
     fn test_fast_img_restore_check_rejects_manifest_deleted_source_with_xmp_leftover() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
@@ -2662,8 +2664,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
-                                toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),
@@ -2680,6 +2681,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
     #[test]
     #[serial]
+    #[rustfmt::skip]
     fn test_fast_img_restore_check_rejects_duplicate_manifest_deleted_source() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
@@ -2695,10 +2697,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let manifest_content = "\
 source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
-                                toutput-blake3\ttrue
-6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\\
-                                toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
+6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";
         fs::write(
             restored.join(".mfb_restore_jpeg_manifest.tsv"),

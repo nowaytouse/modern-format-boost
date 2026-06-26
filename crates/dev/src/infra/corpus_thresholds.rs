@@ -93,9 +93,6 @@ pub fn min_quality_samples_per_class() -> u64 {
 
 #[must_use]
 pub fn loop_corpus_samples_shortfall(total: u64, quality_class: u64, video_class: u64) -> u64 {
-    let total = total;
-    let quality_class = quality_class;
-    let video_class = video_class;
     let min_total = min_loop_samples_total();
     let min_per = min_loop_samples_per_class();
     let needed_total = min_total.saturating_sub(total);
@@ -106,8 +103,6 @@ pub fn loop_corpus_samples_shortfall(total: u64, quality_class: u64, video_class
 
 #[must_use]
 pub fn quality_corpus_samples_shortfall(high: u64, low: u64) -> u64 {
-    let high = high;
-    let low = low;
     let total = high + low;
     let min_total = min_quality_samples_total();
     let min_per = min_quality_samples_per_class();
