@@ -1083,9 +1083,9 @@ dependencies = [
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
+checksum = "818356c5132c1fede50f837ca96afbe78ff42413047f4abb886217845e1b6c8c"
 dependencies = [
  "typenum",
 ]
@@ -1123,7 +1123,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#86e7792285a05049e43f68a7fd55de66ca88e5ab"
+source = "git+https://github.com/image-rs/image#3f2b621ebc8a35bd098eaf18e2dc840883cdd9af"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -2184,7 +2184,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.40.1"
-source = "git+https://github.com/tafia/quick-xml#7ca25266e94987210daa864889ab15c9332c8a2a"
+source = "git+https://github.com/tafia/quick-xml#07f3db8343cf152f5bc3483ef5b3164582489bea"
 dependencies = [
  "memchr",
 ]
