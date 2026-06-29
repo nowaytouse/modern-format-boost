@@ -5141,7 +5141,7 @@ mod tests {
         let xmp_ns: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
         let xmp_body: &[u8] = b"<x:xmpmeta xmlns:hdrgm=\"http://ns.google.com/photos/1.0/camera/\"><hdrgm:Version>1.0</hdrgm:Version></x:xmpmeta>";
         let app1_payload_len = xmp_ns.len() + xmp_body.len();
-        let app1_seg_len = (app1_payload_len + 2) as u16; // includes length field itself
+        let app1_seg_len = foundation::numeric_cast::usize_to_u16_sat(app1_payload_len + 2); // includes length field itself
         buf.extend_from_slice(&[0xFF, 0xE1]);
         buf.extend_from_slice(&app1_seg_len.to_be_bytes());
         buf.extend_from_slice(xmp_ns);
@@ -5150,7 +5150,8 @@ mod tests {
         // APP2 (0xE2) — MPF segment: "MPF\0" identifier + minimal padding
         let mpf_id: &[u8] = b"MPF\0";
         let mpf_padding: &[u8] = &[0u8; 8]; // minimal non-zero tail so length field is valid
-        let app2_seg_len = (mpf_id.len() + mpf_padding.len() + 2) as u16;
+        let app2_seg_len =
+            foundation::numeric_cast::usize_to_u16_sat(mpf_id.len() + mpf_padding.len() + 2);
         buf.extend_from_slice(&[0xFF, 0xE2]);
         buf.extend_from_slice(&app2_seg_len.to_be_bytes());
         buf.extend_from_slice(mpf_id);
@@ -5165,13 +5166,13 @@ mod tests {
         buf
     }
 
-    /// Contract: fast-img mode (REQUIRE_OUTPUT_DELIVERY) must skip UltraHDR JPEGs
+    /// Contract: fast-img mode (`REQUIRE_OUTPUT_DELIVERY`) must skip `UltraHDR` JPEGs
     /// rather than running HDR synthesis, which cannot reconstruct the original
     /// JPEG bitstream and violates the reversibility contract.
     ///
     /// Assertions:
     /// - result is skipped (no JXL output path)
-    /// - skip_reason == JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON
+    /// - `skip_reason` == `JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON`
     /// - no .JXL file was created on disk
     /// - source bytes are byte-identical after the call
     #[test]

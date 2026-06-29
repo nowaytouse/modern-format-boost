@@ -7556,21 +7556,21 @@ mod fast_img_hardening_tests {
         let wc = root.path().join("Photos_optimized");
         std::fs::create_dir_all(&src_root)?;
         std::fs::create_dir_all(&wc)?;
-        let photo_jpeg = src_root.join("photo.jpeg");
-        let photo_jpg = src_root.join("photo.jpg");
-        write_jpeg(&photo_jpeg, b"jpeg")?;
-        write_jpeg(&photo_jpg, b"jpg")?;
+        let source_jpeg = src_root.join("photo.jpeg");
+        let input_jpg_file = src_root.join("photo.jpg");
+        write_jpeg(&source_jpeg, b"jpeg")?;
+        write_jpeg(&input_jpg_file, b"jpg")?;
 
-        let (_, out_rel_jpeg) =
-            fast_img_planned_output_rel(&photo_jpeg, &wc, Path::new("photo.jpeg"))?;
-        let (_, out_rel_jpg) =
-            fast_img_planned_output_rel(&photo_jpg, &wc, Path::new("photo.jpg"))?;
+        let (_, out_path_jxl) =
+            fast_img_planned_output_rel(&source_jpeg, &wc, Path::new("photo.jpeg"))?;
+        let (_, collision_jxl_rel) =
+            fast_img_planned_output_rel(&input_jpg_file, &wc, Path::new("photo.jpg"))?;
 
-        assert_eq!(out_rel_jpeg, "photo.JXL");
-        assert_ne!(out_rel_jpeg, out_rel_jpg);
+        assert_eq!(out_path_jxl, "photo.JXL");
+        assert_ne!(out_path_jxl, collision_jxl_rel);
         assert!(
-            out_rel_jpg.contains("photo"),
-            "disambiguated output should stay photo-derived: {out_rel_jpg}"
+            collision_jxl_rel.contains("photo"),
+            "disambiguated output should stay photo-derived: {collision_jxl_rel}"
         );
         Ok(())
     }

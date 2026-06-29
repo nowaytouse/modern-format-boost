@@ -1,3 +1,4 @@
+use img::lossless_converter::convert_jpeg_to_jxl;
 use std::env;
 use std::fs;
 use tempfile::tempdir;
@@ -54,7 +55,6 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
     fs::write(&input_path, vec![0xFFu8, 0xD8, 0xFF, 0xE0])?;
 
     // Run convert_jpeg_to_jxl which should attempt cjxl and fail
-    use img::lossless_converter::convert_jpeg_to_jxl;
     let options = img::ConvertOptions::default();
 
     let res = convert_jpeg_to_jxl(&input_path, &options, None);

@@ -547,8 +547,8 @@ fn run_fast_img_delivery_check(
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
-        source_files_label: "Source files".to_string(),
-        optimized_files_label: "Optimized files".to_string(),
+        source_files_label: "Recorded source JPEGs".to_string(),
+        optimized_files_label: "Optimized JXL files".to_string(),
         ..Default::default()
     };
 
@@ -919,8 +919,8 @@ fn run_fast_img_restore_check(
         optimized: restored_dir.to_string_lossy().to_string(),
         scope: "images_only".to_string(),
         optimized_path_label: "Restored".to_string(),
-        source_files_label: "Source true JXLs".to_string(),
-        optimized_files_label: "Restored JPEGs".to_string(),
+        source_files_label: "Source JXL files".to_string(),
+        optimized_files_label: "Restored JPEG files".to_string(),
         ..Default::default()
     };
 

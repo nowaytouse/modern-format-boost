@@ -270,7 +270,9 @@ pub fn print_summary_report(summary: &PipelineSummary) {
     let effective_s = summary.total_succeeded();
     let effective_f = summary.total_failed();
     let rate_denominator = effective_s + effective_f;
-    let success_rate = (effective_s * 100).checked_div(rate_denominator).unwrap_or(100);
+    let success_rate = (effective_s * 100)
+        .checked_div(rate_denominator)
+        .unwrap_or(100);
 
     if colors_enabled() {
         println!("{BOLD}{GRAY}Optimization Summary Report{RESET}");
@@ -402,7 +404,10 @@ pub fn print_critical_error_panel(processor: &str, exit_code: i32) {
 pub fn pause_before_gui_exit() {
     let gui = match std::env::var("MFB_GUI_LAUNCH") {
         Ok(v) => !v.trim().is_empty() && v != "0",
-        Err(_) => false,
+        Err(err) => {
+            let _ = err;
+            false
+        }
     };
     if gui && io::stdin().is_terminal() {
         let _ = write!(
