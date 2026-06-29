@@ -822,7 +822,17 @@ def check_tools():
 def rebuild_tools():
     """Attempt to rebuild tools automatically"""
     print(f"\n{YELLOW}Attempting automatic rebuild...{RESET}")
-    cmd = ["cargo", "run", "--locked", "--release", "-p", "dev", "--bin", "smart_build", "--"]
+    cmd = [
+        "cargo",
+        "run",
+        "--locked",
+        "--release",
+        "-p",
+        "dev",
+        "--bin",
+        "smart_build",
+        "--",
+    ]
     if PROCESSING_MODE == "images_only":
         cmd.append("--img")
     elif PROCESSING_MODE == "videos_only":

@@ -274,7 +274,9 @@ def verify_binary_timestamp(binary_path, compile_start_time):
         print(f"{YELLOW}Binary timestamp is older than compile time!{NC}")
         mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(binary_mtime))
         print(f"{DIM}   binary mtime : {mtime_str}{NC}")
-        print(f"{DIM}   compile start: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(compile_start_time))}{NC}")
+        print(
+            f"{DIM}   compile start: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(compile_start_time))}{NC}"
+        )
         return False
     mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(binary_mtime))
     print(f"   {GREEN}✓ timestamp OK{NC}  {DIM}{mtime_str}{NC}")
@@ -491,13 +493,23 @@ Examples:
         help="Clean stale deps and run kondo before building",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Show binary size and mtime after build"
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Show binary size and mtime after build",
     )
     parser.add_argument(
-        "--all", "-a", action="store_true", help="Build everything: img + vid + verify + GUI"
+        "--all",
+        "-a",
+        action="store_true",
+        help="Build everything: img + vid + verify + GUI",
     )
-    parser.add_argument("--img", action="store_true", help="Build image tools (img binary)")
-    parser.add_argument("--vid", action="store_true", help="Build video tools (vid binary)")
+    parser.add_argument(
+        "--img", action="store_true", help="Build image tools (img binary)"
+    )
+    parser.add_argument(
+        "--vid", action="store_true", help="Build video tools (vid binary)"
+    )
     parser.add_argument(
         "--quiet",
         "-q",
@@ -516,12 +528,14 @@ Examples:
         help="Build the Tauri Vue GUI and sync the .app bundle",
     )
     parser.add_argument(
-        "--rust-only", "-r",
+        "--rust-only",
+        "-r",
         action="store_true",
         help="Build Rust binaries only — skip Tauri/Vue GUI step",
     )
     parser.add_argument(
-        "--patch", "-p",
+        "--patch",
+        "-p",
         action="store_true",
         help=(
             "Patch-cycle shortcut: --force + --rust-only + --verbose. "
@@ -563,7 +577,7 @@ Examples:
         clean_with_kondo()
 
     # GUI build: triggered by --gui flag or --all, but not when --rust-only / --patch
-    if (args.gui or args.all) and not getattr(args, 'rust_only', False):
+    if (args.gui or args.all) and not getattr(args, "rust_only", False):
         build_and_sync_gui()
 
     rebuilt = 0
