@@ -13,14 +13,18 @@ use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::{
-    IntegrityResult, apply_library_assets_to_marker, import_jxl_outputs_with_library_verifier,
-    is_true_jpeg, library_handle_from_marker_import_proof, prompt_user_confirm,
-    safe_delete_jpeg_source, safe_delete_matching_xmp_sidecar, verify_final_jxl_delivery_integrity,
+    IntegrityResult, apply_library_assets_to_marker, apply_tier2_library_assets_to_marker,
+    delete_verified_modern_lossy_static_sources, import_jxl_outputs_with_library_verifier,
+    import_modern_lossy_static_tier, is_true_jpeg, library_handle_from_marker_import_proof,
+    library_handle_from_marker_tier2_proof, prompt_user_confirm,
+    prune_empty_source_dirs_for_tier2_assets, safe_delete_jpeg_source,
+    safe_delete_matching_xmp_sidecar, verify_final_jxl_delivery_integrity,
 };
 use foundation::image::format_detect::FormatKind;
 use foundation::image::orientation::{
     PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
 };
+use foundation::modern_lossy_static::ModernLossyStaticCandidate;
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
     Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
@@ -32,6 +36,7 @@ use foundation::pipeline::verification::{
     transcode_complete_or_later, write_marker_atomic,
 };
 use foundation::quality_matcher::SourceCodec;
+use foundation::scan_modern_lossy_static_candidates;
 use foundation::{
     PauseController, Summary, check_dangerous_directory, disk_full_pause_reason, log_detail,
     log_failure, log_fatal, log_hint, log_skip, log_stat, log_success, log_summary_header,
@@ -1408,6 +1413,16 @@ fn dispatch_static_conversion(
     }
 
     Ok(match (format, is_lossless) {
+        ("PNG", _) if foundation::is_true_png(input).unwrap_or(false) => {
+            if config.verbose() {
+                foundation::log_detail!(&format!(
+                    "{} Genuine PNG→Lossless JXL (effort 10, no size gate): {}",
+                    foundation::infra::static_logs::messages::LABEL_DONE,
+                    input.display()
+                ));
+            }
+            convert_to_jxl(input, options, 0.0_f32, analysis.conversion_color_context())?
+        }
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
             if (format == "HEIC" || format == "HEIF")
                 && let Some(h) = &analysis.heic_analysis
@@ -2113,6 +2128,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
     println!("[SCAN    ] scanning true JPEGs in {}", src_dir.display());
+    let lossy_modern_static_candidates =
+        scan_modern_lossy_static_candidates(&src_dir, &input_plan.candidates)?;
     let mut source_jpegs = Vec::new();
     for path in input_plan.candidates {
         if is_true_jpeg(&path)? {
@@ -2125,6 +2142,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         source_jpegs.len(),
         src_dir.display()
     );
+    if !lossy_modern_static_candidates.is_empty() {
+        println!(
+            "[SCAN    ] Found {} lossy modern static image(s) eligible for tier-2 Photos import",
+            lossy_modern_static_candidates.len()
+        );
+    }
 
     if let Some(marker) = &existing_marker
         && retry.0
@@ -2366,7 +2389,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     write_marker_atomic(&marker)?;
 
     if marker.stage == FastImgStageName::ScanComplete {
-        let msg = fast_img_delete_notice_message(source_jpegs.len(), &src_dir);
+        let msg = fast_img_delete_notice_message(
+            source_jpegs.len(),
+            lossy_modern_static_candidates.len(),
+            &src_dir,
+        );
         println!("{msg}");
         tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
     }
@@ -2424,6 +2451,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         shortest_path,
         auto_import,
         reuse_marker_import_proof,
+        &lossy_modern_static_candidates,
     )?;
 
     Ok(())
@@ -2462,10 +2490,17 @@ fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool
         })
 }
 
-fn fast_img_delete_notice_message(jpeg_count: usize, src_dir: &Path) -> String {
+fn fast_img_delete_notice_message(jpeg_count: usize, tier2_count: usize, src_dir: &Path) -> String {
+    let tier2_notice = if tier2_count > 0 {
+        format!(
+            " It will also delete {tier2_count} verified tier-2 lossy modern static source file(s) after Photos import."
+        )
+    } else {
+        String::new()
+    };
     format!(
         "[NOTICE  ] fast-img JXL-only delivery for {jpeg_count} JPEGs from {}. \
-         This workflow will directly delete original JPEG files after strict verification. \
+         This workflow will directly delete original JPEG files after strict verification.{tier2_notice} \
          Back up the source folder first if you need to keep them.",
         src_dir.display()
     )
@@ -4973,6 +5008,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     shortest_path: ShortestPathFlag,
     auto_import: AutoImportFlag,
     reuse_marker_import_proof: bool,
+    lossy_modern_static_candidates: &[ModernLossyStaticCandidate],
 ) -> anyhow::Result<()> {
     let reconciled = fast_img_reconcile_unrecorded_source_disposition(
         marker,
@@ -5093,11 +5129,61 @@ fn fast_img_run_verification_and_delivery_pipeline(
         })?;
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
+        if !lossy_modern_static_candidates.is_empty() {
+            println!(
+                "[TIER 2  ] importing {} lossy modern static source(s) to Photos",
+                lossy_modern_static_candidates.len()
+            );
+            let tier2_handle =
+                import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates).map_err(
+                    |err| {
+                        anyhow::anyhow!("fast-img tier-2 modern lossy static import failed: {err}")
+                    },
+                )?;
+            apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
+                anyhow::anyhow!("fast-img tier-2 marker import proof failed: {err}")
+            })?;
+            tracing::info!(
+                target: "fast_img",
+                imported = tier2_handle.imported_assets.len(),
+                "fast-img tier-2 Photos import completed"
+            );
+            println!(
+                "[TIER 2  ] imported {} lossy modern static asset(s) to Photos",
+                tier2_handle.imported_assets.len()
+            );
+        }
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
         library_handle
     };
+
+    if import_complete_or_later(&marker.stage)
+        && !lossy_modern_static_candidates.is_empty()
+        && marker.tier2_imported_assets.is_empty()
+    {
+        println!(
+            "[TIER 2  ] importing {} lossy modern static source(s) to Photos (resume/backfill)",
+            lossy_modern_static_candidates.len()
+        );
+        let tier2_handle = import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates)
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "fast-img tier-2 modern lossy static import failed on resume: {err}"
+                )
+            })?;
+        apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
+            anyhow::anyhow!("fast-img tier-2 marker import proof failed on resume: {err}")
+        })?;
+        write_marker_atomic(marker)?;
+        println!(
+            "[TIER 2  ] imported {} lossy modern static asset(s) to Photos (resume/backfill)",
+            tier2_handle.imported_assets.len()
+        );
+    }
+
+    let tier2_library_handle = library_handle_from_marker_tier2_proof(marker);
 
     if !gate2_complete_or_later(&marker.stage) {
         print_photos_verifier_proof_summary(&library_handle, expected_count);
@@ -5147,6 +5233,29 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let (source_deleted, source_already_deleted) =
         fast_img_delete_verified_source_jpegs(marker, src_dir)?;
     let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
+    let (tier2_deleted, tier2_already_deleted) = if let Some(tier2_library_handle) =
+        tier2_library_handle.as_ref()
+    {
+        if !tier2_library_handle.imported_assets.is_empty() {
+            println!(
+                "[DELETE  ] removing {} verified tier-2 lossy modern static source(s)",
+                tier2_library_handle.imported_assets.len()
+            );
+        }
+        delete_verified_modern_lossy_static_sources(src_dir, tier2_library_handle, true).map_err(
+            |err| anyhow::anyhow!("fast-img tier-2 source delete failed after Gate 3: {err}"),
+        )?
+    } else {
+        (0, 0)
+    };
+    let tier2_dirs_pruned = if let Some(tier2_library_handle) = tier2_library_handle.as_ref() {
+        prune_empty_source_dirs_for_tier2_assets(src_dir, &tier2_library_handle.imported_assets)
+            .map_err(|err| {
+                anyhow::anyhow!("fast-img tier-2 empty source dir prune failed: {err}")
+            })?
+    } else {
+        0
+    };
     fast_img_strip_non_jxl_files(working_copy)?;
     foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
         .with_context(|| {
@@ -5160,21 +5269,35 @@ fn fast_img_run_verification_and_delivery_pipeline(
         target: "fast_img",
         deleted = source_deleted,
         already_absent = source_already_deleted,
+        tier2_deleted,
+        tier2_already_deleted,
         empty_dirs_pruned = source_dirs_pruned,
+        tier2_empty_dirs_pruned = tier2_dirs_pruned,
         src_dir = %src_dir.display(),
-        "fast-img deleted verified source JPEG files after Gate 3"
+        "fast-img deleted verified source files after Gate 3"
     );
 
     marker.stage = FastImgStageName::CleanupComplete;
     marker.error = None;
     write_marker_atomic(marker)?;
-    println!(
-        "[DONE    ] {} files · {} source JPEGs deleted · {} empty source dirs pruned · JXL-only output at {} · gates: ①②③ all ✅",
-        ctx.expected_count,
-        source_deleted,
-        source_dirs_pruned,
-        working_copy.display()
-    );
+    if tier2_deleted + tier2_already_deleted > 0 {
+        println!(
+            "[DONE    ] {} JXL files · {} source JPEGs deleted · {} tier-2 modern static deleted · {} empty source dirs pruned · JXL-only output at {} · gates: ①②③ all ✅",
+            ctx.expected_count,
+            source_deleted,
+            tier2_deleted,
+            source_dirs_pruned + tier2_dirs_pruned,
+            working_copy.display()
+        );
+    } else {
+        println!(
+            "[DONE    ] {} files · {} source JPEGs deleted · {} empty source dirs pruned · JXL-only output at {} · gates: ①②③ all ✅",
+            ctx.expected_count,
+            source_deleted,
+            source_dirs_pruned,
+            working_copy.display()
+        );
+    }
     Ok(())
 }
 
@@ -7219,11 +7342,19 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn delete_notice_warns_source_jpegs_are_deleted_without_prompting() {
-        let message = fast_img_delete_notice_message(3, std::path::Path::new("/photos"));
+        let message = fast_img_delete_notice_message(3, 0, std::path::Path::new("/photos"));
 
         assert!(message.contains("directly delete original JPEG files"));
         assert!(message.contains("Back up"));
         assert!(!message.contains("[y/N]"));
+    }
+
+    #[test]
+    fn delete_notice_mentions_tier2_sources_when_present() {
+        let message = fast_img_delete_notice_message(2, 4, std::path::Path::new("/photos"));
+
+        assert!(message.contains("tier-2 lossy modern static"));
+        assert!(message.contains("4"));
     }
 
     #[test]

@@ -42,4 +42,8 @@ pub mod fast_img;
 
 pub mod format_detect;
 
+pub mod modern_lossy_static;
+
+pub mod png_validation;
+
 pub mod orientation;

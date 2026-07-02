@@ -26,12 +26,15 @@ pub struct SkippedSourceEntry {
 pub type SkippedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 pub type FailedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LibraryAssetRecord {
     pub rel_path: String,
     pub blake3: String,
     pub sync_status: String,
     pub quarantined: bool,
+    /// Photos library UUID used for pre-delete custody re-verification (tier-2 imports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1126,6 +1129,7 @@ mod tests {
                 blake3: "out".to_string(),
                 sync_status: "uploaded".to_string(),
                 quarantined: false,
+                photos_uuid: None,
             }],
         );
         ctx.blake3_log.insert(
@@ -1158,12 +1162,14 @@ mod tests {
                     blake3: "out-a".to_string(),
                     sync_status: "uploaded".to_string(),
                     quarantined: false,
+                    photos_uuid: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
                     blake3: "out-a".to_string(),
                     sync_status: "uploaded".to_string(),
                     quarantined: false,
+                    photos_uuid: None,
                 },
             ],
         );
@@ -1207,12 +1213,14 @@ mod tests {
                     blake3: "out-a".to_string(),
                     sync_status: "uploaded".to_string(),
                     quarantined: false,
+                    photos_uuid: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
                     blake3: "out-a".to_string(),
                     sync_status: "uploaded".to_string(),
                     quarantined: false,
+                    photos_uuid: None,
                 },
             ],
         );
@@ -1400,6 +1408,9 @@ pub struct WorkingCopyMarker {
     pub skipped_sources: SkippedSourceLog,
     #[serde(default)]
     pub failed_sources: FailedSourceLog,
+    /// Tier-2 lossy modern static assets imported directly into Photos.
+    #[serde(default)]
+    pub tier2_imported_assets: Vec<LibraryAssetRecord>,
     pub error: Option<String>,
 }
 
@@ -1420,6 +1431,7 @@ impl WorkingCopyMarker {
             blake3_log: Blake3Log::new(),
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
+            tier2_imported_assets: Vec::new(),
             error: None,
         }
     }

@@ -544,8 +544,15 @@ pub use smart_file_copier::{
 };
 
 pub use image::fast_img::{
-    FastImgLibraryAssetProbe, PhotosImportCandidate, import_media_outputs_with_library_verifier,
+    FastImgLibraryAssetProbe, PhotosImportCandidate, apply_tier2_library_assets_to_marker,
+    delete_verified_modern_lossy_static_sources, import_media_outputs_with_library_verifier,
+    import_modern_lossy_static_tier, library_handle_from_marker_tier2_proof,
+    prune_empty_source_dirs_for_tier2_assets, safe_delete_modern_lossy_static_source,
 };
+pub use image::modern_lossy_static::{
+    ModernLossyStaticCandidate, scan_modern_lossy_static_candidates,
+};
+pub use image::png_validation::{PNG_LOSSLESS_JXL_EFFORT, is_true_png, png_heuristic_enabled};
 pub use live_photo::is_live as is_live_photo;
 pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, hash_path_to_hex, init_ghost_mode};
 

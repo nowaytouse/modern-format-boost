@@ -228,9 +228,9 @@ jobs:
           # Ubuntu's packaged ffmpeg currently lacks the libvmaf filter used by
           # the runtime quality audit. Install a pinned static build for this job.
           cd /tmp
-          FFMPEG_STATIC_ASSET="ffmpeg-N-124987-g9dd0fe0225-linux64-gpl"
-          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-12-14-04/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
-          echo "41cec775c64761d2f4ad2905abfb03c86456664e8ec3379713f44edb95152a80  ffmpeg-static.tar.xz" | sha256sum -c -
+          FFMPEG_STATIC_ASSET="ffmpeg-N-125428-g1836ef9684-linux64-gpl"
+          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-02-16-09/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
+          echo "5ced75de4d9a7eae8ef4635818894687cbee1fe709fc22ea9873a842181b179c  ffmpeg-static.tar.xz" | sha256sum -c -
           tar xf ffmpeg-static.tar.xz
           sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffmpeg" /usr/local/bin/ffmpeg
           sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffprobe" /usr/local/bin/ffprobe
@@ -419,9 +419,9 @@ jobs:
           # Ubuntu's packaged ffmpeg currently lacks the libvmaf filter used by
           # the runtime quality audit. Install a pinned static build for this job.
           cd /tmp
-          FFMPEG_STATIC_ASSET="ffmpeg-N-124987-g9dd0fe0225-linux64-gpl"
-          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-12-14-04/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
-          echo "41cec775c64761d2f4ad2905abfb03c86456664e8ec3379713f44edb95152a80  ffmpeg-static.tar.xz" | sha256sum -c -
+          FFMPEG_STATIC_ASSET="ffmpeg-N-125428-g1836ef9684-linux64-gpl"
+          download_with_retry "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-02-16-09/${FFMPEG_STATIC_ASSET}.tar.xz" ffmpeg-static.tar.xz
+          echo "5ced75de4d9a7eae8ef4635818894687cbee1fe709fc22ea9873a842181b179c  ffmpeg-static.tar.xz" | sha256sum -c -
           tar xf ffmpeg-static.tar.xz
           sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffmpeg" /usr/local/bin/ffmpeg
           sudo install -m 0755 "${FFMPEG_STATIC_ASSET}/bin/ffprobe" /usr/local/bin/ffprobe

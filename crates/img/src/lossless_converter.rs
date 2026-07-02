@@ -998,9 +998,13 @@ pub fn convert_to_jxl(
     }
 
     let input_size = fs::metadata(input)?.len();
+    let is_genuine_png = foundation::image::png_validation::is_true_png(input).unwrap_or(false);
 
-    if let Some(ext) = input.extension()
-        && ext.to_string_lossy().to_lowercase() == "png"
+    if !options.force()
+        && !is_genuine_png
+        && input
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("png"))
         && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
     {
         if options.verbose() {
@@ -1068,21 +1072,38 @@ pub fn convert_to_jxl(
         )
     );
 
-    let actual_dist = foundation::constants::jxl_distance_for_mode(distance, options.ultimate());
-    let is_extreme_explore =
-        size_ge_1mib(input_size) && options.ultimate() && options.explore() && !options.archive();
-    let actual_eff = jxl_encode_effort_for_size(
-        options.archive(),
-        options.ultimate(),
-        options.explore(),
-        input_size,
-    );
-    let effort_plan = jxl_effort_search_plan(
-        options.archive(),
-        options.ultimate(),
-        options.explore(),
-        input_size,
-    );
+    let actual_dist = if is_genuine_png {
+        0.0
+    } else {
+        foundation::constants::jxl_distance_for_mode(distance, options.ultimate())
+    };
+    let is_extreme_explore = !is_genuine_png
+        && size_ge_1mib(input_size)
+        && options.ultimate()
+        && options.explore()
+        && !options.archive();
+    let effort_plan = if is_genuine_png {
+        vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
+            foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
+        )]
+    } else {
+        jxl_effort_search_plan(
+            options.archive(),
+            options.ultimate(),
+            options.explore(),
+            input_size,
+        )
+    };
+    let actual_eff = if is_genuine_png {
+        foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT
+    } else {
+        jxl_encode_effort_for_size(
+            options.archive(),
+            options.ultimate(),
+            options.explore(),
+            input_size,
+        )
+    };
 
     // Add conversion color metadata via CICP if available.
     if let Some(info) = color_info

@@ -2419,6 +2419,9 @@ fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
 
     match format {
         ImageFormat::Png => {
+            if super::png_validation::is_true_png(path)? {
+                return Ok(true);
+            }
             let detected_format = detect_format_from_bytes(path)?;
             let compression = detect_compression(&detected_format, path)?;
             Ok(compression == CompressionType::Lossless)

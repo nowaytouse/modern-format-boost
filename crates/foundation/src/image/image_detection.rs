@@ -109,10 +109,10 @@ use std::path::Path;
 pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
     let (img, format) = decode_image_with_limits(path)?;
 
-    // PNG Heuristic Detection: Enable 4-layer analysis for PNG files.
-    // Keep this out of the core decoder to avoid recursive analysis when PNG
+    // PNG heuristic detection (opt-in via MFB_ENABLE_PNG_HEURISTIC).
+    // Kept out of the core decoder to avoid recursive analysis when PNG
     // heuristics need decoded pixels themselves.
-    if format == Some(image::ImageFormat::Png) {
+    if format == Some(image::ImageFormat::Png) && super::png_validation::png_heuristic_enabled() {
         match analyze_png_quantization(path) {
             Ok(analysis) => {
                 tracing::debug!(
@@ -1123,6 +1123,11 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
 }
 
 fn detect_png_compression(path: &Path) -> Result<CompressionType> {
+    if !super::png_validation::png_heuristic_enabled() && super::png_validation::is_true_png(path)?
+    {
+        return Ok(CompressionType::Lossless);
+    }
+
     let analysis = analyze_png_quantization(path)?;
 
     if std::env::var(crate::constants::ENV_VERBOSE).is_ok()

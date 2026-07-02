@@ -620,6 +620,329 @@ fn delete_matching_xmp_sidecar_path(
     Ok(true)
 }
 
+/// Delete a tier-2 lossy modern static source after Photos import proof passes.
+///
+/// Gates (all atomic — abort without deletion if any fail):
+/// 1. Photos library BLAKE3 matches the claimed source hash.
+/// 2. Source exists on disk + size > 0.
+/// 3. Current source BLAKE3 matches the claimed hash.
+///
+/// # Errors
+/// Returns an error (source preserved) if any gate fails.
+pub fn safe_delete_modern_lossy_static_source(
+    source: &Path,
+    import_proof: &crate::pipeline::verification::LibraryAssetRecord,
+) -> Result<()> {
+    use crate::common_utils::calculate_blake3_hash;
+    use crate::io_utils::safe_remove_file;
+
+    let claimed_blake3 = import_proof.blake3.as_str();
+    if import_proof.quarantined {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 1 FAIL: Photos import proof for {} is quarantined",
+            source.display()
+        )));
+    }
+    tracing::info!(
+        target: "fast_img_delete",
+        source = %source.display(),
+        library_blake3 = %claimed_blake3,
+        photos_uuid = import_proof.photos_uuid.as_deref().unwrap_or("<missing>"),
+        "delete-gate 1: Photos import BLAKE3 proof confirmed"
+    );
+
+    if !source.exists() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 2 FAIL: source does not exist: {}",
+            source.display()
+        )));
+    }
+    let meta = std::fs::metadata(source).map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "delete-gate 2 FAIL: cannot stat source {}: {e}",
+            source.display()
+        ))
+    })?;
+    if meta.len() == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 2 FAIL: source is empty: {}",
+            source.display()
+        )));
+    }
+
+    let current_source_hash = calculate_blake3_hash(source).map_err(|e| {
+        ImgQualityError::AnalysisError(format!("delete-gate 3 FAIL: BLAKE3(source) failed: {e}"))
+    })?;
+    if current_source_hash != claimed_blake3 {
+        tracing::error!(
+            target: "fast_img_delete",
+            source = %source.display(),
+            claimed_blake3 = %claimed_blake3,
+            current_source_blake3 = %current_source_hash,
+            "delete-gate 3 FAIL: stale or forged source hash"
+        );
+        return Err(ImgQualityError::AnalysisError(
+            "delete-gate 3 FAIL: stale or forged source hash".to_string(),
+        ));
+    }
+
+    tracing::info!(
+        target: "fast_img_delete",
+        source = %source.display(),
+        source_blake3 = %current_source_hash,
+        "delete-gate PASS: removing tier-2 lossy modern static source"
+    );
+
+    let matching_xmp_sidecar = crate::metadata::find_xmp_sidecar(source);
+    safe_remove_file(source).map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "delete failed for tier-2 source {} (Photos custody preserved): {e}",
+            source.display()
+        ))
+    })?;
+    delete_matching_xmp_sidecar_path(source, source, matching_xmp_sidecar.as_deref())?;
+    Ok(())
+}
+
+/// Re-query Photos custody for tier-2 imports before destructive delete.
+///
+/// UUID order from `osxphotos query` is undefined; matching is always by UUID key,
+/// never by response position.
+pub fn reverify_modern_lossy_static_photos_custody(
+    library_handle: &crate::pipeline::verification::LibraryHandle,
+) -> Result<()> {
+    if library_handle.imported_assets.is_empty() {
+        return Ok(());
+    }
+
+    let mut uuids = Vec::with_capacity(library_handle.imported_assets.len());
+    for asset in &library_handle.imported_assets {
+        let Some(uuid) = asset
+            .photos_uuid
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate missing Photos UUID for {}",
+                asset.rel_path
+            )));
+        };
+        uuids.push(uuid.to_string());
+    }
+
+    println!(
+        "[VERIFY  ] final tier-2 Photos delete proofs pending {} · osxphotos custody re-check (UUID-keyed)",
+        uuids.len()
+    );
+    tracing::info!(
+        target: "fast_img_delete",
+        pending = uuids.len(),
+        "tier-2 final Photos custody verification start"
+    );
+
+    let probes = query_osxphotos_asset_probes(&uuids)?;
+    let probe_by_uuid = index_photos_probes_by_uuid(&uuids, probes)?;
+
+    for asset in &library_handle.imported_assets {
+        let uuid = asset.photos_uuid.as_deref().unwrap_or_default();
+        let Some(probe) = probe_by_uuid.get(uuid) else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate missing Photos probe for {} (uuid={uuid})",
+                asset.rel_path
+            )));
+        };
+        if probe.uuid != uuid {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate Photos UUID mismatch for {}: expected={uuid} query={}",
+                asset.rel_path, probe.uuid
+            )));
+        }
+        if probe.ismissing {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate Photos asset missing for {} (uuid={uuid})",
+                asset.rel_path
+            )));
+        }
+        if !probe.path.exists() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate Photos asset path missing for {}: {}",
+                asset.rel_path,
+                probe.path.display()
+            )));
+        }
+        let library_blake3 =
+            crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate Photos BLAKE3 failed for {}: {err}",
+                    probe.path.display()
+                ))
+            })?;
+        if library_blake3 != asset.blake3 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={} library={library_blake3}",
+                asset.rel_path, asset.blake3
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn preflight_modern_lossy_static_source_deletion(
+    library_handle: &crate::pipeline::verification::LibraryHandle,
+    gate3_passed: bool,
+) -> Result<()> {
+    if !gate3_passed {
+        return Err(ImgQualityError::AnalysisError(
+            "tier-2 source delete gate requires Gate 3 passed".to_string(),
+        ));
+    }
+    if library_handle.import_error_count != 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 source delete gate refuses import errors: {}",
+            library_handle.import_error_count
+        )));
+    }
+    for asset in &library_handle.imported_assets {
+        if asset.rel_path.trim().is_empty() || asset.blake3.trim().is_empty() {
+            return Err(ImgQualityError::AnalysisError(
+                "tier-2 source delete gate has incomplete import proof".to_string(),
+            ));
+        }
+        if asset.quarantined {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete gate refuses quarantined import proof for {}",
+                asset.rel_path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Delete tier-2 lossy modern static sources after Gate 3 and Photos custody re-verification.
+pub fn delete_verified_modern_lossy_static_sources(
+    src_dir: &Path,
+    library_handle: &crate::pipeline::verification::LibraryHandle,
+    gate3_passed: bool,
+) -> Result<(usize, usize)> {
+    if library_handle.imported_assets.is_empty() {
+        return Ok((0, 0));
+    }
+    preflight_modern_lossy_static_source_deletion(library_handle, gate3_passed)?;
+    reverify_modern_lossy_static_photos_custody(library_handle)?;
+
+    let mut deleted = 0usize;
+    let mut already_deleted = 0usize;
+    for asset in &library_handle.imported_assets {
+        let source = src_dir.join(&asset.rel_path);
+        if !source.exists() {
+            safe_delete_matching_xmp_sidecar(&source, &source).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete failed to remove matching XMP sidecar for already-absent source {}: {err}",
+                    source.display()
+                ))
+            })?;
+            already_deleted += 1;
+            tracing::info!(
+                target: "fast_img_delete",
+                source = %source.display(),
+                "tier-2 verified source already absent"
+            );
+            continue;
+        }
+        safe_delete_modern_lossy_static_source(&source, asset).map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "tier-2 delete failed for verified source {}: {err}",
+                source.display()
+            ))
+        })?;
+        deleted += 1;
+    }
+    Ok((deleted, already_deleted))
+}
+
+/// Persist tier-2 Photos import proof on the working-copy marker for resume/delete.
+pub fn apply_tier2_library_assets_to_marker(
+    marker: &mut crate::pipeline::verification::WorkingCopyMarker,
+    library: &crate::pipeline::verification::LibraryHandle,
+) -> Result<()> {
+    marker.tier2_imported_assets = library.imported_assets.clone();
+    Ok(())
+}
+
+/// Rebuild tier-2 import proof from a persisted marker.
+#[must_use]
+pub fn library_handle_from_marker_tier2_proof(
+    marker: &crate::pipeline::verification::WorkingCopyMarker,
+) -> Option<crate::pipeline::verification::LibraryHandle> {
+    if marker.tier2_imported_assets.is_empty() {
+        return None;
+    }
+    Some(crate::pipeline::verification::LibraryHandle {
+        imported_assets: marker.tier2_imported_assets.clone(),
+        import_error_count: 0,
+    })
+}
+
+/// Prune empty directories under `src_dir` that previously held tier-2 sources.
+pub fn prune_empty_source_dirs_for_tier2_assets(
+    src_dir: &Path,
+    imported_assets: &[crate::pipeline::verification::LibraryAssetRecord],
+) -> Result<usize> {
+    if !src_dir.is_dir() {
+        return Ok(0);
+    }
+    let mut dirs = Vec::new();
+    for asset in imported_assets {
+        let source = src_dir.join(&asset.rel_path);
+        let mut current = source.parent();
+        while let Some(dir) = current {
+            if dir == src_dir {
+                break;
+            }
+            dirs.push(dir.to_path_buf());
+            current = dir.parent();
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let mut pruned = 0usize;
+    for dir in dirs {
+        let mut entries = std::fs::read_dir(&dir).map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "read tier-2 source dir {}: {err}",
+                dir.display()
+            ))
+        })?;
+        if entries
+            .next()
+            .transpose()
+            .map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "read tier-2 source dir entry {}: {err}",
+                    dir.display()
+                ))
+            })?
+            .is_some()
+        {
+            continue;
+        }
+        std::fs::remove_dir(&dir).map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "delete empty tier-2 source directory {}: {err}",
+                dir.display()
+            ))
+        })?;
+        pruned += 1;
+        tracing::info!(
+            target: "fast_img_delete",
+            path = %dir.display(),
+            "delete-gate PASS: removing empty tier-2 source directory"
+        );
+    }
+    Ok(pruned)
+}
+
 #[derive(Debug, Clone)]
 pub struct FastImgLibraryAssetProbe {
     pub uuid: String,
@@ -736,6 +1059,58 @@ pub fn import_media_outputs_with_library_verifier(
         query_osxphotos_asset_probes,
         quarantine_probe,
     )
+}
+
+/// Build Photos import rows for fast-img tier 2 (lossy modern static originals).
+pub fn build_modern_lossy_static_import_candidates(
+    src_dir: &Path,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+) -> Vec<PhotosImportCandidate> {
+    let folder_name = src_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Imported");
+    let cleaned = fast_img_strip_optimized_import_suffixes(folder_name);
+    let inner_root = if cleaned.is_empty() {
+        "✨Imported".to_string()
+    } else if !cleaned.starts_with('✨') {
+        format!("✨{cleaned}")
+    } else {
+        cleaned
+    };
+
+    candidates
+        .iter()
+        .map(|candidate| {
+            let rel_parent = Path::new(&candidate.rel_path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .and_then(|parent| parent.to_str());
+            let album_name = if let Some(sub) = rel_parent {
+                format!("✨/{inner_root}/{sub}")
+            } else {
+                format!("✨/{inner_root}")
+            };
+            PhotosImportCandidate {
+                rel_path: candidate.rel_path.clone(),
+                path: candidate.path.clone(),
+                blake3: candidate.blake3.clone(),
+                album_name,
+            }
+        })
+        .collect()
+}
+
+/// Import tier-2 lossy modern static sources directly into Photos.
+pub fn import_modern_lossy_static_tier(
+    src_dir: &Path,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+) -> Result<LibraryHandle> {
+    if candidates.is_empty() {
+        return Ok(LibraryHandle::default());
+    }
+    let import_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
+    import_media_outputs_with_library_verifier(&import_candidates)
 }
 
 const FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT: &str = r#"
@@ -1015,6 +1390,7 @@ where
             blake3: library_asset.clone(),
             sync_status: "photos_local".to_string(),
             quarantined: is_quarantined(&path)?,
+            photos_uuid: None,
         });
     }
     pending_entries.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -1237,6 +1613,7 @@ where
             blake3: entry.blake3_entry.out.clone(),
             sync_status: photos_sync_status(&verified_probe.probe).to_string(),
             quarantined: is_quarantined(&entry.path)?,
+            photos_uuid: None,
         });
     }
     records.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -2380,6 +2757,58 @@ fn osxphotos_uuid_from_photos_import_identifier(import_identifier: &str) -> Resu
     Ok(uuid)
 }
 
+fn verify_import_probe_uuid_binding(
+    target: &FastImgImportProbeTarget,
+    probe: &FastImgLibraryAssetProbe,
+) -> Result<()> {
+    if probe.uuid != target.osxphotos_uuid {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos verifier UUID mismatch for {}: import_id={} expected_uuid={} query_uuid={}",
+            target.rel_path, target.import_identifier, target.osxphotos_uuid, probe.uuid
+        )));
+    }
+    Ok(())
+}
+
+/// Index osxphotos query results by UUID and fail closed on missing/duplicate/extra rows.
+fn index_photos_probes_by_uuid(
+    expected_uuids: &[String],
+    probes: Vec<FastImgLibraryAssetProbe>,
+) -> Result<BTreeMap<String, FastImgLibraryAssetProbe>> {
+    let expected = expected_uuids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut by_uuid = BTreeMap::new();
+    for probe in probes {
+        if !expected.contains(probe.uuid.as_str()) {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos query returned unexpected UUID {}",
+                probe.uuid
+            )));
+        }
+        if by_uuid.insert(probe.uuid.clone(), probe).is_some() {
+            return Err(ImgQualityError::AnalysisError(
+                "Photos query returned duplicate UUID".to_string(),
+            ));
+        }
+    }
+    if by_uuid.len() != expected.len() {
+        let missing = expected_uuids
+            .iter()
+            .filter(|uuid| !by_uuid.contains_key(*uuid))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos query returned {} of {} requested UUID(s); missing: {}",
+            by_uuid.len(),
+            expected.len(),
+            missing.join(", ")
+        )));
+    }
+    Ok(by_uuid)
+}
+
 fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &str) -> String {
     let folder_name = marker
         .working_copy
@@ -2446,7 +2875,7 @@ pub fn library_handle_from_media_output_probes(
         }
     }
     let import_targets = fast_img_import_probe_targets(report_pairs)?;
-    let probes = query_uploaded_asset_probes_batch_with_retry(
+    let probes_by_rel = query_uploaded_asset_probes_batch_with_retry(
         &import_targets,
         fast_img_icloud_upload_verify_attempts(),
         fast_img_icloud_upload_verify_batch_size(),
@@ -2455,7 +2884,6 @@ pub fn library_handle_from_media_output_probes(
         &mut query_assets,
         std::thread::sleep,
     )?;
-    let mut verified_probes = verified_library_probes_from_query(probes)?;
 
     let mut imported_assets = Vec::new();
     for target in import_targets {
@@ -2465,19 +2893,51 @@ pub fn library_handle_from_media_output_probes(
                 target.rel_path
             )));
         };
-        let verified_probe = remove_matching_library_probe_by_hash(
-            &mut verified_probes,
-            &target.rel_path,
-            &candidate.blake3,
-            &candidate.path,
-            "Import aborted because Photos library bytes do not match the working copy.",
-        )?;
+        let Some(probe) = probes_by_rel.get(&target.rel_path) else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos verifier missing uploaded probe for {} (uuid={})",
+                target.rel_path, target.osxphotos_uuid
+            )));
+        };
+        verify_import_probe_uuid_binding(&target, probe)?;
+        if !probe.path.exists() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos verifier asset path missing for {}: {}",
+                target.rel_path,
+                probe.path.display()
+            )));
+        }
+        let library_blake3 =
+            crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos verifier BLAKE3 failed for {}: {err}",
+                    probe.path.display()
+                ))
+            })?;
+        if library_blake3 != candidate.blake3 {
+            tracing::error!(
+                target: "photos_import",
+                rel_path = %target.rel_path,
+                candidate_blake3 = %candidate.blake3,
+                library_blake3 = %library_blake3,
+                photos_uuid = %probe.uuid,
+                candidate_path = %candidate.path.display(),
+                library_path = %probe.path.display(),
+                "Photos imported bytes diverged from tier-2 source"
+            );
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos verifier BLAKE3 mismatch for {} (uuid={}): source={} library={library_blake3}. \
+                 Import aborted because Photos library bytes do not match the source file.",
+                target.rel_path, probe.uuid, candidate.blake3
+            )));
+        }
         let quarantined = is_quarantined(&candidate.path)?;
         imported_assets.push(LibraryAssetRecord {
             rel_path: target.rel_path,
             blake3: candidate.blake3.clone(),
-            sync_status: photos_sync_status(&verified_probe.probe).to_string(),
+            sync_status: photos_sync_status(probe).to_string(),
             quarantined,
+            photos_uuid: Some(probe.uuid.clone()),
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -2554,6 +3014,7 @@ fn library_handle_from_batch_probes(
             blake3,
             sync_status: photos_sync_status(&probe).to_string(),
             quarantined,
+            photos_uuid: Some(target.osxphotos_uuid.clone()),
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -2654,6 +3115,7 @@ fn library_handle_from_marker_import_proof_with(
             blake3: library_asset.clone(),
             sync_status: "photos_local".to_string(),
             quarantined: is_quarantined(&output_path)?,
+            photos_uuid: None,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -3894,9 +4356,98 @@ mod tests {
         assert_eq!(handle.imported_assets.len(), 1);
         assert_eq!(handle.imported_assets[0].rel_path, "nested/a.GIF");
         assert_eq!(handle.imported_assets[0].blake3, out_hash);
+        assert_eq!(
+            handle.imported_assets[0].photos_uuid.as_deref(),
+            Some("UUID-A")
+        );
         assert_eq!(handle.imported_assets[0].sync_status, "photos_local");
         assert!(!handle.imported_assets[0].quarantined);
         Ok(())
+    }
+
+    #[test]
+    fn generic_media_import_handle_accepts_out_of_order_osxphotos_rows() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let out_a = temp_dir.path().join("a.webp");
+        let out_b = temp_dir.path().join("b.webp");
+        let lib_a = temp_dir.path().join("library/a.webp");
+        let lib_b = temp_dir.path().join("library/b.webp");
+        std::fs::create_dir_all(lib_a.parent().expect("parent")).unwrap();
+        std::fs::write(&out_a, b"webp-a").unwrap();
+        std::fs::write(&out_b, b"webp-b").unwrap();
+        std::fs::write(&lib_a, b"webp-a").unwrap();
+        std::fs::write(&lib_b, b"webp-b").unwrap();
+        let hash_a = crate::common_utils::calculate_blake3_hash(&out_a)?;
+        let hash_b = crate::common_utils::calculate_blake3_hash(&out_b)?;
+        let candidates = vec![
+            PhotosImportCandidate {
+                rel_path: "a.webp".to_string(),
+                path: out_a.clone(),
+                blake3: hash_a,
+                album_name: "✨tier2".to_string(),
+            },
+            PhotosImportCandidate {
+                rel_path: "b.webp".to_string(),
+                path: out_b.clone(),
+                blake3: hash_b,
+                album_name: "✨tier2".to_string(),
+            },
+        ];
+
+        let handle = library_handle_from_media_output_probes(
+            &candidates,
+            &[
+                ("a.webp".to_string(), "UUID-A".to_string()),
+                ("b.webp".to_string(), "UUID-B".to_string()),
+            ],
+            |uuids| {
+                assert_eq!(uuids, ["UUID-A".to_string(), "UUID-B".to_string()]);
+                Ok(vec![
+                    FastImgLibraryAssetProbe {
+                        uuid: "UUID-B".to_string(),
+                        path: lib_b.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    },
+                    FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".to_string(),
+                        path: lib_a.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    },
+                ])
+            },
+            |path| Ok(path != out_a && path != out_b),
+        )?;
+
+        assert_eq!(handle.imported_assets.len(), 2);
+        assert_eq!(
+            handle.imported_assets[0].photos_uuid.as_deref(),
+            Some("UUID-A")
+        );
+        assert_eq!(
+            handle.imported_assets[1].photos_uuid.as_deref(),
+            Some("UUID-B")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_photos_probes_by_uuid_fails_when_query_incomplete() {
+        let err = index_photos_probes_by_uuid(
+            &["UUID-A".to_string(), "UUID-B".to_string()],
+            vec![FastImgLibraryAssetProbe {
+                uuid: "UUID-A".to_string(),
+                path: PathBuf::from("/tmp/a"),
+                iscloudasset: false,
+                incloud: None,
+                ismissing: false,
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing"));
     }
 
     #[test]
@@ -4935,6 +5486,73 @@ mod tests {
             output_hash,
         };
         safe_delete_jpeg_source(&src_path, out.path(), &integrity).unwrap();
+        assert!(!src_path.exists());
+    }
+
+    #[test]
+    fn tier2_delete_gate_fails_when_source_missing() {
+        let missing = std::path::PathBuf::from("/tmp/__mfb_nonexistent_tier2.webp");
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: "abc".to_string(),
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+        };
+        let err = safe_delete_modern_lossy_static_source(&missing, &proof).unwrap_err();
+        assert!(
+            err.to_string().contains("does not exist"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn tier2_delete_gate_fails_when_source_empty() {
+        let src = NamedTempFile::new().unwrap();
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: "abc".to_string(),
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+        };
+        let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
+        assert!(err.to_string().contains("empty"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn tier2_delete_gate_rejects_forged_source_hash() {
+        let mut src = NamedTempFile::new().unwrap();
+        src.write_all(b"lossy-webp-bytes").unwrap();
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: "forged-hash".to_string(),
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+        };
+        let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
+        assert!(
+            err.to_string().contains("stale or forged"),
+            "unexpected: {err}"
+        );
+        assert!(src.path().exists());
+    }
+
+    #[test]
+    fn tier2_delete_gate_removes_source_when_all_pass() {
+        let mut src = NamedTempFile::new().unwrap();
+        src.write_all(b"lossy-webp-bytes").unwrap();
+        let source_hash = crate::common_utils::calculate_blake3_hash(src.path()).unwrap();
+        let src_path = src.path().to_path_buf();
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: source_hash,
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+        };
+        safe_delete_modern_lossy_static_source(&src_path, &proof).unwrap();
         assert!(!src_path.exists());
     }
 

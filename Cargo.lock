@@ -142,9 +142,9 @@ checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
 name = "arrayvec"
-version = "0.7.7"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "as-slice"
@@ -425,7 +425,7 @@ dependencies = [
 [[package]]
 name = "chrono"
 version = "0.4.45"
-source = "git+https://github.com/chronotope/chrono#3ffcd1b107fd3085bc184a1f5f7445b97a0d655f"
+source = "git+https://github.com/chronotope/chrono#b04c42fda83ff5fbbad0503ae4325c92edc3c01b"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -438,7 +438,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#8387c812c4b9726474b8407f81ec97f0acf570ed"
+source = "git+https://github.com/clap-rs/clap#d3e59a9ab214910b9dad02921b7ef42c6400de9b"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#8387c812c4b9726474b8407f81ec97f0acf570ed"
+source = "git+https://github.com/clap-rs/clap#d3e59a9ab214910b9dad02921b7ef42c6400de9b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#8387c812c4b9726474b8407f81ec97f0acf570ed"
+source = "git+https://github.com/clap-rs/clap#d3e59a9ab214910b9dad02921b7ef42c6400de9b"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#8387c812c4b9726474b8407f81ec97f0acf570ed"
+source = "git+https://github.com/clap-rs/clap#d3e59a9ab214910b9dad02921b7ef42c6400de9b"
 
 [[package]]
 name = "cmake"
@@ -500,8 +500,8 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "console"
-version = "0.16.3"
-source = "git+https://github.com/console-rs/console#1426649a519093470b2af47a5d9b3c6320cc4a0c"
+version = "0.16.4"
+source = "git+https://github.com/console-rs/console#598eca9fe9e3f9b93d2b49fdccf2d395d809bd94"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -1123,7 +1123,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#3f2b621ebc8a35bd098eaf18e2dc840883cdd9af"
+source = "git+https://github.com/image-rs/image#b0416127375f4bc922d13bc1854d7dfe2ef4bc19"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1189,8 +1189,8 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif#692705d66d35cfef8e926cc02be27491b383706c"
+version = "0.18.6"
+source = "git+https://github.com/console-rs/indicatif#728be1768c654e5c3ba61fb0c66872d4c2494648"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1221,9 +1221,9 @@ dependencies = [
 
 [[package]]
 name = "inotify-sys"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
+checksum = "9ea94e891b3606826e9c998be69ddca42247dad8ad50b1649a5cb7e1c9ae06fd"
 dependencies = [
  "libc",
 ]
@@ -1574,9 +1574,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02ab6bace2054fb888a3c16f990117b579d14a3088e472d63c6011fa185c9d3"
+checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
 dependencies = [
  "libc",
 ]
@@ -2076,7 +2076,7 @@ dependencies = [
  "hmac",
  "md-5",
  "memchr",
- "rand 0.10.1",
+ "rand 0.10.2",
  "sha2",
  "stringprep",
 ]
@@ -2154,7 +2154,7 @@ dependencies = [
  "bit-vec",
  "bitflags",
  "num-traits",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rand_chacha 0.10.0",
  "rand_xorshift",
  "regex-syntax",
@@ -2183,8 +2183,8 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.40.1"
-source = "git+https://github.com/tafia/quick-xml#07f3db8343cf152f5bc3483ef5b3164582489bea"
+version = "0.41.0"
+source = "git+https://github.com/tafia/quick-xml#4deda08abeffdc188c269360229cf47e12a77a9f"
 dependencies = [
  "memchr",
 ]
@@ -2222,9 +2222,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -2768,9 +2768,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.51"
+version = "0.3.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c17d80feb7334b40c484e45ed1a5273dfd8bfda537c3be2e74a06a6686f327"
+checksum = "18dfaaeddcb932337b5e7866ee7d0ce9b76d2fd092997146f187ec09b4558a50"
 dependencies = [
  "deranged",
  "num-conv",
@@ -2788,9 +2788,9 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "time-macros"
-version = "0.2.30"
+version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcef1a61bdb119096e153208ec5cbec23944ce8bca13be5c7f60c634f7403935"
+checksum = "c431b87111666e491a90baa837f914fb45cd5dc3c268591b0220ff5057f2085f"
 dependencies = [
  "num-conv",
  "time-core",
@@ -2844,7 +2844,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "rand 0.10.1",
+ "rand 0.10.2",
  "socket2",
  "tokio",
  "tokio-util",
