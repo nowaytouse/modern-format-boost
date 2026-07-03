@@ -4490,10 +4490,12 @@ fn validate_cleanup_complete_deleted_source_state(
                 continue;
             }
             Err(err) => {
+                let marker_file_path = marker_path_for_working_copy(&marker.working_copy);
                 return Err(err).with_context(|| {
                     format!(
-                        "fast-img cleanup marker cannot stat JXL output {}; source JPEGs are already absent, so restore this optimized JXL or restore the source backup before rerunning shortest-path fastmode",
-                        output.display()
+                        "fast-img cleanup marker cannot stat JXL output {}; source JPEGs are already absent, so restore this optimized JXL or restore the source backup before rerunning shortest-path fastmode (to force reset, delete the marker file at: {})",
+                        output.display(),
+                        marker_file_path.display()
                     )
                 });
             }
