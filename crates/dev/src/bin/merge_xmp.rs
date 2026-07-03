@@ -102,7 +102,7 @@ fn system_time_to_timeval(t: SystemTime) -> Result<libc::timeval> {
     let tv_sec =
         foundation::numeric_cast::u64_to_i64_strict(dur.as_secs(), "merge_xmp_timestamp_seconds")
             .context("timestamp seconds overflow time_t")?;
-    let tv_usec = dur.subsec_micros() as i32;
+    let tv_usec = dur.subsec_micros() as _;
     Ok(libc::timeval { tv_sec, tv_usec })
 }
 

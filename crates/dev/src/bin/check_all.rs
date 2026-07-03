@@ -349,6 +349,7 @@ fn install_nightly() -> Result<bool> {
     Ok(status.success())
 }
 
+#[allow(dead_code)]
 fn parse_plist_string_key(content: &str, key: &str) -> Option<String> {
     let key_tag = format!("<key>{key}</key>");
     let idx = content.find(&key_tag)?;

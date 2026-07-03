@@ -865,7 +865,7 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
-    marker.tier2_imported_assets = library.imported_assets.clone();
+    marker.tier2_imported_assets.clone_from(&library.imported_assets);
     Ok(())
 }
 
@@ -1062,6 +1062,7 @@ pub fn import_media_outputs_with_library_verifier(
 }
 
 /// Build Photos import rows for fast-img tier 2 (lossy modern static originals).
+#[must_use]
 pub fn build_modern_lossy_static_import_candidates(
     src_dir: &Path,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],

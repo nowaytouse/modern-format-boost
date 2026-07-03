@@ -949,6 +949,29 @@ pub fn fast_img_session_size_metrics(summary: &str) -> FastImgSessionSizeMetrics
     metrics
 }
 
+/// Parse per-file retained entries from fast-img `[FAIL    ]   rel: reason` and
+/// `[SKIP    ]   rel: reason  [SOURCE RETAINED]` lines.
+///
+/// Returns a `Vec<(String, String)>` where each entry is `("filename: reason", "failed"|"skipped")`,
+/// ready for terminal and session-log display.
+#[must_use]
+pub fn fast_img_retained_file_names(log_text: &str) -> Vec<(String, String)> {
+    log_text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("[FAIL    ]   ") && rest.contains(':') {
+                return Some((rest.to_owned(), "failed".to_owned()));
+            } else if let Some(rest) = trimmed.strip_prefix("[SKIP    ]   ") && rest.contains(':') {
+                // Strip the "  [SOURCE RETAINED]" suffix if present for cleaner display
+                let clean = rest.strip_suffix("  [SOURCE RETAINED]").unwrap_or(rest);
+                return Some((clean.to_owned(), "skipped".to_owned()));
+            }
+            None
+        })
+        .collect()
+}
+
 /// Parse fast-img restore integrity summary lines (mirrors Python
 /// `fast_img_restore_integrity_counts`).
 #[must_use]

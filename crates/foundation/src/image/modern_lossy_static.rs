@@ -20,7 +20,7 @@ pub struct ModernLossyStaticCandidate {
 }
 
 #[must_use]
-pub fn is_modern_static_image_format(format: FormatKind) -> bool {
+pub const fn is_modern_static_image_format(format: FormatKind) -> bool {
     matches!(
         format,
         FormatKind::WebP
@@ -32,7 +32,7 @@ pub fn is_modern_static_image_format(format: FormatKind) -> bool {
     )
 }
 
-fn detected_format_from_kind(format: FormatKind) -> Option<DetectedFormat> {
+const fn detected_format_from_kind(format: FormatKind) -> Option<DetectedFormat> {
     match format {
         FormatKind::WebP => Some(DetectedFormat::WebP),
         FormatKind::Jp2 => Some(DetectedFormat::JP2),
@@ -107,8 +107,7 @@ pub fn scan_modern_lossy_static_candidates(
         if let Some(mut candidate) = probe_modern_lossy_static(path)? {
             candidate.rel_path = path
                 .strip_prefix(src_root)
-                .map(|rel| rel.to_string_lossy().to_string())
-                .unwrap_or_else(|_| candidate.rel_path);
+                .map_or_else(|_| candidate.rel_path, |rel| rel.to_string_lossy().to_string());
             candidates.push(candidate);
         }
     }

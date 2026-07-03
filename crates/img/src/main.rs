@@ -1659,6 +1659,10 @@ fn auto_convert_directory(
     let failed = AtomicUsize::new(0);
     let ignored = AtomicUsize::new(0);
     let processed = AtomicUsize::new(0);
+    // Collect (path, reason) for every hard failure so we can enumerate them at
+    // session end instead of asking the user to grep log shards.
+    let failed_paths: Arc<std::sync::Mutex<Vec<(std::path::PathBuf, String)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let actual_input_bytes = core::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = core::sync::atomic::AtomicU64::new(0);
     let pause_controller = Arc::new(PauseController::new());
@@ -1862,6 +1866,10 @@ let next_index = &next_index;
                                 );
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 foundation::progress_mode::image_processed_failure();
+                                // Accumulate for end-of-session enumeration
+                                if let Ok(mut v) = failed_paths.lock() {
+                                    v.push((path.clone(), err_str.clone()));
+                                }
                             }
                         }
                     }
@@ -2040,6 +2048,18 @@ let next_index = &next_index;
     }
 
     if failed_count > 0 {
+        // Enumerate every failed file with its reason so the user doesn't have
+        // to grep log shards.
+        if let Ok(paths) = failed_paths.lock() {
+            for (p, reason) in paths.iter() {
+                foundation::log_auto_error!(
+                    "Failed file",
+                    "{}: {}",
+                    p.display(),
+                    reason
+                );
+            }
+        }
         anyhow::bail!("Batch completed with {failed_count} failed file(s)");
     }
 
@@ -4962,9 +4982,38 @@ fn fast_img_run_transcode_phase(
             println!(
                 "[SKIP    ] {session_skipped} source JPEG(s) explicitly skipped during transcode"
             );
+            for (rel, entry) in &marker.skipped_sources {
+                let reason = &entry.reason;
+                println!("[SKIP    ]   {rel}: {reason}  [SOURCE RETAINED]");
+                tracing::warn!(
+                    target: "fast_img_skips",
+                    file = %rel,
+                    reason = %reason,
+                    "fast-img source skipped — original file retained"
+                );
+            }
         }
         if session_failed > 0 {
             println!("[FAIL    ] {session_failed} source JPEG(s) failed and were left in place");
+            // Enumerate per-file reasons so the user knows exactly which files
+            // failed without grepping log shards.
+            for (rel, entry) in &marker.failed_sources {
+                let reason = &entry.reason;
+                println!("[FAIL    ]   {rel}: {reason}");
+                tracing::error!(
+                    target: "fast_img_failures",
+                    file = %rel,
+                    reason = %reason,
+                    "fast-img source failed"
+                );
+            }
+        }
+        if !marker.failed_sources.is_empty() || !marker.skipped_sources.is_empty() {
+            println!(
+                "[RETAIN  ] {} source file(s) retained in: {}",
+                marker.failed_sources.len() + marker.skipped_sources.len(),
+                src_dir.display()
+            );
         }
     } else {
         marker.transcoded_count = completed_from_resume;

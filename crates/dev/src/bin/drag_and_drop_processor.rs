@@ -12,7 +12,8 @@ use dev::infra::drag_drop::{
     confirm_in_place, count_fast_img_jxl_outputs, create_directory_structure,
     delete_fast_img_shortest_path_output_dir, effective_success_failure_counts,
     fast_img_integrity_counts, fast_img_marker_requires_retry, fast_img_restore_integrity_counts,
-    fast_img_session_size_metrics, get_unique_output_path, run_unified_verification, safety_check,
+    fast_img_retained_file_names, fast_img_session_size_metrics, get_unique_output_path,
+    run_unified_verification, safety_check,
     scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
@@ -292,6 +293,15 @@ impl DragDropSession {
         if let Some(state) = summary.integrity_state {
             writeln!(file, "Integrity: {state}")?;
         }
+        if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
+            writeln!(file, "Retained files (source preserved):")?;
+            for name in &summary.failed_file_names {
+                writeln!(file, "  [FAIL] {name}")?;
+            }
+            for name in &summary.skipped_file_names {
+                writeln!(file, "  [SKIP] {name}")?;
+            }
+        }
         if let Some(block) = size_summary {
             writeln!(file, "{block}")?;
         }
@@ -546,6 +556,7 @@ fn app_bundle_root() -> Option<PathBuf> {
             return None;
         }
     };
+    #[allow(unused_variables)]
     let exe_dir = exe.parent()?;
     #[cfg(target_os = "macos")]
     {
@@ -1625,6 +1636,14 @@ fn run_drag_drop(
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
                             summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                            // Collect per-file retained names for terminal + session log
+                            for (name, disposition) in fast_img_retained_file_names(&text) {
+                                if disposition == "failed" {
+                                    summary.failed_file_names.push(name);
+                                } else if disposition == "skipped" {
+                                    summary.skipped_file_names.push(name);
+                                }
+                            }
                         }
                         Err(err) => eprintln!(
                             "{} fast-img size metrics log read failed: {err}",
@@ -1767,6 +1786,16 @@ fn run_drag_drop(
                  successfully.",
                 pick_symbol("❌", "[ERROR]")
             );
+            // Enumerate every retained file so the user doesn't have to grep logs
+            if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
+                eprintln!("   Retained files:");
+                for name in &summary.failed_file_names {
+                    eprintln!("     [FAIL] {name}");
+                }
+                for name in &summary.skipped_file_names {
+                    eprintln!("     [SKIP] {name}");
+                }
+            }
         }
         let _ = effective_s;
         print_summary_report(&summary);

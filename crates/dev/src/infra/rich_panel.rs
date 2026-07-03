@@ -228,6 +228,12 @@ pub struct PipelineSummary {
     /// Post-delivery size override for drag summary when output dir is cleaned
     /// (Shortest Path).
     pub fast_img_size_after_override: Option<u64>,
+    /// Names (relative) of files that failed conversion, for terminal and
+    /// session-log enumeration. Each entry is "filename: reason".
+    pub failed_file_names: Vec<String>,
+    /// Names (relative) of files that were skipped, for terminal and
+    /// session-log enumeration. Each entry is "filename: reason".
+    pub skipped_file_names: Vec<String>,
 }
 
 impl PipelineSummary {
