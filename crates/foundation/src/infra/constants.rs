@@ -1056,7 +1056,7 @@ pub const FFMPEG_ARG_LOG_LEVEL: &str = "-v";
 // --- JXL Argument Constants ---
 pub const JXL_ARG_DISTANCE: &str = "-d";
 pub const JXL_ARG_EFFORT: &str = "-e";
-pub const JXL_ARG_THREADS: &str = "-j";
+pub const JXL_ARG_THREADS: &str = "--num_threads";
 pub const JXL_ARG_LOSSLESS_JPEG: &str = "--lossless_jpeg=1";
 pub const JXL_ARG_ALLOW_EXPERT_OPTIONS: &str = "--allow_expert_options";
 pub const JXL_ARG_COLOR_SPACE: &str = "color_space";

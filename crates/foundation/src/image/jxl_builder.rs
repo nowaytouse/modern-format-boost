@@ -259,7 +259,7 @@ mod tests {
         assert!(args.contains(&"-e"));
         assert!(args.contains(&"7"));
 
-        assert!(args.contains(&"-j"));
+        assert!(args.contains(&"--num_threads"));
         assert!(args.contains(&"4"));
 
         assert!(args.contains(&"--lossless_jpeg=1"));

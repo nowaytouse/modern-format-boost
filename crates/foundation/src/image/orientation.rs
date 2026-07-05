@@ -472,6 +472,12 @@ fn diff_jxl_orientation_structure(
     };
 
     if correlation < JXL_ORIENTATION_MIN_STRUCTURE_CORRELATION {
+        if correlation < 0.1 {
+            return Ok(PixelDiffResult::Mismatch {
+                max_delta,
+                channel: 0,
+            });
+        }
         // Low correlation indicates a tonally unusual source (CMYK, heavy
         // saturation, extreme exposure). The BLAKE3 lossless proof that ran
         // before this check already guarantees bit-exact roundtrip; a low
