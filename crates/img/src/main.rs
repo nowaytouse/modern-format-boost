@@ -4373,15 +4373,15 @@ fn fast_img_cleanup_complete_source_state(
         .len()
         .checked_add(marker.failed_sources.len())
         .context("fast-img retained source count overflowed usize")?;
+    let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
+    if current_count == marker.src_jpeg_count && marker_hashes == *current_source_hashes {
+        return Ok(FastImgCleanupCompleteSourceState::RestoredOriginal);
+    }
     if current_count == retained_source_count {
         if retained_hashes != *current_source_hashes {
             anyhow::bail!("fast-img cleanup marker retained-source hash set changed");
         }
         return Ok(FastImgCleanupCompleteSourceState::DeletedConverted);
-    }
-    let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
-    if current_count == marker.src_jpeg_count && marker_hashes == *current_source_hashes {
-        return Ok(FastImgCleanupCompleteSourceState::RestoredOriginal);
     }
     tracing::warn!(
         target: "fast_img",
