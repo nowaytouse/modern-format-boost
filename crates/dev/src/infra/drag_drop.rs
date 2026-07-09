@@ -960,9 +960,13 @@ pub fn fast_img_retained_file_names(log_text: &str) -> Vec<(String, String)> {
         .lines()
         .filter_map(|line| {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("[FAIL    ]   ") && rest.contains(':') {
+            if let Some(rest) = trimmed.strip_prefix("[FAIL    ]   ")
+                && rest.contains(':')
+            {
                 return Some((rest.to_owned(), "failed".to_owned()));
-            } else if let Some(rest) = trimmed.strip_prefix("[SKIP    ]   ") && rest.contains(':') {
+            } else if let Some(rest) = trimmed.strip_prefix("[SKIP    ]   ")
+                && rest.contains(':')
+            {
                 // Strip the "  [SOURCE RETAINED]" suffix if present for cleaner display
                 let clean = rest.strip_suffix("  [SOURCE RETAINED]").unwrap_or(rest);
                 return Some((clean.to_owned(), "skipped".to_owned()));
@@ -1075,12 +1079,14 @@ fn fast_img_marker_cleanup_targets(output_dir: &Path, verify_bin: &Path) -> Resu
         })?;
     let mut targets = Vec::new();
     for (source_rel, entry) in blake3_log {
-        let entry_obj = entry.as_object().with_context(|| {
-            format!("fast-img marker entry is not an object for {source_rel}")
-        })?;
+        let entry_obj = entry
+            .as_object()
+            .with_context(|| format!("fast-img marker entry is not an object for {source_rel}"))?;
         let library_asset = entry_obj.get("library_asset");
         if library_asset.is_none() || library_asset.unwrap().is_null() {
-            bail!("fast-img cleanup aborted: JXL output was not successfully imported to Photos/iCloud (missing library_asset proof for {source_rel})");
+            bail!(
+                "fast-img cleanup aborted: JXL output was not successfully imported to Photos/iCloud (missing library_asset proof for {source_rel})"
+            );
         }
         targets.push(fast_img_safe_output_path(
             output_dir,

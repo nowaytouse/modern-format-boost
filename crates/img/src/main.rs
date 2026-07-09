@@ -2052,12 +2052,7 @@ let next_index = &next_index;
         // to grep log shards.
         if let Ok(paths) = failed_paths.lock() {
             for (p, reason) in paths.iter() {
-                foundation::log_auto_error!(
-                    "Failed file",
-                    "{}: {}",
-                    p.display(),
-                    reason
-                );
+                foundation::log_auto_error!("Failed file", "{}: {}", p.display(), reason);
             }
         }
         anyhow::bail!("Batch completed with {failed_count} failed file(s)");

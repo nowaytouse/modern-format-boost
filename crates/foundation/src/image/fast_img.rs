@@ -865,7 +865,9 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
-    marker.tier2_imported_assets.clone_from(&library.imported_assets);
+    marker
+        .tier2_imported_assets
+        .clone_from(&library.imported_assets);
     Ok(())
 }
 

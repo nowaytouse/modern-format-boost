@@ -13,8 +13,7 @@ use dev::infra::drag_drop::{
     delete_fast_img_shortest_path_output_dir, effective_success_failure_counts,
     fast_img_integrity_counts, fast_img_marker_requires_retry, fast_img_restore_integrity_counts,
     fast_img_retained_file_names, fast_img_session_size_metrics, get_unique_output_path,
-    run_unified_verification, safety_check,
-    scan_content, sync_non_media_files,
+    run_unified_verification, safety_check, scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{

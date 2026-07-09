@@ -105,9 +105,10 @@ pub fn scan_modern_lossy_static_candidates(
     let mut candidates = Vec::new();
     for path in file_paths {
         if let Some(mut candidate) = probe_modern_lossy_static(path)? {
-            candidate.rel_path = path
-                .strip_prefix(src_root)
-                .map_or_else(|_| candidate.rel_path, |rel| rel.to_string_lossy().to_string());
+            candidate.rel_path = path.strip_prefix(src_root).map_or_else(
+                |_| candidate.rel_path,
+                |rel| rel.to_string_lossy().to_string(),
+            );
             candidates.push(candidate);
         }
     }
