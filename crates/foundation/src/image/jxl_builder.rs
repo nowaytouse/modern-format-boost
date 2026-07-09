@@ -117,7 +117,9 @@ impl ToolBuilder for CjxlBuilder {
         }
 
         if let Some(d) = self.distance {
-            cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d}"));
+            if !self.lossless_jpeg {
+                cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d}"));
+            }
         }
 
         if let Some(e) = self.effort {
@@ -252,9 +254,8 @@ mod tests {
             })
             .collect();
 
-        // lossless_jpeg overrides distance to 0.0
-        assert!(args.contains(&"-d"));
-        assert!(args.contains(&"0"));
+        // lossless_jpeg overrides distance, so -d is omitted
+        assert!(!args.contains(&"-d"));
 
         assert!(args.contains(&"-e"));
         assert!(args.contains(&"7"));
