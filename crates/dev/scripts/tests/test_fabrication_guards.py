@@ -889,7 +889,7 @@ class TestFabricationGuards(unittest.TestCase):
             patch.object(
                 mfb_tool_refresh,
                 "_pinned_rust_channel",
-                return_value="nightly-2026-05-23",
+                return_value="nightly-2026-07-09",
             ),
             patch.object(
                 mfb_tool_refresh, "_rust_toolchain_components", return_value=[]
@@ -907,7 +907,7 @@ class TestFabricationGuards(unittest.TestCase):
             cmd for label, cmd in calls if label.startswith("rustup toolchain")
         ]
         self.assertEqual(
-            rustup_cmds, [["rustup", "toolchain", "install", "nightly-2026-05-23"]]
+            rustup_cmds, [["rustup", "toolchain", "install", "nightly-2026-07-09"]]
         )
 
 

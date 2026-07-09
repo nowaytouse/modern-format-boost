@@ -1,5 +1,5 @@
 [toolchain]
 # Pinned nightly for reproducible CI/local builds; bump intentionally (see docs/CHANGELOG.md).
-channel = "nightly-2026-05-23"
+channel = "nightly-2026-07-09"
 components = ["rustfmt", "clippy", "llvm-tools"]
 profile = "minimal"
