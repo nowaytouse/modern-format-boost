@@ -4065,9 +4065,12 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 
     // ICO header: reserved(2) + type(2) + count(2) = 6 bytes
     let mut header = [0u8; 6];
-    if file.read(&mut header).is_err() {
-        return Ok(CompressionType::Lossless);
-    }
+    file.read(&mut header).map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "ICO: failed to read 6-byte header from '{}': {err}",
+            path.display()
+        ))
+    })?;
 
     let image_count = usize::from(u16::from_le_bytes([header[4], header[5]]));
     let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];

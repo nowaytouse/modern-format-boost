@@ -1,366 +1,7 @@
 //! Format-specific utilities and helpers
-//! Format-specific utilities and helpers
-
-pub mod tiff {
-    use crate::unified_error::{ImgQualityError, Result};
-    use anyhow::anyhow;
-    use std::fs;
-    use std::path::Path;
-
-    /// Detect TIFF compression type — traverses ALL IFDs. Supports both
-    /// standard TIFF and `BigTIFF`. Check if the image at `path` is
-    /// lossless.
-    ///
-    /// # Errors
-    /// Returns an error if the file is missing or the format is unsupported.
-    // Rationale: This function handles complex, sequential initialization or business logic where
-    // further fragmentation would hinder readability and maintainability.
-    /// # Panics
-    /// Panics if the file is fundamentally corrupted in a way that prevents
-    /// basic header reading.
-    pub fn is_lossless(path: &Path) -> Result<bool> {
-        const MAX_IFD_COUNT: u32 = 100;
-
-        crate::common_utils::validate_file_size_limit(
-            path,
-            crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
-        )
-        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
-
-        let data = fs::read(path)?;
-        if data.len() < 8 {
-            return Err(ImgQualityError::AnalysisError(
-                crate::infra::static_logs::messages::MSG_FORMAT_TIFF_SMALL
-                    .replace("{}", &path.display().to_string()),
-            ));
-        }
-
-        let is_little_endian = data.get(0..2) == Some(b"II");
-        if data.get(0..2) != Some(b"II") && data.get(0..2) != Some(b"MM") {
-            return Err(ImgQualityError::AnalysisError(
-                crate::infra::static_logs::messages::MSG_FORMAT_TIFF_BYTE_ORDER
-                    .replace("{}", &path.display().to_string()),
-            ));
-        }
-
-        let version = if is_little_endian {
-            u16::from_le_bytes([
-                *data.get(2).ok_or_else(|| {
-                    ImgQualityError::AnalysisError("TIFF header truncated".into())
-                })?,
-                *data.get(3).ok_or_else(|| {
-                    ImgQualityError::AnalysisError("TIFF header truncated".into())
-                })?,
-            ])
-        } else {
-            u16::from_be_bytes([
-                *data.get(2).ok_or_else(|| {
-                    ImgQualityError::AnalysisError("TIFF header truncated".into())
-                })?,
-                *data.get(3).ok_or_else(|| {
-                    ImgQualityError::AnalysisError("TIFF header truncated".into())
-                })?,
-            ])
-        };
-        let is_bigtiff = version == 0x002B;
-
-        let read_u16 = |off: usize| -> Option<u16> {
-            // Explicit bounds check before array access
-            if off + 2 > data.len() {
-                return None;
-            }
-            // Safe: bounds checked above
-            let bytes = [data[off], data[off + 1]];
-            Some(if is_little_endian {
-                u16::from_le_bytes(bytes)
-            } else {
-                u16::from_be_bytes(bytes)
-            })
-        };
-
-        let read_u32 = |off: usize| -> Option<u32> {
-            // Explicit bounds check before slice access
-            if off + 4 > data.len() {
-                return None;
-            }
-            // Safe: bounds checked above
-            let bytes = [data[off], data[off + 1], data[off + 2], data[off + 3]];
-            Some(if is_little_endian {
-                u32::from_le_bytes(bytes)
-            } else {
-                u32::from_be_bytes(bytes)
-            })
-        };
-
-        let read_u64 = |off: usize| -> Option<u64> {
-            // Explicit bounds check before array access
-            if off + 8 > data.len() {
-                return None;
-            }
-            // Safe: bounds checked above
-            let bytes = [
-                data[off],
-                data[off + 1],
-                data[off + 2],
-                data[off + 3],
-                data[off + 4],
-                data[off + 5],
-                data[off + 6],
-                data[off + 7],
-            ];
-            Some(if is_little_endian {
-                u64::from_le_bytes(bytes)
-            } else {
-                u64::from_be_bytes(bytes)
-            })
-        };
-
-        let mut ifd_offset: u64 = if is_bigtiff {
-            if data.len() < 16 {
-                return Err(ImgQualityError::AnalysisError(
-                    crate::infra::static_logs::messages::MSG_FORMAT_TIFF_BIGTIFF_SMALL
-                        .replace("{}", &path.display().to_string()),
-                ));
-            }
-            read_u64(8).ok_or_else(|| {
-                ImgQualityError::AnalysisError(
-                    "TIFF: failed to read BigTIFF IFD offset".to_string(),
-                )
-            })?
-        } else {
-            u64::from(read_u32(4).ok_or_else(|| {
-                ImgQualityError::AnalysisError("TIFF: failed to read IFD offset".to_string())
-            })?)
-        };
-
-        let mut ifd_count = 0u32;
-
-        while ifd_offset != 0 && ifd_count < MAX_IFD_COUNT {
-            ifd_count += 1;
-            let ifd_pos = crate::numeric_cast::u64_to_usize_strict(ifd_offset, "ifd_offset")
-                .ok_or_else(|| {
-                    ImgQualityError::AnalysisError(format!(
-                        "TIFF IFD offset {ifd_offset} is too large for memory (exceeds usize::MAX)"
-                    ))
-                })?;
-
-            let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
-                // BigTIFF: 8-byte entry count
-                if ifd_pos + 8 > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: BigTIFF IFD #{} at offset {} truncated (need 8 bytes \
-                             for entry count, have {})",
-                            ifd_count,
-                            ifd_pos,
-                            data.len().saturating_sub(ifd_pos)
-                        ),
-                    );
-                    break;
-                }
-                let n = crate::numeric_cast::u64_to_usize_strict(
-                    read_u64(ifd_pos).ok_or_else(|| {
-                        anyhow!("TIFF BigTiff IFD entry count missing at offset {ifd_pos}")
-                    })?,
-                    "bigtiff_entry_count",
-                )
-                .ok_or_else(|| {
-                    ImgQualityError::AnalysisError(format!(
-                        "BigTIFF entry count at {ifd_pos} is too large (exceeds usize::MAX)"
-                    ))
-                })?;
-
-                // Validate entry count doesn't cause overflow
-                let entries_end = ifd_pos
-                    .checked_add(8)
-                    .and_then(|start| start.checked_add(n.checked_mul(20)?))
-                    .ok_or_else(|| {
-                        ImgQualityError::AnalysisError(format!(
-                            "BigTIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes \
-                             size overflow"
-                        ))
-                    })?;
-
-                if entries_end > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: BigTIFF IFD #{ifd_count} at offset {ifd_pos} claims \
-                             {n} entries but data truncated"
-                        ),
-                    );
-                }
-
-                (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
-            } else {
-                // Standard TIFF: 2-byte entry count
-                if ifd_pos + 2 > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: IFD #{} at offset {} truncated (need 2 bytes for \
-                             entry count, have {})",
-                            ifd_count,
-                            ifd_pos,
-                            data.len().saturating_sub(ifd_pos)
-                        ),
-                    );
-                    break;
-                }
-                let n = read_u16(ifd_pos)
-                    .map(usize::from)
-                    .ok_or_else(|| anyhow!("TIFF IFD entry count missing at offset {ifd_pos}"))?;
-
-                // Validate entry count doesn't cause overflow
-                let entries_end = ifd_pos
-                    .checked_add(2)
-                    .and_then(|start| start.checked_add(n.checked_mul(12)?))
-                    .ok_or_else(|| {
-                        ImgQualityError::AnalysisError(format!(
-                            "TIFF IFD #{ifd_count} at offset {ifd_pos}: entry count {n} causes \
-                             size overflow"
-                        ))
-                    })?;
-
-                if entries_end > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: IFD #{ifd_count} at offset {ifd_pos} claims {n} \
-                             entries but data truncated"
-                        ),
-                    );
-                }
-
-                (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
-            };
-
-            let mut pos = entries_start;
-            for entries_scanned in 0..num_entries {
-                // Explicit bounds check before accessing entry
-                if pos + entry_size > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: IFD #{} bitstream truncated at entry {}/{} (offset \
-                             {}, need {} bytes, have {})",
-                            ifd_count,
-                            entries_scanned,
-                            num_entries,
-                            pos,
-                            entry_size,
-                            data.len().saturating_sub(pos)
-                        ),
-                    );
-                    break;
-                }
-
-                // Tag 259 = Compression
-                if let Some(tag) = read_u16(pos)
-                    && tag == 259
-                {
-                    let compression_offset = if is_bigtiff { pos + 12 } else { pos + 8 };
-
-                    // Validate compression offset is within bounds
-                    if compression_offset + 2 > data.len() {
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "TIFF: Compression tag at IFD #{} entry {} offset {} out of bounds \
-                             (need 2 bytes, have {})",
-                            ifd_count,
-                            entries_scanned,
-                            compression_offset,
-                            data.len().saturating_sub(compression_offset)
-                        )));
-                    }
-
-                    let compression = read_u16(compression_offset).ok_or_else(|| {
-                        ImgQualityError::AnalysisError(format!(
-                            "TIFF: Failed to read compression tag at IFD #{} entry {} offset {} \
-                             in {}",
-                            ifd_count,
-                            entries_scanned,
-                            compression_offset,
-                            path.display()
-                        ))
-                    })?;
-
-                    // Lossy compression schemes:
-                    // 6: JPEG (old-style)
-                    // 7: JPEG (old-style, alternative)
-                    // 34892: JPEG (lossy)
-                    // 50001: PIXARLOG (can be lossy depending on settings)
-                    if compression == 6
-                        || compression == 7
-                        || compression == 34892
-                        || compression == 50001
-                    {
-                        return Ok(false);
-                    }
-                }
-
-                // Advance to next entry with overflow check
-                pos = pos.checked_add(entry_size).ok_or_else(|| {
-                    ImgQualityError::AnalysisError(format!(
-                        "TIFF: Position overflow at IFD #{ifd_count} entry {entries_scanned}"
-                    ))
-                })?;
-            }
-
-            // Read next IFD offset
-            if is_bigtiff {
-                if next_offset_pos + 8 > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: BigTIFF IFD #{} next offset truncated at {} (need 8 \
-                             bytes, have {})",
-                            ifd_count,
-                            next_offset_pos,
-                            data.len().saturating_sub(next_offset_pos)
-                        ),
-                    );
-                    break;
-                }
-                ifd_offset = read_u64(next_offset_pos).ok_or_else(|| {
-                    anyhow!("TIFF BigTiff next IFD offset missing at offset {next_offset_pos}")
-                })?;
-            } else {
-                if next_offset_pos + 4 > data.len() {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        format!(
-                            "TIFF Analysis: IFD #{} next offset truncated at {} (need 4 bytes, \
-                             have {})",
-                            ifd_count,
-                            next_offset_pos,
-                            data.len().saturating_sub(next_offset_pos)
-                        ),
-                    );
-                    break;
-                }
-                ifd_offset = u64::from(read_u32(next_offset_pos).ok_or_else(|| {
-                    anyhow!("TIFF next IFD offset missing at offset {next_offset_pos}")
-                })?);
-            }
-        }
-
-        // If we hit the IFD count limit, log a warning
-        if ifd_count >= MAX_IFD_COUNT && ifd_offset != 0 {
-            crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_heic",
-                format!(
-                    "TIFF Analysis: Stopped after {} IFDs (safety limit) in {}. File may contain \
-                     more IFDs.",
-                    MAX_IFD_COUNT,
-                    path.display()
-                ),
-            );
-        }
-
-        Ok(true)
-    }
-}
+// Note: pub mod tiff (pure IFD byte-parser) removed — zero callers.
+// All TIFF/DNG lossless detection uses tiff_family::is_lossless_tiff_family
+// (exiftool-based, with disciplined main-IFD selection).
 
 
 
@@ -1512,12 +1153,12 @@ pub mod avif {
                 return Ok(true);
             }
 
-            // Dimension 4: Profile 0 + 4:4:4
-            if is_444 && seq_profile == 0 {
-                return Ok(true);
-            }
+            // NOTE: Dimension 4 (Profile 0 + 4:4:4) removed.
+            // AV1 Profile 0 (Main) is 4:2:0 only per spec — the combination
+            // (is_444 && seq_profile == 0) is unreachable for valid AVIF files
+            // and would be a guess for malformed data.
 
-            // Dimension 5: pixi box
+            // Dimension 4: pixi box
             if is_444 && let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                 if let Some(max_depth) = parse_pixi_max_depth(pixi_data)? {
                     if max_depth >= 12 {
@@ -1752,8 +1393,20 @@ pub mod tiff_family {
         })?;
 
         match compression {
-            1 | 5 | 7 | 8 | 50001 => Ok(true), // Uncompressed, LZW, JPEG (lossless in DNG), Deflate, PIXARLOG
-            6 | 34892 => Ok(false),    // Old JPEG, Lossy JPEG
+            // Lossless compressions (pixel-exact round-trip):
+            //   1  = Uncompressed
+            //   5  = LZW (lossless)
+            //   7  = New-style JPEG — in DNG context this is lossless Huffman JPEG
+            //   8  = Deflate/ZIP (lossless)
+            //  32773 = PackBits (lossless RLE)
+            1 | 5 | 7 | 8 | 32773 => Ok(true),
+            // Lossy compressions:
+            //   6     = Old-style JPEG (lossy)
+            //  34892  = Lossy JPEG in DNG
+            //  50001  = PIXARLOG — log-quantized, NOT pixel-exact
+            //  34676  = SGILog — log-encoded, lossy
+            //  34677  = SGILog24 — log-encoded, lossy
+            6 | 34892 | 50001 | 34676 | 34677 => Ok(false),
             52546 => {
                 // JPEG XL
                 let offset_val = main_ifd.get("StripOffsets").or(main_ifd.get("TileOffsets"));
