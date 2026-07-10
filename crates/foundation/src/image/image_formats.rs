@@ -393,12 +393,16 @@ pub mod webp {
 
     #[must_use]
     pub fn is_animated_from_bytes(data: &[u8]) -> bool {
+        // Authoritative path: libwebp BitstreamFeatures.
+        // On parse failure (truncated/corrupted), conservative answer = not animated.
+        // The raw `data.windows(4).any(|w| w == b"ANIM")` scan was removed:
+        // it could false-positive on VP8/VP8L payload bytes that happen to spell "ANIM".
         if let Some(features) = ::webp::BitstreamFeatures::new(data)
             && features.has_animation()
         {
             return true;
         }
-        data.windows(4).any(|w| w == b"ANIM")
+        false
     }
 
     /// Canvas dimensions from RIFF/WebP chunk headers (VP8 / VP8L / VP8X /
