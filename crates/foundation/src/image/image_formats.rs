@@ -1624,6 +1624,154 @@ pub mod jxl {
     }
 }
 
+pub mod dng {
+    use crate::unified_error::{ImgQualityError, Result};
+    use serde_json::Value;
+    use std::path::Path;
+    use std::process::Command;
+
+    /// Helper to parse array values or space-separated strings as the first u64
+    fn parse_first_u64(val: &Value) -> Option<u64> {
+        if let Some(n) = val.as_u64() {
+            return Some(n);
+        }
+        if let Some(s) = val.as_str() {
+            return s.split_whitespace().next().and_then(|num_str| num_str.parse().ok());
+        }
+        if let Some(arr) = val.as_array() {
+            return arr.first().and_then(|v| v.as_u64().or_else(|| {
+                v.as_str().and_then(|s| s.parse().ok())
+            }));
+        }
+        None
+    }
+
+    /// Detect if a DNG file is lossless using `exiftool` to target the main raw image IFD.
+    pub fn is_lossless_dng(path: &Path) -> Result<bool> {
+        let output = Command::new("exiftool")
+            .arg("-n")
+            .arg("-j")
+            .arg("-G1")
+            .arg("-a")
+            .arg("-Compression")
+            .arg("-PhotometricInterpretation")
+            .arg("-SubfileType")
+            .arg("-ImageWidth")
+            .arg("-ImageHeight")
+            .arg("-StripOffsets")
+            .arg("-StripByteCounts")
+            .arg("-TileOffsets")
+            .arg("-TileByteCounts")
+            .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+            .output()
+            .map_err(|e| ImgQualityError::AnalysisError(format!("Failed to execute exiftool: {e}")))?;
+
+        if !output.status.success() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "exiftool failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let parsed: Value = serde_json::from_str(&json_str)
+            .map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse exiftool JSON: {e}")))?;
+
+        let obj = parsed
+            .as_array()
+            .and_then(|arr| arr.get(0))
+            .and_then(|val| val.as_object())
+            .ok_or_else(|| ImgQualityError::AnalysisError("Invalid exiftool JSON structure".into()))?;
+
+        // Group ExifTool keys by their IFD namespace (e.g., IFD0, SubIFD)
+        let mut ifds: std::collections::HashMap<&str, std::collections::HashMap<&str, &Value>> =
+            std::collections::HashMap::new();
+
+        for (key, val) in obj {
+            if let Some((prefix, tag)) = key.split_once(':') {
+                ifds.entry(prefix).or_default().insert(tag, val);
+            }
+        }
+
+        let mut best_ifd = None;
+        let mut max_pixels = 0;
+
+        for (_prefix, tags) in &ifds {
+            let photo_interp = parse_first_u64(tags.get("PhotometricInterpretation").unwrap_or(&&Value::Null)).unwrap_or(0);
+            let is_raw = photo_interp == 32803 || photo_interp == 34892;
+
+            let subfile_type = parse_first_u64(tags.get("SubfileType").unwrap_or(&&Value::Null)).unwrap_or(1);
+            let is_full_res = subfile_type == 0;
+
+            if is_raw || is_full_res {
+                let width = parse_first_u64(tags.get("ImageWidth").unwrap_or(&&Value::Null)).unwrap_or(0);
+                let height = parse_first_u64(tags.get("ImageHeight").unwrap_or(&&Value::Null)).unwrap_or(0);
+                let pixels = width * height;
+                if pixels >= max_pixels && width > 0 && height > 0 {
+                    max_pixels = pixels;
+                    best_ifd = Some(tags);
+                }
+            }
+        }
+
+        // Fallback: pick largest image if none match raw/full-res precisely
+        if best_ifd.is_none() {
+            for (_prefix, tags) in &ifds {
+                let width = parse_first_u64(tags.get("ImageWidth").unwrap_or(&&Value::Null)).unwrap_or(0);
+                let height = parse_first_u64(tags.get("ImageHeight").unwrap_or(&&Value::Null)).unwrap_or(0);
+                let pixels = width * height;
+                if pixels > max_pixels && width > 0 && height > 0 {
+                    max_pixels = pixels;
+                    best_ifd = Some(tags);
+                }
+            }
+        }
+
+        let main_ifd = best_ifd.ok_or_else(|| {
+            ImgQualityError::AnalysisError("Could not identify main raw IFD in DNG".into())
+        })?;
+
+        let compression = parse_first_u64(main_ifd.get("Compression").unwrap_or(&&Value::Null)).unwrap_or(0);
+
+        match compression {
+            1 | 7 | 8 => Ok(true), // Uncompressed, JPEG (lossless in DNG), Deflate
+            34892 => Ok(false),    // Lossy JPEG
+            52546 => {
+                // JPEG XL
+                let offset = parse_first_u64(main_ifd.get("StripOffsets").unwrap_or(
+                    main_ifd.get("TileOffsets").unwrap_or(&&Value::Null),
+                ))
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "DNG with JPEG XL compression missing StripOffsets/TileOffsets".into(),
+                    )
+                })?;
+
+                let length = parse_first_u64(main_ifd.get("StripByteCounts").unwrap_or(
+                    main_ifd.get("TileByteCounts").unwrap_or(&&Value::Null),
+                ))
+                .unwrap_or(10 * 1024 * 1024); // Fallback length if missing
+
+                let mut f = std::fs::File::open(path)?;
+                use std::io::{Read, Seek, SeekFrom};
+                f.seek(SeekFrom::Start(offset))?;
+
+                let safe_length = std::cmp::min(length, 10 * 1024 * 1024); // max 10MB to read header
+                let mut buffer = vec![0u8; safe_length as usize];
+                let bytes_read = f.read(&mut buffer)?;
+                buffer.truncate(bytes_read);
+
+                crate::image_formats::jxl::is_lossless_from_bytes(&buffer, path)
+            }
+            _ => {
+                // Conservative fallback for unknown compressions
+                Ok(false)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

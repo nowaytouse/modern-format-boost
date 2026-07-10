@@ -4006,7 +4006,18 @@ fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
 /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard
 /// TIFF and `BigTIFF`.
 fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
-    if crate::image_formats::tiff::is_lossless(path)? {
+    let is_dng = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dng"))
+        .unwrap_or(false);
+
+    let is_lossless = if is_dng {
+        crate::image_formats::dng::is_lossless_dng(path)?
+    } else {
+        crate::image_formats::tiff::is_lossless(path)?
+    };
+
+    if is_lossless {
         Ok(CompressionType::Lossless)
     } else {
         Ok(CompressionType::Lossy)
