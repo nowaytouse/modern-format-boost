@@ -2052,7 +2052,10 @@ let next_index = &next_index;
         // Enumerate every failed file with its reason so the user doesn't have
         // to grep log shards.
         {
-            let paths = foundation::media_conversion_gate::mutex_guard_or_recover("failed_paths_enum", failed_paths.lock());
+            let paths = foundation::media_conversion_gate::mutex_guard_or_recover(
+                "failed_paths_enum",
+                failed_paths.lock(),
+            );
             for (p, reason) in paths.iter() {
                 foundation::log_auto_error!("Failed file", "{}: {}", p.display(), reason);
             }

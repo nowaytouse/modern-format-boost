@@ -2613,10 +2613,12 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                 Ok(image) => {
                     let width = image.width();
                     let height = image.height();
-                    let has_alpha = image.image_header().metadata.ec_info.iter().any(|info| {
-                        matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
-                    });
-                    let bit_depth = Some(image.image_header().metadata.bit_depth.bits_per_sample() as u8);
+                    let has_alpha =
+                        image.image_header().metadata.ec_info.iter().any(|info| {
+                            matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
+                        });
+                    let bit_depth =
+                        Some(image.image_header().metadata.bit_depth.bits_per_sample() as u8);
                     return Ok((width, height, has_alpha, bit_depth));
                 }
                 Err(err) => {

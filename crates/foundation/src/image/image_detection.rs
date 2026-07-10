@@ -525,8 +525,8 @@ pub fn detect_animation(
                     // jxl-oxide failed; fall back to jxlinfo for full check.
                     use crate::ToolBuilder;
                     if JxlinfoBuilder::new().check_available() {
-                        if let Some(is_anim) = detect_jxl_animation_via_jxlinfo(path)
-                            .unwrap_or(None)
+                        if let Some(is_anim) =
+                            detect_jxl_animation_via_jxlinfo(path).unwrap_or(None)
                         {
                             let (frame_count, fps) = if is_anim {
                                 jxlinfo_refine_jxl_animation(path, None)
@@ -599,8 +599,10 @@ pub fn detect_animation(
         // we explicitly count the packets. This demuxes the file and is 100% accurate.
         // Note: JXL is handled entirely in Stage 1 via jxl-oxide+jxlinfo and never
         //       reaches this point.
-        if matches!(format, DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF)
-            && let Some(explicit_count) = crate::ffprobe::get_frame_count(path)
+        if matches!(
+            format,
+            DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF
+        ) && let Some(explicit_count) = crate::ffprobe::get_frame_count(path)
         {
             if explicit_count > 1 {
                 let final_count =
@@ -707,6 +709,24 @@ pub fn animatable_format_confirmed_static_only(
             isobmff_confirmed_static_only(path)
         }
         DetectedFormat::JXL => {
+            // Prioritize authoritative native library (jxl-oxide) for animation detection
+            let is_animated_by_oxide = if let Ok(data) = std::fs::read(path) {
+                match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
+                    Ok(image) => Some(image.image_header().metadata.animation.is_some()),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
+            if let Some(is_anim) = is_animated_by_oxide {
+                if is_anim {
+                    return Ok(false);
+                }
+                return Ok(true);
+            }
+
+            // Fall back to external toolchain (jxlinfo/djxl) if native library fails
             if is_jxl_animated_via_ffprobe(path)? {
                 return Ok(false);
             }

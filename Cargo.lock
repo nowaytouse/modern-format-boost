@@ -438,7 +438,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#fcc0e199fd8f1e21ef31113cac5786fcc1204daf"
+source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#fcc0e199fd8f1e21ef31113cac5786fcc1204daf"
+source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
 dependencies = [
  "anstream",
  "anstyle",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#fcc0e199fd8f1e21ef31113cac5786fcc1204daf"
+source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#fcc0e199fd8f1e21ef31113cac5786fcc1204daf"
+source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
 
 [[package]]
 name = "cmake"
@@ -777,7 +777,7 @@ dependencies = [
 [[package]]
 name = "exr"
 version = "1.74.1"
-source = "git+https://github.com/johannesvollmer/exrs#824f5a5cca7dd0ad27c698ca6f025a68bb444c16"
+source = "git+https://github.com/johannesvollmer/exrs#35c503819f5ca4bed2bf3b0eb485a3b95aa9bab9"
 dependencies = [
  "bit_field",
  "half",
@@ -2766,7 +2766,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#ee5756bb2a113322fb1fd1e410be3645a85e3490"
+source = "git+https://github.com/Stebalien/tempfile#ddb6ec507bb849a9853c91d0aab23ed7e9420f2d"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",

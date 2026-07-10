@@ -195,11 +195,7 @@ mod tests {
     fn test_scan_modern_lossy_static_candidates_skips_non_modern() -> Result<()> {
         let tempdir = tempfile::tempdir().unwrap();
         let jpeg_path = tempdir.path().join("photo.jpg");
-        std::fs::write(
-            &jpeg_path,
-            [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46],
-        )
-        .unwrap();
+        std::fs::write(&jpeg_path, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]).unwrap();
 
         let candidates = scan_modern_lossy_static_candidates(tempdir.path(), &[jpeg_path])?;
         assert!(candidates.is_empty());

@@ -1462,11 +1462,14 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     // Multi-stream ISOBMFF (AVIF/HEIC cover + image) can emit one count per stream
     // line ("1\n1").
     let mut parsed: Vec<u64> = Vec::new();
+    // Track whether any non-empty, non-N/A content appeared.
+    let mut has_unexpected_content = false;
     for line in output.stdout.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed == "N/A" {
             continue;
         }
+        has_unexpected_content = true;
         match trimmed.parse::<u64>() {
             Ok(value) => parsed.push(value),
             Err(err) => {
@@ -1480,13 +1483,41 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     }
     if let Some(frame_count) = parsed.into_iter().max() {
         Some(frame_count)
-    } else {
-        let trimmed = output.stdout.trim();
-        crate::media_conversion_gate::probe_ffprobe_path_audit(
-            "ffprobe_frame_count_parse_failed",
-            path,
-            format!("failed to parse ffprobe frame-count output ({trimmed})"),
+    } else if has_unexpected_content {
+        // Non-N/A content appeared but nothing parsed to a u64 — line-level
+        // audit already fired above for each offending token. Log this fallback
+        // path explicitly so it is never silent.
+        tracing::debug!(
+            target: "mfb.ffprobe",
+            path = %path.display(),
+            "ffprobe_frame_count_parse_failed: all non-N/A lines failed u64 parse; returning None"
         );
+        None
+    } else {
+        // All non-empty lines were "N/A": ffprobe found the file but reports no
+        // countable frames for the selected video stream. This is the expected
+        // outcome for still images (JXL, AVIF, etc.) that carry no video
+        // stream. Not an error — log explicitly at debug so the path is
+        // visible, then return None.
+        let trimmed = output.stdout.trim();
+        if trimmed.is_empty() {
+            // Truly empty stdout is unexpected even for still images — keep the
+            // probe audit so it surfaces in strict-delivery logs.
+            crate::media_conversion_gate::probe_ffprobe_path_audit(
+                "ffprobe_frame_count_empty_output",
+                path,
+                "ffprobe frame-count returned empty stdout",
+            );
+        } else {
+            // Pure N/A output — known still-image case. Explicit debug log;
+            // never a probe_ffprobe_path_audit (which escalates to RARE ERROR).
+            tracing::debug!(
+                target: "mfb.ffprobe",
+                path = %path.display(),
+                "ffprobe_frame_count_no_video_stream: stdout={trimmed:?}; \
+                 still image with no video stream — returning None"
+            );
+        }
         None
     }
 }

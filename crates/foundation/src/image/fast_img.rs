@@ -782,10 +782,11 @@ pub fn reverify_modern_lossy_static_photos_custody(
                     probe.path.display()
                 ))
             })?;
-        if library_blake3 != asset.blake3 {
+        let expected_library_blake3 = asset.library_blake3.as_deref().unwrap_or(&asset.blake3);
+        if library_blake3 != expected_library_blake3 {
             return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={} library={library_blake3}",
-                asset.rel_path, asset.blake3
+                "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
+                asset.rel_path
             )));
         }
     }
@@ -1399,6 +1400,7 @@ where
             sync_status: "photos_local".to_string(),
             quarantined: is_quarantined(&path)?,
             photos_uuid: None,
+            library_blake3: None,
         });
     }
     pending_entries.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -1622,6 +1624,7 @@ where
             sync_status: photos_sync_status(&verified_probe.probe).to_string(),
             quarantined: is_quarantined(&entry.path)?,
             photos_uuid: None,
+            library_blake3: None,
         });
     }
     records.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -2922,22 +2925,58 @@ pub fn library_handle_from_media_output_probes(
                     probe.path.display()
                 ))
             })?;
+        let mut final_library_blake3 = None;
         if library_blake3 != candidate.blake3 {
-            tracing::error!(
-                target: "photos_import",
-                rel_path = %target.rel_path,
-                candidate_blake3 = %candidate.blake3,
-                library_blake3 = %library_blake3,
-                photos_uuid = %probe.uuid,
-                candidate_path = %candidate.path.display(),
-                library_path = %probe.path.display(),
-                "Photos imported bytes diverged from tier-2 source"
-            );
-            return Err(ImgQualityError::AnalysisError(format!(
-                "Photos verifier BLAKE3 mismatch for {} (uuid={}): source={} library={library_blake3}. \
-                 Import aborted because Photos library bytes do not match the source file.",
-                target.rel_path, probe.uuid, candidate.blake3
-            )));
+            let fmt = crate::image::format_detect::detect_true_format(&candidate.path)?;
+            if let Some(tolerance) =
+                crate::image::orientation::orientation_diff_tolerance_for_format(fmt)
+            {
+                match crate::image::orientation::verify_orientation_pixel_diff(
+                    &candidate.path,
+                    &probe.path,
+                    fmt,
+                    tolerance,
+                )? {
+                    crate::image::orientation::PixelDiffResult::Match => {
+                        final_library_blake3 = Some(library_blake3);
+                        tracing::info!(
+                            target: "photos_import",
+                            rel_path = %target.rel_path,
+                            candidate_blake3 = %candidate.blake3,
+                            library_blake3 = %final_library_blake3.as_ref().unwrap(),
+                            "Photos imported bytes diverged but pixel-equivalence proof passed; recording library_blake3"
+                        );
+                    }
+                    crate::image::orientation::PixelDiffResult::SkippedToolAbsent { tool } => {
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "Photos verifier pixel-equivalence: proof unavailable for {} (uuid={}): missing {tool}",
+                            target.rel_path, probe.uuid
+                        )));
+                    }
+                    crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel } => {
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "Photos verifier pixel-equivalence: mismatch for {} (uuid={}): max_delta={max_delta} channel={channel:?}",
+                            target.rel_path, probe.uuid
+                        )));
+                    }
+                }
+            } else {
+                tracing::error!(
+                    target: "photos_import",
+                    rel_path = %target.rel_path,
+                    candidate_blake3 = %candidate.blake3,
+                    library_blake3 = %library_blake3,
+                    photos_uuid = %probe.uuid,
+                    candidate_path = %candidate.path.display(),
+                    library_path = %probe.path.display(),
+                    "Photos imported bytes diverged from tier-2 source"
+                );
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Photos verifier BLAKE3 mismatch for {} (uuid={}): source={} library={library_blake3}. \
+                     Import aborted because Photos library bytes do not match the source file and pixel equivalence check is not supported.",
+                    target.rel_path, probe.uuid, candidate.blake3
+                )));
+            }
         }
         let quarantined = is_quarantined(&candidate.path)?;
         imported_assets.push(LibraryAssetRecord {
@@ -2946,6 +2985,7 @@ pub fn library_handle_from_media_output_probes(
             sync_status: photos_sync_status(probe).to_string(),
             quarantined,
             photos_uuid: Some(probe.uuid.clone()),
+            library_blake3: final_library_blake3,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -3023,6 +3063,7 @@ fn library_handle_from_batch_probes(
             sync_status: photos_sync_status(&probe).to_string(),
             quarantined,
             photos_uuid: Some(target.osxphotos_uuid.clone()),
+            library_blake3: None,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -3124,6 +3165,7 @@ fn library_handle_from_marker_import_proof_with(
             sync_status: "photos_local".to_string(),
             quarantined: is_quarantined(&output_path)?,
             photos_uuid: None,
+            library_blake3: None,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -5506,6 +5548,7 @@ mod tests {
             sync_status: "uploaded".to_string(),
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
+            library_blake3: None,
         };
         let err = safe_delete_modern_lossy_static_source(&missing, &proof).unwrap_err();
         assert!(
@@ -5523,6 +5566,7 @@ mod tests {
             sync_status: "uploaded".to_string(),
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
+            library_blake3: None,
         };
         let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
         assert!(err.to_string().contains("empty"), "unexpected: {err}");
@@ -5538,6 +5582,7 @@ mod tests {
             sync_status: "uploaded".to_string(),
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
+            library_blake3: None,
         };
         let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
         assert!(
@@ -5559,6 +5604,7 @@ mod tests {
             sync_status: "uploaded".to_string(),
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
+            library_blake3: None,
         };
         safe_delete_modern_lossy_static_source(&src_path, &proof).unwrap();
         assert!(!src_path.exists());

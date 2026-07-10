@@ -47,10 +47,8 @@ pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<Di
     match fmt {
         FormatKind::Jxl => Some(DiffTolerance::JxlOrientation),
         FormatKind::Avif => Some(DiffTolerance::LsbAvif),
-        FormatKind::Heic
-        | FormatKind::Heif
-        | FormatKind::WebP
-        | FormatKind::Jpeg
+        FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => Some(DiffTolerance::LsbAvif),
+        FormatKind::Jpeg
         | FormatKind::Png
         | FormatKind::Gif
         | FormatKind::Bmp
