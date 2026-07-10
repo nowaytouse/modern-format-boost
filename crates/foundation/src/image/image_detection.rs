@@ -435,6 +435,39 @@ pub fn detect_animation(
             };
             return Ok((is_animated, Some(frame_count), fps));
         }
+        DetectedFormat::JXL => {
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            let data = std::fs::read(path)?;
+            match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
+                Ok(image) => {
+                    let metadata = &image.image_header().metadata;
+                    let is_animated = metadata.animation.is_some();
+                    let frame_count = if is_animated {
+                        // jxl-oxide exposes num_loaded_frames after init;
+                        // header alone cannot give total frame count without
+                        // fully decoding — return None to avoid fabrication.
+                        None
+                    } else {
+                        Some(1u32)
+                    };
+                    return Ok((is_animated, frame_count, None));
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "jxl_oxide_probe",
+                        path = %path.display(),
+                        error = %err,
+                        "jxl-oxide failed to parse JXL for animation detection; treating as static"
+                    );
+                    // JXL that cannot be parsed is not animated.
+                    return Ok((false, None, None));
+                }
+            }
+        }
         _ => {} // Fall through for ISOBMFF and unknown formats
     }
 
