@@ -2607,6 +2607,37 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
             }
         }
     }
+    match std::fs::read(path) {
+        Ok(data) => {
+            match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
+                Ok(image) => {
+                    let width = image.width();
+                    let height = image.height();
+                    let has_alpha = image.image_header().metadata.ec_info.iter().any(|info| {
+                        matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
+                    });
+                    let bit_depth = Some(image.image_header().metadata.bit_depth.bits_per_sample() as u8);
+                    return Ok((width, height, has_alpha, bit_depth));
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "jxl_oxide_probe",
+                        path = %path.display(),
+                        error = %err,
+                        "jxl-oxide failed to parse codestream; falling back to ffprobe"
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "jxl_oxide_probe",
+                path = %path.display(),
+                error = %err,
+                "failed to read file for jxl-oxide; falling back to ffprobe"
+            );
+        }
+    }
     resolve_jxl_canvas_from_ffprobe(path).inspect_err(|_err| {
         crate::log_detail!(crate::infra::static_logs::messages::MSG_ANALYZER_JXLLINFO_SUGGESTION);
     })
