@@ -1270,6 +1270,7 @@ pub mod jxl {
 pub mod tiff_family {
     use crate::unified_error::{ImgQualityError, Result};
     use serde_json::Value;
+    use std::io::{Read, Seek, SeekFrom};
     use std::path::Path;
     use std::process::Command;
 
@@ -1278,13 +1279,12 @@ pub mod tiff_family {
         if let Some(n) = val.as_u64() {
             return Ok(n);
         }
-        if let Some(s) = val.as_str() {
-            if let Some(num_str) = s.split_whitespace().next() {
+        if let Some(s) = val.as_str()
+            && let Some(num_str) = s.split_whitespace().next() {
                 return num_str.parse().map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}")));
             }
-        }
-        if let Some(arr) = val.as_array() {
-            if let Some(v) = arr.first() {
+        if let Some(arr) = val.as_array()
+            && let Some(v) = arr.first() {
                 if let Some(num) = v.as_u64() {
                     return Ok(num);
                 }
@@ -1292,7 +1292,6 @@ pub mod tiff_family {
                     return s.parse().map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}")));
                 }
             }
-        }
         Err(ImgQualityError::AnalysisError("Value is not a valid u64 or u64 string".into()))
     }
 
@@ -1330,7 +1329,7 @@ pub mod tiff_family {
 
         let obj = parsed
             .as_array()
-            .and_then(|arr| arr.get(0))
+            .and_then(|arr| arr.first())
             .and_then(|val| val.as_object())
             .ok_or_else(|| ImgQualityError::AnalysisError("Invalid exiftool JSON structure".into()))?;
 
@@ -1347,17 +1346,17 @@ pub mod tiff_family {
         let mut best_ifd = None;
         let mut max_pixels = 0u64;
 
-        for (_prefix, tags) in &ifds {
-            let photo_interp = tags.get("PhotometricInterpretation").map(|v| parse_first_u64(*v)).transpose()?;
+        for tags in ifds.values() {
+            let photo_interp = tags.get("PhotometricInterpretation").map(|v| parse_first_u64(v)).transpose()?;
             let is_raw = photo_interp == Some(32803) || photo_interp == Some(34892);
 
-            let subfile_type = tags.get("SubfileType").map(|v| parse_first_u64(*v)).transpose()?;
+            let subfile_type = tags.get("SubfileType").map(|v| parse_first_u64(v)).transpose()?;
             let is_full_res = subfile_type == Some(0) || subfile_type.is_none();
 
-            if is_raw || is_full_res {
-                if let (Some(w), Some(h)) = (
-                    tags.get("ImageWidth").map(|v| parse_first_u64(*v)).transpose()?,
-                    tags.get("ImageHeight").map(|v| parse_first_u64(*v)).transpose()?,
+            if (is_raw || is_full_res)
+                && let (Some(w), Some(h)) = (
+                    tags.get("ImageWidth").map(|v| parse_first_u64(v)).transpose()?,
+                    tags.get("ImageHeight").map(|v| parse_first_u64(v)).transpose()?,
                 ) {
                     let pixels = w.saturating_mul(h);
                     if pixels >= max_pixels && w > 0 && h > 0 {
@@ -1365,15 +1364,14 @@ pub mod tiff_family {
                         best_ifd = Some(tags);
                     }
                 }
-            }
         }
 
         // Fallback: pick largest image if none match raw/full-res precisely
         if best_ifd.is_none() {
-            for (_prefix, tags) in &ifds {
+            for tags in ifds.values() {
                 if let (Some(w), Some(h)) = (
-                    tags.get("ImageWidth").map(|v| parse_first_u64(*v)).transpose()?,
-                    tags.get("ImageHeight").map(|v| parse_first_u64(*v)).transpose()?,
+                    tags.get("ImageWidth").map(|v| parse_first_u64(v)).transpose()?,
+                    tags.get("ImageHeight").map(|v| parse_first_u64(v)).transpose()?,
                 ) {
                     let pixels = w.saturating_mul(h);
                     if pixels > max_pixels && w > 0 && h > 0 {
@@ -1388,7 +1386,7 @@ pub mod tiff_family {
             ImgQualityError::AnalysisError("Could not identify main raw IFD in DNG".into())
         })?;
 
-        let compression = main_ifd.get("Compression").map(|v| parse_first_u64(*v)).transpose()?.ok_or_else(|| {
+        let compression = main_ifd.get("Compression").map(|v| parse_first_u64(v)).transpose()?.ok_or_else(|| {
             ImgQualityError::AnalysisError("TIFF main IFD missing Compression tag".into())
         })?;
 
@@ -1409,24 +1407,26 @@ pub mod tiff_family {
             6 | 34892 | 50001 | 34676 | 34677 => Ok(false),
             52546 => {
                 // JPEG XL
-                let offset_val = main_ifd.get("StripOffsets").or(main_ifd.get("TileOffsets"));
+                let offset_val = main_ifd.get("StripOffsets").or_else(|| main_ifd.get("TileOffsets"));
                 let offset = offset_val
-                    .map(|v| parse_first_u64(*v))
+                    .map(|v| parse_first_u64(v))
                     .transpose()?
                     .ok_or_else(|| ImgQualityError::AnalysisError("DNG with JPEG XL missing StripOffsets/TileOffsets".into()))?;
 
-                let length_val = main_ifd.get("StripByteCounts").or(main_ifd.get("TileByteCounts"));
+                let length_val = main_ifd.get("StripByteCounts").or_else(|| main_ifd.get("TileByteCounts"));
                 let length = length_val
-                    .map(|v| parse_first_u64(*v))
+                    .map(|v| parse_first_u64(v))
                     .transpose()?
                     .ok_or_else(|| ImgQualityError::AnalysisError("DNG with JPEG XL missing StripByteCounts/TileByteCounts".into()))?;
 
                 let mut f = std::fs::File::open(path)?;
-                use std::io::{Read, Seek, SeekFrom};
                 f.seek(SeekFrom::Start(offset))?;
 
                 let safe_length = std::cmp::min(length, 10 * 1024 * 1024); // max 10MB to read header
-                let mut buffer = vec![0u8; safe_length as usize];
+                let buffer_size = usize::try_from(safe_length).map_err(|e| {
+                    ImgQualityError::AnalysisError(format!("JXL buffer size overflow: {e}"))
+                })?;
+                let mut buffer = vec![0u8; buffer_size];
                 let bytes_read = f.read(&mut buffer)?;
                 buffer.truncate(bytes_read);
 

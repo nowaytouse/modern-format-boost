@@ -710,7 +710,7 @@ pub fn animatable_format_confirmed_static_only(
         DetectedFormat::JXL => {
             // Prioritize authoritative native library (jxl-oxide) for animation detection
             let data = std::fs::read(path).map_err(|e| {
-                ImgQualityError::AnalysisError(format!("Failed to read JXL file for oxide probe: {}", e))
+                ImgQualityError::AnalysisError(format!("Failed to read JXL file for oxide probe: {e}"))
             })?;
 
             match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
