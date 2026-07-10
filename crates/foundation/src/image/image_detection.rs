@@ -435,6 +435,44 @@ pub fn detect_animation(
             };
             return Ok((is_animated, Some(frame_count), fps));
         }
+        DetectedFormat::TIFF => {
+            // TIFF does not support animation (no multi-frame sequence standard).
+            // Immediately declare static without touching ffprobe.
+            return Ok((false, None, None));
+        }
+        DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => {
+            // libheif-rs is the authoritative HEIC/AVIF/HEIF library — use it
+            // directly before falling back to ffprobe.
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            let data = std::fs::read(path)?;
+            match libheif_rs::HeifContext::read_from_bytes(&data) {
+                Ok(ctx) => {
+                    let ids = ctx.image_ids();
+                    let count = ids.len();
+                    if count > 1 {
+                        // Multiple top-level image items → sequence/burst/live.
+                        let fc = crate::numeric_cast::usize_to_u32_strict(count, "heif_item_count");
+                        return Ok((true, fc, None));
+                    }
+                    // count == 0 or 1: single item → static image.
+                    // Do NOT fabricate frame_count=1 (M248).
+                    return Ok((false, None, None));
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "libheif_probe",
+                        path = %path.display(),
+                        error = %err,
+                        "libheif-rs failed to read HEIF/AVIF for animation detection; falling through to ffprobe"
+                    );
+                    // Fall through to Stage 2 (ffprobe) for ambiguous/malformed containers.
+                }
+            }
+        }
         DetectedFormat::JXL => {
             crate::common_utils::validate_file_size_limit(
                 path,
@@ -557,15 +595,12 @@ pub fn detect_animation(
             }
         }
 
-        // If metadata probe fails to find frame count (common for AVIF/JXL sequences),
+        // If metadata probe fails to find frame count (common for AVIF sequences),
         // we explicitly count the packets. This demuxes the file and is 100% accurate.
-        if matches!(
-            format,
-            DetectedFormat::AVIF
-                | DetectedFormat::JXL
-                | DetectedFormat::HEIC
-                | DetectedFormat::HEIF
-        ) && let Some(explicit_count) = crate::ffprobe::get_frame_count(path)
+        // Note: JXL is handled entirely in Stage 1 via jxl-oxide+jxlinfo and never
+        //       reaches this point.
+        if matches!(format, DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF)
+            && let Some(explicit_count) = crate::ffprobe::get_frame_count(path)
         {
             if explicit_count > 1 {
                 let final_count =
@@ -573,7 +608,7 @@ pub fn detect_animation(
                 return Ok((true, final_count, fps));
             }
             if explicit_count == 1
-                && matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL)
+                && matches!(format, DetectedFormat::AVIF)
                 && !crate::ffprobe::isobmff_cover_stream_ambiguous(path)
             {
                 let sequence = is_isobmff_animated_sequence(path).map_err(|e| {
