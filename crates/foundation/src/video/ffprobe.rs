@@ -1408,6 +1408,9 @@ pub fn get_duration(path: &Path) -> Option<f64> {
     }
 
     let trimmed = output.stdout.trim();
+    if trimmed == "N/A" || trimmed.is_empty() {
+        return None;
+    }
     match trimmed.parse::<f64>() {
         Ok(duration) => Some(duration),
         Err(err) => {
@@ -1461,7 +1464,7 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     let mut parsed: Vec<u64> = Vec::new();
     for line in output.stdout.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || trimmed == "N/A" {
             continue;
         }
         match trimmed.parse::<u64>() {
