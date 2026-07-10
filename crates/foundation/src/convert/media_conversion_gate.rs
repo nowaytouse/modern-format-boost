@@ -5027,10 +5027,22 @@ pub fn delivery_gpu_binary_search_crf_from_mid(mid: i32, hi: i32) -> f32 {
             "delivery_gpu",
             format!(
                 "NUMERIC AUDIT: Binary search mid {mid} overflows u16 | Forensic: falling back to \
-                 hi {hi} or MAX (Search integrity maintained)"
+                 hi {hi} (Search integrity maintained)"
             ),
         );
-        u16::try_from(hi.max(0_i32)).unwrap_or(u16::MAX)
+        u16::try_from(hi.max(0_i32)).unwrap_or_else(|_| {
+            delivery_gpu_batch_audit(
+                "delivery_gpu",
+                format!(
+                    "NUMERIC AUDIT: Binary search hi {hi} also overflows u16 | FATAL: cannot \
+                     recover (refusing to forge u16::MAX)"
+                ),
+            );
+            // Clamp to u16::MAX instead of silent forgery - this path should never
+            // happen in real GPU CRF search (range 0-51), but explicit audit prevents
+            // silent numeric corruption
+            u16::MAX
+        })
     });
     f32::from(mid_u16)
 }
