@@ -39,6 +39,18 @@ BREW_MEDIA_FORMULAE = (
 
 ALL_PROJECTS = {"crates/img": "img", "crates/vid": "vid", "crates/dev": "verify"}
 
+SYNC_BINARIES = [
+    "img",
+    "vid",
+    "verify",
+    "cache_cleaner",
+    "database_manager",
+    "collect_optimized",
+    "merge_xmp",
+    "icloud_import",
+    "drag_and_drop_processor",
+]
+
 DEFAULT_PROJECTS = ["crates/img", "crates/vid", "crates/dev"]
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -172,7 +184,7 @@ def clean_old_binaries():
     print(f"{YELLOW}Cleaning old binaries...{NC}")
     cleaned = 0
 
-    for binary_name in ALL_PROJECTS.values():
+    for binary_name in SYNC_BINARIES:
         for p in PROJECT_ROOT.rglob(binary_name):
             if p.is_file() and "target" not in p.parts:
                 print(f"   {RED}Removing: {DIM}{p}{NC}")
@@ -400,17 +412,7 @@ def sync_app_bundle():
     if not app_res_dir.exists():
         return
     print(f"\n{DIM}Syncing binaries to App Bundle...{NC}")
-    binaries = [
-        "img",
-        "vid",
-        "verify",
-        "cache_cleaner",
-        "database_manager",
-        "collect_optimized",
-        "merge_xmp",
-        "icloud_import",
-        "drag_and_drop_processor",
-    ]
+    binaries = SYNC_BINARIES
     target_release = PROJECT_ROOT / "target" / "release"
     for bin_name in binaries:
         src = target_release / bin_name
@@ -617,14 +619,10 @@ Examples:
 
     if args.verbose or rebuilt > 0:
         print(f"\n{DIM}Binary info:{NC}")
-        for proj_dir in projects_to_build:
-            binary_name = ALL_PROJECTS.get(proj_dir)
-            if not binary_name:
-                continue
-
-            p = get_binary_path(proj_dir, binary_name)
-            if Path(p).exists():
-                stat = Path(p).stat()
+        for binary_name in SYNC_BINARIES:
+            p = PROJECT_ROOT / "target" / "release" / binary_name
+            if p.exists():
+                stat = p.stat()
                 sz_mb = stat.st_size / (1024 * 1024)
                 mtime_str = time.strftime(
                     "%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)
