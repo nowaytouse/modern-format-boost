@@ -135,7 +135,7 @@ pub fn is_probably_animated_isobmff(path: &Path) -> Result<bool> {
         ));
     }
     let brand_bytes = &data[8..box_size];
-    for chunk in brand_bytes.chunks_exact(4) {
+    for chunk in brand_bytes.as_chunks::<4>().0 {
         if chunk == b"avis" || chunk == b"msf1" {
             return Ok(true);
         }

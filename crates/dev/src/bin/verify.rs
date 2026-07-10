@@ -239,6 +239,8 @@ struct IntegrityStats {
     restore_manifest_errors: usize,
     verified_deleted_sources: usize,
     count_status_label: Option<String>,
+    tier2_recorded: usize,
+    tier2_verified_deleted: usize,
 }
 
 fn same_path(p1: &Path, p2: &Path) -> bool {
@@ -615,6 +617,11 @@ fn run_fast_img_delivery_check(
     let mut skipped_sources = HashMap::new();
     let mut failed_sources = HashMap::new();
 
+    let mut tier2_recorded = 0;
+    let mut tier2_verified_deleted = 0;
+    let mut tier2_unexpected_remaining = Vec::new();
+    let mut tier2_missing_proof = Vec::new();
+
     if let Some(ref m) = marker_opt {
         recorded_source_jpegs = m
             .get("src_jpeg_count")
@@ -630,6 +637,26 @@ fn run_fast_img_delivery_check(
             for (k, v) in failed {
                 failed_source_rels.insert(k.clone());
                 failed_sources.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(arr) = m.get("tier2_imported_assets").and_then(|v| v.as_array()) {
+            tier2_recorded = arr.len();
+            for item in arr {
+                let rel = item
+                    .get("rel_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let photos_uuid = item.get("photos_uuid").and_then(|v| v.as_str());
+                let source_path = source_dir.join(rel);
+                let exists = source_path.exists();
+
+                if exists {
+                    tier2_unexpected_remaining.push(rel.to_string());
+                } else if photos_uuid.is_some() && !photos_uuid.unwrap().is_empty() {
+                    tier2_verified_deleted += 1;
+                } else {
+                    tier2_missing_proof.push(rel.to_string());
+                }
             }
         }
     }
@@ -707,6 +734,8 @@ fn run_fast_img_delivery_check(
     stats.matched = optimized_jxl.len();
     stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len();
     stats.optimized_total_size = optimized_size;
+    stats.tier2_recorded = tier2_recorded;
+    stats.tier2_verified_deleted = tier2_verified_deleted;
 
     let mut integrity_failures = 0;
     if !marker_ok {
@@ -729,6 +758,12 @@ fn run_fast_img_delivery_check(
     }
     if !failed_sources_missing.is_empty() {
         integrity_failures += failed_sources_missing.len();
+    }
+    if !tier2_missing_proof.is_empty() {
+        integrity_failures += tier2_missing_proof.len();
+    }
+    if !tier2_unexpected_remaining.is_empty() {
+        integrity_failures += tier2_unexpected_remaining.len();
     }
     integrity_failures += source_probe_errors.len() + optimized_probe_errors.len();
 
@@ -796,9 +831,20 @@ fn run_fast_img_delivery_check(
         optimized_probe_errors.len()
     ));
     report.push_str(&format!(
-        "Non-JXL optimized files:     {}\n\n",
+        "Non-JXL optimized files:     {}\n",
         non_jxl_outputs.len()
     ));
+    if tier2_recorded > 0 {
+        report.push_str(&format!(
+            "Recorded tier-2 lossy files: {}\n",
+            tier2_recorded
+        ));
+        report.push_str(&format!(
+            "Verified tier-2 deleted:     {}\n",
+            tier2_verified_deleted
+        ));
+    }
+    report.push('\n');
 
     if integrity_failures > 0 {
         stats.has_warnings = true;
@@ -886,6 +932,24 @@ fn run_fast_img_delivery_check(
                 ));
             }
         }
+        if !tier2_missing_proof.is_empty() {
+            report.push_str(&format!(
+                "  - {} tier-2 modern lossy files deleted without Photos/iCloud proof:\n",
+                tier2_missing_proof.len()
+            ));
+            for rel in &tier2_missing_proof {
+                report.push_str(&format!("      - {}\n", rel));
+            }
+        }
+        if !tier2_unexpected_remaining.is_empty() {
+            report.push_str(&format!(
+                "  - {} tier-2 modern lossy files remained under source (not deleted):\n",
+                tier2_unexpected_remaining.len()
+            ));
+            for rel in &tier2_unexpected_remaining {
+                report.push_str(&format!("      - {}\n", rel));
+            }
+        }
     } else {
         report.push_str(&format!(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
@@ -893,6 +957,11 @@ fn run_fast_img_delivery_check(
         ));
         report.push_str("  - All non-skipped/non-failed source JPEGs were successfully deleted\n");
         report.push_str("  - Optimized directory contains only JXL delivery files\n");
+        if tier2_recorded > 0 {
+            report.push_str(
+                "  - All tier-2 modern lossy files were successfully deleted after verification\n",
+            );
+        }
     }
 
     Ok(stats)
@@ -2096,6 +2165,16 @@ fn main() -> Result<()> {
                 format!("{}:", stats.optimized_files_label),
                 stats.optimized_files
             );
+            if stats.tier2_recorded > 0 {
+                println!(
+                    "   {:<34}{}",
+                    "Recorded tier-2 modern lossy:", stats.tier2_recorded
+                );
+                println!(
+                    "   {:<34}{}",
+                    "Verified tier-2 deleted:", stats.tier2_verified_deleted
+                );
+            }
             if stats.skipped_sources > 0 {
                 println!(
                     "   {:<34}{}",
@@ -2824,5 +2903,122 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         assert!(stats.integrity_failures >= 2);
         assert!(report.contains("Source format probe errors"));
         assert!(report.contains("Optimized format probe errors"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_delivery_check_accepts_tier2_modern_lossy_assets() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let optimized = tempdir.path().join("Album_optimized");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&optimized).unwrap();
+
+        let marker_path = optimized.join("fastmode_img_marker.json");
+        let marker_data = serde_json::json!({
+            "working_copy": optimized.to_string_lossy().to_string(),
+            "src_jpeg_count": 0,
+            "skipped_sources": {},
+            "failed_sources": {},
+            "tier2_imported_assets": [
+                {
+                    "rel_path": "photo.webp",
+                    "blake3": "abc",
+                    "sync_status": "success",
+                    "quarantined": false,
+                    "photos_uuid": "some-uuid"
+                }
+            ]
+        });
+        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+
+        let mut report = String::new();
+        let stats =
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+
+        assert_eq!(stats.tier2_recorded, 1);
+        assert_eq!(stats.tier2_verified_deleted, 1);
+        assert_eq!(stats.integrity_failures, 0);
+        assert!(!stats.has_warnings);
+        assert!(report.contains("Recorded tier-2 lossy files: 1"));
+        assert!(report.contains("Verified tier-2 deleted:     1"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_delivery_check_rejects_tier2_missing_proof() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let optimized = tempdir.path().join("Album_optimized");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&optimized).unwrap();
+
+        let marker_path = optimized.join("fastmode_img_marker.json");
+        let marker_data = serde_json::json!({
+            "working_copy": optimized.to_string_lossy().to_string(),
+            "src_jpeg_count": 0,
+            "skipped_sources": {},
+            "failed_sources": {},
+            "tier2_imported_assets": [
+                {
+                    "rel_path": "photo.webp",
+                    "blake3": "abc",
+                    "sync_status": "success",
+                    "quarantined": false,
+                    "photos_uuid": null
+                }
+            ]
+        });
+        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+
+        let mut report = String::new();
+        let stats =
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+
+        assert_eq!(stats.tier2_recorded, 1);
+        assert_eq!(stats.tier2_verified_deleted, 0);
+        assert!(stats.integrity_failures >= 1);
+        assert!(stats.has_warnings);
+        assert!(report.contains("deleted without Photos/iCloud proof"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_delivery_check_rejects_tier2_unexpected_remaining() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let optimized = tempdir.path().join("Album_optimized");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&optimized).unwrap();
+
+        fs::write(source.join("photo.webp"), b"fake content").unwrap();
+
+        let marker_path = optimized.join("fastmode_img_marker.json");
+        let marker_data = serde_json::json!({
+            "working_copy": optimized.to_string_lossy().to_string(),
+            "src_jpeg_count": 0,
+            "skipped_sources": {},
+            "failed_sources": {},
+            "tier2_imported_assets": [
+                {
+                    "rel_path": "photo.webp",
+                    "blake3": "abc",
+                    "sync_status": "success",
+                    "quarantined": false,
+                    "photos_uuid": "some-uuid"
+                }
+            ]
+        });
+        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+
+        let mut report = String::new();
+        let stats =
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+
+        assert_eq!(stats.tier2_recorded, 1);
+        assert_eq!(stats.tier2_verified_deleted, 0);
+        assert!(stats.integrity_failures >= 1);
+        assert!(stats.has_warnings);
+        assert!(report.contains("remained under source (not deleted)"));
     }
 }

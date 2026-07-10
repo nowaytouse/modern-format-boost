@@ -302,6 +302,26 @@ def run_fast_img_delivery_check(
     failed_sources = marker.get("failed_sources", {}) if marker else {}
     skipped_source_rels = set(skipped_sources)
     failed_source_rels = set(failed_sources)
+
+    tier2_recorded = 0
+    tier2_verified_deleted = 0
+    tier2_unexpected_remaining = []
+    tier2_missing_proof = []
+    if marker:
+        tier2_assets = marker.get("tier2_imported_assets", [])
+        tier2_recorded = len(tier2_assets)
+        for item in tier2_assets:
+            rel = item.get("rel_path", "")
+            photos_uuid = item.get("photos_uuid")
+            source_path = source_dir / rel
+            exists = source_path.is_file()
+            
+            if exists:
+                tier2_unexpected_remaining.append(rel)
+            elif photos_uuid:
+                tier2_verified_deleted += 1
+            else:
+                tier2_missing_proof.append(rel)
     skipped_sources_present = []
     failed_sources_present = []
     unexpected_source_true_jpegs = []
@@ -391,6 +411,22 @@ def run_fast_img_delivery_check(
             report_f.write(f"  ! {path.relative_to(optimized_dir)}: {exc}\n")
         report_f.write("\n")
 
+    if tier2_unexpected_remaining:
+        report_f.write(
+            f"--- Tier-2 modern lossy files remained under source ({len(tier2_unexpected_remaining)}) ---\n"
+        )
+        for rel in tier2_unexpected_remaining:
+            report_f.write(f"  ✗ {rel}\n")
+        report_f.write("\n")
+
+    if tier2_missing_proof:
+        report_f.write(
+            f"--- Tier-2 modern lossy files deleted without Photos/iCloud proof ({len(tier2_missing_proof)}) ---\n"
+        )
+        for rel in tier2_missing_proof:
+            report_f.write(f"  ! {rel}\n")
+        report_f.write("\n")
+
     if not optimized_jxl:
         if expected_optimized_jxl == 0 and (skipped_sources or failed_sources):
             report_f.write(
@@ -410,6 +446,8 @@ def run_fast_img_delivery_check(
         + len(source_probe_errors)
         + len(non_jxl_outputs)
         + len(optimized_probe_errors)
+        + len(tier2_unexpected_remaining)
+        + len(tier2_missing_proof)
     )
     if not optimized_jxl and expected_optimized_jxl > 0:
         integrity_failures += 1
@@ -432,6 +470,9 @@ def run_fast_img_delivery_check(
     report_f.write(f"Source probe errors:         {len(source_probe_errors)}\n")
     report_f.write(f"Optimized probe errors:      {len(optimized_probe_errors)}\n")
     report_f.write(f"Non-JXL optimized files:     {len(non_jxl_outputs)}\n")
+    if tier2_recorded > 0:
+        report_f.write(f"Recorded tier-2 lossy files: {tier2_recorded}\n")
+        report_f.write(f"Verified tier-2 deleted:     {tier2_verified_deleted}\n")
     report_f.write(
         "Count status:    "
         f"{count_status_label if count_status_label else 'FAST_IMG_DELIVERY_MISMATCH'}\n\n"
@@ -460,6 +501,8 @@ def run_fast_img_delivery_check(
         "count_matches_with_handoff": count_matches,
         "count_fully_explained": count_matches,
         "count_status_label": count_status_label,
+        "tier2_recorded": tier2_recorded,
+        "tier2_verified_deleted": tier2_verified_deleted,
         "explained_gaps": len(skipped_sources) + len(failed_sources),
         "expected_count_delta": 0,
         "matched": len(optimized_jxl),
@@ -1857,6 +1900,13 @@ if __name__ == "__main__":
             )
             print(f"   {source_label + ':':<34}{integrity_stats['source_files']}")
             print(f"   {optimized_label + ':':<34}{integrity_stats['optimized_files']}")
+            if integrity_stats.get("tier2_recorded", 0) > 0:
+                print(
+                    f"   {'Recorded tier-2 modern lossy:':<34}{integrity_stats['tier2_recorded']}"
+                )
+                print(
+                    f"   {'Verified tier-2 deleted:':<34}{integrity_stats['tier2_verified_deleted']}"
+                )
             if "skipped_sources" in integrity_stats:
                 print(
                     f"   {'Recorded skipped JPEGs:':<34}{integrity_stats['skipped_sources']}"

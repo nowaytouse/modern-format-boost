@@ -25,12 +25,14 @@ enum PngValidationOutcome {
 
 #[must_use]
 pub fn png_heuristic_enabled() -> bool {
-    std::env::var(ENV_ENABLE_PNG_HEURISTIC).is_ok_and(|value| {
-        matches!(
-            value.trim(),
-            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
-        )
-    })
+    std::env::var(ENV_ENABLE_PNG_HEURISTIC)
+        .map(|value| {
+            matches!(
+                value.trim(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Hierarchical PNG validation: pngcheck → libpng/image decode → magic bytes.
@@ -144,6 +146,34 @@ mod tests {
         unsafe {
             std::env::remove_var(ENV_ENABLE_PNG_HEURISTIC);
         }
+    }
+
+    #[test]
+    #[serial]
+    fn test_png_heuristic_enabled_all_values() {
+        for (val, expected) in [
+            ("1", true),
+            ("true", true),
+            ("TRUE", true),
+            ("yes", true),
+            ("YES", true),
+            ("on", true),
+            ("ON", true),
+            ("0", false),
+            ("false", false),
+            ("no", false),
+            ("off", false),
+            ("", false),
+        ] {
+            unsafe {
+                std::env::set_var(ENV_ENABLE_PNG_HEURISTIC, val);
+            }
+            assert_eq!(png_heuristic_enabled(), expected, "val={val}");
+        }
+        unsafe {
+            std::env::remove_var(ENV_ENABLE_PNG_HEURISTIC);
+        }
+        assert!(!png_heuristic_enabled());
     }
 
     #[test]

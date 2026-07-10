@@ -5793,7 +5793,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
 
     if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
         let mut quantized = std::collections::HashSet::new();
-        for chunk in thumb_output.stdout.chunks_exact(3) {
+        for chunk in thumb_output.stdout.as_chunks::<3>().0 {
             let r = chunk
                 .first()
                 .copied()

@@ -500,7 +500,7 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Resul
 
     let mut has_heic_payload_brand = false;
     let mut has_generic_heif_container = false;
-    for brand in compat_data.chunks_exact(4) {
+    for brand in compat_data.as_chunks::<4>().0 {
         if is_avif_brand(brand) {
             return Ok(FormatKind::Avif);
         }
@@ -535,14 +535,14 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Resul
     }
 }
 
-fn is_avif_brand(brand: &[u8]) -> bool {
+const fn is_avif_brand(brand: &[u8]) -> bool {
     matches!(
         brand,
         b"avif" | b"avis" | b"avio" | b"MA1B" | b"MA1A" | b"av01"
     )
 }
 
-fn is_heic_brand(brand: &[u8]) -> bool {
+const fn is_heic_brand(brand: &[u8]) -> bool {
     matches!(
         brand,
         b"heic"
@@ -562,21 +562,21 @@ fn is_heic_brand(brand: &[u8]) -> bool {
     )
 }
 
-fn is_heif_brand(brand: &[u8]) -> bool {
+const fn is_heif_brand(brand: &[u8]) -> bool {
     matches!(
         brand,
         b"heif" | b"miaf" | b"miPr" | b"mif2" | b"hefb" | b"hefc"
     )
 }
 
-fn is_jp2_brand(brand: &[u8]) -> bool {
+const fn is_jp2_brand(brand: &[u8]) -> bool {
     matches!(
         brand,
         b"mjp2" | b"mjpb" | b"mjd2" | b"mpx3" | b"mpx4" | b"mpxh"
     )
 }
 
-fn is_mp4_brand(brand: &[u8]) -> bool {
+const fn is_mp4_brand(brand: &[u8]) -> bool {
     matches!(
         brand,
         b"mp41"

@@ -744,7 +744,12 @@ pub fn reverify_modern_lossy_static_photos_custody(
     let probe_by_uuid = index_photos_probes_by_uuid(&uuids, probes)?;
 
     for asset in &library_handle.imported_assets {
-        let uuid = asset.photos_uuid.as_deref().unwrap_or_default();
+        let Some(uuid) = asset.photos_uuid.as_deref() else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 delete gate missing Photos UUID for {}",
+                asset.rel_path
+            )));
+        };
         let Some(probe) = probe_by_uuid.get(uuid) else {
             return Err(ImgQualityError::AnalysisError(format!(
                 "tier-2 delete gate missing Photos probe for {} (uuid={uuid})",

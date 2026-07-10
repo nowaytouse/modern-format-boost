@@ -1867,7 +1867,8 @@ let next_index = &next_index;
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 foundation::progress_mode::image_processed_failure();
                                 // Accumulate for end-of-session enumeration
-                                if let Ok(mut v) = failed_paths.lock() {
+                                {
+                                    let mut v = foundation::media_conversion_gate::mutex_guard_or_recover("failed_paths_acc", failed_paths.lock());
                                     v.push((path.clone(), err_str.clone()));
                                 }
                             }
@@ -2050,7 +2051,8 @@ let next_index = &next_index;
     if failed_count > 0 {
         // Enumerate every failed file with its reason so the user doesn't have
         // to grep log shards.
-        if let Ok(paths) = failed_paths.lock() {
+        {
+            let paths = foundation::media_conversion_gate::mutex_guard_or_recover("failed_paths_enum", failed_paths.lock());
             for (p, reason) in paths.iter() {
                 foundation::log_auto_error!("Failed file", "{}: {}", p.display(), reason);
             }
@@ -7400,7 +7402,7 @@ mod fast_img_hardening_tests {
         let message = fast_img_delete_notice_message(2, 4, std::path::Path::new("/photos"));
 
         assert!(message.contains("tier-2 lossy modern static"));
-        assert!(message.contains("4"));
+        assert!(message.contains('4'));
     }
 
     #[test]

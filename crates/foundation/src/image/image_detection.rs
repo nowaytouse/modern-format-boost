@@ -861,7 +861,7 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
     let mut compat_data = vec![0u8; compat_size];
     std::io::Read::read_exact(&mut file, &mut compat_data)?;
 
-    for cb in compat_data.chunks_exact(4) {
+    for cb in compat_data.as_chunks::<4>().0 {
         for seq_brand in ISOBMFF_ANIMATED_BRANDS {
             if cb == *seq_brand {
                 return Ok(true);
