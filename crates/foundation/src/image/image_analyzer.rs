@@ -2427,18 +2427,26 @@ fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
             Ok(compression == CompressionType::Lossless)
         }
         // GIF uses palette quantization — inherently lossless for its own 256-color space.
-        // Returning true preserves the palette exactly in JXL/AVIF lossless modes.
-        // BMP, ICO, Pnm, Tga, Hdr, Farbfeld, OpenExr are all uncompressed/lossless pixel formats.
-        // DDS/Qoi can be either; treat conservatively as lossless to avoid lossy re-encoding.
+        // BMP, Pnm, Tga, Hdr, Farbfeld are all uncompressed/lossless pixel formats.
+        // QOI is lossless-only by design.
         ImageFormat::Gif
         | ImageFormat::Bmp
-        | ImageFormat::Ico
         | ImageFormat::Pnm
         | ImageFormat::Tga
         | ImageFormat::Hdr
         | ImageFormat::Farbfeld
-        | ImageFormat::OpenExr
         | ImageFormat::Qoi => Ok(true),
+        // ICO can embed quantized PNGs — route through dedicated detector
+        ImageFormat::Ico => {
+            let compression = detect_compression(&DetectedFormat::ICO, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
+        // OpenEXR supports both lossless (NONE/RLE/ZIP/PIZ) and lossy (PXR24/B44/DWAA/DWAB)
+        // Must parse the compression attribute — do not assume lossless.
+        ImageFormat::OpenExr => {
+            let compression = detect_compression(&DetectedFormat::EXR, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
         ImageFormat::Tiff => {
             let compression = detect_compression(&DetectedFormat::TIFF, path)?;
             Ok(compression == CompressionType::Lossless)

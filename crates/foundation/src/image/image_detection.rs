@@ -4206,8 +4206,10 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     let data = std::fs::read(path)?;
     // Magic (4) + version (4) = 8 bytes minimum before attributes
     if data.len() < 12 || !data.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
-        // Fallback to lossless for corrupted/invalid EXR files (safe default)
-        return Ok(CompressionType::Lossless);
+        return Err(ImgQualityError::AnalysisError(format!(
+            "EXR: invalid magic bytes or file too short in '{}'; cannot determine compression",
+            path.display()
+        )));
     }
 
     // Check version field for multi-part flag (bit 9)
@@ -4302,9 +4304,18 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                     ));
                 }
 
+                // EXR compression values:
+                //  0=NONE, 1=RLE, 2=ZIPS, 3=ZIP, 4=PIZ → lossless
+                //  5=PXR24, 6=B44, 7=B44A, 8=DWAA, 9=DWAB → lossy
                 // Any lossy part → entire file is lossy
-                if compression >= 5 {
+                if (5..=9).contains(&compression) {
                     return Ok(CompressionType::Lossy);
+                }
+                if compression > 9 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "EXR: unknown compression value {compression} in '{}'; cannot determine losslessness",
+                        path.display()
+                    )));
                 }
             }
 
@@ -4329,7 +4340,12 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         }
     }
 
-    let _ = found_any_compression; // silence found_any_compression if unused
+    if !found_any_compression {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "EXR: no 'compression' attribute found in '{}'; cannot determine losslessness",
+            path.display()
+        )));
+    }
     Ok(CompressionType::Lossless)
 }
 
