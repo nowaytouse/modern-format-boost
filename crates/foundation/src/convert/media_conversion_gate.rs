@@ -5030,10 +5030,7 @@ pub fn delivery_gpu_binary_search_crf_from_mid(mid: i32, hi: i32) -> f32 {
                  hi {hi} or MAX (Search integrity maintained)"
             ),
         );
-        match u16::try_from(hi.max(0_i32)) {
-            Ok(v2) => v2,
-            Err(_) => u16::MAX,
-        }
+        u16::try_from(hi.max(0_i32)).unwrap_or(u16::MAX)
     });
     f32::from(mid_u16)
 }

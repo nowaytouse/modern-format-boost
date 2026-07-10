@@ -46,8 +46,9 @@ const JXL_ORIENTATION_LOW_VARIANCE_EPSILON: f64 = 1.0e-6;
 pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
     match fmt {
         FormatKind::Jxl => Some(DiffTolerance::JxlOrientation),
-        FormatKind::Avif => Some(DiffTolerance::LsbAvif),
-        FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => Some(DiffTolerance::LsbAvif),
+        FormatKind::Avif | FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => {
+            Some(DiffTolerance::LsbAvif)
+        }
         FormatKind::Jpeg
         | FormatKind::Png
         | FormatKind::Gif

@@ -489,8 +489,8 @@ pub fn detect_animation(
                     // tps = tps_numerator / tps_denominator; fps = tps.
                     let oxide_fps: Option<f32> = if is_animated {
                         metadata.animation.as_ref().and_then(|anim| {
-                            let num = anim.tps_numerator as f64;
-                            let den = anim.tps_denominator as f64;
+                            let num = f64::from(anim.tps_numerator);
+                            let den = f64::from(anim.tps_denominator);
                             if den > 0.0 && num > 0.0 {
                                 let fps = num / den;
                                 if fps.is_finite() && fps > 0.0 {
@@ -516,6 +516,7 @@ pub fn detect_animation(
                     return Ok((true, frame_count, fps));
                 }
                 Err(err) => {
+                    use crate::ToolBuilder;
                     tracing::debug!(
                         target: "jxl_oxide_probe",
                         path = %path.display(),
@@ -523,9 +524,8 @@ pub fn detect_animation(
                         "jxl-oxide failed to parse JXL for animation detection; treating as static"
                     );
                     // jxl-oxide failed; fall back to jxlinfo for full check.
-                    use crate::ToolBuilder;
-                    if JxlinfoBuilder::new().check_available() {
-                        if let Some(is_anim) =
+                    if JxlinfoBuilder::new().check_available()
+                        && let Some(is_anim) =
                             detect_jxl_animation_via_jxlinfo(path).unwrap_or(None)
                         {
                             let (frame_count, fps) = if is_anim {
@@ -535,7 +535,6 @@ pub fn detect_animation(
                             };
                             return Ok((is_anim, frame_count, fps));
                         }
-                    }
                     return Ok((false, None, None));
                 }
             }
@@ -1098,15 +1097,13 @@ fn parse_jxlinfo_full_info(output: &str) -> (Option<u32>, Option<f32>) {
         }
 
         // "Animation: 100ms per frame (10.00 fps)"
-        if fps.is_none() {
-            if let Some(pos) = lower.find(" fps)") {
-                if let Some(lparen) = lower[..pos].rfind('(') {
+        if fps.is_none()
+            && let Some(pos) = lower.find(" fps)")
+                && let Some(lparen) = lower[..pos].rfind('(') {
                     let token = lower[lparen + 1..pos].trim();
                     fps = crate::numeric_cast::parse_strict::<f64>(token, "jxlinfo_fps")
                         .map(crate::numeric_cast::f64_to_f32_lossy);
                 }
-            }
-        }
 
         if frame_count.is_some() && fps.is_some() {
             break;

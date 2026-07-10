@@ -2938,14 +2938,14 @@ pub fn library_handle_from_media_output_probes(
                     tolerance,
                 )? {
                     crate::image::orientation::PixelDiffResult::Match => {
-                        final_library_blake3 = Some(library_blake3);
                         tracing::info!(
                             target: "photos_import",
                             rel_path = %target.rel_path,
                             candidate_blake3 = %candidate.blake3,
-                            library_blake3 = %final_library_blake3.as_ref().unwrap(),
+                            library_blake3 = %library_blake3,
                             "Photos imported bytes diverged but pixel-equivalence proof passed; recording library_blake3"
                         );
+                        final_library_blake3 = Some(library_blake3);
                     }
                     crate::image::orientation::PixelDiffResult::SkippedToolAbsent { tool } => {
                         return Err(ImgQualityError::AnalysisError(format!(

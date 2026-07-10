@@ -212,10 +212,9 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                             sdh_warning,
                             path.display()
                         )));
-                    } else {
-                        // Flag is 0 -> definitely lossy
-                        return Ok(false);
                     }
+                    // Flag is 0 -> definitely lossy
+                    return Ok(false);
                 }
 
                         let matrix_warning = if has_rgb_identity_matrix {

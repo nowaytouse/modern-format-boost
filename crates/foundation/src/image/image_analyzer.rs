@@ -2618,7 +2618,7 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                             matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
                         });
                     let bit_depth =
-                        Some(image.image_header().metadata.bit_depth.bits_per_sample() as u8);
+                        u8::try_from(image.image_header().metadata.bit_depth.bits_per_sample()).ok();
                     return Ok((width, height, has_alpha, bit_depth));
                 }
                 Err(err) => {
