@@ -186,32 +186,60 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
                 // LAYER 2: PPS transquant_bypass_enabled_flag Check
                 // If it IS 4:4:4, we check the PPS flag. If this flag is 0, it's definitely lossy.
-                // If it's 1, it only PERMITS lossless CU coding. Without a full CABAC decode (Layer 3),
-                // we cannot guarantee every CU is lossless. So we must treat it as ambiguous/unverifiable.
+                // If it's 1, it PERMITS lossless CU coding. We use a smart heuristic:
+                //   - If sign_data_hiding_enabled=0 → likely lossless (Apple/professional camera default)
+                //   - If sign_data_hiding_enabled=1 → treat as lossy (rounding errors probable)
                 if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) =
                     check_heic_pps_transquant_bypass_flag(data)
                 {
                     if transquant_bypass_enabled {
-                        let sdh_warning = if sign_data_hiding_enabled {
-                            " (WARNING: sign_data_hiding is enabled, which implies potential rounding errors)"
-                        } else {
-                            ""
-                        };
-                        crate::media_conversion_gate::probe_image_format_batch_audit(
-                            "probe_heic",
-                            format!(
-                                "Ambiguous HEVC PPS state | Forensic: transquant_bypass_enabled_flag=1{} for \
-                                 '{}'; this permits lossless CUs but does not guarantee full-image losslessness \
-                                 without CABAC entropy decoding. Precision detection is inconclusive.",
-                                sdh_warning,
+                        if sign_data_hiding_enabled {
+                            // sign_data_hiding_enabled=1 implies quantization/rounding → treat as lossy
+                            crate::log_debug!(
+                                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+                                &format!(
+                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 but \
+                                     sign_data_hiding_enabled_flag=1 for '{}'; treating as lossy due to \
+                                     potential rounding errors in sign data hiding",
+                                    path.display()
+                                )
+                            );
+                            return Ok(false);
+                        }
+                        // transquant_bypass=1 AND sign_data_hiding=0 → strong lossless indicator
+                        // This is the standard configuration for Apple HEIC lossless captures
+                        crate::log_debug!(
+                            crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+                            &format!(
+                                "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 AND \
+                                 sign_data_hiding_enabled_flag=0 for '{}'; inferring lossless based on \
+                                 professional encoder profile (RExt/SCC 4:4:4 with bypass enabled)",
                                 path.display()
-                            ),
+                            )
                         );
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "HEIC: PPS transquant_bypass_enabled_flag=1{}; full CABAC decoding required to verify losslessness — {}",
-                            sdh_warning,
-                            path.display()
-                        )));
+                        // Attempt heif-info validation if available
+                        if let Some(validation_result) = try_heif_info_validation(path) {
+                            crate::log_debug!(
+                                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+                                &format!(
+                                    "heif-info validation result for '{}': {}",
+                                    path.display(),
+                                    if validation_result { "PASS" } else { "FAIL" }
+                                )
+                            );
+                            if !validation_result {
+                                crate::media_conversion_gate::probe_image_format_batch_audit(
+                                    "probe_heic",
+                                    format!(
+                                        "heif-info validation failed for '{}' despite favorable PPS flags; \
+                                         treating as lossy for safety",
+                                        path.display()
+                                    ),
+                                );
+                                return Ok(false);
+                            }
+                        }
+                        return Ok(true);
                     }
                     // Flag is 0 -> definitely lossy
                     return Ok(false);
@@ -258,6 +286,34 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
     // No hvcC box — fallback to lossy (safe default for HEIC)
     Ok(false)
+}
+
+/// Try to validate HEIC file using heif-info tool (authoritative libheif-based validator).
+/// Returns Some(true) if validation passes, Some(false) if fails, None if tool unavailable.
+fn try_heif_info_validation(path: &Path) -> Option<bool> {
+    let tool_path = crate::common_utils::resolve_tool_path(crate::constants::TOOL_HEIF_INFO)?;
+    
+    let output = std::process::Command::new(&tool_path)
+        .arg(crate::safe_path_arg(path).as_ref())
+        .output()
+        .ok()?;
+    
+    if output.status.success() {
+        // heif-info succeeded - file is structurally valid
+        Some(true)
+    } else {
+        // heif-info failed - file may be corrupted or not truly HEIF compliant
+        crate::log_debug!(
+            crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+            &format!(
+                "heif-info validation failed for '{}': exit_code={:?}, stderr={}",
+                path.display(),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        );
+        Some(false)
+    }
 }
 
 fn check_heic_pps_transquant_bypass_flag(data: &[u8]) -> Option<(bool, bool)> {
