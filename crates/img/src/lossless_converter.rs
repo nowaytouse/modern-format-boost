@@ -998,7 +998,7 @@ pub fn convert_to_jxl(
     }
 
     let input_size = fs::metadata(input)?.len();
-    let is_genuine_png = foundation::image::png_validation::is_true_png(input).unwrap_or(false);
+    let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
 
     if !options.force()
         && !is_genuine_png

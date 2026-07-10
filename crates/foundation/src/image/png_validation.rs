@@ -25,13 +25,16 @@ enum PngValidationOutcome {
 
 #[must_use]
 pub fn png_heuristic_enabled() -> bool {
-    std::env::var(ENV_ENABLE_PNG_HEURISTIC)
-        .is_ok_and(|value| {
-            matches!(
-                value.trim(),
-                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
-            )
-        })
+    match std::env::var(ENV_ENABLE_PNG_HEURISTIC) {
+        Ok(value) => matches!(
+            value.trim(),
+            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+        ),
+        Err(e) => {
+            tracing::debug!("PNG heuristic env var error: {}", e);
+            false
+        }
+    }
 }
 
 /// Hierarchical PNG validation: pngcheck → libpng/image decode → magic bytes.

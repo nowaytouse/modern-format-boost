@@ -362,6 +362,8 @@ pub mod tiff {
     }
 }
 
+
+
 pub mod jpeg {
     use crate::unified_error::Result;
     use std::path::Path;
@@ -1624,30 +1626,37 @@ pub mod jxl {
     }
 }
 
-pub mod dng {
+pub mod tiff_family {
     use crate::unified_error::{ImgQualityError, Result};
     use serde_json::Value;
     use std::path::Path;
     use std::process::Command;
 
     /// Helper to parse array values or space-separated strings as the first u64
-    fn parse_first_u64(val: &Value) -> Option<u64> {
+    fn parse_first_u64(val: &Value) -> Result<u64> {
         if let Some(n) = val.as_u64() {
-            return Some(n);
+            return Ok(n);
         }
         if let Some(s) = val.as_str() {
-            return s.split_whitespace().next().and_then(|num_str| num_str.parse().ok());
+            if let Some(num_str) = s.split_whitespace().next() {
+                return num_str.parse().map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}")));
+            }
         }
         if let Some(arr) = val.as_array() {
-            return arr.first().and_then(|v| v.as_u64().or_else(|| {
-                v.as_str().and_then(|s| s.parse().ok())
-            }));
+            if let Some(v) = arr.first() {
+                if let Some(num) = v.as_u64() {
+                    return Ok(num);
+                }
+                if let Some(s) = v.as_str() {
+                    return s.parse().map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}")));
+                }
+            }
         }
-        None
+        Err(ImgQualityError::AnalysisError("Value is not a valid u64 or u64 string".into()))
     }
 
-    /// Detect if a DNG file is lossless using `exiftool` to target the main raw image IFD.
-    pub fn is_lossless_dng(path: &Path) -> Result<bool> {
+    /// Detect if a TIFF-family file (TIFF, DNG) is lossless using `exiftool` to target the main image IFD.
+    pub fn is_lossless_tiff_family(path: &Path) -> Result<bool> {
         let output = Command::new("exiftool")
             .arg("-n")
             .arg("-j")
@@ -1695,22 +1704,25 @@ pub mod dng {
         }
 
         let mut best_ifd = None;
-        let mut max_pixels = 0;
+        let mut max_pixels = 0u64;
 
         for (_prefix, tags) in &ifds {
-            let photo_interp = parse_first_u64(tags.get("PhotometricInterpretation").unwrap_or(&&Value::Null)).unwrap_or(0);
-            let is_raw = photo_interp == 32803 || photo_interp == 34892;
+            let photo_interp = tags.get("PhotometricInterpretation").map(|v| parse_first_u64(*v)).transpose()?;
+            let is_raw = photo_interp == Some(32803) || photo_interp == Some(34892);
 
-            let subfile_type = parse_first_u64(tags.get("SubfileType").unwrap_or(&&Value::Null)).unwrap_or(1);
-            let is_full_res = subfile_type == 0;
+            let subfile_type = tags.get("SubfileType").map(|v| parse_first_u64(*v)).transpose()?;
+            let is_full_res = subfile_type == Some(0) || subfile_type.is_none();
 
             if is_raw || is_full_res {
-                let width = parse_first_u64(tags.get("ImageWidth").unwrap_or(&&Value::Null)).unwrap_or(0);
-                let height = parse_first_u64(tags.get("ImageHeight").unwrap_or(&&Value::Null)).unwrap_or(0);
-                let pixels = width * height;
-                if pixels >= max_pixels && width > 0 && height > 0 {
-                    max_pixels = pixels;
-                    best_ifd = Some(tags);
+                if let (Some(w), Some(h)) = (
+                    tags.get("ImageWidth").map(|v| parse_first_u64(*v)).transpose()?,
+                    tags.get("ImageHeight").map(|v| parse_first_u64(*v)).transpose()?,
+                ) {
+                    let pixels = w.saturating_mul(h);
+                    if pixels >= max_pixels && w > 0 && h > 0 {
+                        max_pixels = pixels;
+                        best_ifd = Some(tags);
+                    }
                 }
             }
         }
@@ -1718,12 +1730,15 @@ pub mod dng {
         // Fallback: pick largest image if none match raw/full-res precisely
         if best_ifd.is_none() {
             for (_prefix, tags) in &ifds {
-                let width = parse_first_u64(tags.get("ImageWidth").unwrap_or(&&Value::Null)).unwrap_or(0);
-                let height = parse_first_u64(tags.get("ImageHeight").unwrap_or(&&Value::Null)).unwrap_or(0);
-                let pixels = width * height;
-                if pixels > max_pixels && width > 0 && height > 0 {
-                    max_pixels = pixels;
-                    best_ifd = Some(tags);
+                if let (Some(w), Some(h)) = (
+                    tags.get("ImageWidth").map(|v| parse_first_u64(*v)).transpose()?,
+                    tags.get("ImageHeight").map(|v| parse_first_u64(*v)).transpose()?,
+                ) {
+                    let pixels = w.saturating_mul(h);
+                    if pixels > max_pixels && w > 0 && h > 0 {
+                        max_pixels = pixels;
+                        best_ifd = Some(tags);
+                    }
                 }
             }
         }
@@ -1732,26 +1747,26 @@ pub mod dng {
             ImgQualityError::AnalysisError("Could not identify main raw IFD in DNG".into())
         })?;
 
-        let compression = parse_first_u64(main_ifd.get("Compression").unwrap_or(&&Value::Null)).unwrap_or(0);
+        let compression = main_ifd.get("Compression").map(|v| parse_first_u64(*v)).transpose()?.ok_or_else(|| {
+            ImgQualityError::AnalysisError("TIFF main IFD missing Compression tag".into())
+        })?;
 
         match compression {
-            1 | 7 | 8 => Ok(true), // Uncompressed, JPEG (lossless in DNG), Deflate
-            34892 => Ok(false),    // Lossy JPEG
+            1 | 5 | 7 | 8 | 50001 => Ok(true), // Uncompressed, LZW, JPEG (lossless in DNG), Deflate, PIXARLOG
+            6 | 34892 => Ok(false),    // Old JPEG, Lossy JPEG
             52546 => {
                 // JPEG XL
-                let offset = parse_first_u64(main_ifd.get("StripOffsets").unwrap_or(
-                    main_ifd.get("TileOffsets").unwrap_or(&&Value::Null),
-                ))
-                .ok_or_else(|| {
-                    ImgQualityError::AnalysisError(
-                        "DNG with JPEG XL compression missing StripOffsets/TileOffsets".into(),
-                    )
-                })?;
+                let offset_val = main_ifd.get("StripOffsets").or(main_ifd.get("TileOffsets"));
+                let offset = offset_val
+                    .map(|v| parse_first_u64(*v))
+                    .transpose()?
+                    .ok_or_else(|| ImgQualityError::AnalysisError("DNG with JPEG XL missing StripOffsets/TileOffsets".into()))?;
 
-                let length = parse_first_u64(main_ifd.get("StripByteCounts").unwrap_or(
-                    main_ifd.get("TileByteCounts").unwrap_or(&&Value::Null),
-                ))
-                .unwrap_or(10 * 1024 * 1024); // Fallback length if missing
+                let length_val = main_ifd.get("StripByteCounts").or(main_ifd.get("TileByteCounts"));
+                let length = length_val
+                    .map(|v| parse_first_u64(*v))
+                    .transpose()?
+                    .ok_or_else(|| ImgQualityError::AnalysisError("DNG with JPEG XL missing StripByteCounts/TileByteCounts".into()))?;
 
                 let mut f = std::fs::File::open(path)?;
                 use std::io::{Read, Seek, SeekFrom};

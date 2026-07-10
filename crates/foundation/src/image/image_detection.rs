@@ -709,20 +709,27 @@ pub fn animatable_format_confirmed_static_only(
         }
         DetectedFormat::JXL => {
             // Prioritize authoritative native library (jxl-oxide) for animation detection
-            let is_animated_by_oxide = if let Ok(data) = std::fs::read(path) {
-                match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
-                    Ok(image) => Some(image.image_header().metadata.animation.is_some()),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
+            let data = std::fs::read(path).map_err(|e| {
+                ImgQualityError::AnalysisError(format!("Failed to read JXL file for oxide probe: {}", e))
+            })?;
 
-            if let Some(is_anim) = is_animated_by_oxide {
-                if is_anim {
-                    return Ok(false);
+            match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
+                Ok(image) => {
+                    let is_anim = image.image_header().metadata.animation.is_some();
+                    if is_anim {
+                        return Ok(false);
+                    }
+                    return Ok(true);
                 }
-                return Ok(true);
+                Err(e) => {
+                    // Log the parse failure but allow fallback to ffprobe
+                    tracing::warn!(
+                        target: "jxl_oxide_probe",
+                        path = %path.display(),
+                        error = %e,
+                        "jxl-oxide parsing failed, falling back to ffprobe"
+                    );
+                }
             }
 
             // Fall back to external toolchain (jxlinfo/djxl) if native library fails
@@ -4006,16 +4013,7 @@ fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
 /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard
 /// TIFF and `BigTIFF`.
 fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
-    let is_dng = path
-        .extension()
-        .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dng"))
-        .unwrap_or(false);
-
-    let is_lossless = if is_dng {
-        crate::image_formats::dng::is_lossless_dng(path)?
-    } else {
-        crate::image_formats::tiff::is_lossless(path)?
-    };
+    let is_lossless = crate::image_formats::tiff_family::is_lossless_tiff_family(path)?;
 
     if is_lossless {
         Ok(CompressionType::Lossless)

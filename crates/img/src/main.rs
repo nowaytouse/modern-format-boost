@@ -1412,8 +1412,14 @@ fn dispatch_static_conversion(
         }
     }
 
+    let is_genuine_png = if format == "PNG" {
+        foundation::is_true_png(input)?
+    } else {
+        false
+    };
+
     Ok(match (format, is_lossless) {
-        ("PNG", _) if foundation::is_true_png(input).unwrap_or(false) => {
+        ("PNG", _) if is_genuine_png => {
             if config.verbose() {
                 foundation::log_detail!(&format!(
                     "{} Genuine PNG→Lossless JXL (effort 10, no size gate): {}",
@@ -5971,6 +5977,7 @@ mod fast_img_hardening_tests {
     #[test]
     fn restore_jpeg_cleanup_prunes_empty_source_dirs_but_keeps_root() -> anyhow::Result<()> {
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("redone");
         let output_root = root.path().join("redone_restored_jpeg");
         let source_dir = input_root.join("🌟来源/✨闲鱼");
@@ -5997,6 +6004,7 @@ mod fast_img_hardening_tests {
     #[test]
     fn restore_jpeg_cleanup_refuses_missing_or_non_jpeg_output() -> anyhow::Result<()> {
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
         let output_root = root.path().join("Album_restored_jpeg");
         let source = input_root.join("camera.JXL");
