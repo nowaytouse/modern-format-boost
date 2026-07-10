@@ -1841,7 +1841,11 @@ fn run_drag_drop(
     );
 
     if let (Some(sess), Some(output_dir)) = (session, &args.output) {
-        let output_size = du_size_recursive(output_dir)?;
+        let output_size = if let Some(override_size) = summary.fast_img_size_after_override {
+            override_size
+        } else {
+            du_size_recursive(output_dir)?
+        };
         if let Some(source_dir) = args.inputs.first() {
             let source_size = du_size_recursive(source_dir)?;
             let ratio = if source_size > 0 {

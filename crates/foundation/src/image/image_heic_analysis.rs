@@ -61,13 +61,8 @@ pub fn extract_hevc_bit_depths(hvcc_data: &[u8]) -> Result<(u8, u8)> {
 /// 1. **hvcC `profile_idc`**: Main(1)/Main10(2)/MainStillPicture(3) →
 ///    definitely lossy (4:2:0 only)
 /// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check `chroma_format_idc`
-/// 3. **hvcC `chroma_format_idc`**: < 3 (not 4:4:4) → lossy; == 3 → lossless
-/// 4. **hvcC `general_profile_compatibility_flags`**: bit 4 set → `RExt`
-///    compatible → lossless
-/// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
-/// 6. **colr box**: Identity matrix (MC=0) → lossless
-/// 7. **SPS `transquant_bypass_enabled_flag`**: if 1 → mathematically lossless
-///    (100% certain)
+/// 3. **hvcC `chroma_format_idc`**: < 3 (not 4:4:4) → lossy; == 3 → lossless capable (move to PPS check)
+/// 4. **PPS `transquant_bypass_enabled_flag`**: if 0 → lossy. If 1 → ambiguous (permits lossless CUs, requires CABAC)
 ///
 /// Detect if an HEIC file is lossless (using libheif).
 ///
@@ -130,7 +125,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 };
                 *byte = *b;
             }
-            let compat_flags = u32::from_be_bytes(compat_bytes);
+            let _compat_flags = u32::from_be_bytes(compat_bytes);
 
             // HEVCDecoderConfigurationRecord fixed fields
             let Some(b_16) = hvcc_data.get(16) else {
@@ -143,8 +138,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 ));
             };
             let chroma_format_idc = b_16 & 0x03;
-
-            let (bit_depth_luma, bit_depth_chroma) = extract_hevc_bit_depths(hvcc_data)?;
+            extract_hevc_bit_depths(hvcc_data)?;
 
             // Dimension 0: chromaFormatIdc — direct chroma subsampling
             // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
@@ -166,8 +160,6 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             if profile_idc == crate::constants::HEIC_PROFILE_REXT
                 || profile_idc == crate::constants::HEIC_PROFILE_SCC
             {
-                let is_444 = chroma_format_idc == crate::constants::HEIC_CHROMA_444;
-
                 // Check colr box for Identity matrix (RGB = lossless indicator for RExt)
                 let colr_payload = match find_box_payload_by_magic(data, *b"colr") {
                     Some(v) => Some(v),
@@ -185,108 +177,69 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     })
                     .is_some_and(|matrix| matrix == 0);
 
-                if has_rgb_identity_matrix {
-                    return Ok(true);
+                // LAYER 1: Fast Exclusion based on Chroma Subsampling
+                // True lossless MUST be 4:4:4. If chroma_format_idc is NOT 3 (4:4:4), it's definitely lossy.
+                // This filters out 99%+ of consumer HEIC files instantly.
+                if chroma_format_idc != crate::constants::HEIC_CHROMA_444 {
+                    return Ok(false);
                 }
 
-                // Check pixi box for high bit depth
-                let pixi_payload = match find_box_payload_by_magic(data, *b"pixi") {
-                    Some(v) => Some(v),
-                    None => find_box_data_recursive(data, *b"pixi"),
-                };
-                let has_high_bitdepth = pixi_payload
-                    .and_then(|pixi_data| {
-                        // pixi is a FullBox: version(1) + flags(3) + num_channels(1) +
-                        // bits_per_channel(num_channels)
-                        if pixi_data.len() < 5 {
-                            None
-                        } else {
-                            let Some(num_ch) = crate::numeric_cast::u8_to_usize_strict(
-                                *pixi_data.get(4)?,
-                                "heic_pixi_num_ch",
-                            ) else {
-                                crate::media_conversion_gate::probe_image_format_batch_audit(
-                                    "probe_heic",
-                                    "HEIC pixi num_ch overflow! Refusing to forge data.",
-                                );
-                                return None;
-                            };
-                            if num_ch > 0 && pixi_data.len() >= 5 + num_ch {
-                                Some(pixi_data.get(5..5 + num_ch)?.iter().copied().max()?)
-                            } else {
-                                None
-                            }
-                        }
-                    })
-                    .is_some_and(|max_depth| {
-                        max_depth >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH
-                    });
-
-                if has_high_bitdepth {
-                    return Ok(true);
-                }
-
-                // High bit depth from hvcC itself
-                if is_444
-                    && (bit_depth_luma >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH
-                        || bit_depth_chroma >= crate::constants::HEIC_LOSSLESS_MIN_BIT_DEPTH)
+                // LAYER 2: PPS transquant_bypass_enabled_flag Check
+                // If it IS 4:4:4, we check the PPS flag. If this flag is 0, it's definitely lossy.
+                // If it's 1, it only PERMITS lossless CU coding. Without a full CABAC decode (Layer 3),
+                // we cannot guarantee every CU is lossless. So we must treat it as ambiguous/unverifiable.
+                if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) =
+                    check_heic_pps_transquant_bypass_flag(data)
                 {
-                    return Ok(true);
+                    if transquant_bypass_enabled {
+                        let sdh_warning = if sign_data_hiding_enabled {
+                            " (WARNING: sign_data_hiding is enabled, which implies potential rounding errors)"
+                        } else {
+                            ""
+                        };
+                        crate::media_conversion_gate::probe_image_format_batch_audit(
+                            "probe_heic",
+                            format!(
+                                "Ambiguous HEVC PPS state | Forensic: transquant_bypass_enabled_flag=1{} for \
+                                 '{}'; this permits lossless CUs but does not guarantee full-image losslessness \
+                                 without CABAC entropy decoding. Precision detection is inconclusive.",
+                                sdh_warning,
+                                path.display()
+                            ),
+                        );
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "HEIC: PPS transquant_bypass_enabled_flag=1{}; full CABAC decoding required to verify losslessness — {}",
+                            sdh_warning,
+                            path.display()
+                        )));
+                    } else {
+                        // Flag is 0 -> definitely lossy
+                        return Ok(false);
+                    }
                 }
 
-                // RExt/SCC + 4:4:4 without other indicators — likely lossless
-                if is_444 {
-                    return Ok(true);
-                }
-
-                // RExt/SCC without 4:4:4 — ambiguous (RExt can also do lossy 4:2:0)
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_heic",
-                    format!(
-                        "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} without \
-                         4:4:4 chroma for '{}'; precision detection is inconclusive",
-                        profile_idc,
-                        path.display()
-                    ),
-                );
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: RExt/SCC profile ({}) without 4:4:4 chroma; cannot determine — {}",
-                    profile_idc,
-                    path.display()
-                )));
-            }
-
-            // Dimension 4: Check profile compatibility flags — bit 4 = RExt compatible
-            if (compat_flags & (1 << (31_i32 - i32::from(crate::constants::HEIC_PROFILE_REXT))))
-                != 0
-            {
-                if chroma_format_idc == crate::constants::HEIC_CHROMA_444 {
-                    return Ok(true);
-                }
-                crate::media_conversion_gate::probe_image_format_audit(
-                    "probe_heic",
-                    path,
-                    format!(
-                        "HEIC AUDIT: RExt compatibility flag mismatch | Forensic: flag set but \
-                         chroma {} is not 4:4:4 for '{}'; refusing to assume structural \
-                         losslessness",
-                        chroma_format_idc,
-                        path.display()
-                    ),
-                );
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot \
-                     determine — {}",
-                    chroma_format_idc,
-                    path.display()
-                )));
-            }
-
-            // Dimension 5: Parse SPS NAL units to check transquant_bypass_enabled_flag
-            if let Some(is_lossless) = detect_heic_lossless_via_mp4parse_data(data)
-                && is_lossless
-            {
-                return Ok(true);
+                        let matrix_warning = if has_rgb_identity_matrix {
+                            " (Note: Identity RGB matrix detected, but PPS parsing failed)"
+                        } else {
+                            ""
+                        };
+                        crate::media_conversion_gate::probe_image_format_batch_audit(
+                            "probe_heic",
+                            format!(
+                                "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} is \
+                                 4:4:4 but PPS transquant_bypass_enabled_flag could not be parsed for '{}'{}; \
+                                 precision detection is inconclusive",
+                                profile_idc,
+                                path.display(),
+                                matrix_warning
+                            ),
+                        );
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "HEIC: RExt/SCC profile ({}) is 4:4:4 but PPS could not be parsed{}; cannot determine — {}",
+                            profile_idc,
+                            matrix_warning,
+                            path.display()
+                        )));
             }
 
             // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
@@ -308,16 +261,16 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     Ok(false)
 }
 
-fn detect_heic_lossless_via_mp4parse_data(data: &[u8]) -> Option<bool> {
+fn check_heic_pps_transquant_bypass_flag(data: &[u8]) -> Option<(bool, bool)> {
     let hvcc_data = find_box_data_recursive(data, *b"hvcC")?;
-    parse_sps_for_transquant_bypass_flag(hvcc_data)
+    parse_pps_for_transquant_bypass_flag(hvcc_data)
 }
 
-fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
-    if hvcc_data.len() < 25 {
+fn parse_pps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<(bool, bool)> {
+    if hvcc_data.len() < 23 {
         return None;
     }
-    let num_nalu_arrays = if let Some(b) = hvcc_data.get(24) {
+    let num_nalu_arrays = if let Some(b) = hvcc_data.get(22) {
         crate::numeric_cast::u8_to_usize_strict(*b, "num_nalu_arrays")?
     } else {
         crate::log_corruption!(
@@ -326,7 +279,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
         );
         return None;
     };
-    let mut pos = 25;
+    let mut pos = 23;
     for _ in 0..num_nalu_arrays {
         if pos + 3 > hvcc_data.len() {
             return None;
@@ -370,7 +323,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
             "heic_nalu_count",
         )?;
         pos += 3;
-        if nal_unit_type == crate::constants::HEIC_NAL_UNIT_TYPE_SPS {
+        if nal_unit_type == crate::constants::HEIC_NAL_UNIT_TYPE_PPS {
             for _ in 0..num_nalus {
                 if pos + 2 > hvcc_data.len() {
                     return None;
@@ -391,12 +344,12 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
                 }
-                let sps_payload = hvcc_data.get(pos..pos + nal_unit_length)?;
+                let pps_payload = hvcc_data.get(pos..pos + nal_unit_length)?;
                 pos += nal_unit_length;
-                if sps_payload.len() < 3 {
+                if pps_payload.len() < 3 {
                     continue;
                 }
-                return parse_sps_rbsp_for_transquant_bypass(sps_payload);
+                return parse_pps_rbsp_for_transquant_bypass(pps_payload);
             }
         } else {
             for _ in 0..num_nalus {
@@ -530,66 +483,63 @@ impl<'a> BitReader<'a> {
     }
 }
 
-fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
-    if sps_payload.len() < 3 {
+fn parse_pps_rbsp_for_transquant_bypass(pps_payload: &[u8]) -> Option<(bool, bool)> {
+    if pps_payload.len() < 3 {
         return None;
     }
-    let rbsp = sps_payload.get(2..)?;
-    let mut reader = BitReader::new(rbsp);
-    reader.read_bits(4)?; // sps_video_parameter_set_id
-    let max_sub_layers = reader.read_bits(3)?;
-    reader.read_bits(1)?; // sps_temporal_id_nesting_flag
-    reader.skip_profile_tier_level(true, max_sub_layers)?;
-    reader.read_ue()?; // sps_seq_parameter_set_id
-    let chroma_format = reader.read_ue()?;
-    if chroma_format == 3 {
-        reader.read_bits(1)?;
-    } // separate_colour_plane_flag
-    reader.read_ue()?; // pic_width_in_luma_samples
-    reader.read_ue()?; // pic_height_in_luma_samples
-    if reader.read_bits(1)? == 1 {
-        // conformance_window_flag
-        for _ in 0_i32..4_i32 {
-            reader.read_ue()?;
+    // Skip NAL unit header (2 bytes) to reach RBSP payload
+    let raw_rbsp = pps_payload.get(2..)?;
+
+    // Remove Emulation Prevention Bytes (0x03)
+    let mut rbsp = Vec::with_capacity(raw_rbsp.len());
+    let mut i = 0;
+    while i < raw_rbsp.len() {
+        if i + 2 < raw_rbsp.len()
+            && raw_rbsp[i] == 0x00
+            && raw_rbsp[i + 1] == 0x00
+            && raw_rbsp[i + 2] == 0x03
+        {
+            rbsp.push(0x00);
+            rbsp.push(0x00);
+            i += 3;
+        } else {
+            rbsp.push(raw_rbsp[i]);
+            i += 1;
         }
     }
-    reader.read_ue()?; // bit_depth_luma_minus8
-    reader.read_ue()?; // bit_depth_chroma_minus8
-    reader.read_ue()?; // log2_max_pic_order_cnt_lsb_minus4
 
-    let sub_layer_ordering_info_present = reader.read_bits(1)? == 1;
-    let start_idx = if sub_layer_ordering_info_present {
-        0
-    } else {
-        max_sub_layers
-    };
+    let mut reader = BitReader::new(&rbsp);
 
-    for _ in start_idx..=max_sub_layers {
-        reader.read_ue()?; // sps_max_dec_pic_buffering_minus1
-        reader.read_ue()?; // sps_max_num_reorder_pics
-        reader.read_ue()?; // sps_max_latency_increase_plus1
+    // H.265 §7.3.2.3 pic_parameter_set_rbsp() — fields in spec order:
+    reader.read_ue()?; // pps_pic_parameter_set_id  ue(v)
+    reader.read_ue()?; // pps_seq_parameter_set_id  ue(v)
+    reader.read_bits(1)?; // dependent_slice_segments_enabled_flag  u(1)
+    reader.read_bits(1)?; // output_flag_present_flag  u(1)
+    reader.read_bits(3)?; // num_extra_slice_header_bits  u(3)
+    let sign_data_hiding_enabled_flag = reader.read_bits(1)?; // u(1) — must be 0 for lossless
+    reader.read_bits(1)?; // cabac_init_present_flag  u(1)
+    reader.read_ue()?; // num_ref_idx_l0_default_active_minus1  ue(v)
+    reader.read_ue()?; // num_ref_idx_l1_default_active_minus1  ue(v)
+    // SE fields: SE uses identical Exp-Golomb bit encoding as UE (H.265 §9.1);
+    // only the value interpretation differs — safe to read_ue() to advance the bit pointer.
+    reader.read_ue()?; // init_qp_minus26  se(v) — skip
+    reader.read_bits(1)?; // constrained_intra_pred_flag  u(1)
+    reader.read_bits(1)?; // transform_skip_enabled_flag  u(1)
+    let cu_qp_delta_enabled_flag = reader.read_bits(1)? == 1;
+    if cu_qp_delta_enabled_flag {
+        reader.read_ue()?; // diff_cu_qp_delta_depth  ue(v)
     }
+    reader.read_ue()?; // pps_cb_qp_offset  se(v) — skip
+    reader.read_ue()?; // pps_cr_qp_offset  se(v) — skip
+    reader.read_bits(1)?; // pps_slice_chroma_qp_offsets_present_flag  u(1)
+    reader.read_bits(1)?; // weighted_pred_flag  u(1)
+    reader.read_bits(1)?; // weighted_bipred_flag  u(1)
+    let transquant_bypass_enabled_flag = reader.read_bits(1)?; // u(1)
 
-    reader.read_ue()?; // sps_log2_min_luma_coding_block_size_minus3
-    reader.read_ue()?; // sps_log2_diff_max_min_luma_coding_block_size
-    reader.read_ue()?; // sps_max_luma_hierarchy_depth
-    if chroma_format != 0 {
-        reader.read_ue()?; // sps_min_chroma_coding_block_size_minus3
-        reader.read_ue()?; // sps_max_chroma_coding_block_size_minus3
-        reader.read_ue()?; // sps_max_chroma_hierarchy_depth
-    }
-    reader.read_bits(1)?; // amp_enabled_flag
-    reader.read_bits(1)?; // sample_adaptive_offset_enabled_flag
-    if reader.read_bits(1)? == 1 {
-        // pcm_enabled_flag
-        reader.read_bits(1)?;
-        reader.read_bits(1)?;
-        reader.read_ue()?;
-        reader.read_ue()?;
-        reader.read_bits(1)?;
-    }
-    let transquant_bypass = reader.read_bits(1)?;
-    Some(transquant_bypass == 1)
+    Some((
+        transquant_bypass_enabled_flag == 1,
+        sign_data_hiding_enabled_flag == 1,
+    ))
 }
 
 /// Multi-dimensional HEIC analysis (using both libheif and metadata

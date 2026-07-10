@@ -76,7 +76,7 @@ fn file_content_hash(path: &Path, chunk_size: usize) -> (Option<String>, Option<
     hasher.update(&buf);
     let hash_result = hasher.finalize();
     let hex: String = hash_result.iter().map(|b| format!("{b:02x}")).collect();
-    (Some(hex[..16].to_string()), None)
+    (Some(hex), None)
 }
 
 fn collect_media_files(
