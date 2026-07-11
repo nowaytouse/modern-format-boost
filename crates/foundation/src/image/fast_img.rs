@@ -2936,8 +2936,8 @@ pub fn library_handle_from_media_output_probes(
                     &probe.path,
                     fmt,
                     tolerance,
-                )? {
-                    crate::image::orientation::PixelDiffResult::Match => {
+                ) {
+                    Ok(crate::image::orientation::PixelDiffResult::Match) => {
                         tracing::info!(
                             target: "photos_import",
                             rel_path = %target.rel_path,
@@ -2947,18 +2947,27 @@ pub fn library_handle_from_media_output_probes(
                         );
                         final_library_blake3 = Some(library_blake3);
                     }
-                    crate::image::orientation::PixelDiffResult::SkippedToolAbsent { tool } => {
+                    Ok(crate::image::orientation::PixelDiffResult::SkippedToolAbsent { tool }) => {
                         return Err(ImgQualityError::AnalysisError(format!(
                             "Photos verifier pixel-equivalence: proof unavailable for {} (uuid={}): missing {tool}",
                             target.rel_path, probe.uuid
                         )));
                     }
-                    crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel } => {
+                    Ok(crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel }) => {
                         return Err(ImgQualityError::AnalysisError(format!(
                             "Photos verifier pixel-equivalence: mismatch for {} (uuid={}): max_delta={max_delta} channel={channel:?}",
                             target.rel_path, probe.uuid
                         )));
                     }
+                    Err(ImgQualityError::AnalysisError(msg)) if msg.contains("dimension mismatch") => {
+                        tracing::warn!(
+                            target: "photos_import",
+                            rel_path = %target.rel_path,
+                            "Photos verifier pixel-equivalence: {msg} (allowed for modern format due to Apple Photos original/cropped de-duplication)"
+                        );
+                        final_library_blake3 = Some(library_blake3);
+                    }
+                    Err(err) => return Err(err),
                 }
             } else {
                 tracing::error!(

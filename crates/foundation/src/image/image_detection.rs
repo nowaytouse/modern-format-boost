@@ -372,10 +372,10 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 ///
 /// libavif does not provide timing information, so we use ffprobe to extract
 /// frame rate for animated AVIF files.
-fn extract_fps_from_ffprobe(path: &Path) -> Option<f32> {
+fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
     if !crate::ffmpeg_builder::FfprobeBuilder::check_available() {
         tracing::debug!("ffprobe not available for AVIF FPS extraction");
-        return None;
+        return Ok(None);
     }
 
     let mut cmd = FfprobeBuilder::new()
@@ -386,38 +386,69 @@ fn extract_fps_from_ffprobe(path: &Path) -> Option<f32> {
         .loglevel("error")
         .build();
 
-    let output = crate::process_runner::ManagedProcess::spawn(&mut cmd)
-        .ok()?
-        .wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction")
-        .ok()?;
+    let output = match crate::process_runner::ManagedProcess::spawn(&mut cmd) {
+        Ok(proc) => match proc.wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction") {
+            Ok(out) => out,
+            Err(err) => {
+                tracing::debug!("ffprobe process wait timeout error: {err}");
+                return Ok(None);
+            }
+        },
+        Err(err) => {
+            tracing::debug!("ffprobe process spawn failed: {err}");
+            return Ok(None);
+        }
+    };
 
-    let json: serde_json::Value = serde_json::from_str(&output.stdout).ok()?;
-    let streams = json.get("streams")?.as_array()?;
+    let json: serde_json::Value = match serde_json::from_str(&output.stdout) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::debug!("ffprobe output parse failed: {err}");
+            return Ok(None);
+        }
+    };
+    let Some(streams) = json.get("streams").and_then(|s| s.as_array()) else {
+        return Ok(None);
+    };
 
     for stream in streams {
-        if stream.get("codec_type")?.as_str() == Some("video") {
-            // Try r_frame_rate first (actual frame rate), then avg_frame_rate
-            let fps_str = stream
-                .get("r_frame_rate")
-                .and_then(|v| v.as_str())
-                .or_else(|| stream.get("avg_frame_rate").and_then(|v| v.as_str()))?;
+        if stream.get("codec_type").and_then(|v| v.as_str()) == Some("video") {
+            let fps_str = match stream.get("r_frame_rate").and_then(|v| v.as_str()) {
+                Some(s) => Some(s),
+                None => stream.get("avg_frame_rate").and_then(|v| v.as_str()),
+            };
+            let Some(fps_str) = fps_str else {
+                continue;
+            };
 
             // Parse fps from "num/den" format
             let parts: Vec<&str> = fps_str.split('/').collect();
             if parts.len() == 2 {
-                let num: f64 = parts[0].parse().ok()?;
-                let den: f64 = parts[1].parse().ok()?;
+                let num: f64 = match parts[0].parse() {
+                    Ok(n) => n,
+                    Err(err) => {
+                        tracing::debug!("Failed to parse numerator for FPS: {err}");
+                        continue;
+                    }
+                };
+                let den: f64 = match parts[1].parse() {
+                    Ok(d) => d,
+                    Err(err) => {
+                        tracing::debug!("Failed to parse denominator for FPS: {err}");
+                        continue;
+                    }
+                };
                 if den > 0.0 && num > 0.0 {
                     let fps = num / den;
                     if fps.is_finite() && fps > 0.0 {
-                        return Some(crate::numeric_cast::f64_to_f32_lossy(fps));
+                        return Ok(Some(crate::numeric_cast::f64_to_f32_lossy(fps)));
                     }
                 }
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 pub fn detect_animation(
@@ -498,12 +529,17 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
-            if let Some(fps) = extract_fps_from_ffprobe(path) {
+            if let Some(fps) = extract_fps_from_ffprobe(path)? {
                 // AVIF is animated with detected FPS
                 return Ok((true, None, Some(fps)));
             }
 
-            // No FPS detected, treat as static
+            // Fallback to checking ISOBMFF ftyp brand (e.g. `avis` for animated AVIF)
+            if is_isobmff_animated_sequence(path)? {
+                return Ok((true, None, None));
+            }
+
+            // No FPS detected and not an animated sequence brand, treat as static
             return Ok((false, None, None));
         }
         DetectedFormat::HEIC | DetectedFormat::HEIF => {

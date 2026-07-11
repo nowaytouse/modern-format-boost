@@ -314,12 +314,7 @@ fn verify_pixel_diff_against_decoded_image(
                 .contains("was not recognized as an image format")
             {
                 // Check if source is HEIC/HEIF by magic bytes
-                let is_heic = match infer::get_from_path(source_image) {
-                    Ok(Some(kind)) => {
-                        kind.mime_type() == "image/heic" || kind.mime_type() == "image/heif"
-                    }
-                    _ => false,
-                };
+                let is_heic = crate::image_heic_analysis::is_heic_file(source_image)?;
 
                 if is_heic {
                     tracing::info!(
@@ -715,8 +710,10 @@ mod tests {
         DiffTolerance, PixelDiffResult, decode_temp_extension_for_format, diff_dynamic_images,
         diff_orientation_images, orientation_diff_tolerance_for_format,
         parse_exif_orientation_stdout, read_exif_orientation, should_retry_jxl_decode_as_jpeg,
+        verify_pixel_diff_against_decoded_image,
     };
     use crate::image::format_detect::FormatKind;
+    use crate::unified_error::ImgQualityError;
     use image::{DynamicImage, ImageBuffer, Rgb};
     use tempfile::NamedTempFile;
 
@@ -1027,5 +1024,78 @@ mod tests {
             parse_exif_orientation_stdout(tmp.path(), b"0\n").unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn test_verify_pixel_diff_heic_magic_recognition() {
+        use std::io::Write;
+        let mut heic_stub = tempfile::Builder::new()
+            .suffix(".HEIC")
+            .tempfile()
+            .unwrap();
+        heic_stub
+            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
+            .unwrap();
+
+        let decoded_stub = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .unwrap();
+        // Save a valid 1x1 PNG to the decoded stub path
+        let ref_img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(1, 1, image::Rgb([10, 20, 30])));
+        ref_img.save_with_format(decoded_stub.path(), image::ImageFormat::Png).unwrap();
+
+        let result = verify_pixel_diff_against_decoded_image(
+            heic_stub.path(),
+            decoded_stub.path(),
+            DiffTolerance::Exact,
+        );
+
+        match result {
+            Err(ImgQualityError::AnalysisError(msg)) => {
+                assert!(
+                    msg.contains("heif-convert"),
+                    "Expected heif-convert execution attempt, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected AnalysisError from heif-convert, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_verify_pixel_diff_dimension_mismatch_returns_analysis_error() {
+        let f1 = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .unwrap();
+        // Save a 1x1 PNG to f1
+        let img1 = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(1, 1, image::Rgb([10, 20, 30])));
+        img1.save_with_format(f1.path(), image::ImageFormat::Png).unwrap();
+
+        let f2 = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .unwrap();
+        // Save a 2x2 PNG to f2 (different dimensions!)
+        let img2 = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(2, 2, image::Rgb([10, 20, 30])));
+        img2.save_with_format(f2.path(), image::ImageFormat::Png).unwrap();
+
+        let result = verify_pixel_diff_against_decoded_image(
+            f1.path(),
+            f2.path(),
+            DiffTolerance::Exact,
+        );
+
+        match result {
+            Err(ImgQualityError::AnalysisError(msg)) => {
+                assert!(
+                    msg.contains("dimension mismatch"),
+                    "Expected dimension mismatch error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected AnalysisError(dimension mismatch), got {:?}", other),
+        }
     }
 }
