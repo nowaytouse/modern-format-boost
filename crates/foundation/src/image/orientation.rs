@@ -295,6 +295,88 @@ fn orientation_decode_tempfile(suffix: &str) -> Result<tempfile::NamedTempFile> 
     .map_err(|e| ImgQualityError::AnalysisError(format!("pixel-diff: temp alloc failed: {e}")))
 }
 
+fn verify_pixel_diff_against_decoded_image(
+    source_image: &Path,
+    decoded_output: &Path,
+    tol: DiffTolerance,
+) -> Result<PixelDiffResult> {
+    let src_orient = read_exif_orientation(source_image)?;
+    let out_img = crate::image_detection::open_image_with_limits(decoded_output).map_err(|e| {
+        ImgQualityError::AnalysisError(format!("pixel-diff: cannot open decoded output: {e}"))
+    })?;
+
+    let src_img_result = crate::image_detection::open_image_with_limits(source_image);
+    let src_img_raw = match src_img_result {
+        Ok(img) => img,
+        Err(e) => {
+            // If the image crate doesn't support the format (e.g., HEIC), decode it first
+            if e.to_string()
+                .contains("was not recognized as an image format")
+            {
+                // Check if source is HEIC/HEIF by magic bytes
+                let is_heic = match infer::get_from_path(source_image) {
+                    Ok(Some(kind)) => {
+                        kind.mime_type() == "image/heic" || kind.mime_type() == "image/heif"
+                    }
+                    _ => false,
+                };
+
+                if is_heic {
+                    tracing::info!(
+                        target: "orientation_pixel_diff",
+                        source = %source_image.display(),
+                        "pixel-diff: source is HEIC, decoding with heif-convert first"
+                    );
+
+                    // Decode HEIC to PNG using heif-convert
+                    let temp_png = orientation_decode_tempfile(".png")?;
+                    let decode_output = std::process::Command::new("heif-convert")
+                        .arg(source_image)
+                        .arg(temp_png.path())
+                        .output()
+                        .map_err(|e| {
+                            ImgQualityError::AnalysisError(format!(
+                                "pixel-diff: heif-convert spawn failed: {e}"
+                            ))
+                        })?;
+
+                    if !decode_output.status.success() {
+                        let stderr = first_nonempty_tool_line(&decode_output.stderr)
+                            .unwrap_or("<empty stderr>");
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "pixel-diff: heif-convert exited non-zero decoding {}: {stderr}",
+                            source_image.display()
+                        )));
+                    }
+
+                    // Now open the decoded PNG with image crate
+                    let decoded_png = crate::image_detection::open_image_with_limits(
+                        temp_png.path(),
+                    )
+                    .map_err(|e| {
+                        ImgQualityError::AnalysisError(format!(
+                            "pixel-diff: cannot open decoded PNG: {e}"
+                        ))
+                    })?;
+
+                    return diff_orientation_images(
+                        &decoded_png,
+                        src_orient,
+                        &out_img,
+                        tol,
+                        decoded_output,
+                    );
+                }
+            }
+            return Err(ImgQualityError::AnalysisError(format!(
+                "pixel-diff: cannot open source image: {e}"
+            )));
+        }
+    };
+
+    diff_orientation_images(&src_img_raw, src_orient, &out_img, tol, decoded_output)
+}
+
 fn should_retry_jxl_decode_as_jpeg(fmt: FormatKind, stderr: &[u8]) -> bool {
     if fmt != FormatKind::Jxl {
         return false;
@@ -356,23 +438,6 @@ const fn decode_temp_extension_for_format(fmt: FormatKind) -> Option<&'static st
         | FormatKind::Webm
         | FormatKind::Unknown => None,
     }
-}
-
-fn verify_pixel_diff_against_decoded_image(
-    source_image: &Path,
-    decoded_output: &Path,
-    tol: DiffTolerance,
-) -> Result<PixelDiffResult> {
-    let src_orient = read_exif_orientation(source_image)?;
-    let out_img = crate::image_detection::open_image_with_limits(decoded_output).map_err(|e| {
-        ImgQualityError::AnalysisError(format!("pixel-diff: cannot open decoded output: {e}"))
-    })?;
-    let src_img_raw =
-        crate::image_detection::open_image_with_limits(source_image).map_err(|e| {
-            ImgQualityError::AnalysisError(format!("pixel-diff: cannot open source image: {e}"))
-        })?;
-
-    diff_orientation_images(&src_img_raw, src_orient, &out_img, tol, decoded_output)
 }
 
 fn diff_orientation_images(
