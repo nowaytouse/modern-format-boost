@@ -1149,6 +1149,8 @@ pub mod avif {
                 let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
                 if matrix_coefficients == 0 {
                     return Ok(true);
+                } else if is_444 {
+                    return Ok(false);
                 }
             }
 
@@ -1390,6 +1392,11 @@ pub mod tiff_family {
             ImgQualityError::AnalysisError("Could not identify main raw IFD in DNG".into())
         })?;
 
+        let is_raw_photo = main_ifd.get("PhotometricInterpretation")
+            .map(|v| parse_first_u64(v))
+            .transpose()?
+            .is_some_and(|p| p == 32803 || p == 34892);
+
         let compression = main_ifd.get("Compression").map(|v| parse_first_u64(v)).transpose()?.ok_or_else(|| {
             ImgQualityError::AnalysisError("TIFF main IFD missing Compression tag".into())
         })?;
@@ -1398,10 +1405,12 @@ pub mod tiff_family {
             // Lossless compressions (pixel-exact round-trip):
             //   1  = Uncompressed
             //   5  = LZW (lossless)
-            //   7  = New-style JPEG — in DNG context this is lossless Huffman JPEG
             //   8  = Deflate/ZIP (lossless)
             //  32773 = PackBits (lossless RLE)
-            1 | 5 | 7 | 8 | 32773 => Ok(true),
+            1 | 5 | 8 | 32773 => Ok(true),
+            // Compression 7 is lossless Huffman JPEG in DNG (raw context),
+            // but standard lossy JPEG in normal TIFF files.
+            7 => Ok(is_raw_photo),
             // Lossy compressions:
             //   6     = Old-style JPEG (lossy)
             //  34892  = Lossy JPEG in DNG
@@ -1411,13 +1420,19 @@ pub mod tiff_family {
             6 | 34892 | 50001 | 34676 | 34677 => Ok(false),
             52546 => {
                 // JPEG XL
-                let offset_val = main_ifd.get("StripOffsets").or_else(|| main_ifd.get("TileOffsets"));
+                let offset_val = match main_ifd.get("StripOffsets") {
+                    Some(v) => Some(v),
+                    None => main_ifd.get("TileOffsets"),
+                };
                 let offset = offset_val
                     .map(|v| parse_first_u64(v))
                     .transpose()?
                     .ok_or_else(|| ImgQualityError::AnalysisError("DNG with JPEG XL missing StripOffsets/TileOffsets".into()))?;
 
-                let length_val = main_ifd.get("StripByteCounts").or_else(|| main_ifd.get("TileByteCounts"));
+                let length_val = match main_ifd.get("StripByteCounts") {
+                    Some(v) => Some(v),
+                    None => main_ifd.get("TileByteCounts"),
+                };
                 let length = length_val
                     .map(|v| parse_first_u64(v))
                     .transpose()?

@@ -189,34 +189,32 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 // If it's 1, it PERMITS lossless CU coding. We use a smart heuristic:
                 //   - If sign_data_hiding_enabled=0 → likely lossless (Apple/professional camera default)
                 //   - If sign_data_hiding_enabled=1 → treat as lossy (rounding errors probable)
-                if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) =
-                    check_heic_pps_transquant_bypass_flag(data)
+                let pps_flags = check_heic_pps_transquant_bypass_flag(data);
+                if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) = pps_flags
                 {
                     if transquant_bypass_enabled {
                         if sign_data_hiding_enabled {
-                            // sign_data_hiding_enabled=1 implies quantization/rounding → treat as lossy
                             crate::log_debug!(
                                 crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
                                 &format!(
-                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 but \
-                                     sign_data_hiding_enabled_flag=1 for '{}'; treating as lossy due to \
-                                     potential rounding errors in sign data hiding",
+                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 and \
+                                     sign_data_hiding_enabled_flag=1 for '{}'; treating as lossless (standard x265 pattern)",
                                     path.display()
                                 )
                             );
-                            return Ok(false);
+                        } else {
+                            // transquant_bypass=1 AND sign_data_hiding=0 → strong lossless indicator
+                            // This is the standard configuration for Apple HEIC lossless captures
+                            crate::log_debug!(
+                                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+                                &format!(
+                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 AND \
+                                     sign_data_hiding_enabled_flag=0 for '{}'; inferring lossless based on \
+                                     professional encoder profile (RExt/SCC 4:4:4 with bypass enabled)",
+                                    path.display()
+                                )
+                            );
                         }
-                        // transquant_bypass=1 AND sign_data_hiding=0 → strong lossless indicator
-                        // This is the standard configuration for Apple HEIC lossless captures
-                        crate::log_debug!(
-                            crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                            &format!(
-                                "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 AND \
-                                 sign_data_hiding_enabled_flag=0 for '{}'; inferring lossless based on \
-                                 professional encoder profile (RExt/SCC 4:4:4 with bypass enabled)",
-                                path.display()
-                            )
-                        );
                         // Attempt heif-info validation if available
                         if let Some(validation_result) = try_heif_info_validation(path) {
                             crate::log_debug!(
@@ -293,10 +291,13 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 fn try_heif_info_validation(path: &Path) -> Option<bool> {
     let tool_path = crate::common_utils::resolve_tool_path(crate::constants::TOOL_HEIF_INFO)?;
     
-    let output = std::process::Command::new(&tool_path)
+    let output = match std::process::Command::new(&tool_path)
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(out) => out,
+        _ => return None,
+    };
     
     if output.status.success() {
         // heif-info succeeded - file is structurally valid

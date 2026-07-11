@@ -2466,18 +2466,24 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
     Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
 }
 
+/// Returns `true` when `MFB_ENABLE_PIXEL_HEURISTIC` is set to a truthy value.
+/// Default: `false` (pixel heuristics disabled).
+#[must_use]
+fn pixel_heuristic_enabled() -> bool {
+    match std::env::var("MFB_ENABLE_PIXEL_HEURISTIC") {
+        Ok(v) => matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"),
+        _ => false,
+    }
+}
+
 /// Pixel-level fallback for `is_lossless` when format-level detection returns
 /// Err or is unavailable.
 ///
 /// **Default off.** Enable with `MFB_ENABLE_PIXEL_HEURISTIC=1`.
 /// When disabled, callers must handle the format-level `Err` directly.
 fn pixel_fallback_lossless(path: &Path) -> Result<bool> {
-    // Gate: pixel heuristics are disabled by default to prevent silent guessing.
-    // Set MFB_ENABLE_PIXEL_HEURISTIC=1 to opt in.
-    let enabled = std::env::var("MFB_ENABLE_PIXEL_HEURISTIC")
-        .ok()
-        .is_some_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"));
-    if !enabled {
+    // Gate: pixel heuristics disabled by default to prevent silent guessing.
+    if !pixel_heuristic_enabled() {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel heuristic disabled (set MFB_ENABLE_PIXEL_HEURISTIC=1 to enable) for {}",
             path.display()
@@ -2488,7 +2494,6 @@ fn pixel_fallback_lossless(path: &Path) -> Result<bool> {
         "[Lossless Fallback] Format-level detection failed; using pixel-level heuristic for {}",
         path.display()
     );
-
 
     let analysis = crate::image_quality_detector::analyze_image_quality_from_path(path)
         .ok_or_else(|| {

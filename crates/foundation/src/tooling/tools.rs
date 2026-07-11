@@ -63,6 +63,16 @@ pub fn get_tool_version(name: &str) -> Option<String> {
                 None
             }
         },
+        "ffmpeg" => match Command::new(&path).arg("-version").output() {
+            Ok(output) => Some(output),
+            Err(e) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "tool_version",
+                    format!("tool version probe failed for {name} via -version: {e}"),
+                );
+                None
+            }
+        },
         _ => match Command::new(&path)
             .arg("--version")
             .output()

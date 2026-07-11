@@ -340,3 +340,27 @@ fn detect_animation_webp_fps_from_anmf_delays_in_tempdir() {
     let fps = fps.expect("fps from ANMF delays");
     assert!((f64::from(fps) - (2.0 / 0.3)).abs() < 1.0e-3);
 }
+
+#[test]
+fn test_all_control_groups_lossless_lossy() {
+    let formats = [
+        ("WebP", "/tmp/test_lossless.webp", "/tmp/test_lossy.webp", DetectedFormat::WebP),
+        ("AVIF", "/tmp/test_lossless.avif", "/tmp/test_lossy.avif", DetectedFormat::AVIF),
+        ("TIFF", "/tmp/test_lossless.tiff", "/tmp/test_lossy.tiff", DetectedFormat::TIFF),
+        ("JXL", "/tmp/test_lossless.jxl", "/tmp/test_lossy.jxl", DetectedFormat::JXL),
+    ];
+    
+    for (name, lossless_path, lossy_path, format) in &formats {
+        let l_path = std::path::Path::new(lossless_path);
+        let y_path = std::path::Path::new(lossy_path);
+        
+        if l_path.exists() && y_path.exists() {
+            let l_res = detect_compression(format, l_path);
+            let y_res = detect_compression(format, y_path);
+            
+            println!("Control Group {name}: lossless={:?}, lossy={:?}", l_res, y_res);
+            assert_eq!(l_res.unwrap(), CompressionType::Lossless, "Format {name} lossless was detected as lossy");
+            assert_eq!(y_res.unwrap(), CompressionType::Lossy, "Format {name} lossy was detected as lossless");
+        }
+    }
+}

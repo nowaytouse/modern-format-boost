@@ -196,3 +196,20 @@ fn smoke_detect_heic_is_lossless_simple_lossy() {
     let path = std::path::Path::new("test.heic");
     assert!(!detect_heic_is_lossless(&data, path).unwrap());
 }
+
+#[test]
+fn test_control_group_lossless_lossy() {
+    let lossless_path = std::path::Path::new("/tmp/test_lossless.heic");
+    let lossy_path = std::path::Path::new("/tmp/test_lossy.heic");
+    if lossless_path.exists() && lossy_path.exists() {
+        let lossless_data = std::fs::read(lossless_path).unwrap();
+        let lossy_data = std::fs::read(lossy_path).unwrap();
+        
+        let lossless_res = detect_heic_is_lossless(&lossless_data, lossless_path);
+        let lossy_res = detect_heic_is_lossless(&lossy_data, lossy_path);
+        
+        println!("Control group: lossless={:?}, lossy={:?}", lossless_res, lossy_res);
+        assert!(lossless_res.unwrap(), "Lossless HEIC failed detection");
+        assert!(!lossy_res.unwrap(), "Lossy HEIC failed detection");
+    }
+}

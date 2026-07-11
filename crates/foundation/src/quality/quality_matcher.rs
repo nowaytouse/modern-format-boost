@@ -2564,6 +2564,13 @@ pub fn is_size_guard_active(codec_str: &str, apple_compat: bool) -> bool {
 }
 
 #[must_use]
+pub fn tiff_enabled() -> bool {
+    std::env::var("MFB_ENABLE_TIFF")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[must_use]
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
 
@@ -2583,10 +2590,13 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     // and broader compatibility while maintaining mathematical losslessness.
     let is_heic_lossless = matches!(codec, SourceCodec::Heic) && is_lossless;
 
-    let should_skip = is_modern_lossy || is_jxl;
+    let is_tiff_disabled = matches!(codec, SourceCodec::Tiff) && !tiff_enabled();
+
+    let should_skip = is_modern_lossy || is_jxl || is_tiff_disabled;
 
     let reason = if should_skip {
         let codec_name = match codec {
+            SourceCodec::Tiff if is_tiff_disabled => "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)",
             SourceCodec::WebpStatic => "lossy WebP",
             SourceCodec::Avif => "lossy AVIF",
             SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF",
@@ -2624,7 +2634,11 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             | SourceCodec::Tiff
             | SourceCodec::Unknown => "modern lossy format",
         };
-        crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE.replace("{}", codec_name)
+        if is_tiff_disabled {
+            codec_name.to_string()
+        } else {
+            crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE.replace("{}", codec_name)
+        }
     } else if is_heic_lossless {
         // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.
         String::new()
@@ -3205,7 +3219,17 @@ mod tests {
         assert!(!should_skip_image_format("jpeg", false).should_skip);
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
+        unsafe {
+            std::env::remove_var("MFB_ENABLE_TIFF");
+        }
+        assert!(should_skip_image_format("tiff", true).should_skip);
+        unsafe {
+            std::env::set_var("MFB_ENABLE_TIFF", "1");
+        }
         assert!(!should_skip_image_format("tiff", true).should_skip);
+        unsafe {
+            std::env::remove_var("MFB_ENABLE_TIFF");
+        }
         assert!(!should_skip_image_format("heif", true).should_skip); // lossless HEIF → JXL
     }
 

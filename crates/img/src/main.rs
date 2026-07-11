@@ -266,6 +266,12 @@ const fn command_requires_database(command: &Commands) -> bool {
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
+    let result = main_inner();
+    foundation::progress_mode::flush_log_file();
+    result
+}
+
+fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
