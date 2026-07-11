@@ -2565,9 +2565,7 @@ pub fn is_size_guard_active(codec_str: &str, apple_compat: bool) -> bool {
 
 #[must_use]
 pub fn tiff_enabled() -> bool {
-    std::env::var("MFB_ENABLE_TIFF")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    std::env::var("MFB_ENABLE_TIFF").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 #[must_use]
