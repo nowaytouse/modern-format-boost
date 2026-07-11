@@ -89,6 +89,7 @@
 use crate::Rational;
 use crate::io_utils::ByteSliceExt;
 use crate::tool_builders::JxlinfoBuilder;
+use crate::tooling::builder_base::ToolBuilder;
 use crate::unified_error::{ImgQualityError, Result};
 use crate::{DjxlBuilder, FfmpegBuilder, FfprobeBuilder};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
@@ -367,10 +368,58 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     )
 }
 
-/// Detect if an image is animated (GIF, APNG, WebP, etc.).
+/// Extract FPS from AVIF using ffprobe fallback.
 ///
-/// # Errors
-/// Returns an error if the file cannot be read or parsed.
+/// libavif does not provide timing information, so we use ffprobe to extract
+/// frame rate for animated AVIF files.
+fn extract_fps_from_ffprobe(path: &Path) -> Option<f32> {
+    if !crate::ffmpeg_builder::FfprobeBuilder::check_available() {
+        tracing::debug!("ffprobe not available for AVIF FPS extraction");
+        return None;
+    }
+
+    let mut cmd = FfprobeBuilder::new()
+        .input(path)
+        .show_streams()
+        .show_format()
+        .print_format("json")
+        .loglevel("error")
+        .build();
+
+    let output = crate::process_runner::ManagedProcess::spawn(&mut cmd)
+        .ok()?
+        .wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction")
+        .ok()?;
+
+    let json: serde_json::Value = serde_json::from_str(&output.stdout).ok()?;
+    let streams = json.get("streams")?.as_array()?;
+
+    for stream in streams {
+        if stream.get("codec_type")?.as_str() == Some("video") {
+            // Try r_frame_rate first (actual frame rate), then avg_frame_rate
+            let fps_str = stream
+                .get("r_frame_rate")
+                .and_then(|v| v.as_str())
+                .or_else(|| stream.get("avg_frame_rate").and_then(|v| v.as_str()))?;
+
+            // Parse fps from "num/den" format
+            let parts: Vec<&str> = fps_str.split('/').collect();
+            if parts.len() == 2 {
+                let num: f64 = parts[0].parse().ok()?;
+                let den: f64 = parts[1].parse().ok()?;
+                if den > 0.0 && num > 0.0 {
+                    let fps = num / den;
+                    if fps.is_finite() && fps > 0.0 {
+                        return Some(crate::numeric_cast::f64_to_f32_lossy(fps));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn detect_animation(
     path: &Path,
     format: &DetectedFormat,
@@ -440,8 +489,25 @@ pub fn detect_animation(
             // Immediately declare static without touching ffprobe.
             return Ok((false, None, None));
         }
-        DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => {
-            // libheif-rs is the authoritative HEIC/AVIF/HEIF library — use it
+        DetectedFormat::AVIF => {
+            // libavif 0.14 doesn't provide animation detection, so use ffprobe
+            // to determine if the AVIF is animated and extract its frame rate.
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+
+            if let Some(fps) = extract_fps_from_ffprobe(path) {
+                // AVIF is animated with detected FPS
+                return Ok((true, None, Some(fps)));
+            }
+
+            // No FPS detected, treat as static
+            return Ok((false, None, None));
+        }
+        DetectedFormat::HEIC | DetectedFormat::HEIF => {
+            // libheif-rs is the authoritative HEIC/HEIF library — use it
             // directly before falling back to ffprobe.
             crate::common_utils::validate_file_size_limit(
                 path,
@@ -467,7 +533,7 @@ pub fn detect_animation(
                         target: "libheif_probe",
                         path = %path.display(),
                         error = %err,
-                        "libheif-rs failed to read HEIF/AVIF for animation detection; falling through to ffprobe"
+                        "libheif-rs failed to read HEIF/HEIC for animation detection; falling through to ffprobe"
                     );
                     // Fall through to Stage 2 (ffprobe) for ambiguous/malformed containers.
                 }

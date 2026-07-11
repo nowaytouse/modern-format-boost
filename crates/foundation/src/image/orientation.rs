@@ -330,7 +330,7 @@ fn verify_pixel_diff_against_decoded_image(
 
                     // Decode HEIC to PNG using heif-convert
                     let temp_png = orientation_decode_tempfile(".png")?;
-                    let decode_output = std::process::Command::new("heif-convert")
+                    let heif_decode_output = std::process::Command::new("heif-convert")
                         .arg(source_image)
                         .arg(temp_png.path())
                         .output()
@@ -340,8 +340,8 @@ fn verify_pixel_diff_against_decoded_image(
                             ))
                         })?;
 
-                    if !decode_output.status.success() {
-                        let stderr = first_nonempty_tool_line(&decode_output.stderr)
+                    if !heif_decode_output.status.success() {
+                        let stderr = first_nonempty_tool_line(&heif_decode_output.stderr)
                             .unwrap_or("<empty stderr>");
                         return Err(ImgQualityError::AnalysisError(format!(
                             "pixel-diff: heif-convert exited non-zero decoding {}: {stderr}",

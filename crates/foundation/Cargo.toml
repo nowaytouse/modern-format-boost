@@ -40,6 +40,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }
+libavif = { workspace = true }
 jpegxl-rs = { workspace = true, optional = true }
 flate2 = { workspace = true }
 ctrlc = { workspace = true }
