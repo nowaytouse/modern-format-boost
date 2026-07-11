@@ -358,7 +358,7 @@ fn test_all_control_groups_lossless_lossy() {
             let l_res = detect_compression(format, l_path);
             let y_res = detect_compression(format, y_path);
             
-            println!("Control Group {name}: lossless={:?}, lossy={:?}", l_res, y_res);
+            println!("Control Group {name}: lossless={l_res:?}, lossy={y_res:?}");
             assert_eq!(l_res.unwrap(), CompressionType::Lossless, "Format {name} lossless was detected as lossy");
             assert_eq!(y_res.unwrap(), CompressionType::Lossy, "Format {name} lossy was detected as lossless");
         }
