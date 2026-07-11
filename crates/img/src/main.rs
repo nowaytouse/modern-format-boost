@@ -5140,6 +5140,30 @@ fn fast_img_run_verification_and_delivery_pipeline(
         marker.stage = FastImgStageName::CleanupComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
+        if !lossy_modern_static_candidates.is_empty() {
+            println!(
+                "[TIER 2  ] importing {} lossy modern static source(s) to Photos",
+                lossy_modern_static_candidates.len()
+            );
+            let tier2_handle =
+                import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates).map_err(
+                    |err| {
+                        anyhow::anyhow!("fast-img tier-2 modern lossy static import failed: {err}")
+                    },
+                )?;
+            apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
+                anyhow::anyhow!("fast-img tier-2 marker import proof failed: {err}")
+            })?;
+            tracing::info!(
+                target: "fast_img",
+                imported = tier2_handle.imported_assets.len(),
+                "fast-img tier-2 Photos import completed"
+            );
+            println!(
+                "[TIER 2  ] imported {} lossy modern static asset(s) to Photos",
+                tier2_handle.imported_assets.len()
+            );
+        }
         println!(
             "[DELIVER ] Gate 1 passed; JXL-only output at {}; source JPEGs deleted={} already_absent={} empty_dirs_pruned={}",
             working_copy.display(),

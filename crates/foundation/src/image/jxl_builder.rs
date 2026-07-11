@@ -117,9 +117,10 @@ impl ToolBuilder for CjxlBuilder {
         }
 
         if let Some(d) = self.distance
-            && !self.lossless_jpeg {
-                cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d}"));
-            }
+            && !self.lossless_jpeg
+        {
+            cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d}"));
+        }
 
         if let Some(e) = self.effort {
             let lossless_transcode_e11 =

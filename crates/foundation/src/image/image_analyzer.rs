@@ -2471,7 +2471,10 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
 #[must_use]
 fn pixel_heuristic_enabled() -> bool {
     match std::env::var("MFB_ENABLE_PIXEL_HEURISTIC") {
-        Ok(v) => matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"),
+        Ok(v) => matches!(
+            v.trim(),
+            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+        ),
         _ => false,
     }
 }
@@ -2646,7 +2649,9 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                         image.image_header().metadata.ec_info.iter().any(|info| {
                             matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
                         });
-                    let bit_depth = match u8::try_from(image.image_header().metadata.bit_depth.bits_per_sample()) {
+                    let bit_depth = match u8::try_from(
+                        image.image_header().metadata.bit_depth.bits_per_sample(),
+                    ) {
                         Ok(b) => Some(b),
                         Err(e) => {
                             tracing::warn!(target: "jxl_oxide_probe", error = %e, "Invalid bit depth parsed in jxl metadata");

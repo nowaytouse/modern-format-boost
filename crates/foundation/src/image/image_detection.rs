@@ -527,14 +527,14 @@ pub fn detect_animation(
                     if JxlinfoBuilder::new().check_available()
                         && let Some(is_anim) =
                             detect_jxl_animation_via_jxlinfo(path).unwrap_or(None)
-                        {
-                            let (frame_count, fps) = if is_anim {
-                                jxlinfo_refine_jxl_animation(path, None)
-                            } else {
-                                (None, None)
-                            };
-                            return Ok((is_anim, frame_count, fps));
-                        }
+                    {
+                        let (frame_count, fps) = if is_anim {
+                            jxlinfo_refine_jxl_animation(path, None)
+                        } else {
+                            (None, None)
+                        };
+                        return Ok((is_anim, frame_count, fps));
+                    }
                     return Ok((false, None, None));
                 }
             }
@@ -710,7 +710,9 @@ pub fn animatable_format_confirmed_static_only(
         DetectedFormat::JXL => {
             // Prioritize authoritative native library (jxl-oxide) for animation detection
             let data = std::fs::read(path).map_err(|e| {
-                ImgQualityError::AnalysisError(format!("Failed to read JXL file for oxide probe: {e}"))
+                ImgQualityError::AnalysisError(format!(
+                    "Failed to read JXL file for oxide probe: {e}"
+                ))
             })?;
 
             match ::jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&data)) {
@@ -1106,11 +1108,12 @@ fn parse_jxlinfo_full_info(output: &str) -> (Option<u32>, Option<f32>) {
         // "Animation: 100ms per frame (10.00 fps)"
         if fps.is_none()
             && let Some(pos) = lower.find(" fps)")
-                && let Some(lparen) = lower[..pos].rfind('(') {
-                    let token = lower[lparen + 1..pos].trim();
-                    fps = crate::numeric_cast::parse_strict::<f64>(token, "jxlinfo_fps")
-                        .map(crate::numeric_cast::f64_to_f32_lossy);
-                }
+            && let Some(lparen) = lower[..pos].rfind('(')
+        {
+            let token = lower[lparen + 1..pos].trim();
+            fps = crate::numeric_cast::parse_strict::<f64>(token, "jxlinfo_fps")
+                .map(crate::numeric_cast::f64_to_f32_lossy);
+        }
 
         if frame_count.is_some() && fps.is_some() {
             break;

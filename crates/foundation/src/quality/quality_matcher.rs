@@ -2596,7 +2596,9 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
 
     let reason = if should_skip {
         let codec_name = match codec {
-            SourceCodec::Tiff if is_tiff_disabled => "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)",
+            SourceCodec::Tiff if is_tiff_disabled => {
+                "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)"
+            }
             SourceCodec::WebpStatic => "lossy WebP",
             SourceCodec::Avif => "lossy AVIF",
             SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF",
@@ -2637,7 +2639,8 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
         if is_tiff_disabled {
             codec_name.to_string()
         } else {
-            crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE.replace("{}", codec_name)
+            crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE
+                .replace("{}", codec_name)
         }
     } else if is_heic_lossless {
         // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.

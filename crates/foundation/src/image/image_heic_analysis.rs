@@ -190,8 +190,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 //   - If sign_data_hiding_enabled=0 → likely lossless (Apple/professional camera default)
                 //   - If sign_data_hiding_enabled=1 → treat as lossy (rounding errors probable)
                 let pps_flags = check_heic_pps_transquant_bypass_flag(data);
-                if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) = pps_flags
-                {
+                if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) = pps_flags {
                     if transquant_bypass_enabled {
                         if sign_data_hiding_enabled {
                             crate::log_debug!(
@@ -243,28 +242,28 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     return Ok(false);
                 }
 
-                        let matrix_warning = if has_rgb_identity_matrix {
-                            " (Note: Identity RGB matrix detected, but PPS parsing failed)"
-                        } else {
-                            ""
-                        };
-                        crate::media_conversion_gate::probe_image_format_batch_audit(
-                            "probe_heic",
-                            format!(
-                                "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} is \
+                let matrix_warning = if has_rgb_identity_matrix {
+                    " (Note: Identity RGB matrix detected, but PPS parsing failed)"
+                } else {
+                    ""
+                };
+                crate::media_conversion_gate::probe_image_format_batch_audit(
+                    "probe_heic",
+                    format!(
+                        "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} is \
                                  4:4:4 but PPS transquant_bypass_enabled_flag could not be parsed for '{}'{}; \
                                  precision detection is inconclusive",
-                                profile_idc,
-                                path.display(),
-                                matrix_warning
-                            ),
-                        );
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "HEIC: RExt/SCC profile ({}) is 4:4:4 but PPS could not be parsed{}; cannot determine — {}",
-                            profile_idc,
-                            matrix_warning,
-                            path.display()
-                        )));
+                        profile_idc,
+                        path.display(),
+                        matrix_warning
+                    ),
+                );
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "HEIC: RExt/SCC profile ({}) is 4:4:4 but PPS could not be parsed{}; cannot determine — {}",
+                    profile_idc,
+                    matrix_warning,
+                    path.display()
+                )));
             }
 
             // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
@@ -290,7 +289,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 /// Returns Some(true) if validation passes, Some(false) if fails, None if tool unavailable.
 fn try_heif_info_validation(path: &Path) -> Option<bool> {
     let tool_path = crate::common_utils::resolve_tool_path(crate::constants::TOOL_HEIF_INFO)?;
-    
+
     let output = match std::process::Command::new(&tool_path)
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
@@ -298,7 +297,7 @@ fn try_heif_info_validation(path: &Path) -> Option<bool> {
         Ok(out) => out,
         _ => return None,
     };
-    
+
     if output.status.success() {
         // heif-info succeeded - file is structurally valid
         Some(true)
