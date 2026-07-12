@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Core Features & Capabilities
+
+- **TIFF/DNG Processing**: Added `MFB_ENABLE_TIFF` environment gate. TIFF processing is now disabled by default and requires explicit opt-in.
+- **Lossless Detection Overhaul**:
+  - **HEIC**: Replaced basic heuristic checks with deep PPS (`transquant_bypass_enabled_flag` / `sign_data_hiding_enabled_flag`) NAL parsing for deterministic 4:4:4 lossless identification.
+  - **JXL**: Added native `jxl-oxide` parsing for canvas/metadata extraction, with fallback to `ffprobe`.
+  - **EXR/ICO**: Explicitly evaluate compression attributes instead of assuming lossless.
+  - **Pixel Heuristic**: Gated pixel-level lossless fallback behind `MFB_ENABLE_PIXEL_HEURISTIC=1`.
+- **Format Support**: Added `libavif` v0.14 dependency and `ffprobe` FPS extraction for animated AVIFs.
+- **Tier-2 Verification**: Added robust Apple Photos import verification for tier-2 modern lossy assets, handling UUID tracking and pixel-equivalence for drifted container hashes.
+
+### Refactoring & Project Hygiene
+
+- Bumped Rust toolchain to `nightly-2026-07-09`.
+- Replaced multiple silent `unwrap_or(default)` and `is_ok_and` instances across the codebase with explicit error propagation.
+- Improved multithreading safety by using `mutex_guard_or_recover` instead of silently discarding `.lock()` errors in `img/src/main.rs`.
+- Standardized JXL arguments to use `--num_threads`.
+
 ### Developer Experience & Tooling
 
 - **Rust Primary Launcher**: Migrated `drag_and_drop_processor` from Python to Rust as the primary binary, retaining Python version as compatibility reference only.

@@ -5034,8 +5034,8 @@ pub fn delivery_gpu_binary_search_crf_from_mid(mid: i32, hi: i32) -> f32 {
             delivery_gpu_batch_audit(
                 "delivery_gpu",
                 format!(
-                    "NUMERIC AUDIT: Binary search hi {hi} also overflows u16 | FATAL: cannot \
-                     recover (refusing to forge u16::MAX)"
+                    "NUMERIC AUDIT: Binary search hi {hi} also overflows u16 | FATAL: \
+                     clamping to u16::MAX"
                 ),
             );
             // Clamp to u16::MAX instead of silent forgery - this path should never

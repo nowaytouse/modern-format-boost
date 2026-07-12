@@ -1,0 +1,6 @@
+fix: audit defect resolution and weekly changelog update
+
+- Fix: Removed `unwrap_or_default()` in verify.rs/py tier-2 asset logic to prevent false positives when `rel_path` is missing.
+- Fix: Addressed strict numeric cast violations in `image_analyzer.rs` and `image_formats.rs` by routing through `numeric_cast::u32_to_u8_strict` and `numeric_cast::u64_to_usize_strict`.
+- Fix: Corrected misleading audit log in `media_conversion_gate.rs` to accurately reflect clamping to `u16::MAX`.
+- Docs: Updated CHANGELOG.md with the consolidated week's audit summary.

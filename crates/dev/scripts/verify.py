@@ -311,7 +311,9 @@ def run_fast_img_delivery_check(
         tier2_assets = marker.get("tier2_imported_assets", [])
         tier2_recorded = len(tier2_assets)
         for item in tier2_assets:
-            rel = item.get("rel_path", "")
+            rel = item.get("rel_path")
+            if not rel:
+                continue
             photos_uuid = item.get("photos_uuid")
             source_path = source_dir / rel
             exists = source_path.is_file()
