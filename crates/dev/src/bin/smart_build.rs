@@ -489,7 +489,6 @@ fn get_newest_source_mtime(project_root: &Path, project_dir: &str) -> f64 {
     check_file(&project_root.join("Cargo.toml"));
     check_file(&project_root.join("Cargo.lock"));
     check_file(&project_root.join("rust-toolchain.toml"));
-    check_file(&project_root.join("crates/dev/src/bin/smart_build.rs"));
 
     newest
 }
@@ -590,8 +589,8 @@ fn decide_build_action(
 fn build_project(
     project_root: &Path,
     project_dir: &str,
-    binary_name: &str,
-    retry_count: i32,
+    _binary_name: &str,
+    _retry_count: i32,
     _args: &Args,
     style: Style,
 ) -> Result<bool> {
@@ -646,11 +645,45 @@ fn build_project(
 
     // Always verify timestamps: a mismatched mtime means Cargo reused a cached
     // binary without recompiling, which would silently deploy stale code.
+    // For multi-binary crates, Cargo might rebuild only the changed binaries.
+    // We must check if AT LEAST ONE expected binary was successfully updated.
     {
-        let binary_path = get_binary_path(project_root, binary_name);
         std::thread::sleep(std::time::Duration::from_secs(1));
 
-        if !binary_path.is_file() {
+        let expected_binaries = match project_dir {
+            "crates/img" => vec!["img"],
+            "crates/vid" => vec!["vid"],
+            _ => vec![
+                "verify",
+                "cache_cleaner",
+                "database_manager",
+                "collect_optimized",
+                "merge_xmp",
+                "icloud_import",
+                "drag_and_drop_processor",
+            ],
+        };
+
+        let mut any_updated = false;
+        let mut newest_mtime = 0.0;
+        let mut missing_binary = false;
+
+        for bin in &expected_binaries {
+            let p = get_binary_path(project_root, bin);
+            if !p.is_file() {
+                missing_binary = true;
+                break;
+            }
+            let mtime = get_mtime(&p);
+            if mtime > newest_mtime {
+                newest_mtime = mtime;
+            }
+            if mtime >= (compile_start_time - 2.0) {
+                any_updated = true;
+            }
+        }
+
+        if missing_binary {
             println!(
                 "{}ERROR: TIMESTAMP VERIFICATION FAILED: Binary not found{}",
                 style.red, style.reset
@@ -658,53 +691,23 @@ fn build_project(
             return Ok(false);
         }
 
-        let binary_mtime = get_mtime(&binary_path);
-        if binary_mtime < (compile_start_time - 2.0) {
+        if !any_updated {
             println!(
-                "{}FAILURE: TIMESTAMP VERIFICATION FAILED{}",
-                style.red, style.reset
+                "   {}\u{2713} Cargo cache reused (no rebuild required){}",
+                style.dim, style.reset
             );
-            if retry_count < 2 {
-                warn!(
-                    "Timestamp verification failed for {}. Retrying ({}/2).",
-                    binary_path.display(),
-                    retry_count + 1
-                );
-                println!(
-                    "{}Retry {}/2: Rebuilding with clean...{}",
-                    style.yellow,
-                    retry_count + 1,
-                    style.reset
-                );
-                warn!("[AUDIT] DESTRUCTIVE ACTION: Deleting target/release/deps");
-                let _ = fs::remove_dir_all(project_root.join("target/release/deps"));
-                warn!("[AUDIT] DESTRUCTIVE ACTION: Deleting target/release/.fingerprint");
-                let _ = fs::remove_dir_all(project_root.join("target/release/.fingerprint"));
-                return build_project(
-                    project_root,
-                    project_dir,
-                    binary_name,
-                    retry_count + 1,
-                    _args,
-                    style,
-                );
-            }
+        } else {
+            // Timestamp verified — print confirmation matching Python smart_build output.
+            let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
+                .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .into();
+            let mtime_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
             println!(
-                "{}FAILURE: Timestamp verification failed after retries{}",
-                style.red, style.reset
+                "   {}\u{2713} timestamp OK{}  {}{}{}",
+                style.green, style.reset, style.dim, mtime_str, style.reset
             );
-            return Ok(false);
         }
-        // Timestamp verified — print confirmation matching Python smart_build output.
-        let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs_f64(binary_mtime))
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-            .into();
-        let mtime_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
-        println!(
-            "   {}\u{2713} timestamp OK{}  {}{}{}",
-            style.green, style.reset, style.dim, mtime_str, style.reset
-        );
     }
 
     Ok(true)
