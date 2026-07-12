@@ -1481,9 +1481,11 @@ pub mod tiff_family {
                 f.seek(SeekFrom::Start(offset))?;
 
                 let safe_length = std::cmp::min(length, 10 * 1024 * 1024); // max 10MB to read header
-                let buffer_size = crate::numeric_cast::u64_to_usize_strict(safe_length, "jxl_buffer_size").ok_or_else(|| {
-                    ImgQualityError::AnalysisError("JXL buffer size overflow".to_string())
-                })?;
+                let buffer_size =
+                    crate::numeric_cast::u64_to_usize_strict(safe_length, "jxl_buffer_size")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError("JXL buffer size overflow".to_string())
+                        })?;
                 let mut buffer = vec![0u8; buffer_size];
                 let bytes_read = f.read(&mut buffer)?;
                 buffer.truncate(bytes_read);

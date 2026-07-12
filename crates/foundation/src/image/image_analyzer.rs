@@ -2651,7 +2651,7 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                         });
                     let bit_depth = match crate::numeric_cast::u32_to_u8_strict(
                         image.image_header().metadata.bit_depth.bits_per_sample(),
-                        "jxl_bit_depth"
+                        "jxl_bit_depth",
                     ) {
                         Some(b) => Some(b),
                         None => {

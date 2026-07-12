@@ -642,10 +642,7 @@ fn run_fast_img_delivery_check(
         if let Some(arr) = m.get("tier2_imported_assets").and_then(|v| v.as_array()) {
             tier2_recorded = arr.len();
             for item in arr {
-                let Some(rel) = item
-                    .get("rel_path")
-                    .and_then(|v| v.as_str())
-                else {
+                let Some(rel) = item.get("rel_path").and_then(|v| v.as_str()) else {
                     continue;
                 };
                 let photos_uuid = item.get("photos_uuid").and_then(|v| v.as_str());

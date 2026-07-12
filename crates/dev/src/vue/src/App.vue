@@ -572,7 +572,12 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div v-if="uiNotice" class="ui-notice liquid-glass" role="status" aria-live="polite">
+    <div
+      v-if="uiNotice"
+      class="ui-notice liquid-glass"
+      role="status"
+      aria-live="polite"
+    >
       {{ uiNotice }}
     </div>
 
@@ -1468,7 +1473,9 @@ body {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background-color 0.2s ease, transform 0.15s ease;
+  transition:
+    background-color 0.2s ease,
+    transform 0.15s ease;
 }
 .toggle-row:hover {
   background: rgba(128, 128, 128, 0.1);
@@ -1502,7 +1509,9 @@ body {
   background: rgba(128, 128, 128, 0.3);
   border-radius: 10px;
   position: relative;
-  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+  transition:
+    background-color 0.3s ease,
+    box-shadow 0.3s ease;
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .switch input {
@@ -1516,11 +1525,15 @@ body {
   height: 16px;
   background: #fff;
   border-radius: 50%;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease;
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.3s ease;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 .switch:hover {
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2), 0 0 0 3px rgba(52, 199, 89, 0.1);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.2),
+    0 0 0 3px rgba(52, 199, 89, 0.1);
 }
 .switch.on {
   background: var(--success);
@@ -1683,7 +1696,9 @@ body {
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 50% 50%;
-  transition: stroke-dashoffset 0.1s linear, stroke 0.3s ease;
+  transition:
+    stroke-dashoffset 0.1s linear,
+    stroke 0.3s ease;
   filter: drop-shadow(0 0 6px rgba(10, 132, 255, 0.3));
 }
 .progress-text {

@@ -589,11 +589,19 @@ fn decide_build_action(
 fn build_project(
     project_root: &Path,
     project_dir: &str,
-    _binary_name: &str,
-    _retry_count: i32,
-    _args: &Args,
+    binary_name: &str,
+    retry_count: i32,
+    args: &Args,
     style: Style,
 ) -> Result<bool> {
+    if args.force && retry_count == 0 {
+        let pkg = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
+        let _ = Command::new("cargo")
+            .args(["clean", "-p", pkg, "--release"])
+            .current_dir(project_root)
+            .status();
+    }
+
     let compile_start_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs_f64(),
         Err(_err) => 0.0,
@@ -692,10 +700,41 @@ fn build_project(
         }
 
         if !any_updated {
-            println!(
-                "   {}\u{2713} Cargo cache reused (no rebuild required){}",
-                style.dim, style.reset
-            );
+            if retry_count < 2 {
+                warn!(
+                    "Timestamp verification failed for {project_dir}. Retrying ({}/2).",
+                    retry_count + 1
+                );
+                println!(
+                    "{}Retry {}/2: Rebuilding with clean...{}",
+                    style.yellow,
+                    retry_count + 1,
+                    style.reset
+                );
+                let pkg = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
+                warn!(
+                    "[AUDIT] DESTRUCTIVE ACTION: cargo clean -p {} --release",
+                    pkg
+                );
+                let _ = Command::new("cargo")
+                    .args(["clean", "-p", pkg, "--release"])
+                    .current_dir(project_root)
+                    .status();
+                return build_project(
+                    project_root,
+                    project_dir,
+                    binary_name,
+                    retry_count + 1,
+                    args,
+                    style,
+                );
+            } else {
+                println!(
+                    "{}FAILURE: Timestamp verification failed after 2 retries{}",
+                    style.red, style.reset
+                );
+                return Ok(false);
+            }
         } else {
             // Timestamp verified — print confirmation matching Python smart_build output.
             let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
@@ -1231,10 +1270,16 @@ fn main() -> Result<()> {
     if args.clean {
         println!("{}Cleaning build artifacts...{}", style.yellow, style.reset);
         for proj in &projects_to_build {
-            let _ = fs::remove_dir_all(project_root.join(proj).join("target/release/deps"));
-            let _ = fs::remove_dir_all(project_root.join(proj).join("target/release/.fingerprint"));
+            let pkg = proj.strip_prefix("crates/").unwrap_or(proj);
+            let _ = Command::new("cargo")
+                .args(["clean", "-p", pkg, "--release"])
+                .current_dir(&project_root)
+                .status();
         }
-        let _ = fs::remove_dir_all(project_root.join("crates/foundation/target/release/deps"));
+        let _ = Command::new("cargo")
+            .args(["clean", "-p", "foundation", "--release"])
+            .current_dir(&project_root)
+            .status();
         println!();
         clean_with_kondo(&project_root, style)?;
     }

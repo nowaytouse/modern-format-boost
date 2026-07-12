@@ -317,7 +317,7 @@ def run_fast_img_delivery_check(
             photos_uuid = item.get("photos_uuid")
             source_path = source_dir / rel
             exists = source_path.is_file()
-            
+
             if exists:
                 tier2_unexpected_remaining.append(rel)
             elif photos_uuid:
