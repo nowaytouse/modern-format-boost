@@ -1163,6 +1163,7 @@ fn main() -> Result<()> {
     if args.all {
         projects_to_build.push("crates/img");
         projects_to_build.push("crates/vid");
+        projects_to_build.push("crates/dev");
     } else {
         if args.img {
             projects_to_build.push("crates/img");
@@ -1221,7 +1222,7 @@ fn main() -> Result<()> {
     );
 
     // Always remove stale binaries left over from previous build locations.
-    let targets = vec!["img", "vid"];
+    let targets = APP_BUNDLE_RESOURCE_BINARIES.to_vec();
     clean_old_binaries(&project_root, &targets, style)?;
 
     if args.clean {
@@ -1299,12 +1300,7 @@ fn main() -> Result<()> {
 
     if args.verbose || rebuilt > 0 {
         println!("\n{}Binary info:{}", style.bold, style.reset);
-        for proj in &projects_to_build {
-            let bin = match *proj {
-                "crates/img" => "img",
-                "crates/vid" => "vid",
-                _ => "verify",
-            };
+        for bin in APP_BUNDLE_RESOURCE_BINARIES {
             let p = get_binary_path(&project_root, bin);
             if p.is_file() {
                 match fs::metadata(&p) {
