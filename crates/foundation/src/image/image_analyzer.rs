@@ -2649,15 +2649,12 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                         image.image_header().metadata.ec_info.iter().any(|info| {
                             matches!(info.ty, ::jxl_oxide::ExtraChannelType::Alpha { .. })
                         });
-                    let bit_depth = match crate::numeric_cast::u32_to_u8_strict(
+                    let bit_depth = if let Some(b) = crate::numeric_cast::u32_to_u8_strict(
                         image.image_header().metadata.bit_depth.bits_per_sample(),
                         "jxl_bit_depth",
-                    ) {
-                        Some(b) => Some(b),
-                        None => {
-                            tracing::warn!(target: "jxl_oxide_probe", "Invalid bit depth parsed in jxl metadata");
-                            None
-                        }
+                    ) { Some(b) } else {
+                        tracing::warn!(target: "jxl_oxide_probe", "Invalid bit depth parsed in jxl metadata");
+                        None
                     };
                     return Ok((width, height, has_alpha, bit_depth));
                 }
