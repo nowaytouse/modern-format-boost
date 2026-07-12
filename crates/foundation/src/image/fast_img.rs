@@ -2953,13 +2953,18 @@ pub fn library_handle_from_media_output_probes(
                             target.rel_path, probe.uuid
                         )));
                     }
-                    Ok(crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel }) => {
+                    Ok(crate::image::orientation::PixelDiffResult::Mismatch {
+                        max_delta,
+                        channel,
+                    }) => {
                         return Err(ImgQualityError::AnalysisError(format!(
                             "Photos verifier pixel-equivalence: mismatch for {} (uuid={}): max_delta={max_delta} channel={channel:?}",
                             target.rel_path, probe.uuid
                         )));
                     }
-                    Err(ImgQualityError::AnalysisError(msg)) if msg.contains("dimension mismatch") => {
+                    Err(ImgQualityError::AnalysisError(msg))
+                        if msg.contains("dimension mismatch") =>
+                    {
                         tracing::warn!(
                             target: "photos_import",
                             rel_path = %target.rel_path,

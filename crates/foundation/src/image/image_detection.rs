@@ -387,13 +387,15 @@ fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
         .build();
 
     let output = match crate::process_runner::ManagedProcess::spawn(&mut cmd) {
-        Ok(proc) => match proc.wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction") {
-            Ok(out) => out,
-            Err(err) => {
-                tracing::debug!("ffprobe process wait timeout error: {err}");
-                return Ok(None);
+        Ok(proc) => {
+            match proc.wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction") {
+                Ok(out) => out,
+                Err(err) => {
+                    tracing::debug!("ffprobe process wait timeout error: {err}");
+                    return Ok(None);
+                }
             }
-        },
+        }
         Err(err) => {
             tracing::debug!("ffprobe process spawn failed: {err}");
             return Ok(None);

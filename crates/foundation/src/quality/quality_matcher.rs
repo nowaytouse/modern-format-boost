@@ -2565,7 +2565,14 @@ pub fn is_size_guard_active(codec_str: &str, apple_compat: bool) -> bool {
 
 #[must_use]
 pub fn tiff_enabled() -> bool {
-    std::env::var("MFB_ENABLE_TIFF").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    match std::env::var("MFB_ENABLE_TIFF") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(e) => {
+            tracing::warn!("Failed to read MFB_ENABLE_TIFF env var: {e}");
+            false
+        }
+    }
 }
 
 #[must_use]
