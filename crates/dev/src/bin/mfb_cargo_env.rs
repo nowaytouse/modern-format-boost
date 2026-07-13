@@ -1,8 +1,6 @@
 //! Optional PATH helper when `~/.cargo/bin` shims are broken.
 //!
-//! Port of `crates/dev/scripts/ci/mfb_cargo_env.py` (Python retained as compat
-//! reference). Root fix (run once): `repair_rustup_shims` bin /
-//! `repair_rustup_shims.py`.
+//! Root fix (run once): `repair_rustup_shims` bin.
 
 use dev::infra::mfb_cargo_env::setup_cargo_env;
 

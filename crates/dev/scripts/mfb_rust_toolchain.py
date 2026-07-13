@@ -2,7 +2,7 @@
 
 **Root fix on Homebrew macOS:** ``~/.cargo/bin/rustup`` must point at the real
 ``libexec/bin/rustup`` binary, not Homebrew's shell wrapper (see
-``crates/dev/scripts/ci/repair_rustup_shims.py``). Without that, toolchain ``cargo`` loads
+``repair_rustup_shims`` bin). Without that, toolchain ``cargo`` loads
 ``cargo-clippy`` from ``CARGO_HOME/bin`` and rustup mis-parses subcommands.
 
 This module prepends ``toolchains/<name>/bin`` when proxies are still broken.

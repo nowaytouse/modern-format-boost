@@ -1019,7 +1019,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "GitHub Actions health-check profile: ci-static-build tests, contract "
             "registry (test_real_silent_fallbacks), required LCOV; sets GITHUB_ACTIONS "
-            "for crates/dev/scripts/ci/clippy_strict.py. Use with expensive checks (default); "
+            "for clippy_strict bin. Use with expensive checks (default); "
             "pass --no-expensive to skip hack/bloat/extra llvm-cov only."
         ),
     )
@@ -1177,11 +1177,17 @@ def main() -> None:
         )
         subprocess.run(fmt_cmd, env=os.environ.copy())
 
-        clippy_fix = [
-            sys.executable,
-            str(repo_root / "crates" / "dev" / "scripts" / "ci" / "clippy_strict.py"),
+        clippy_fix = cargo_argv(
+            rust_tc,
+            "run",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "clippy_strict",
+            "--",
             "--fix",
-        ]
+        )
         subprocess.run(clippy_fix, env=os.environ.copy(), cwd=repo_root)
 
         if has_command("ruff"):
@@ -1261,18 +1267,21 @@ def main() -> None:
     else:
         skip_step(tracker, "python syntax", "no scripts")
 
-    # ── clippy (required, ultra-strict — same as CI crates/dev/scripts/ci/clippy_strict.py) ──
+    # ── clippy (required, ultra-strict — same as CI clippy_strict bin) ──
     if nc.clippy and rust_tc.clippy:
         run_step(
             tracker,
             "required",
-            "crates/dev/scripts/ci/clippy_strict.py (workspace deny + pedantic/nursery/cargo)",
-            [
-                sys.executable,
-                str(
-                    repo_root / "crates" / "dev" / "scripts" / "ci" / "clippy_strict.py"
-                ),
-            ],
+            "clippy_strict (workspace deny + pedantic/nursery/cargo)",
+            cargo_argv(
+                rust_tc,
+                "run",
+                "--locked",
+                "-p",
+                "dev",
+                "--bin",
+                "clippy_strict",
+            ),
         )
     else:
         if nc.toolchain:
