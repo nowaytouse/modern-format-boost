@@ -1,4 +1,4 @@
-    //! Modern Format Boost - Diagnostic Analysis and Integrity Verifier in Rust.
+//! Modern Format Boost - Diagnostic Analysis and Integrity Verifier in Rust.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -59,7 +59,11 @@ struct Args {
     #[arg(long = "session-audit", help = "Session verbose log(s).")]
     session_audit: Vec<PathBuf>,
 
-    #[arg(long = "strategy", default_value = "jxl", help = "Transcode strategy (jxl or avif).")]
+    #[arg(
+        long = "strategy",
+        default_value = "jxl",
+        help = "Transcode strategy (jxl or avif)."
+    )]
     strategy: String,
 }
 
@@ -554,7 +558,11 @@ fn run_fast_img_delivery_check(
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
         source_files_label: "Recorded source JPEGs".to_string(),
-        optimized_files_label: if strategy == "avif" { "Optimized AVIF files".to_string() } else { "Optimized JXL files".to_string() },
+        optimized_files_label: if strategy == "avif" {
+            "Optimized AVIF files".to_string()
+        } else {
+            "Optimized JXL files".to_string()
+        },
         ..Default::default()
     };
 
@@ -2071,7 +2079,12 @@ fn main() -> Result<()> {
                     &args.strategy,
                 )?);
             } else if args.fast_img_restore {
-                integrity_stats = Some(run_fast_img_restore_check(&src, &opt, &mut report, &args.strategy)?);
+                integrity_stats = Some(run_fast_img_restore_check(
+                    &src,
+                    &opt,
+                    &mut report,
+                    &args.strategy,
+                )?);
             } else {
                 integrity_stats = Some(run_integrity_check(
                     &src,
@@ -2356,7 +2369,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 0);
@@ -2434,7 +2448,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 1);
@@ -2471,7 +2486,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.optimized_files, 0);
@@ -2509,7 +2525,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 1);
@@ -2531,7 +2548,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 0);
         assert_eq!(stats.integrity_failures, 1);
@@ -2561,7 +2579,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 1);
@@ -2612,7 +2631,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.optimized_files, 0);
         assert_eq!(stats.extra, 1);
@@ -2890,7 +2910,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         #[cfg(unix)]
         {
@@ -2943,7 +2964,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 1);
@@ -2982,7 +3004,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 0);
@@ -3022,7 +3045,8 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+                .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 0);

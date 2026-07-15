@@ -1343,11 +1343,7 @@ mod fast_gif_tests {
     fn fast_gif_command_accepts_meme_mode_strategy() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["vid", "fast-gif", "/media/in", "--strategy", "avif"])?;
 
-        let Commands::FastGif {
-            strategy,
-            ..
-        } = parsed.command
-        else {
+        let Commands::FastGif { strategy, .. } = parsed.command else {
             anyhow::bail!("expected fast-gif command");
         };
         assert_eq!(strategy, "avif");
