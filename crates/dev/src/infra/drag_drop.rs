@@ -382,7 +382,7 @@ pub fn choose_fast_img_strategy() -> Result<String> {
     println!("\n{green}FAST MODE STRATEGY{reset}");
     println!("   {bold}1{reset} - {green}Default (JXL){reset}");
     println!("       {dim}Fast lossless recompression of JPEGs to JXL.{reset}");
-    println!("   {bold}2{reset} - {green}AVIF (表情包模式){reset}");
+    println!("   {bold}2{reset} - {green}AVIF (Meme Mode){reset}");
     println!("       {dim}Meme Mode: Strict static encoding of images to AVIF.{reset}");
     let answer = read_line(&format!(
         "\n   {bold}Choose strategy [1/2] ({green}Enter = Default{reset}{bold}): {reset}"
@@ -404,7 +404,7 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
     if strategy == "avif" {
         println!(
-            "       {dim}AVIF-only (表情包模式) delivery, strict verification, automatic iCloud Photos import, then \
+            "       {dim}AVIF-only (Meme Mode) delivery, strict verification, automatic iCloud Photos import, then \
              local AVIF folder cleanup.{reset}"
         );
     } else {
@@ -451,7 +451,7 @@ pub fn choose_fast_vid_shortest_path(strategy: &str) -> Result<bool> {
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
     if strategy == "avif" {
         println!(
-            "       {dim}AVIF-only (表情包模式) animated image delivery, no loop intent judgment.{reset}"
+            "       {dim}AVIF-only (Meme Mode) animated image delivery, no loop intent judgment.{reset}"
         );
     } else {
         println!(

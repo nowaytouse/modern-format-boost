@@ -2188,7 +2188,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     | foundation::image::format_detect::FormatKind::Heif
                     | foundation::image::format_detect::FormatKind::Avif
             ) {
-                source_jpegs.push(path);
+                if let Ok(analysis) = foundation::image_analyzer::analyze_image(&path) {
+                    if !analysis.is_animated {
+                        source_jpegs.push(path);
+                    }
+                }
             }
         } else if is_true_jpeg(&path)? {
             source_jpegs.push(path);
@@ -7454,6 +7458,20 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    #[test]
+    fn fast_img_command_accepts_strategy_flag() -> anyhow::Result<()> {
+        let parsed = Cli::try_parse_from(["img", "fast-img", "/photos", "--strategy", "avif"])?;
+
+        let Commands::FastImg {
+            strategy,
+            ..
+        } = parsed.command
+        else {
+            anyhow::bail!("expected fast-img command");
+        };
+        assert_eq!(strategy, "avif");
+        Ok(())
+    }
     #[test]
     fn run_command_accepts_archive_flag() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["img", "run", "/photos", "--archive"])?;
