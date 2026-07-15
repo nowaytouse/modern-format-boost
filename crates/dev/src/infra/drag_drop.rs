@@ -570,11 +570,12 @@ pub enum VerifyFastImgMode {
     Restore,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct VerificationFlags {
     pub include_logs: bool,
     pub auto_mode: bool,
     pub fast_img: VerifyFastImgMode,
+    pub strategy: Option<String>,
 }
 
 pub fn run_unified_verification(
@@ -621,6 +622,9 @@ pub fn run_unified_verification(
     }
     if flags.auto_mode {
         cmd.arg("--print-integrity-summary");
+    }
+    if let Some(strategy) = flags.strategy {
+        cmd.arg("--strategy").arg(strategy);
     }
     let output = cmd
         .output()

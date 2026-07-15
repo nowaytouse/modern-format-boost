@@ -142,6 +142,8 @@ struct Args {
     /// Only process videos/animated media (maps to `--mode videos`)
     #[arg(long, conflicts_with = "images_only")]
     pub videos_only: bool,
+
+    #[arg(long)]
     pub strategy: Option<String>,
 }
 
@@ -1068,6 +1070,7 @@ fn run_post_adjacent_steps(
             include_logs: true,
             auto_mode: true,
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::None,
+            strategy: args.strategy.clone(),
         },
     )?;
     if verify.exit_code != 0 {
@@ -1118,6 +1121,7 @@ fn run_fast_img_post_success(
             include_logs: false,
             auto_mode: true,
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::Delivery,
+            strategy: args.strategy.clone(),
         },
     )?;
     summary.integrity_state = verify
@@ -1184,6 +1188,7 @@ fn run_fast_img_restore_post_success(
             include_logs: false,
             auto_mode: true,
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::Restore,
+            strategy: args.strategy.clone(),
         },
     )?;
     summary.integrity_state = verify

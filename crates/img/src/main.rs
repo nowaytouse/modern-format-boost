@@ -2188,10 +2188,9 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     | foundation::image::format_detect::FormatKind::Heif
                     | foundation::image::format_detect::FormatKind::Avif
             ) {
-                if let Ok(analysis) = foundation::image_analyzer::analyze_image(&path) {
-                    if !analysis.is_animated {
-                        source_jpegs.push(path);
-                    }
+                let analysis = foundation::image_analyzer::analyze_image(&path)?;
+                if !analysis.is_animated {
+                    source_jpegs.push(path);
                 }
             }
         } else if is_true_jpeg(&path)? {
