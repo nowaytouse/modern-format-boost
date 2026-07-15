@@ -723,7 +723,7 @@ def print_loop_distribution(conn: DbConnection) -> None:
         )
     )
     print(
-        "total={0} null_embedding={1} non_finite={2} non_neutral_directory_score={3} replica_source_paths={4}".format(
+        "total={} null_embedding={} non_finite={} non_neutral_directory_score={} replica_source_paths={}".format(
             total,
             null_embedding,
             non_finite,
@@ -1029,7 +1029,7 @@ def print_loop_intent_runtime_status(summary: LoopIntentTableSummary) -> None:
         print(f"knn_issues={'; '.join(status.readiness_issues)}")
     runtime_state = "ready" if status.ready_for_runtime else "pending"
     print(
-        "loop_runtime={0} feature_stats={1} directory_scores_backfilled={2}/{3}".format(
+        "loop_runtime={} feature_stats={} directory_scores_backfilled={}/{}".format(
             runtime_state,
             "yes" if summary.feature_stats_present else "no",
             summary.non_neutral_directory_score,

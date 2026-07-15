@@ -8,12 +8,12 @@ use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
 use dev::infra::drag_drop::{
     ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
-    build_size_comparison_summary, choose_fast_img_action, choose_fast_vid_shortest_path,
-    confirm_in_place, count_fast_img_jxl_outputs, create_directory_structure,
-    delete_fast_img_shortest_path_output_dir, effective_success_failure_counts,
-    fast_img_integrity_counts, fast_img_marker_requires_retry, fast_img_restore_integrity_counts,
-    fast_img_retained_file_names, fast_img_session_size_metrics, get_unique_output_path,
-    run_unified_verification, safety_check, scan_content, sync_non_media_files,
+    build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
+    create_directory_structure, delete_fast_img_shortest_path_output_dir,
+    effective_success_failure_counts, fast_img_integrity_counts, fast_img_marker_requires_retry,
+    fast_img_restore_integrity_counts, fast_img_retained_file_names, fast_img_session_size_metrics,
+    get_unique_output_path, run_unified_verification, safety_check, scan_content,
+    sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -141,7 +141,8 @@ struct Args {
 
     /// Only process videos/animated media (maps to `--mode videos`)
     #[arg(long, conflicts_with = "images_only")]
-    videos_only: bool,
+    pub videos_only: bool,
+    pub strategy: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1227,6 +1228,7 @@ fn run_fast_img_with_retry(
         args.shortest_path,
         true,
         retry,
+        args.strategy.as_deref(),
     ))?;
     let stats = command.run_collecting(args.dry_run, Some(session), false)?;
     if stats.exit_code != 0 && !args.retry && fast_img_marker_requires_retry(&verify_bin, &output)?
@@ -1241,6 +1243,7 @@ fn run_fast_img_with_retry(
             args.shortest_path,
             true,
             true,
+            args.strategy.as_deref(),
         ))?;
         let retry_stats = retry_cmd.run_collecting(args.dry_run, Some(session), false)?;
         return Ok((retry_stats, output));
@@ -1349,6 +1352,7 @@ fn plan_cli_invocations(
                     args.shortest_path,
                     args.archive,
                     args.retry,
+                    args.strategy.as_deref(),
                 ))?);
             }
             LaunchMode::RestoreJpeg => {
@@ -1370,6 +1374,7 @@ fn plan_cli_invocations(
                     input,
                     &output,
                     args.shortest_path,
+                    args.strategy.as_deref(),
                 ))?);
             }
             LaunchMode::Collect => {
@@ -2062,6 +2067,7 @@ fn execute_menu_selection(
                     true,
                     false,
                     filter,
+                    None,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if actual == 1 {
@@ -2069,11 +2075,20 @@ fn execute_menu_selection(
                     return Ok(false);
                 }
                 *dir_lock = Some(acquire_global_lock(target)?);
-                let args =
-                    build_run_args(target, LaunchMode::Auto, None, true, false, false, filter);
+                let args = build_run_args(
+                    target,
+                    LaunchMode::Auto,
+                    None,
+                    true,
+                    false,
+                    false,
+                    filter,
+                    None,
+                );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
-                let shortest = choose_fast_vid_shortest_path()?;
+                let strategy = dev::infra::drag_drop::choose_fast_img_strategy()?;
+                let shortest = dev::infra::drag_drop::choose_fast_vid_shortest_path(&strategy)?;
                 let output = dev::infra::fastmode_paths::fast_vid_output_dir_for_target(target);
                 let args = build_run_args(
                     target,
@@ -2083,10 +2098,12 @@ fn execute_menu_selection(
                     true,
                     shortest,
                     filter,
+                    Some(strategy),
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
-                let action = choose_fast_img_action()?;
+                let strategy = dev::infra::drag_drop::choose_fast_img_strategy()?;
+                let action = dev::infra::drag_drop::choose_fast_img_action(&strategy)?;
                 let verify_bin = cli_binary(&root, "verify");
                 let output =
                     dev::infra::drag_drop::resolve_output_for_fast_img(target, action, &verify_bin);
@@ -2095,8 +2112,16 @@ fn execute_menu_selection(
                     FastImgAction::Normal => (LaunchMode::FastImg, false),
                     FastImgAction::ShortestPath => (LaunchMode::FastImg, true),
                 };
-                let args =
-                    build_run_args(target, mode, Some(output), false, true, shortest, filter);
+                let args = build_run_args(
+                    target,
+                    mode,
+                    Some(output),
+                    false,
+                    true,
+                    shortest,
+                    filter,
+                    Some(strategy),
+                );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
         }
@@ -2122,6 +2147,7 @@ fn execute_menu_selection(
                 false,
                 false,
                 ProcessingFilter::Both,
+                None,
             );
             run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
         }
@@ -2135,6 +2161,7 @@ fn execute_menu_selection(
                     false,
                     false,
                     ProcessingFilter::Both,
+                    None,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -2181,6 +2208,7 @@ fn build_run_args(
     archive: bool,
     shortest_path: bool,
     filter: ProcessingFilter,
+    strategy: Option<String>,
 ) -> Args {
     Args {
         inputs: vec![target.to_path_buf()],
@@ -2201,6 +2229,7 @@ fn build_run_args(
         watch: false,
         images_only: matches!(filter, ProcessingFilter::ImagesOnly),
         videos_only: matches!(filter, ProcessingFilter::VideosOnly),
+        strategy,
     }
 }
 
@@ -2563,6 +2592,7 @@ mod tests {
             watch: false,
             images_only: false,
             videos_only: false,
+            strategy: None,
         };
 
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
@@ -2604,6 +2634,7 @@ mod tests {
             watch: false,
             images_only: false,
             videos_only: false,
+            strategy: None,
         };
 
         let err = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap_err();
@@ -2655,6 +2686,7 @@ mod tests {
                 watch: false,
                 images_only: false,
                 videos_only: false,
+                strategy: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);
@@ -2704,6 +2736,7 @@ mod tests {
                 watch: false,
                 images_only: false,
                 videos_only: false,
+                strategy: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);

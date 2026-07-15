@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use foundation::ToolBuilder;
 use foundation::log_detail;
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,8 @@ enum Commands {
         resume: bool,
         #[arg(long)]
         no_resume: bool,
+        #[arg(long, default_value = "default")]
+        strategy: String,
         #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
         codec: String,
     },
@@ -116,6 +119,10 @@ enum Commands {
         shortest_path: bool,
         #[arg(long, default_value_t = false)]
         auto_import: bool,
+        #[arg(long, default_value_t = false)]
+        apple_compat: bool,
+        #[arg(long, default_value = "default")]
+        strategy: String,
     },
 }
 
@@ -485,6 +492,8 @@ fn run_fast_gif(
     force: bool,
     shortest_path: bool,
     auto_import: bool,
+    apple_compat: bool,
+    strategy: &str,
 ) -> anyhow::Result<()> {
     if auto_import && !shortest_path {
         anyhow::bail!("fast-gif --auto-import requires --shortest-path");
@@ -518,7 +527,48 @@ fn run_fast_gif(
     let mut skipped = 0usize;
     let mut failed = 0usize;
     let mut deliveries = Vec::new();
+    let effective_strategy = if apple_compat { "gif" } else { strategy };
     for file in files {
+        if effective_strategy == "avif" {
+            // AVIF Strategy (Meme Mode) bypasses loop intent judgment and just encodes to AVIF.
+            let stem = file
+                .file_stem()
+                .ok_or_else(|| anyhow::anyhow!("missing file stem for {}", file.display()))?;
+            let output = output_root.join(stem).with_extension("avif");
+
+            let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let q = foundation::media_conversion_gate::avif_quality_or_fallback(None);
+
+            let mut builder = foundation::AvifencBuilder::new();
+            builder
+                .speed(4)
+                .jobs("all")
+                .quality(q, q)
+                .input(&file)
+                .output(&temp_output);
+
+            let output_cmd = builder.build().output()?;
+            if !output_cmd.status.success() {
+                failed += 1;
+                println!(
+                    "[FAIL    ] {} avifenc failed: {}",
+                    file.display(),
+                    String::from_utf8_lossy(&output_cmd.stderr)
+                );
+                continue;
+            }
+
+            std::fs::rename(&temp_output, &output)?;
+            println!("[READY   ] {} -> {}", file.display(), output.display());
+            deliveries.push(FastGifDelivery {
+                input: file.clone(),
+                output,
+            });
+            converted += 1;
+            continue;
+        }
+
         let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(&file)?;
         if !verdict.is_keep_gif() {
             skipped += 1;
@@ -685,6 +735,7 @@ fn main() -> anyhow::Result<()> {
             plain,
             resume,
             no_resume,
+            strategy,
             codec,
         } => {
             // Fail-fast if critical sub-tools are missing
@@ -751,6 +802,8 @@ fn main() -> anyhow::Result<()> {
                 archive,
                 allow_size_tolerance,
                 allow_hdr10plus_static_fallback,
+                plain,
+                &strategy,
                 selected_codec,
             );
 
@@ -886,6 +939,8 @@ fn main() -> anyhow::Result<()> {
             force,
             shortest_path,
             auto_import,
+            apple_compat,
+            strategy,
         } => {
             run_fast_gif(
                 &input,
@@ -895,6 +950,8 @@ fn main() -> anyhow::Result<()> {
                 force,
                 shortest_path,
                 auto_import,
+                apple_compat,
+                &strategy,
             )?;
         }
 
@@ -1116,6 +1173,8 @@ fn build_conversion_config(
     archive: bool,
     allow_size_tolerance: bool,
     allow_hdr10plus_static_fallback: bool,
+    _plain: bool,
+    _strategy: &str,
     codec: SelectedCodec,
 ) -> ConversionConfig {
     ConversionConfig {
@@ -1245,6 +1304,8 @@ mod fast_gif_tests {
             force,
             shortest_path,
             auto_import,
+            apple_compat,
+            strategy,
         } = parsed.command
         else {
             anyhow::bail!("expected fast-gif command");
@@ -1256,6 +1317,8 @@ mod fast_gif_tests {
         assert!(!force);
         assert!(shortest_path);
         assert!(auto_import);
+        assert!(!apple_compat);
+        assert_eq!(strategy, "default");
         Ok(())
     }
 
@@ -1269,6 +1332,8 @@ mod fast_gif_tests {
             force: false,
             shortest_path: false,
             auto_import: false,
+            apple_compat: false,
+            strategy: "default".to_string(),
         };
 
         assert!(!command_requires_database(&command));

@@ -44,7 +44,7 @@ existing_conn_str = None
 if CONF_FILE_JSON.exists():
     print(f"{YELLOW}Existing JSON configuration found at: {CONF_FILE_JSON}{RESET}")
     try:
-        with open(CONF_FILE_JSON, "r") as f:
+        with open(CONF_FILE_JSON) as f:
             config = json.load(f)
             existing_conn_str = config.get("MFB_PG_CONNSTR")
             print(json.dumps(config, indent=2))
@@ -55,7 +55,7 @@ if CONF_FILE_JSON.exists():
 elif CONF_FILE_SH.exists():
     print(f"{YELLOW}Existing shell configuration found at: {CONF_FILE_SH}{RESET}")
     try:
-        with open(CONF_FILE_SH, "r") as f:
+        with open(CONF_FILE_SH) as f:
             content = f.read()
             print(content)
             for line in content.splitlines():

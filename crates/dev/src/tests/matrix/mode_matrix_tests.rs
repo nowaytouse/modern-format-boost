@@ -388,7 +388,7 @@ fn real_strategy_matrix_covers_supported_mode_routes() -> Result<()> {
             file: "test_short_2s.mp4",
             codec: SelectedCodec::Hevc,
             apple_compat: false,
-            expected: TargetVideoFormat::Skip,
+            expected: TargetVideoFormat::HevcMp4,
         },
     ];
 

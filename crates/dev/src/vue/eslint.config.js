@@ -69,6 +69,7 @@ export default tseslint.config(
       "*.config.js",
       "*.js",
       "src/**/*.js",
+      "**/*.app/",
     ],
   },
   eslintConfigPrettier,

@@ -2652,7 +2652,9 @@ fn resolve_jxl_canvas(path: &Path) -> Result<JxlCanvas> {
                     let bit_depth = if let Some(b) = crate::numeric_cast::u32_to_u8_strict(
                         image.image_header().metadata.bit_depth.bits_per_sample(),
                         "jxl_bit_depth",
-                    ) { Some(b) } else {
+                    ) {
+                        Some(b)
+                    } else {
                         tracing::warn!(target: "jxl_oxide_probe", "Invalid bit depth parsed in jxl metadata");
                         None
                     };

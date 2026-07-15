@@ -251,7 +251,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.13.0"
-source = "git+https://github.com/bitflags/bitflags#9253889ee93921055309908c46272bd6c5c6ad99"
+source = "git+https://github.com/bitflags/bitflags#e077c4a679706661af508a91cfd96c6a7c4ac2d2"
 dependencies = [
  "serde_core",
 ]
@@ -460,7 +460,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
+source = "git+https://github.com/clap-rs/clap#c7c3184f6ddbbd16abf5be0236b79fd79df8772d"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
+source = "git+https://github.com/clap-rs/clap#c7c3184f6ddbbd16abf5be0236b79fd79df8772d"
 dependencies = [
  "anstream",
  "anstyle",
@@ -480,7 +480,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
+source = "git+https://github.com/clap-rs/clap#c7c3184f6ddbbd16abf5be0236b79fd79df8772d"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -491,7 +491,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
+source = "git+https://github.com/clap-rs/clap#c7c3184f6ddbbd16abf5be0236b79fd79df8772d"
 
 [[package]]
 name = "cmake"
@@ -1159,7 +1159,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#5eb3df8de3b3cf9b0c9533e2a388fc4d25f39930"
+source = "git+https://github.com/image-rs/image#ebb603fe046576a2a1c5e3261a66aeafd4e2b047"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1762,9 +1762,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
+checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
  "log",
@@ -2794,9 +2794,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "simd-adler32"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "simd_helpers"
@@ -2833,9 +2833,9 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "socket2"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -2884,9 +2884,9 @@ checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
-version = "2.0.118"
+version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2930,7 +2930,7 @@ dependencies = [
  "cfg-expr 0.20.8",
  "heck",
  "pkg-config",
- "toml 1.1.2+spec-1.1.0",
+ "toml 1.1.3+spec-1.1.0",
  "version-compare",
 ]
 
@@ -3131,9 +3131,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
+checksum = "53c96ecdfa941c8fc4fcaed14f99ada8ebed502eef533015095a07e3301d4c3c"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -3141,7 +3141,7 @@ dependencies = [
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -3181,14 +3181,14 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.3",
+ "winnow 1.0.4",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracing"
@@ -3328,9 +3328,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.4"
+version = "1.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
+checksum = "ea5fab0d6c3c01ae70085a09cb03d4c7a1d6314e2b3e075392783396d724ca0a"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -3776,9 +3776,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "wit-bindgen"
@@ -3821,9 +3821,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.21"
+version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zune-core"

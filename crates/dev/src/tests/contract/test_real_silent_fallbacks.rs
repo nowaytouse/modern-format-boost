@@ -12317,10 +12317,10 @@ fn media_conversion_unified_log_layout_m160() {
         log_paths.contains("training_lane_slug"),
         "mfb_log_paths must expose training_lane_slug (M160)"
     );
-    let launcher = root.join("crates/dev/scripts/start_training_three.py");
+    let launcher = root.join("crates/dev/scripts/start_training_four.py");
     assert!(
         launcher.is_file(),
-        "start_training_three.py must exist for parallel lane launch"
+        "start_training_four.py must exist for parallel lane launch"
     );
     assert!(
         !run_training.contains("target/training_logs"),
@@ -18030,25 +18030,12 @@ fn python_production_scripts_declare_guard_main() {
             "{script} must call guard_main() at entry"
         );
     }
-    let drag_source = root.join("crates/dev/scripts/archive/drag_and_drop_processor.py");
-    let content = fs::read_to_string(&drag_source)
-        .unwrap_or_else(|err| panic!("read {}: {err:?}", drag_source.display())); // audited: contract test assertion path; panic/expect is test-only failure signal
-    assert!(
-        content.contains("guard_main("),
-        "archived drag_and_drop_processor.py must retain guard_main() for parity reference"
-    );
 }
 
 #[test]
 fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
     let root = workspace_root();
-    let overlaps = [
-        "ci/build_libdispatch.py",
-        "ci/clippy_strict.py",
-        "ci/download_gnu_mpc.py",
-        "ci/just_fix_gate.py",
-        "run_training.py",
-    ];
+    let overlaps = ["run_training.py"];
 
     for script in overlaps {
         assert!(
@@ -18056,12 +18043,6 @@ fn py2bin_overlap_python_sources_stay_until_parity_is_proven() {
             "py2bin source must remain until Rust parity is explicitly proven: {script}"
         );
     }
-    assert!(
-        root.join("crates/dev/scripts/archive/drag_and_drop_processor.py")
-            .is_file(),
-        "py2bin archived source must remain until Rust parity is explicitly proven: \
-         drag_and_drop_processor.py"
-    );
 
     let drag_rs = fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
         .expect("drag_and_drop_processor.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal

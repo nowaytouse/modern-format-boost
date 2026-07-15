@@ -66,6 +66,7 @@ pub fn build_fast_img_command(
     shortest_path: bool,
     archive: bool,
     retry: bool,
+    strategy: Option<&str>,
 ) -> Vec<String> {
     let mut command = vec![
         img_binary.to_string_lossy().to_string(),
@@ -82,6 +83,10 @@ pub fn build_fast_img_command(
     if shortest_path {
         command.push("--shortest-path".to_string());
         command.push("--auto-import".to_string());
+    }
+    if let Some(strat) = strategy {
+        command.push("--strategy".to_string());
+        command.push(strat.to_string());
     }
     command
 }
@@ -110,8 +115,9 @@ pub fn build_fast_vid_command(
     target_dir: &Path,
     output_dir: &Path,
     _shortest_path: bool,
+    strategy: Option<&str>,
 ) -> Vec<String> {
-    vec![
+    let mut command = vec![
         vid_binary.to_string_lossy().to_string(),
         "run".to_string(),
         target_dir.to_string_lossy().to_string(),
@@ -123,7 +129,12 @@ pub fn build_fast_vid_command(
         "--apple-compat".to_string(),
         "--ultimate".to_string(),
         "--archive".to_string(),
-    ]
+    ];
+    if let Some(strat) = strategy {
+        command.push("--strategy".to_string());
+        command.push(strat.to_string());
+    }
+    command
 }
 
 #[cfg(test)]
@@ -199,6 +210,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_eq!(
             command,
@@ -219,6 +231,7 @@ mod tests {
             false,
             true,
             false,
+            None,
         );
         assert_eq!(
             command,
@@ -240,6 +253,7 @@ mod tests {
             true,
             true,
             false,
+            None,
         );
         assert_eq!(
             command,
@@ -263,6 +277,7 @@ mod tests {
             false,
             false,
             true,
+            None,
         );
         assert!(command.contains(&"--retry".to_string()));
     }
@@ -312,6 +327,7 @@ mod tests {
             Path::new("/Users/example/Movies/Clips"),
             Path::new("/Users/example/Movies/Clips_optimized"),
             false,
+            None,
         );
         assert_eq!(
             command,
@@ -338,6 +354,7 @@ mod tests {
             Path::new("/Users/example/Movies/Clips"),
             Path::new("/Users/example/Movies/Clips_optimized"),
             true,
+            None,
         );
         assert!(command.contains(&"run".to_string()));
         assert!(!command.contains(&"fast-gif".to_string()));

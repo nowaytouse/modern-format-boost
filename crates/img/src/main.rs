@@ -233,6 +233,10 @@ enum Commands {
         /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
+
+        /// Meme mode strategy. "jxl" (default) or "avif" (Meme Mode).
+        #[arg(long, default_value = "jxl")]
+        strategy: String,
     },
 
     /// Restore true JXL files back to JPEG in an adjacent output tree.
@@ -855,8 +859,9 @@ fn main_inner() -> anyhow::Result<()> {
             archive,
             retry,
             allow_expert_options,
+            strategy,
         } => {
-            run_fast_img(FastImgRunOptions {
+            let options = FastImgRunOptions {
                 input: &input,
                 output_dir: output.as_deref(),
                 delete_source: DeleteSourceFlag(delete_source),
@@ -867,7 +872,9 @@ fn main_inner() -> anyhow::Result<()> {
                 retry: RetryFlag(retry),
                 archive,
                 allow_expert_options,
-            })?;
+                strategy: &strategy,
+            };
+            run_fast_img(options)?;
         }
         Commands::RestoreJpeg {
             input,
@@ -2110,6 +2117,7 @@ struct FastImgRunOptions<'a> {
     retry: RetryFlag,
     archive: bool,
     allow_expert_options: bool,
+    strategy: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2130,6 +2138,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         retry,
         archive,
         allow_expert_options,
+        strategy,
     } = options;
 
     if let Some(output_dir) = output_dir {
@@ -2159,21 +2168,46 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let working_copy = resolve_working_copy_dir(&src_dir);
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
-    println!("[SCAN    ] scanning true JPEGs in {}", src_dir.display());
+    if strategy == "avif" {
+        println!("[SCAN    ] scanning static images in {}", src_dir.display());
+    } else {
+        println!("[SCAN    ] scanning true JPEGs in {}", src_dir.display());
+    }
     let lossy_modern_static_candidates =
         scan_modern_lossy_static_candidates(&src_dir, &input_plan.candidates)?;
     let mut source_jpegs = Vec::new();
     for path in input_plan.candidates {
-        if is_true_jpeg(&path)? {
+        if strategy == "avif" {
+            let format = foundation::image::format_detect::detect_true_format(&path)?;
+            if matches!(
+                format,
+                foundation::image::format_detect::FormatKind::Jpeg
+                    | foundation::image::format_detect::FormatKind::Png
+                    | foundation::image::format_detect::FormatKind::WebP
+                    | foundation::image::format_detect::FormatKind::Heic
+                    | foundation::image::format_detect::FormatKind::Heif
+                    | foundation::image::format_detect::FormatKind::Avif
+            ) {
+                source_jpegs.push(path);
+            }
+        } else if is_true_jpeg(&path)? {
             source_jpegs.push(path);
         }
     }
     let current_source_hashes = fast_img_source_hash_set(&src_dir, &source_jpegs)?;
-    println!(
-        "[SCAN    ] Found {} true JPEGs in {}",
-        source_jpegs.len(),
-        src_dir.display()
-    );
+    if strategy == "avif" {
+        println!(
+            "[SCAN    ] Found {} static images in {}",
+            source_jpegs.len(),
+            src_dir.display()
+        );
+    } else {
+        println!(
+            "[SCAN    ] Found {} true JPEGs in {}",
+            source_jpegs.len(),
+            src_dir.display()
+        );
+    }
     if !lossy_modern_static_candidates.is_empty() {
         println!(
             "[SCAN    ] Found {} lossy modern static image(s) eligible for tier-2 Photos import",
@@ -2338,12 +2372,21 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     }
 
     if dry_run.0 {
-        println!(
-            "[DRY-RUN ] would transcode {} JPEGs from {} into JXL-only output {}",
-            source_jpegs.len(),
-            src_dir.display(),
-            working_copy.display()
-        );
+        if strategy == "avif" {
+            println!(
+                "[DRY-RUN ] would encode {} static images from {} into AVIF-only output {}",
+                source_jpegs.len(),
+                src_dir.display(),
+                working_copy.display()
+            );
+        } else {
+            println!(
+                "[DRY-RUN ] would encode {} JPEGs from {} into JXL-only output {}",
+                source_jpegs.len(),
+                src_dir.display(),
+                working_copy.display()
+            );
+        }
         return Ok(());
     }
 
@@ -2452,6 +2495,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             retry_failed_sources_from_cleanup,
             archive,
             allow_expert_options,
+            strategy,
         )?;
     }
 
@@ -2808,30 +2852,41 @@ fn fast_img_run_transcode_job_inner(
     child_threads: usize,
     archive: bool,
     allow_expert_options: bool,
+    strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
-    let options = LosslessConvertOptions {
-        output_dir: Some(working_copy.to_path_buf()),
-        base_dir: Some(src_dir.to_path_buf()),
-        flags: LosslessConvertFlags::FORCE
-            | LosslessConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
-            | LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY
-            | LosslessConvertFlags::ULTIMATE
-            | if archive {
-                LosslessConvertFlags::ARCHIVE
-            } else {
-                LosslessConvertFlags::empty()
-            }
-            | if allow_expert_options {
-                LosslessConvertFlags::ALLOW_EXPERT_OPTIONS
-            } else {
-                LosslessConvertFlags::empty()
-            },
-        child_threads,
-        input_format: Some("JPEG".to_string()),
-        quality_label: None,
-        codec: foundation::conversion_types::SelectedCodec::default(),
+    let result = if strategy == "avif" {
+        let convert_options = foundation::ConvertOptions {
+            output_dir: Some(working_copy.to_path_buf()),
+            base_dir: Some(src_dir.to_path_buf()),
+            flags: foundation::ConvertFlags::FORCE,
+            ..Default::default()
+        };
+        img::lossless_converter::convert_to_avif(&job.source, None, &convert_options)?
+    } else {
+        let options = LosslessConvertOptions {
+            output_dir: Some(working_copy.to_path_buf()),
+            base_dir: Some(src_dir.to_path_buf()),
+            flags: LosslessConvertFlags::FORCE
+                | LosslessConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
+                | LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY
+                | LosslessConvertFlags::ULTIMATE
+                | if archive {
+                    LosslessConvertFlags::ARCHIVE
+                } else {
+                    LosslessConvertFlags::empty()
+                }
+                | if allow_expert_options {
+                    LosslessConvertFlags::ALLOW_EXPERT_OPTIONS
+                } else {
+                    LosslessConvertFlags::empty()
+                },
+            child_threads,
+            input_format: Some("JPEG".to_string()),
+            quality_label: None,
+            codec: foundation::conversion_types::SelectedCodec::default(),
+        };
+        convert_jpeg_to_jxl(&job.source, &options, None)?
     };
-    let result = convert_jpeg_to_jxl(&job.source, &options, None)?;
     if result.skipped && result.output_path.is_none() {
         let skip_reason = result.skip_reason.as_deref().unwrap_or("<none>");
         if skip_reason == img::lossless_converter::JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON {
@@ -2856,12 +2911,23 @@ fn fast_img_run_transcode_job_inner(
         )
     })?;
 
-    let orientation_tolerance = orientation_diff_tolerance_for_format(FormatKind::Jxl)
-        .ok_or_else(|| anyhow::anyhow!("missing shared orientation tolerance for JXL output"))?;
+    let orientation_tolerance = if strategy == "avif" {
+        orientation_diff_tolerance_for_format(FormatKind::Avif).ok_or_else(|| {
+            anyhow::anyhow!("missing shared orientation tolerance for AVIF output")
+        })?
+    } else {
+        orientation_diff_tolerance_for_format(FormatKind::Jxl)
+            .ok_or_else(|| anyhow::anyhow!("missing shared orientation tolerance for JXL output"))?
+    };
+    let output_format = if strategy == "avif" {
+        FormatKind::Avif
+    } else {
+        FormatKind::Jxl
+    };
     match verify_orientation_pixel_diff(
         &job.source,
         out_path,
-        FormatKind::Jxl,
+        output_format,
         orientation_tolerance,
     )? {
         PixelDiffResult::Match => {}
@@ -2914,6 +2980,7 @@ fn fast_img_run_transcode_job(
     child_threads: usize,
     archive: bool,
     allow_expert_options: bool,
+    strategy: &str,
 ) -> FastImgJobResult {
     fast_img_run_transcode_job_inner(
         job,
@@ -2922,6 +2989,7 @@ fn fast_img_run_transcode_job(
         child_threads,
         archive,
         allow_expert_options,
+        strategy,
     )
     .map_err(|err| FastImgTranscodeError {
         rel_key: job.rel_key.clone(),
@@ -4738,6 +4806,7 @@ fn fast_img_run_transcode_phase(
     retry_failed_sources_from_cleanup: bool,
     archive: bool,
     allow_expert_options: bool,
+    strategy: &str,
 ) -> anyhow::Result<()> {
     let total = source_jpegs.len();
     let mut completed_from_resume = 0usize;
@@ -4889,6 +4958,7 @@ fn fast_img_run_transcode_phase(
                         child_threads,
                         archive,
                         allow_expert_options,
+                        strategy,
                     );
                     if result.is_ok() {
                         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -6267,6 +6337,7 @@ mod fast_img_hardening_tests {
             retry: RetryFlag(false),
             archive: false,
             allow_expert_options: false,
+            strategy: "jxl",
         })?;
 
         Ok(())
@@ -6408,6 +6479,7 @@ mod fast_img_hardening_tests {
             retry: RetryFlag(false),
             archive: false,
             allow_expert_options: false,
+            strategy: "jxl",
         })?;
 
         Ok(())
@@ -6628,6 +6700,7 @@ mod fast_img_hardening_tests {
             false,
             false,
             false,
+            "jxl",
         )?;
 
         let entry = marker
@@ -6712,6 +6785,7 @@ mod fast_img_hardening_tests {
             false,
             false,
             false,
+            "jxl",
         )?;
 
         let entry = marker
@@ -6828,6 +6902,7 @@ mod fast_img_hardening_tests {
             retry: RetryFlag(true),
             archive: false,
             allow_expert_options: false,
+            strategy: "jxl",
         })?;
 
         Ok(())
@@ -7343,6 +7418,7 @@ mod fast_img_hardening_tests {
             archive: false,
             retry: false,
             allow_expert_options: false,
+            strategy: "jxl".to_string(),
         };
 
         assert!(!command_requires_database(&command));

@@ -589,7 +589,6 @@ fn decide_build_action(
 fn build_project(
     project_root: &Path,
     project_dir: &str,
-    binary_name: &str,
     retry_count: i32,
     args: &Args,
     style: Style,
@@ -720,14 +719,7 @@ fn build_project(
                     .args(["clean", "-p", pkg, "--release"])
                     .current_dir(project_root)
                     .status();
-                return build_project(
-                    project_root,
-                    project_dir,
-                    binary_name,
-                    retry_count + 1,
-                    args,
-                    style,
-                );
+                return build_project(project_root, project_dir, retry_count + 1, args, style);
             } else {
                 println!(
                     "{}FAILURE: Timestamp verification failed after 2 retries{}",
@@ -1312,7 +1304,7 @@ fn main() -> Result<()> {
                 "[BUILD] {}{}{} {}({}){}",
                 style.bold, proj, style.reset, style.dim, reason, style.reset
             );
-            if build_project(&project_root, proj, bin, 0, &args, style)? {
+            if build_project(&project_root, proj, 0, &args, style)? {
                 println!("[OK] {}{}{} - compiled", style.bold, proj, style.reset);
                 rebuilt += 1;
             } else {

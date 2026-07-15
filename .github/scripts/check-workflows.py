@@ -73,7 +73,7 @@ def check_action_versions(workflow_files):
     outdated_actions = 0
     for file in workflow_files:
         try:
-            with open(file, "r") as f:
+            with open(file) as f:
                 content = f.read()
             if re.search(r"actions/checkout@(v1|v2|v3)\b", content):
                 print_status(
@@ -122,7 +122,7 @@ def check_permissions(workflow_files):
     permission_issues = 0
     for file in workflow_files:
         try:
-            with open(file, "r") as f:
+            with open(file) as f:
                 content = f.read()
             if "permissions: read-all" in content:
                 print_status(
@@ -150,7 +150,7 @@ def check_anti_patterns(workflow_files):
     anti_patterns = 0
     for file in workflow_files:
         try:
-            with open(file, "r") as f:
+            with open(file) as f:
                 content = f.read()
             if "timeout-minutes:" not in content:
                 print_status(YELLOW, f"⚠️  Missing timeout-minutes in {file.name}")
@@ -194,7 +194,7 @@ def check_rust_specific(workflow_files):
     rust_toolchain = Path("rust-toolchain.toml")
     if rust_toolchain.exists():
         try:
-            with open(rust_toolchain, "r") as f:
+            with open(rust_toolchain) as f:
                 content = f.read()
             if "channel" not in content:
                 print_status(
@@ -216,7 +216,7 @@ def check_rust_specific(workflow_files):
     toolchain_inconsistency = 0
     for file in workflow_files:
         try:
-            with open(file, "r") as f:
+            with open(file) as f:
                 content = f.read()
             if "dtolnay/rust-toolchain" in content:
                 if (

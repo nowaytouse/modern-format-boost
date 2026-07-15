@@ -374,23 +374,57 @@ pub fn scan_content(
     Ok(scan)
 }
 
-pub fn choose_fast_img_action() -> Result<FastImgAction> {
+pub fn choose_fast_img_strategy() -> Result<String> {
+    let green = if colors_enabled() { "\x1b[32m" } else { "" };
+    let bold = if colors_enabled() { "\x1b[1m" } else { "" };
+    let dim = if colors_enabled() { "\x1b[2m" } else { "" };
+    let reset = if colors_enabled() { "\x1b[0m" } else { "" };
+    println!("\n{green}FAST MODE STRATEGY{reset}");
+    println!("   {bold}1{reset} - {green}Default (JXL){reset}");
+    println!("       {dim}Fast lossless recompression of JPEGs to JXL.{reset}");
+    println!("   {bold}2{reset} - {green}AVIF (表情包模式){reset}");
+    println!("       {dim}Meme Mode: Strict static encoding of images to AVIF.{reset}");
+    let answer = read_line(&format!(
+        "\n   {bold}Choose strategy [1/2] ({green}Enter = Default{reset}{bold}): {reset}"
+    ))?;
+    Ok(if answer.trim() == "2" {
+        "avif".to_string()
+    } else {
+        "jxl".to_string()
+    })
+}
+
+pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     let green = if colors_enabled() { "\x1b[32m" } else { "" };
     let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
     let bold = if colors_enabled() { "\x1b[1m" } else { "" };
     let dim = if colors_enabled() { "\x1b[2m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
-    println!("\n{green}FAST MODE SELECTED{reset}");
+    println!("\n{green}FAST MODE SELECTED{reset}{cyan} [{strategy}]{reset}");
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
-    println!(
-        "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
-         local JXL folder cleanup.{reset}"
-    );
+    if strategy == "avif" {
+        println!(
+            "       {dim}AVIF-only (表情包模式) delivery, strict verification, automatic iCloud Photos import, then \
+             local AVIF folder cleanup.{reset}"
+        );
+    } else {
+        println!(
+            "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
+             local JXL folder cleanup.{reset}"
+        );
+    }
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
-    println!(
-        "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still \
-         deleted after strict verification.{reset}"
-    );
+    if strategy == "avif" {
+        println!(
+            "       {dim}AVIF-only adjacent output; user imports manually. Source images are still \
+             deleted after strict verification.{reset}"
+        );
+    } else {
+        println!(
+            "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still \
+             deleted after strict verification.{reset}"
+        );
+    }
     println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
     println!(
         "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure \
@@ -407,18 +441,24 @@ pub fn choose_fast_img_action() -> Result<FastImgAction> {
     })
 }
 
-pub fn choose_fast_vid_shortest_path() -> Result<bool> {
+pub fn choose_fast_vid_shortest_path(strategy: &str) -> Result<bool> {
     let green = if colors_enabled() { "\x1b[32m" } else { "" };
     let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
     let bold = if colors_enabled() { "\x1b[1m" } else { "" };
     let dim = if colors_enabled() { "\x1b[2m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
-    println!("\n{green}FAST VIDEO MODE SELECTED{reset}");
+    println!("\n{green}FAST VIDEO MODE SELECTED{reset}{cyan} [{strategy}]{reset}");
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
-    println!(
-        "       {dim}Full LoopIntent video and animated-image delivery through Rust vid \
-         run.{reset}"
-    );
+    if strategy == "avif" {
+        println!(
+            "       {dim}AVIF-only (表情包模式) animated image delivery, no loop intent judgment.{reset}"
+        );
+    } else {
+        println!(
+            "       {dim}Full LoopIntent video and animated-image delivery through Rust vid \
+             run.{reset}"
+        );
+    }
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
     println!("       {dim}Full vid pipeline adjacent output with archive-quality settings.{reset}");
     let answer = read_line(&format!(
