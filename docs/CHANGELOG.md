@@ -17,7 +17,7 @@ All notable changes to this project will be documented in this file.
 
 ### Refactoring & Project Hygiene
 
-- Bumped Rust toolchain to `nightly-2026-07-09`.
+- Bumped Rust toolchain to `nightly-2026-07-13`.
 - Replaced multiple silent `unwrap_or(default)` and `is_ok_and` instances across the codebase with explicit error propagation.
 - Improved multithreading safety by using `mutex_guard_or_recover` instead of silently discarding `.lock()` errors in `img/src/main.rs`.
 - Standardized JXL arguments to use `--num_threads`.

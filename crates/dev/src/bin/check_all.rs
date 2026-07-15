@@ -1607,12 +1607,12 @@ mod tests {
     fn parses_pinned_rust_toolchain_channel() {
         let content = r#"
             [toolchain]
-            channel = "nightly-2026-07-09"
+            channel = "nightly-2026-07-13"
             components = ["clippy", "rustfmt"]
         "#;
         assert_eq!(
             parse_rust_toolchain_channel_toml(content),
-            Some("nightly-2026-07-09".to_string())
+            Some("nightly-2026-07-13".to_string())
         );
     }
 
