@@ -1,4 +1,4 @@
-//! Modern Format Boost - Diagnostic Analysis and Integrity Verifier in Rust.
+    //! Modern Format Boost - Diagnostic Analysis and Integrity Verifier in Rust.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -58,6 +58,9 @@ struct Args {
 
     #[arg(long = "session-audit", help = "Session verbose log(s).")]
     session_audit: Vec<PathBuf>,
+
+    #[arg(long = "strategy", default_value = "jxl", help = "Transcode strategy (jxl or avif).")]
+    strategy: String,
 }
 
 fn file_content_hash(path: &Path, chunk_size: usize) -> (Option<String>, Option<String>) {
@@ -524,6 +527,7 @@ fn run_fast_img_delivery_check(
     optimized_dir: &Path,
     report: &mut String,
     processing_mode: &str,
+    strategy: &str,
 ) -> Result<IntegrityStats> {
     let source_dir = if source_dir.exists() {
         source_dir
@@ -550,7 +554,7 @@ fn run_fast_img_delivery_check(
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
         source_files_label: "Recorded source JPEGs".to_string(),
-        optimized_files_label: "Optimized JXL files".to_string(),
+        optimized_files_label: if strategy == "avif" { "Optimized AVIF files".to_string() } else { "Optimized JXL files".to_string() },
         ..Default::default()
     };
 
@@ -580,8 +584,8 @@ fn run_fast_img_delivery_check(
         }
     }
 
-    let mut optimized_jxl = Vec::new();
-    let mut non_jxl_outputs = Vec::new();
+    let mut optimized_outputs = Vec::new();
+    let mut unexpected_outputs = Vec::new();
     let mut optimized_probe_errors = Vec::new();
     let optimized_files = if optimized_dir.exists() {
         collect_regular_files(&optimized_dir)?
@@ -598,10 +602,10 @@ fn run_fast_img_delivery_check(
         }
         match detect_true_format(&path) {
             Ok(true_format) => {
-                if true_format == "jxl" {
-                    optimized_jxl.push(path);
+                if true_format == strategy {
+                    optimized_outputs.push(path);
                 } else {
-                    non_jxl_outputs.push((path, true_format));
+                    unexpected_outputs.push((path, true_format));
                 }
             }
             Err(e) => {
@@ -694,7 +698,7 @@ fn run_fast_img_delivery_check(
     failed_sources_missing.sort();
 
     let mut optimized_size = 0u64;
-    for path in &optimized_jxl {
+    for path in &optimized_outputs {
         match std::fs::metadata(path) {
             Ok(meta) => optimized_size += meta.len(),
             Err(err) => {
@@ -722,15 +726,15 @@ fn run_fast_img_delivery_check(
     }
 
     stats.source_files = recorded_source_jpegs as usize;
-    stats.optimized_files = optimized_jxl.len();
+    stats.optimized_files = optimized_outputs.len();
     stats.skipped_sources = skipped_source_rels.len();
     stats.failed_sources = failed_source_rels.len();
     stats.source_remaining_files = source_true_jpegs.len();
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = optimized_probe_errors.len();
-    stats.extra = non_jxl_outputs.len() + optimized_probe_errors.len();
-    stats.count_delta = (optimized_jxl.len() as isize) - (expected_delivery_count as isize);
-    stats.matched = optimized_jxl.len();
+    stats.extra = unexpected_outputs.len() + optimized_probe_errors.len();
+    stats.count_delta = (optimized_outputs.len() as isize) - (expected_delivery_count as isize);
+    stats.matched = optimized_outputs.len();
     stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len();
     stats.optimized_total_size = optimized_size;
     stats.tier2_recorded = tier2_recorded;
@@ -743,13 +747,13 @@ fn run_fast_img_delivery_check(
     if !unexpected_source_true_jpegs.is_empty() {
         integrity_failures += unexpected_source_true_jpegs.len();
     }
-    if !non_jxl_outputs.is_empty() {
-        integrity_failures += non_jxl_outputs.len();
+    if !unexpected_outputs.is_empty() {
+        integrity_failures += unexpected_outputs.len();
     }
-    if marker_opt.is_some() && expected_delivery_count != optimized_jxl.len() {
+    if marker_opt.is_some() && expected_delivery_count != optimized_outputs.len() {
         integrity_failures += 1;
     }
-    if optimized_jxl.is_empty() && expected_delivery_count > 0 {
+    if optimized_outputs.is_empty() && expected_delivery_count > 0 {
         integrity_failures += 1;
     }
     if !skipped_sources_missing.is_empty() {
@@ -814,12 +818,13 @@ fn run_fast_img_delivery_check(
         "Recorded failed JPEGs:       {}\n",
         failed_source_rels.len()
     ));
+    let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     report.push_str(&format!(
-        "Expected optimized JXLs:     {expected_delivery_count}\n"
+        "Expected optimized {ext_name}s:     {expected_delivery_count}\n"
     ));
     report.push_str(&format!(
-        "Optimized JXL files:         {}\n",
-        optimized_jxl.len()
+        "Optimized {ext_name} files:         {}\n",
+        optimized_outputs.len()
     ));
     report.push_str(&format!(
         "Source probe errors:         {}\n",
@@ -830,8 +835,8 @@ fn run_fast_img_delivery_check(
         optimized_probe_errors.len()
     ));
     report.push_str(&format!(
-        "Non-JXL optimized files:     {}\n",
-        non_jxl_outputs.len()
+        "Unexpected optimized files:  {}\n",
+        unexpected_outputs.len()
     ));
     if tier2_recorded > 0 {
         report.push_str(&format!(
@@ -867,12 +872,13 @@ fn run_fast_img_delivery_check(
                 ));
             }
         }
-        if !non_jxl_outputs.is_empty() {
+        if !unexpected_outputs.is_empty() {
+            let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
             report.push_str(&format!(
-                "  - {} non-JXL output(s) found in optimized directory:\n",
-                non_jxl_outputs.len()
+                "  - {} non-{ext_name} output(s) found in optimized directory:\n",
+                unexpected_outputs.len()
             ));
-            for (p, fmt) in &non_jxl_outputs {
+            for (p, fmt) in &unexpected_outputs {
                 report.push_str(&format!(
                     "      - {} (detected true format: {})\n",
                     p.strip_prefix(&optimized_dir)?.display(),
@@ -880,11 +886,12 @@ fn run_fast_img_delivery_check(
                 ));
             }
         }
-        if marker_opt.is_some() && expected_delivery_count != optimized_jxl.len() {
+        if marker_opt.is_some() && expected_delivery_count != optimized_outputs.len() {
+            let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
             report.push_str(&format!(
-                "  - Delivered JXL count mismatch: expected {} but got {}\n",
+                "  - Delivered {ext_name} count mismatch: expected {} but got {}\n",
                 expected_delivery_count,
-                optimized_jxl.len()
+                optimized_outputs.len()
             ));
         }
         if !skipped_sources_missing.is_empty() {
@@ -970,6 +977,7 @@ fn run_fast_img_restore_check(
     source_dir: &Path,
     restored_dir: &Path,
     report: &mut String,
+    strategy: &str,
 ) -> Result<IntegrityStats> {
     let source_dir = source_dir
         .canonicalize()
@@ -982,17 +990,18 @@ fn run_fast_img_restore_check(
     report.push_str(&format!("Source:    {}\n", source_dir.display()));
     report.push_str(&format!("Restored:  {}\n\n", restored_dir.display()));
 
+    let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     let mut stats = IntegrityStats {
         source: source_dir.to_string_lossy().to_string(),
         optimized: restored_dir.to_string_lossy().to_string(),
         scope: "images_only".to_string(),
         optimized_path_label: "Restored".to_string(),
-        source_files_label: "Source JXL files".to_string(),
+        source_files_label: format!("Source {ext_name} files"),
         optimized_files_label: "Restored JPEG files".to_string(),
         ..Default::default()
     };
 
-    let mut source_jxl = BTreeMap::new();
+    let mut source_outputs = BTreeMap::new();
     let mut source_probe_errors = Vec::new();
     for path in collect_regular_files(&source_dir)? {
         if let Some(name) = path.file_name().and_then(|f| f.to_str()) {
@@ -1004,9 +1013,9 @@ fn run_fast_img_restore_check(
         }
         match detect_true_format(&path) {
             Ok(true_format) => {
-                if true_format == "jxl" {
+                if true_format == strategy {
                     let rel = path.strip_prefix(&source_dir)?;
-                    source_jxl.insert(integrity_stem_key(rel), path);
+                    source_outputs.insert(integrity_stem_key(rel), path);
                 }
             }
             Err(e) => {
@@ -1079,7 +1088,7 @@ fn run_fast_img_restore_check(
     }
 
     let mut expected_keys = HashSet::new();
-    for k in source_jxl.keys() {
+    for k in source_outputs.keys() {
         expected_keys.insert(k.clone());
     }
     for k in manifest_deleted_sources.keys() {
@@ -1124,7 +1133,7 @@ fn run_fast_img_restore_check(
     }
 
     stats.source_files = expected_keys.len();
-    stats.source_remaining_files = source_jxl.len();
+    stats.source_remaining_files = source_outputs.len();
     stats.verified_deleted_sources = manifest_deleted_sources.len();
     stats.optimized_files = restored_jpeg.len();
     stats.source_probe_errors = source_probe_errors.len();
@@ -1163,7 +1172,7 @@ fn run_fast_img_restore_check(
     ));
     report.push_str(&format!(
         "Source remaining JXL files: {}\n",
-        source_jxl.len()
+        source_outputs.len()
     ));
     report.push_str(&format!(
         "Manifest verified deleted source JXLs: {}\n",
@@ -1213,7 +1222,7 @@ fn run_fast_img_restore_check(
                 missing_keys.len()
             ));
             for key in &missing_keys {
-                if let Some(path) = source_jxl.get(key) {
+                if let Some(path) = source_outputs.get(key) {
                     report.push_str(&format!(
                         "  ! {}\n",
                         path.strip_prefix(&source_dir)?.display()
@@ -2059,9 +2068,10 @@ fn main() -> Result<()> {
                     &opt,
                     &mut report,
                     &args.mode,
+                    &args.strategy,
                 )?);
             } else if args.fast_img_restore {
-                integrity_stats = Some(run_fast_img_restore_check(&src, &opt, &mut report)?);
+                integrity_stats = Some(run_fast_img_restore_check(&src, &opt, &mut report, &args.strategy)?);
             } else {
                 integrity_stats = Some(run_integrity_check(
                     &src,
@@ -2346,7 +2356,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 0);
@@ -2424,7 +2434,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 1);
@@ -2461,7 +2471,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.optimized_files, 0);
@@ -2499,7 +2509,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 1);
@@ -2521,7 +2531,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 0);
         assert_eq!(stats.integrity_failures, 1);
@@ -2551,7 +2561,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 1);
@@ -2602,7 +2612,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.optimized_files, 0);
         assert_eq!(stats.extra, 1);
@@ -2630,7 +2640,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.optimized_files, 1);
@@ -2667,7 +2677,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 0);
@@ -2711,7 +2721,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert!(stats.integrity_failures >= 1);
@@ -2751,7 +2761,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert!(stats.integrity_failures >= 1);
         assert!(stats.has_warnings);
@@ -2785,7 +2795,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert!(stats.integrity_failures >= 1);
         assert!(stats.has_warnings);
@@ -2805,7 +2815,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         fs::write(restored.join("wrong.png"), b"\x89PNG\r\n\x1a\nnot-jpeg").unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report).unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 0);
@@ -2880,7 +2890,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         #[cfg(unix)]
         {
@@ -2933,7 +2943,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 1);
@@ -2972,7 +2982,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 0);
@@ -3012,7 +3022,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only").unwrap();
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl").unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
         assert_eq!(stats.tier2_verified_deleted, 0);
