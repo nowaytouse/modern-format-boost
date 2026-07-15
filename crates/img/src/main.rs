@@ -2188,9 +2188,19 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     | foundation::image::format_detect::FormatKind::Heif
                     | foundation::image::format_detect::FormatKind::Avif
             ) {
-                let analysis = foundation::image_analyzer::analyze_image(&path)?;
-                if !analysis.is_animated {
-                    source_jpegs.push(path);
+                match foundation::image_analyzer::analyze_image(&path) {
+                    Ok(analysis) => {
+                        if !analysis.is_animated {
+                            source_jpegs.push(path);
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "[ERROR   ] Failed to analyze image {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
                 }
             }
         } else if is_true_jpeg(&path)? {
@@ -2471,7 +2481,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             lossy_modern_static_candidates.len(),
             &src_dir,
-            &strategy,
+            strategy,
         );
         println!("{msg}");
         tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
@@ -2571,11 +2581,28 @@ fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool
         })
 }
 
-fn fast_img_delete_notice_message(jpeg_count: usize, tier2_count: usize, src_dir: &Path, strategy: &str) -> String {
-    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
-    let source_type_plural = if strategy == "avif" { "static images" } else { "JPEGs" };
-    let source_type_singular = if strategy == "avif" { "static image" } else { "JPEG" };
-    
+fn fast_img_delete_notice_message(
+    jpeg_count: usize,
+    tier2_count: usize,
+    src_dir: &Path,
+    strategy: &str,
+) -> String {
+    let mode_name = if strategy == "avif" {
+        "AVIF-only (Meme Mode)"
+    } else {
+        "JXL-only"
+    };
+    let source_type_plural = if strategy == "avif" {
+        "static images"
+    } else {
+        "JPEGs"
+    };
+    let source_type_singular = if strategy == "avif" {
+        "static image"
+    } else {
+        "JPEG"
+    };
+
     let tier2_notice = if tier2_count > 0 {
         format!(
             " It will also delete {tier2_count} verified tier-2 lossy modern static source file(s) after Photos import."
@@ -3189,7 +3216,11 @@ fn fast_img_validate_jxl_only_delivery_exit(
     current_source_hashes: &BTreeMap<String, String>,
     strategy: &str,
 ) -> anyhow::Result<()> {
-    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
+    let mode_name = if strategy == "avif" {
+        "AVIF-only (Meme Mode)"
+    } else {
+        "JXL-only"
+    };
     if marker.src_jpeg_count != current_count {
         anyhow::bail!(
             "fast-img source count changed before {mode_name} delivery: marker={} current={current_count}",
@@ -3206,7 +3237,10 @@ fn fast_img_validate_jxl_only_delivery_exit(
         anyhow::bail!("fast-img {mode_name} output hash incomplete for {rel}");
     }
     if !fast_img_marker_outputs_current(marker)? {
-        anyhow::bail!("fast-img {} output proof missing/drifted before delivery", if strategy == "avif" { "AVIF" } else { "JXL" });
+        anyhow::bail!(
+            "fast-img {} output proof missing/drifted before delivery",
+            if strategy == "avif" { "AVIF" } else { "JXL" }
+        );
     }
 
     Ok(())
@@ -3244,7 +3278,10 @@ fn fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
         anyhow::bail!("fast-img cleanup retry output hash incomplete for {rel}");
     }
     if !fast_img_marker_outputs_current(marker)? {
-        anyhow::bail!("fast-img cleanup retry {} output proof missing/drifted before delivery", if strategy == "avif" { "AVIF" } else { "JXL" });
+        anyhow::bail!(
+            "fast-img cleanup retry {} output proof missing/drifted before delivery",
+            if strategy == "avif" { "AVIF" } else { "JXL" }
+        );
     }
     Ok(())
 }
@@ -5156,9 +5193,17 @@ fn fast_img_run_verification_and_delivery_pipeline(
     lossy_modern_static_candidates: &[ModernLossyStaticCandidate],
     strategy: &str,
 ) -> anyhow::Result<()> {
-    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
+    let mode_name = if strategy == "avif" {
+        "AVIF-only (Meme Mode)"
+    } else {
+        "JXL-only"
+    };
     let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
-    let source_type = if strategy == "avif" { "images" } else { "JPEGs" };
+    let source_type = if strategy == "avif" {
+        "images"
+    } else {
+        "JPEGs"
+    };
     let reconciled = fast_img_reconcile_unrecorded_source_disposition(
         marker,
         src_dir,
@@ -7476,11 +7521,7 @@ mod fast_img_hardening_tests {
     fn fast_img_command_accepts_strategy_flag() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["img", "fast-img", "/photos", "--strategy", "avif"])?;
 
-        let Commands::FastImg {
-            strategy,
-            ..
-        } = parsed.command
-        else {
+        let Commands::FastImg { strategy, .. } = parsed.command else {
             anyhow::bail!("expected fast-img command");
         };
         assert_eq!(strategy, "avif");
@@ -8017,7 +8058,8 @@ mod fast_img_hardening_tests {
             },
         );
 
-        let err = match fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes, "jxl") {
+        let err = match fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes, "jxl")
+        {
             Ok(()) => anyhow::bail!("missing JXL output unexpectedly passed delivery exit"),
             Err(err) => err,
         };

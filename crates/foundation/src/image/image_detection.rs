@@ -372,10 +372,10 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 ///
 /// libavif does not provide timing information, so we use ffprobe to extract
 /// frame rate for animated AVIF files.
-fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
+fn extract_fps_from_ffprobe(path: &Path) -> Option<f32> {
     if !crate::ffmpeg_builder::FfprobeBuilder::check_available() {
         tracing::debug!("ffprobe not available for AVIF FPS extraction");
-        return Ok(None);
+        return None;
     }
 
     let mut cmd = FfprobeBuilder::new()
@@ -392,13 +392,13 @@ fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
                 Ok(out) => out,
                 Err(err) => {
                     tracing::debug!("ffprobe process wait timeout error: {err}");
-                    return Ok(None);
+                    return None;
                 }
             }
         }
         Err(err) => {
             tracing::debug!("ffprobe process spawn failed: {err}");
-            return Ok(None);
+            return None;
         }
     };
 
@@ -406,11 +406,11 @@ fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
         Ok(v) => v,
         Err(err) => {
             tracing::debug!("ffprobe output parse failed: {err}");
-            return Ok(None);
+            return None;
         }
     };
     let Some(streams) = json.get("streams").and_then(|s| s.as_array()) else {
-        return Ok(None);
+        return None;
     };
 
     for stream in streams {
@@ -443,14 +443,14 @@ fn extract_fps_from_ffprobe(path: &Path) -> Result<Option<f32>> {
                 if den > 0.0 && num > 0.0 {
                     let fps = num / den;
                     if fps.is_finite() && fps > 0.0 {
-                        return Ok(Some(crate::numeric_cast::f64_to_f32_lossy(fps)));
+                        return Some(crate::numeric_cast::f64_to_f32_lossy(fps));
                     }
                 }
             }
         }
     }
 
-    Ok(None)
+    None
 }
 
 pub fn detect_animation(
@@ -531,7 +531,7 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
-            if let Some(fps) = extract_fps_from_ffprobe(path)? {
+            if let Some(fps) = extract_fps_from_ffprobe(path) {
                 // AVIF is animated with detected FPS
                 return Ok((true, None, Some(fps)));
             }

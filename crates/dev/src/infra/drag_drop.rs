@@ -381,9 +381,11 @@ pub fn choose_fast_img_strategy() -> Result<String> {
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
     println!("\n{green}FAST MODE STRATEGY{reset}");
     println!("   {bold}1{reset} - {green}Default (JXL){reset}");
-    println!("       {dim}Fast lossless recompression of JPEGs to JXL.{reset}");
+    println!("       {dim}Fast lossless encoding of JPEGs to JXL.{reset}");
     println!("   {bold}2{reset} - {green}AVIF (Meme Mode){reset}");
-    println!("       {dim}Meme Mode: Strict static encoding of images to AVIF.{reset}");
+    println!(
+        "       {dim}Meme Mode (表情包模式): Strict static encoding of images to AVIF.{reset}"
+    );
     let answer = read_line(&format!(
         "\n   {bold}Choose strategy [1/2] ({green}Enter = Default{reset}{bold}): {reset}"
     ))?;
@@ -408,9 +410,10 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
              local AVIF folder cleanup.{reset}"
         );
     } else {
+        let format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
         println!(
-            "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
-             local JXL folder cleanup.{reset}"
+            "       {dim}{format_name}-only delivery, strict verification, automatic iCloud Photos import, then \
+             local {format_name} folder cleanup.{reset}"
         );
     }
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
