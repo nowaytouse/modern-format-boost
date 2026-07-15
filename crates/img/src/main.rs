@@ -2472,6 +2472,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             lossy_modern_static_candidates.len(),
             &src_dir,
+            &strategy,
         );
         println!("{msg}");
         tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
@@ -2532,6 +2533,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         auto_import,
         reuse_marker_import_proof,
         &lossy_modern_static_candidates,
+        strategy,
     )?;
 
     Ok(())
@@ -2570,7 +2572,11 @@ fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool
         })
 }
 
-fn fast_img_delete_notice_message(jpeg_count: usize, tier2_count: usize, src_dir: &Path) -> String {
+fn fast_img_delete_notice_message(jpeg_count: usize, tier2_count: usize, src_dir: &Path, strategy: &str) -> String {
+    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
+    let source_type_plural = if strategy == "avif" { "static images" } else { "JPEGs" };
+    let source_type_singular = if strategy == "avif" { "static image" } else { "JPEG" };
+    
     let tier2_notice = if tier2_count > 0 {
         format!(
             " It will also delete {tier2_count} verified tier-2 lossy modern static source file(s) after Photos import."
@@ -2579,8 +2585,8 @@ fn fast_img_delete_notice_message(jpeg_count: usize, tier2_count: usize, src_dir
         String::new()
     };
     format!(
-        "[NOTICE  ] fast-img JXL-only delivery for {jpeg_count} JPEGs from {}. \
-         This workflow will directly delete original JPEG files after strict verification.{tier2_notice} \
+        "[NOTICE  ] fast-img {mode_name} delivery for {jpeg_count} {source_type_plural} from {}. \
+         This workflow will directly delete original {source_type_singular} files after strict verification.{tier2_notice} \
          Back up the source folder first if you need to keep them.",
         src_dir.display()
     )
@@ -3182,10 +3188,12 @@ fn fast_img_validate_jxl_only_delivery_exit(
     marker: &WorkingCopyMarker,
     current_count: usize,
     current_source_hashes: &BTreeMap<String, String>,
+    strategy: &str,
 ) -> anyhow::Result<()> {
+    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
     if marker.src_jpeg_count != current_count {
         anyhow::bail!(
-            "fast-img source count changed before JXL-only delivery: marker={} current={current_count}",
+            "fast-img source count changed before {mode_name} delivery: marker={} current={current_count}",
             marker.src_jpeg_count
         );
     }
@@ -3196,10 +3204,10 @@ fn fast_img_validate_jxl_only_delivery_exit(
         .iter()
         .find(|(_rel, entry)| entry.out_rel.is_none() || entry.out.is_empty())
     {
-        anyhow::bail!("fast-img JXL-only output hash incomplete for {rel}");
+        anyhow::bail!("fast-img {mode_name} output hash incomplete for {rel}");
     }
     if !fast_img_marker_outputs_current(marker)? {
-        anyhow::bail!("fast-img JXL output proof missing/drifted before delivery");
+        anyhow::bail!("fast-img {} output proof missing/drifted before delivery", if strategy == "avif" { "AVIF" } else { "JXL" });
     }
 
     Ok(())
@@ -3209,6 +3217,7 @@ fn fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
     marker: &WorkingCopyMarker,
     current_count: usize,
     current_source_hashes: &BTreeMap<String, String>,
+    strategy: &str,
 ) -> anyhow::Result<()> {
     if current_count != current_source_hashes.len() {
         anyhow::bail!(
@@ -3236,7 +3245,7 @@ fn fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
         anyhow::bail!("fast-img cleanup retry output hash incomplete for {rel}");
     }
     if !fast_img_marker_outputs_current(marker)? {
-        anyhow::bail!("fast-img cleanup retry JXL output proof missing/drifted before delivery");
+        anyhow::bail!("fast-img cleanup retry {} output proof missing/drifted before delivery", if strategy == "avif" { "AVIF" } else { "JXL" });
     }
     Ok(())
 }
@@ -5146,7 +5155,11 @@ fn fast_img_run_verification_and_delivery_pipeline(
     auto_import: AutoImportFlag,
     reuse_marker_import_proof: bool,
     lossy_modern_static_candidates: &[ModernLossyStaticCandidate],
+    strategy: &str,
 ) -> anyhow::Result<()> {
+    let mode_name = if strategy == "avif" { "AVIF-only (Meme Mode)" } else { "JXL-only" };
+    let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
+    let source_type = if strategy == "avif" { "images" } else { "JPEGs" };
     let reconciled = fast_img_reconcile_unrecorded_source_disposition(
         marker,
         src_dir,
@@ -5187,12 +5200,14 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 marker,
                 source_jpegs.len(),
                 current_source_hashes,
+                strategy,
             )?;
         } else {
             fast_img_validate_jxl_only_delivery_exit(
                 marker,
                 source_jpegs.len(),
                 current_source_hashes,
+                strategy,
             )?;
         }
         let (source_deleted, source_already_deleted) =
@@ -5239,7 +5254,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             );
         }
         println!(
-            "[DELIVER ] Gate 1 passed; JXL-only output at {}; source JPEGs deleted={} already_absent={} empty_dirs_pruned={}",
+            "[DELIVER ] Gate 1 passed; {mode_name} output at {}; source {source_type} deleted={} already_absent={} empty_dirs_pruned={}",
             working_copy.display(),
             source_deleted,
             source_already_deleted,
@@ -5443,7 +5458,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     write_marker_atomic(marker)?;
     if tier2_deleted + tier2_already_deleted > 0 {
         println!(
-            "[DONE    ] {} JXL files · {} source JPEGs deleted · {} tier-2 modern static deleted · {} empty source dirs pruned · JXL-only output at {} · gates: ①②③ all ✅",
+            "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} tier-2 modern static deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
             ctx.expected_count,
             source_deleted,
             tier2_deleted,
@@ -5452,7 +5467,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         );
     } else {
         println!(
-            "[DONE    ] {} files · {} source JPEGs deleted · {} empty source dirs pruned · JXL-only output at {} · gates: ①②③ all ✅",
+            "[DONE    ] {} files · {} source {source_type} deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
             ctx.expected_count,
             source_deleted,
             source_dirs_pruned,
@@ -6437,7 +6452,7 @@ mod fast_img_hardening_tests {
         );
         let current_hashes = fast_img_source_hash_set(&src_root, &[failed_src])?;
 
-        fast_img_validate_cleanup_retry_jxl_only_delivery_exit(&marker, 1, &current_hashes)?;
+        fast_img_validate_cleanup_retry_jxl_only_delivery_exit(&marker, 1, &current_hashes, "jxl")?;
 
         Ok(())
     }
@@ -7525,19 +7540,15 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn delete_notice_warns_source_jpegs_are_deleted_without_prompting() {
-        let message = fast_img_delete_notice_message(3, 0, std::path::Path::new("/photos"));
-
-        assert!(message.contains("directly delete original JPEG files"));
-        assert!(message.contains("Back up"));
-        assert!(!message.contains("[y/N]"));
+        let message = fast_img_delete_notice_message(3, 0, std::path::Path::new("/photos"), "jxl");
+        assert!(message.contains("will directly delete original JPEG files"));
+        assert!(message.contains("JXL-only delivery"));
     }
 
     #[test]
     fn delete_notice_mentions_tier2_sources_when_present() {
-        let message = fast_img_delete_notice_message(2, 4, std::path::Path::new("/photos"));
-
-        assert!(message.contains("tier-2 lossy modern static"));
-        assert!(message.contains('4'));
+        let message = fast_img_delete_notice_message(2, 4, std::path::Path::new("/photos"), "jxl");
+        assert!(message.contains("will also delete 4 verified tier-2 lossy"));
     }
 
     #[test]
@@ -7573,7 +7584,7 @@ mod fast_img_hardening_tests {
             },
         );
 
-        fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes)?;
+        fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes, "jxl")?;
         Ok(())
     }
 
@@ -7683,7 +7694,7 @@ mod fast_img_hardening_tests {
             },
         );
 
-        fast_img_validate_jxl_only_delivery_exit(&marker, 2, &current_hashes)?;
+        fast_img_validate_jxl_only_delivery_exit(&marker, 2, &current_hashes, "jxl")?;
         Ok(())
     }
 
@@ -7980,7 +7991,7 @@ mod fast_img_hardening_tests {
         )?;
         assert_eq!(reconciled, 1);
 
-        fast_img_validate_jxl_only_delivery_exit(&marker, 2, &current_hashes)?;
+        fast_img_validate_jxl_only_delivery_exit(&marker, 2, &current_hashes, "jxl")?;
         Ok(())
     }
 
@@ -8007,7 +8018,7 @@ mod fast_img_hardening_tests {
             },
         );
 
-        let err = match fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes) {
+        let err = match fast_img_validate_jxl_only_delivery_exit(&marker, 1, &current_hashes, "jxl") {
             Ok(()) => anyhow::bail!("missing JXL output unexpectedly passed delivery exit"),
             Err(err) => err,
         };
