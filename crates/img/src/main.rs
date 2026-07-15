@@ -2891,17 +2891,36 @@ fn fast_img_run_transcode_job_inner(
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
-        // Read JPEG quality for AVIF encoding
-        let jpeg_quality = foundation::image_jpeg_analysis::analyze_jpeg_file(&job.source)
-            .ok()
-            .map(|analysis| analysis.estimated_quality);
+        // Determine quality for AVIF encoding based on source format
+        let format = foundation::image::format_detect::detect_true_format(&job.source)?;
+        let quality = match format {
+            foundation::image::format_detect::FormatKind::Jpeg => {
+                // For JPEG: read quality from quantization tables
+                foundation::image_jpeg_analysis::analyze_jpeg_file(&job.source)
+                    .ok()
+                    .map(|analysis| analysis.estimated_quality)
+            }
+            foundation::image::format_detect::FormatKind::Png
+            | foundation::image::format_detect::FormatKind::WebP => {
+                // PNG/WebP are typically lossless or high quality
+                // Use high quality (90) for AVIF encoding
+                Some(90)
+            }
+            foundation::image::format_detect::FormatKind::Heic
+            | foundation::image::format_detect::FormatKind::Heif
+            | foundation::image::format_detect::FormatKind::Avif => {
+                // HEIC/HEIF/AVIF: use balanced quality
+                Some(85)
+            }
+            _ => None, // Other formats: use encoder default
+        };
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: foundation::ConvertFlags::FORCE,
             ..Default::default()
         };
-        img::lossless_converter::convert_to_avif(&job.source, jpeg_quality, &convert_options)?
+        img::lossless_converter::convert_to_avif(&job.source, quality, &convert_options)?
     } else {
         let options = LosslessConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
