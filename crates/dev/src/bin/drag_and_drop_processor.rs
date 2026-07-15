@@ -2011,6 +2011,7 @@ fn execute_menu_quick_pick(
     session: &DragDropSession,
     dir_lock: &mut Option<DirLock>,
     target: &Path,
+    strategy: &str,
 ) -> Result<()> {
     let (cat, sub) = match choice {
         1 => (0, 0),
@@ -2033,6 +2034,7 @@ fn execute_menu_quick_pick(
         dir_lock,
         target,
         ProcessingFilter::Both,
+        strategy,
     )?;
     Ok(())
 }
@@ -2046,6 +2048,7 @@ fn execute_menu_selection(
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     filter: ProcessingFilter,
+    strategy: &str,
 ) -> Result<bool> {
     let root = resolve_runtime_root()?;
     match selected {
@@ -2092,8 +2095,7 @@ fn execute_menu_selection(
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
-                let strategy = dev::infra::drag_drop::choose_fast_img_strategy()?;
-                let shortest = dev::infra::drag_drop::choose_fast_vid_shortest_path(&strategy)?;
+                let shortest = dev::infra::drag_drop::choose_fast_vid_shortest_path(strategy)?;
                 let output = dev::infra::fastmode_paths::fast_vid_output_dir_for_target(target);
                 let args = build_run_args(
                     target,
@@ -2103,12 +2105,11 @@ fn execute_menu_selection(
                     true,
                     shortest,
                     filter,
-                    Some(strategy),
+                    Some(strategy.to_string()),
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
-                let strategy = dev::infra::drag_drop::choose_fast_img_strategy()?;
-                let action = dev::infra::drag_drop::choose_fast_img_action(&strategy)?;
+                let action = dev::infra::drag_drop::choose_fast_img_action(strategy)?;
                 let verify_bin = cli_binary(&root, "verify");
                 let output =
                     dev::infra::drag_drop::resolve_output_for_fast_img(target, action, &verify_bin);
@@ -2125,7 +2126,7 @@ fn execute_menu_selection(
                     true,
                     shortest,
                     filter,
-                    Some(strategy),
+                    Some(strategy.to_string()),
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -2275,6 +2276,7 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
     let mut opt_sub = 0usize;
     let mut workspace_sub = 0usize;
     let mut maint_sub = 0usize;
+    let mut strategy = "jxl".to_string(); // Default strategy
     let fastmode_count = if matches!(
         filter,
         ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
@@ -2290,8 +2292,8 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
         println!("{bold}Select Operation Mode:{reset}\n");
         println!("   Target: {}\n", target.display());
 
-        let (opt_title, opt_desc) = optimization_menu_labels(opt_sub, filter);
-        print_menu_row(selected == 0, opt_title, opt_desc);
+        let (opt_title, opt_desc) = optimization_menu_labels(opt_sub, filter, &strategy);
+        print_menu_row(selected == 0, &opt_title, opt_desc);
 
         let ws = [
             (
@@ -2327,6 +2329,21 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
 
         print_menu_hint();
 
+        // Show strategy hint when Fast Mode is selected
+        if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+            let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
+            let dim = if colors_enabled() { "\x1b[2m" } else { "" };
+            println!(
+                "\n   {cyan}Current Strategy: {}{reset}",
+                if strategy == "avif" {
+                    "AVIF (Meme Mode/表情包模式)"
+                } else {
+                    "JXL (Default)"
+                }
+            );
+            println!("   {dim}Press 'S' or Space to switch strategy{reset}\n");
+        }
+
         let key = read_nav_key()?;
         match key {
             NavKey::Up | NavKey::Left => {
@@ -2341,13 +2358,23 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                 1 => workspace_sub = (workspace_sub + 1) % 3,
                 _ => maint_sub = (maint_sub + 1) % 3,
             },
+            NavKey::Char('s') | NavKey::Char('S') | NavKey::Char(' ') => {
+                // Toggle strategy when Fast Mode is selected
+                if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+                    strategy = if strategy == "jxl" {
+                        "avif".to_string()
+                    } else {
+                        "jxl".to_string()
+                    };
+                }
+            }
             NavKey::Quit | NavKey::Char('0') => return Ok(()),
             NavKey::Char(c @ '1'..='9') => {
                 let n = match c.to_digit(10) {
                     Some(v) => v as usize,
                     None => 0,
                 };
-                execute_menu_quick_pick(n, session, &mut dir_lock, &target)?;
+                execute_menu_quick_pick(n, session, &mut dir_lock, &target, &strategy)?;
                 wait_enter();
             }
             NavKey::Enter => {
@@ -2360,6 +2387,7 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                     &mut dir_lock,
                     &target,
                     filter,
+                    &strategy,
                 )?;
                 wait_enter();
             }
@@ -2368,46 +2396,61 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
     }
 }
 
-const fn optimization_menu_labels(
+fn optimization_menu_labels(
     sub: usize,
     filter: ProcessingFilter,
-) -> (&'static str, &'static str) {
+    strategy: &str,
+) -> (String, &'static str) {
     match filter {
         ProcessingFilter::VideosOnly => match sub {
             0 => (
-                "Mode: Fast Video Mode [Tab to Switch]",
+                format!(
+                    "Mode: Fast Video Mode ({}) [Tab to Switch]",
+                    if strategy == "avif" {
+                        "AVIF/Meme"
+                    } else {
+                        "JXL"
+                    }
+                ),
                 "Full LoopIntent path for videos and animated images.",
             ),
             1 => (
-                "Mode: In-Place Optimization [Tab to Switch]",
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
                 "Replaces original files. Saves disk space.",
             ),
             _ => (
-                "Mode: Output to Adjacent Folder [Tab to Switch]",
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
                 "Safe mode. Keeps originals untouched.",
             ),
         },
         ProcessingFilter::ImagesOnly => match sub {
             0 => (
-                "Mode: Fast Image Mode [Tab to Switch]",
+                format!(
+                    "Mode: Fast Image Mode ({}) [Tab to Switch]",
+                    if strategy == "avif" {
+                        "AVIF/Meme"
+                    } else {
+                        "JXL"
+                    }
+                ),
                 "JPEG→JXL fast path or JXL→JPEG restore.",
             ),
             1 => (
-                "Mode: In-Place Optimization [Tab to Switch]",
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
                 "Replaces original files. Saves disk space.",
             ),
             _ => (
-                "Mode: Output to Adjacent Folder [Tab to Switch]",
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
                 "Safe mode. Keeps originals untouched.",
             ),
         },
         ProcessingFilter::Both => match sub {
             0 => (
-                "Mode: Output to Adjacent Folder [Tab to Switch]",
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
                 "Safe mode. Keeps originals untouched.",
             ),
             _ => (
-                "Mode: In-Place Optimization [Tab to Switch]",
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
                 "Replaces original files. Saves disk space.",
             ),
         },
