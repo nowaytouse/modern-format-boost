@@ -2891,13 +2891,17 @@ fn fast_img_run_transcode_job_inner(
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
+        // Read JPEG quality for AVIF encoding
+        let jpeg_quality = foundation::image_jpeg_analysis::analyze_jpeg_file(&job.source)
+            .ok()
+            .map(|analysis| analysis.estimated_quality);
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: foundation::ConvertFlags::FORCE,
             ..Default::default()
         };
-        img::lossless_converter::convert_to_avif(&job.source, None, &convert_options)?
+        img::lossless_converter::convert_to_avif(&job.source, jpeg_quality, &convert_options)?
     } else {
         let options = LosslessConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
