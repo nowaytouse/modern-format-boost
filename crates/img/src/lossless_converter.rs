@@ -1391,7 +1391,7 @@ impl JpegJbrdLadderDiagnostics {
             "refusing implicit ImageMagick pixel re-encode fallback. Explicitly opt in with ALLOW_JPEG_PIXEL_REENCODE_FALLBACK if decoded-pixel delivery is intended"
         };
         format!(
-            "cjxl JPEG lossless encode failed after JBRD structural recovery ladder; source: {}; {fallback_note}; layers: {}",
+            "cjxl JPEG lossless transcode failed after JBRD structural recovery ladder; source: {}; {fallback_note}; layers: {}",
             self.source,
             self.layer_report()
         )
@@ -1445,7 +1445,7 @@ fn run_cjxl_jpeg_encode_with_effort(
 
     let mut command = builder.build();
     foundation::process_runner::ManagedProcess::spawn(&mut command)?
-        .wait_timeout(cjxl_timeout()?, "cjxl JPEG lossless encode")
+        .wait_timeout(cjxl_timeout()?, "cjxl JPEG lossless transcode")
 }
 
 fn jpeg_effort_stage_label(base: &str, effort: u8) -> String {
@@ -1992,7 +1992,7 @@ fn handle_irreversible_jpeg_encode_failure(
         return Ok(TaskResult::skipped_custom(
             input,
             input_size,
-            "Skipped: JPEG cannot be reversibly encoded; source remains unmodified",
+            "Skipped: JPEG cannot be reversibly transcoded; source remains unmodified",
             JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
         ));
     }
@@ -2274,7 +2274,7 @@ pub fn convert_jpeg_to_jxl(
             input_size,
             options,
             color_context,
-            "JPEG lossless encode preflight rejected source before cjxl: JPEG is truncated or missing EOI",
+            "JPEG lossless transcode preflight rejected source before cjxl: JPEG is truncated or missing EOI",
         );
     }
 
@@ -2288,12 +2288,12 @@ pub fn convert_jpeg_to_jxl(
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "ultrahdr_fast_img_skip",
                 input,
-                "UltraHDR JPEG cannot be reversibly encoded in fast-img mode; source remains unmodified",
+                "UltraHDR JPEG cannot be reversibly transcoded in fast-img mode; source remains unmodified",
             );
             return Ok(TaskResult::skipped_custom(
                 input,
                 input_size,
-                "Skipped: UltraHDR JPEG cannot be reversibly encoded; source remains unmodified",
+                "Skipped: UltraHDR JPEG cannot be reversibly transcoded; source remains unmodified",
                 JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
             ));
         }
@@ -2341,7 +2341,8 @@ pub fn convert_jpeg_to_jxl(
     let output_cmd = match result {
         Ok(out) => out,
         Err(e) if aggressive_e11 => {
-            let failure = format!("cjxl aggressive e11 JPEG lossless encode process failed: {e}");
+            let failure =
+                format!("cjxl aggressive e11 JPEG lossless transcode process failed: {e}");
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "jpeg_aggressive_e11_process_error",
                 input,
@@ -2368,7 +2369,7 @@ pub fn convert_jpeg_to_jxl(
         }
         Err(e) => {
             return Err(ImgQualityError::ConversionError(format!(
-                "cjxl JPEG lossless encode process failed: {e}"
+                "cjxl JPEG lossless transcode process failed: {e}"
             )));
         }
     };
@@ -4441,19 +4442,19 @@ mod tests {
 
         assert!(
             !body.contains("extract_icc_profile("),
-            "JPEG lossless encode must let libjxl adopt the source JPEG ICC"
+            "JPEG lossless transcode must let libjxl adopt the source JPEG ICC"
         );
         assert!(
             !body.contains(".icc_profile("),
-            "JPEG lossless encode must not force an ICC override"
+            "JPEG lossless transcode must not force an ICC override"
         );
         assert!(
             !body.contains("color_info_to_cicp("),
-            "JPEG lossless encode must not synthesize CICP over JPEG-native color"
+            "JPEG lossless transcode must not synthesize CICP over JPEG-native color"
         );
         assert!(
             !body.contains(".cicp("),
-            "JPEG lossless encode must not force a CICP override"
+            "JPEG lossless transcode must not force a CICP override"
         );
     }
 

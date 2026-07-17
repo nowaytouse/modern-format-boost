@@ -30,7 +30,9 @@ fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
     assert!(result.success, "skipped TaskResult should be success=true");
     assert!(result.skip_reason.is_some(), "skip_reason should be set");
     assert!(
-        result.message.contains("JPEG cannot be reversibly encoded")
+        result
+            .message
+            .contains("JPEG cannot be reversibly transcoded")
             || result.message.contains("encode preflight rejected"),
         "unexpected skip message: {}",
         result.message

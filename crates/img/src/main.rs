@@ -113,7 +113,7 @@ enum Commands {
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless encode may test cjxl e11.
+        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -184,7 +184,7 @@ enum Commands {
     /// Perform deep diagnostic scan of the database infrastructure and data integrity
     DbHealth,
 
-    /// Fast JPEG-only encode: true JPEGs → adjacent JXL-only output.
+    /// Fast JPEG-only transcode: true JPEGs → adjacent JXL-only output.
     ///
     /// Detects true JPEGs via magic bytes (never extension-only), strips residual
     /// EXIF Orientation tag post-encode, deletes verified source JPEGs, and
@@ -231,7 +231,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         retry: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless encode may test cjxl e11.
+        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -517,7 +517,7 @@ fn main_inner() -> anyhow::Result<()> {
             if allow_expert_options {
                 log_stat!(
                     foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    "Expert Options Audit: lab-only encoder parameters enabled; JPEG lossless encode may test cjxl e11"
+                    "Expert Options Audit: lab-only encoder parameters enabled; JPEG lossless transcode may test cjxl e11"
                 );
             }
             if !allow_size_tolerance {
@@ -1392,7 +1392,7 @@ fn dispatch_static_conversion(
     let is_lossless = analysis.is_lossless;
 
     // 🔬 Level 4 Feedback: KNN Static Quality Score
-    // JPEG bypass: cjxl encode is fast enough to skip DB lookup.
+    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
     // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
     let quality = if format == "JPEG" {
         None
