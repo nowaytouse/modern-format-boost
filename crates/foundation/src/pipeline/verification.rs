@@ -110,7 +110,7 @@ impl VerificationGate for Gate1Local {
             check_exact_metadata_copies(ctx),
             check_nonzero_size(ctx.expected_count, &jxl_files),
             check_orientation_absent(&jxl_files),
-            check_decode_probe(&jxl_files),
+            check_decode_probe(&jxl_files, ctx.output_format),
         ];
         gate_result(checks)
     }
@@ -637,20 +637,29 @@ where
     )
 }
 
-fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
-    if !is_command_available("djxl") {
+fn check_decode_probe(files: &[PathBuf], output_format: Option<crate::format_detect::FormatKind>) -> CheckDetail {
+    let is_avif = matches!(output_format, Some(crate::format_detect::FormatKind::Avif));
+    let tool = if is_avif { "avifdec" } else { "djxl" };
+
+    if !is_command_available(tool) {
         return detail(
             "decode",
             false,
-            "djxl available and every JXL decodes".to_string(),
-            "djxl unavailable".to_string(),
+            format!("{tool} available and every file decodes"),
+            format!("{tool} unavailable"),
             files.to_vec(),
         );
     }
 
     let failures = files
         .iter()
-        .filter_map(|path| djxl_decode_probe(path).err().map(|err| (path.clone(), err)))
+        .filter_map(|path| {
+            if is_avif {
+                avifdec_decode_probe(path).err().map(|err| (path.clone(), err))
+            } else {
+                djxl_decode_probe(path).err().map(|err| (path.clone(), err))
+            }
+        })
         .collect::<Vec<_>>();
     let failure_paths = failures
         .iter()
@@ -668,7 +677,7 @@ fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
     detail(
         "decode",
         failures.is_empty(),
-        format!("{} djxl decode probes pass", files.len()),
+        format!("{} {} decode probes pass", files.len(), tool),
         actual,
         failure_paths,
     )
@@ -750,6 +759,33 @@ fn ensure_exiftool_success(path: &Path, status: ExitStatus, stderr: &[u8]) -> st
         "exiftool orientation probe failed for {}: {stderr}",
         path.display()
     )))
+}
+
+fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
+    let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "fast_img_gate1_decode_probe",
+        Some("mfb_gate1_decode"),
+        Some(".png"),
+    )
+    .map_err(|err| format!("avifdec decode probe scratch tempfile failed: {err}"))?;
+    let output = std::process::Command::new("avifdec")
+        .arg(path)
+        .arg(temp.path())
+        .stdout(std::process::Stdio::null())
+        .output()
+        .map_err(|err| format!("avifdec decode probe spawn failed: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
+        stderr.lines().rev().find(|line| !line.trim().is_empty()),
+    );
+    Err(format!(
+        "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
+        path.display(),
+        output.status.code()
+    ))
 }
 
 fn djxl_decode_probe(path: &Path) -> Result<(), String> {

@@ -18,7 +18,8 @@ use foundation::fast_img::{
     import_modern_lossy_static_tier, is_true_jpeg, library_handle_from_marker_import_proof,
     library_handle_from_marker_tier2_proof, prompt_user_confirm,
     prune_empty_source_dirs_for_tier2_assets, safe_delete_jpeg_source,
-    safe_delete_matching_xmp_sidecar, verify_final_jxl_delivery_integrity,
+    safe_delete_matching_xmp_sidecar, verify_final_avif_delivery_integrity,
+    verify_final_jxl_delivery_integrity,
 };
 use foundation::image::format_detect::FormatKind;
 use foundation::image::orientation::{
@@ -3344,6 +3345,7 @@ fn fast_img_marker_outputs_current(marker: &WorkingCopyMarker) -> anyhow::Result
 fn fast_img_delete_verified_source_jpegs(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
+    strategy: &str,
 ) -> anyhow::Result<(usize, usize)> {
     fast_img_preflight_verified_source_deletion(marker, src_dir)?;
     let mut candidates = Vec::new();
@@ -3365,16 +3367,21 @@ fn fast_img_delete_verified_source_jpegs(
         );
         let parallelism =
             fast_img_effective_verify_parallelism(existing.len(), thread_config.parallel_tasks);
+        let format_label = if strategy == "avif" { "AVIF" } else { "JXL" };
+        let tool_label = if strategy == "avif" { "avifdec" } else { "djxl" };
         println!(
-            "[VERIFY  ] final JXL delete proofs pending {} · parallel {} djxl checks",
+            "[VERIFY  ] final {} delete proofs pending {} · parallel {} {} checks",
+            format_label,
             existing.len(),
-            parallelism
+            parallelism,
+            tool_label
         );
         tracing::info!(
             target: "fast_img_delete",
             pending = existing.len(),
             parallelism,
-            "fast-img final JXL delete proof verification start"
+            "fast-img final {} delete proof verification start",
+            format_label
         );
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
@@ -3384,7 +3391,16 @@ fn fast_img_delete_verified_source_jpegs(
             existing
                 .par_iter()
                 .map(|candidate| {
-                    let integrity =
+                    let integrity = if strategy == "avif" {
+                        verify_final_avif_delivery_integrity(&candidate.source, &candidate.output)
+                            .map_err(|err| {
+                                anyhow::anyhow!(
+                                    "fast-img source delete gate final AVIF proof failed for {} -> {}: {err}",
+                                    candidate.source.display(),
+                                    candidate.output.display()
+                                )
+                            })?
+                    } else {
                         verify_final_jxl_delivery_integrity(&candidate.source, &candidate.output)
                             .map_err(|err| {
                                 anyhow::anyhow!(
@@ -3392,7 +3408,8 @@ fn fast_img_delete_verified_source_jpegs(
                                     candidate.source.display(),
                                     candidate.output.display()
                                 )
-                            })?;
+                            })?
+                    };
                     Ok(FastImgVerifiedSourceDelete {
                         source: candidate.source.clone(),
                         output: candidate.output.clone(),
@@ -5291,7 +5308,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             )?;
         }
         let (source_deleted, source_already_deleted) =
-            fast_img_delete_verified_source_jpegs(marker, src_dir)?;
+            fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
         let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
         fast_img_strip_non_jxl_files(working_copy)?;
         foundation::restore_delivery_directory_metadata(
@@ -5489,7 +5506,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     let (source_deleted, source_already_deleted) =
-        fast_img_delete_verified_source_jpegs(marker, src_dir)?;
+        fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
     let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
     let (tier2_deleted, tier2_already_deleted) = if let Some(tier2_library_handle) =
         tier2_library_handle.as_ref()

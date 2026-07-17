@@ -280,6 +280,18 @@ pub fn verify_final_jxl_delivery_integrity(
     verify_final_delivery_integrity(source_jpeg, jxl_output, FormatKind::Jxl)
 }
 
+/// Same as [`verify_final_jxl_delivery_integrity`] but for AVIF meme mode.
+///
+/// # Errors
+/// Returns an error if any proof step fails.
+pub fn verify_final_avif_delivery_integrity(
+    source_jpeg: &Path,
+    avif_output: &Path,
+) -> Result<IntegrityResult> {
+    use crate::image::format_detect::FormatKind;
+    verify_final_delivery_integrity(source_jpeg, avif_output, FormatKind::Avif)
+}
+
 /// Verify a final delivered modern format output is safe to use as the sole
 /// retained JPEG-derived asset.
 ///
