@@ -476,11 +476,17 @@ impl ToolBuilder for GifskiBuilder {
 }
 
 /// Builder for constructing `avifenc` commands.
+///
+/// Uses the unified quality API (`-q`/`--qcolor`, 0-100 where 100=lossless)
+/// introduced in avifenc ≥1.2.0. The legacy `--min`/`--max` (0-63) flags are
+/// no longer emitted.
 #[derive(Debug, Default)]
 pub struct AvifencBuilder {
     base: crate::builder_base::BaseBuilder,
-    min_quality: Option<u8>,
-    max_quality: Option<u8>,
+    /// Color quality: 0-100, 100 = lossless. Maps to `-q`.
+    quality: Option<u8>,
+    /// Alpha quality: 0-100, 100 = lossless. Maps to `--qalpha`.
+    quality_alpha: Option<u8>,
     lossless: bool,
     speed: Option<u8>,
     threads: Option<String>,
@@ -504,9 +510,15 @@ impl AvifencBuilder {
         self
     }
 
-    pub const fn quality(&mut self, min: u8, max: u8) -> &mut Self {
-        self.min_quality = Some(min);
-        self.max_quality = Some(max);
+    /// Set color quality (0-100, 100 = lossless). Emits `-q`.
+    pub const fn quality(&mut self, quality: u8) -> &mut Self {
+        self.quality = Some(quality);
+        self
+    }
+
+    /// Set alpha channel quality (0-100, 100 = lossless). Emits `--qalpha`.
+    pub const fn quality_alpha(&mut self, quality: u8) -> &mut Self {
+        self.quality_alpha = Some(quality);
         self
     }
 
@@ -553,12 +565,14 @@ impl ToolBuilder for AvifencBuilder {
             cmd.arg(constants::AVIFENC_ARG_JOBS).arg(j);
         }
 
-        if let Some(q) = self.max_quality {
-            cmd.arg(constants::AVIFENC_ARG_MAX).arg(q.to_string());
+        // Unified quality API: -q (color) and --qalpha (alpha).
+        if let Some(q) = self.quality {
+            cmd.arg(constants::AVIFENC_ARG_QUALITY).arg(q.to_string());
         }
 
-        if let Some(q) = self.min_quality {
-            cmd.arg(constants::AVIFENC_ARG_MIN).arg(q.to_string());
+        if let Some(qa) = self.quality_alpha {
+            cmd.arg(constants::AVIFENC_ARG_QUALITY_ALPHA)
+                .arg(qa.to_string());
         }
 
         if let Some(d) = self.depth {
@@ -912,7 +926,7 @@ mod tests {
             .lossless(true)
             .speed(6)
             .jobs("all")
-            .quality(60, 80)
+            .quality(70)
             .depth(10);
 
         let cmd = builder.build();
@@ -923,10 +937,10 @@ mod tests {
         assert!(args.contains(&"6"));
         assert!(args.contains(&"-j"));
         assert!(args.contains(&"all"));
-        assert!(args.contains(&"--min"));
-        assert!(args.contains(&"60"));
-        assert!(args.contains(&"--max"));
-        assert!(args.contains(&"80"));
+        assert!(args.contains(&"-q"));
+        assert!(args.contains(&"70"));
+        assert!(!args.contains(&"--min"));
+        assert!(!args.contains(&"--max"));
         assert!(args.contains(&"--depth"));
         assert!(args.contains(&"10"));
     }

@@ -657,7 +657,7 @@ fn convert_to_avif(
     let mut builder = foundation::AvifencBuilder::new();
     builder.input(&input_abs).output(&output_abs);
 
-    builder.quality(q, q);
+    builder.quality(q);
 
     let status = builder.build().output()?;
 

@@ -337,6 +337,19 @@ pub fn verify_avif_health(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Verify AVIF pixel equivalence with tolerance for lossy compression.
+///
+/// # Errors
+/// Returns error if pixel validation fails.
+pub fn verify_avif_pixel_equivalence(source: &Path, output: &Path) -> Result<(), String> {
+    use crate::format_detect::FormatKind;
+    use crate::image::fast_img::verify_pixel_equivalence_integrity;
+    match verify_pixel_equivalence_integrity(source, output, FormatKind::Avif) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("AVIF pixel verification failed: {e}")),
+    }
+}
+
 /// Verify AV1-in-MP4 output exists and has minimal size. Optional ffprobe
 /// or duration checks can be added later.
 /// Verify the health of an AV1 MP4 file.

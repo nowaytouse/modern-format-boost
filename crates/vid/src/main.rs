@@ -544,7 +544,7 @@ fn run_fast_gif(
             builder
                 .speed(4)
                 .jobs("all")
-                .quality(q, q)
+                .quality(q)
                 .input(&file)
                 .output(&temp_output);
 

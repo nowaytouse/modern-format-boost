@@ -25,8 +25,10 @@ pub enum DiffTolerance {
     /// roundtrip with BLAKE3, so this check verifies geometry/structure only
     /// and deliberately ignores decoder/color-management channel drift.
     JxlOrientation,
-    /// Lossless AVIF — one LSB per channel is allowed.
+    /// Lossless HEIC/HEIF/WebP — one LSB per channel is allowed.
     LsbAvif,
+    /// Lossy AVIF (meme mode) — max 255 delta per channel.
+    LossyAvif,
 }
 
 impl DiffTolerance {
@@ -35,6 +37,7 @@ impl DiffTolerance {
             Self::Exact => 0,
             Self::JxlOrientation => u8::MAX,
             Self::LsbAvif => 1,
+            Self::LossyAvif => 255,
         }
     }
 }
@@ -46,9 +49,8 @@ const JXL_ORIENTATION_LOW_VARIANCE_EPSILON: f64 = 1.0e-6;
 pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
     match fmt {
         FormatKind::Jxl => Some(DiffTolerance::JxlOrientation),
-        FormatKind::Avif | FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => {
-            Some(DiffTolerance::LsbAvif)
-        }
+        FormatKind::Avif => Some(DiffTolerance::LossyAvif),
+        FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => Some(DiffTolerance::LsbAvif),
         FormatKind::Jpeg
         | FormatKind::Png
         | FormatKind::Gif

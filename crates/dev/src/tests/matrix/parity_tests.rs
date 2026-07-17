@@ -760,18 +760,21 @@ fn test_gifski_performance_controls() {
 }
 
 fn test_avifenc_quality_refinement() {
+    // avifenc ≥1.2.0: unified quality via -q (0-100, 100=lossless).
+    // Old --min/--max (0-63 quantizer) is no longer emitted.
     let cmd = foundation::image_builders::AvifencBuilder::new()
-        .quality(15, 35)
+        .quality(75)
         .speed(8)
         .build();
     let args: Vec<String> = cmd
         .get_args()
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
-    assert!(args.contains(&"--min".to_string()));
-    assert!(args.contains(&"15".to_string()));
-    assert!(args.contains(&"--max".to_string()));
-    assert!(args.contains(&"35".to_string()));
+    assert!(args.contains(&"-q".to_string()));
+    assert!(args.contains(&"75".to_string()));
     assert!(args.contains(&"--speed".to_string()));
     assert!(args.contains(&"8".to_string()));
+    // Legacy flags must NOT appear.
+    assert!(!args.contains(&"--min".to_string()));
+    assert!(!args.contains(&"--max".to_string()));
 }

@@ -109,6 +109,16 @@ impl ImgStaticDelivery {
             Self::Avif => "AVIF",
         }
     }
+
+    /// Map this delivery strategy to the corresponding [`crate::image::format_detect::FormatKind`]
+    /// for use in pipeline verification gate context.
+    #[must_use]
+    pub const fn to_format_kind(self) -> crate::image::format_detect::FormatKind {
+        match self {
+            Self::Jxl => crate::image::format_detect::FormatKind::Jxl,
+            Self::Avif => crate::image::format_detect::FormatKind::Avif,
+        }
+    }
 }
 
 /// Parse and validate `img run --codec`.
@@ -122,6 +132,20 @@ pub fn resolve_cli_img_static_delivery(
     let delivery = ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)?;
     delivery.validate_img_flags(apple_compat)?;
     Ok(delivery)
+}
+
+/// Parse a fast-img strategy string (`"jxl"` / `"avif"`) into the
+/// corresponding [`crate::image::format_detect::FormatKind`].
+///
+/// Returns `None` for unknown / empty strategy strings so callers can fall
+/// back to heuristic detection.
+#[must_use]
+pub fn strategy_to_format_kind(strategy: &str) -> Option<crate::image::format_detect::FormatKind> {
+    match strategy.trim().to_ascii_lowercase().as_str() {
+        "jxl" | "hevc" | "h265" | "x265" => Some(crate::image::format_detect::FormatKind::Jxl),
+        "avif" | "av1" | "av01" => Some(crate::image::format_detect::FormatKind::Avif),
+        _ => None,
+    }
 }
 
 /// Startup log line for `img run`.

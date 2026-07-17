@@ -3048,8 +3048,11 @@ pub const GIFSKI_ARG_OUTPUT: &str = "--output";
 pub const AVIFENC_ARG_LOSSLESS: &str = "--lossless";
 pub const AVIFENC_ARG_SPEED: &str = "--speed";
 pub const AVIFENC_ARG_JOBS: &str = "-j";
-pub const AVIFENC_ARG_MAX: &str = "--max";
-pub const AVIFENC_ARG_MIN: &str = "--min";
+/// Unified quality for color, 0-100 where 100 = lossless (avifenc ≥1.2.0).
+/// Replaces the legacy --min/--max (0-63) API.
+pub const AVIFENC_ARG_QUALITY: &str = "-q";
+/// Alpha channel quality, 0-100 where 100 = lossless (avifenc ≥1.2.0).
+pub const AVIFENC_ARG_QUALITY_ALPHA: &str = "--qalpha";
 pub const AVIFENC_ARG_DEPTH: &str = "--depth";
 pub const AVIFENC_ARG_YUV: &str = "--yuv";
 

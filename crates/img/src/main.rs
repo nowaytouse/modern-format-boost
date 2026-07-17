@@ -2649,6 +2649,7 @@ fn fast_img_pipeline_ctx(
     marker: &WorkingCopyMarker,
     expected_count: usize,
     library_handle: Option<LibraryHandle>,
+    output_format: Option<foundation::image::format_detect::FormatKind>,
 ) -> PipelineCtx {
     PipelineCtx {
         working_copy: marker.working_copy.clone(),
@@ -2656,6 +2657,7 @@ fn fast_img_pipeline_ctx(
         blake3_log: marker.blake3_log.clone(),
         expected_count,
         library_handle,
+        output_format,
     }
 }
 
@@ -5244,7 +5246,18 @@ fn fast_img_run_verification_and_delivery_pipeline(
         source_jpegs.len(),
         resume_local_delivery_for_shortest_path,
     );
-    let ctx = fast_img_pipeline_ctx(marker, expected_count, None);
+
+    // Fail early if all sources failed during encoding
+    if expected_count == 0 && !marker.failed_sources.is_empty() {
+        anyhow::bail!(
+            "All {} source {}(s) failed during encoding; no outputs to verify. Check logs for per-file failure reasons.",
+            marker.failed_sources.len(),
+            source_type
+        );
+    }
+
+    let output_format = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy);
+    let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
     if !gate1_complete_or_later(&marker.stage) {
         println!("[GATE 1  ] verifying local outputs");
         let gate1 = Gate1Local.run(&ctx);
@@ -5435,6 +5448,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             marker,
             expected_count,
             Some(library_handle.clone()),
+            output_format,
         ));
         print_gate_result("GATE 2", &gate2);
         marker.apply_gate2(&gate2);
@@ -5460,6 +5474,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             marker,
             expected_count,
             Some(library_handle),
+            output_format,
         ));
         print_gate_result("GATE 3", &gate3);
         marker.apply_gate3(&gate3);
@@ -8260,6 +8275,7 @@ mod fast_img_hardening_tests {
             blake3_log: marker.blake3_log,
             expected_count: 1,
             library_handle: Some(handle),
+            output_format: None,
         };
 
         assert!(Gate2Import.run(&ctx).passed);
@@ -8361,6 +8377,7 @@ mod fast_img_hardening_tests {
             blake3_log: marker.blake3_log,
             expected_count: 1,
             library_handle: Some(handle),
+            output_format: None,
         };
 
         assert!(Gate2Import.run(&ctx).passed);
@@ -8413,7 +8430,7 @@ mod fast_img_hardening_tests {
         )?;
         apply_library_assets_to_marker(&mut marker, &handle)?;
 
-        let ctx = fast_img_pipeline_ctx(&marker, marker.src_jpeg_count, Some(handle));
+        let ctx = fast_img_pipeline_ctx(&marker, marker.src_jpeg_count, Some(handle), None);
 
         assert!(Gate3Deep.run(&ctx).passed);
         Ok(())

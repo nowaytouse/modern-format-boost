@@ -184,42 +184,57 @@ pub fn verify_jxl_pixel_equivalence_integrity(
     source_jpeg: &Path,
     jxl_output: &Path,
 ) -> Result<IntegrityResult> {
-    use crate::common_utils::calculate_blake3_hash;
     use crate::image::format_detect::FormatKind;
+    verify_pixel_equivalence_integrity(source_jpeg, jxl_output, FormatKind::Jxl)
+}
+
+/// Pixel-equivalence integrity proof for modern format transcodes.
+///
+/// Supports JXL (without JBRD), AVIF, and other lossy modern formats.
+/// Uses format-specific pixel diff tolerance from orientation policy.
+///
+/// # Errors
+/// Returns an error if decoder/pixel proof is unavailable or mismatches.
+pub fn verify_pixel_equivalence_integrity(
+    source_jpeg: &Path,
+    output: &Path,
+    format: crate::image::format_detect::FormatKind,
+) -> Result<IntegrityResult> {
+    use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
         PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
-    let out_meta = std::fs::metadata(jxl_output).map_err(|e| {
+    let out_meta = std::fs::metadata(output).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "pixel-equivalence: cannot stat output {}: {e}",
-            jxl_output.display()
+            output.display()
         ))
     })?;
     if out_meta.len() == 0 {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel-equivalence: output is empty: {}",
-            jxl_output.display()
+            output.display()
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(FormatKind::Jxl).ok_or_else(|| {
-        ImgQualityError::AnalysisError(
-            "pixel-equivalence: missing JXL orientation policy".to_string(),
-        )
+    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+        ImgQualityError::AnalysisError(format!(
+            "pixel-equivalence: missing {format:?} orientation policy"
+        ))
     })?;
-    match verify_orientation_pixel_diff(source_jpeg, jxl_output, FormatKind::Jxl, tolerance)? {
+    match verify_orientation_pixel_diff(source_jpeg, output, format, tolerance)? {
         PixelDiffResult::Match => {}
         PixelDiffResult::SkippedToolAbsent { tool } => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "pixel-equivalence: proof unavailable for {}: missing {tool}",
-                jxl_output.display()
+                output.display()
             )));
         }
         PixelDiffResult::Mismatch { max_delta, channel } => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "pixel-equivalence: proof failed for {}: max_delta={max_delta} channel={channel}",
-                jxl_output.display()
+                output.display()
             )));
         }
     }
@@ -227,7 +242,7 @@ pub fn verify_jxl_pixel_equivalence_integrity(
     let source_hash = calculate_blake3_hash(source_jpeg).map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-equivalence: BLAKE3(source) failed: {e}"))
     })?;
-    let output_hash = calculate_blake3_hash(jxl_output).map_err(|e| {
+    let output_hash = calculate_blake3_hash(output).map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-equivalence: BLAKE3(output) failed: {e}"))
     })?;
 
@@ -235,7 +250,7 @@ pub fn verify_jxl_pixel_equivalence_integrity(
         target: "fast_img_integrity",
         source = %source_jpeg.display(),
         source_blake3 = %source_hash,
-        output = %jxl_output.display(),
+        output = %output.display(),
         output_blake3 = %output_hash,
         "pixel-equivalence integrity check"
     );
@@ -261,60 +276,85 @@ pub fn verify_final_jxl_delivery_integrity(
     source_jpeg: &Path,
     jxl_output: &Path,
 ) -> Result<IntegrityResult> {
-    use crate::common_utils::calculate_blake3_hash;
     use crate::image::format_detect::FormatKind;
+    verify_final_delivery_integrity(source_jpeg, jxl_output, FormatKind::Jxl)
+}
+
+/// Verify a final delivered modern format output is safe to use as the sole
+/// retained JPEG-derived asset.
+///
+/// Supports JXL, AVIF, and other modern formats. Checks source/output hash,
+/// non-empty output, decoder readability, orientation-correct pixels, and
+/// (for JXL) no residual Orientation tag.
+///
+/// # Errors
+/// Returns an error if any proof step fails.
+pub fn verify_final_delivery_integrity(
+    source_jpeg: &Path,
+    output: &Path,
+    format: crate::image::format_detect::FormatKind,
+) -> Result<IntegrityResult> {
+    use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
         PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
-    let out_meta = std::fs::metadata(jxl_output).map_err(|e| {
+    let out_meta = std::fs::metadata(output).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "final-integrity: cannot stat output {}: {e}",
-            jxl_output.display()
+            output.display()
         ))
     })?;
     if out_meta.len() == 0 {
         return Err(ImgQualityError::AnalysisError(format!(
             "final-integrity: output is empty: {}",
-            jxl_output.display()
+            output.display()
         )));
     }
 
-    if !crate::DjxlBuilder::check_available() {
+    // djxl is the decode-verification tool for JXL only; skip for other formats.
+    if format == crate::image::format_detect::FormatKind::Jxl
+        && !crate::DjxlBuilder::check_available()
+    {
         return Err(ImgQualityError::AnalysisError(format!(
             "final-integrity: djxl unavailable; cannot verify final JXL {}",
-            jxl_output.display()
+            output.display()
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(FormatKind::Jxl).ok_or_else(|| {
-        ImgQualityError::AnalysisError(
-            "final-integrity: missing JXL orientation policy".to_string(),
-        )
+    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+        ImgQualityError::AnalysisError(format!(
+            "final-integrity: missing {format:?} orientation policy"
+        ))
     })?;
-    match verify_orientation_pixel_diff(source_jpeg, jxl_output, FormatKind::Jxl, tolerance)? {
+    match verify_orientation_pixel_diff(source_jpeg, output, format, tolerance)? {
         PixelDiffResult::Match => {}
         PixelDiffResult::SkippedToolAbsent { tool } => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "final-integrity: orientation proof unavailable for {}: missing {tool}",
-                jxl_output.display()
+                output.display()
             )));
         }
         PixelDiffResult::Mismatch { max_delta, channel } => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "final-integrity: orientation proof failed for {}: max_delta={max_delta} \
                  channel={channel}",
-                jxl_output.display()
+                output.display()
             )));
         }
     }
 
-    ensure_no_residual_orientation_tag(jxl_output)?;
+    // Residual orientation-tag check is JXL-specific (AVIF handles orientation
+    // via container metadata, not EXIF Orientation, so the check is a no-op and
+    // would error when djxl/exiftool disagree on AVIF container structure).
+    if format == crate::image::format_detect::FormatKind::Jxl {
+        ensure_no_residual_orientation_tag(output)?;
+    }
 
     let source_hash = calculate_blake3_hash(source_jpeg).map_err(|e| {
         ImgQualityError::AnalysisError(format!("final-integrity: BLAKE3(source) failed: {e}"))
     })?;
-    let output_hash = calculate_blake3_hash(jxl_output).map_err(|e| {
+    let output_hash = calculate_blake3_hash(output).map_err(|e| {
         ImgQualityError::AnalysisError(format!("final-integrity: BLAKE3(output) failed: {e}"))
     })?;
 
@@ -322,9 +362,10 @@ pub fn verify_final_jxl_delivery_integrity(
         target: "fast_img_integrity",
         source = %source_jpeg.display(),
         source_blake3 = %source_hash,
-        output = %jxl_output.display(),
+        output = %output.display(),
         output_blake3 = %output_hash,
-        "final JXL delivery integrity check"
+        format = ?format,
+        "final modern format delivery integrity check"
     );
 
     Ok(IntegrityResult::FinalJxlDelivery {

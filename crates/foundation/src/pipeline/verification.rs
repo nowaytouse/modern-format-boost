@@ -53,6 +53,9 @@ pub struct PipelineCtx {
     pub blake3_log: Blake3Log,
     pub expected_count: usize,
     pub library_handle: Option<LibraryHandle>,
+    /// Output format for this pipeline run, used to select the extension for
+    /// output file collection. When `None`, falls back to filesystem detection.
+    pub output_format: Option<crate::image::format_detect::FormatKind>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -85,7 +88,11 @@ impl VerificationGate for Gate1Local {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
-        let jxl_files = match collect_jxl_files(&ctx.working_copy) {
+        let ext = ctx
+            .output_format
+            .and_then(output_format_extension)
+            .unwrap_or_else(|| detect_output_extension(&ctx.working_copy));
+        let jxl_files = match collect_output_files(&ctx.working_copy, ext) {
             Ok(files) => files,
             Err(err) => {
                 return gate_result(vec![detail(
@@ -207,7 +214,11 @@ impl VerificationGate for Gate3Deep {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
-        let jxl_files = match collect_jxl_files(&ctx.working_copy) {
+        let ext = ctx
+            .output_format
+            .and_then(output_format_extension)
+            .unwrap_or_else(|| detect_output_extension(&ctx.working_copy));
+        let jxl_files = match collect_output_files(&ctx.working_copy, ext) {
             Ok(files) => files,
             Err(err) => {
                 return gate_result(vec![detail(
@@ -663,7 +674,7 @@ fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
     )
 }
 
-fn collect_jxl_files(root: &Path) -> Result<Vec<PathBuf>, walkdir::Error> {
+fn collect_output_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, walkdir::Error> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -675,13 +686,49 @@ fn collect_jxl_files(root: &Path) -> Result<Vec<PathBuf>, walkdir::Error> {
                 .path()
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
         {
             files.push(entry.path().to_path_buf());
         }
     }
     files.sort();
     Ok(files)
+}
+
+/// Convert a known output format to its canonical file extension.
+/// Returns `None` for formats that are not valid fast-img output targets.
+fn output_format_extension(fmt: crate::image::format_detect::FormatKind) -> Option<&'static str> {
+    use crate::image::format_detect::FormatKind;
+    match fmt {
+        FormatKind::Jxl => Some("jxl"),
+        FormatKind::Avif => Some("avif"),
+        _ => None,
+    }
+}
+
+fn detect_output_extension(root: &Path) -> &'static str {
+    if !root.exists() {
+        return "jxl";
+    }
+    let mut has_jxl = false;
+    let mut has_avif = false;
+    for entry in walkdir::WalkDir::new(root).max_depth(2) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+            if ext.eq_ignore_ascii_case("jxl") {
+                has_jxl = true;
+            } else if ext.eq_ignore_ascii_case("avif") {
+                has_avif = true;
+            }
+        }
+        if has_jxl || has_avif {
+            break;
+        }
+    }
+    if has_avif { "avif" } else { "jxl" }
 }
 
 fn orientation_tag_present(path: &Path) -> std::io::Result<bool> {
@@ -818,6 +865,7 @@ mod tests {
                 imported_assets,
                 import_error_count: 0,
             }),
+            output_format: None,
         }
     }
 
@@ -829,6 +877,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         let result = Gate1Local.run(&ctx);
 
@@ -850,6 +899,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         let result = Gate2Import.run(&ctx);
 
@@ -865,6 +915,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         let result = Gate3Deep.run(&ctx);
 
@@ -949,6 +1000,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -982,6 +1034,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -1021,6 +1074,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -1085,6 +1139,7 @@ mod tests {
             blake3_log: BTreeMap::new(),
             expected_count: 1,
             library_handle: None,
+            output_format: None,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),

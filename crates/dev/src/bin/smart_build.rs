@@ -141,6 +141,16 @@ struct Args {
     /// Use after small source edits to rebuild and verify timestamps immediately.
     #[arg(long, short = 'p')]
     patch: bool,
+
+    /// Build a single named binary only (e.g. img, vid, drag_and_drop_processor).
+    /// Resolves to the owning crate automatically.
+    #[arg(long, value_name = "BINARY", conflicts_with_all = ["all", "img", "vid"])]
+    bin: Option<String>,
+
+    /// Skip compilation — just sync existing target/release binaries to the .app bundle.
+    /// Fast path after a manual cargo build.
+    #[arg(long, short = 's')]
+    sync: bool,
 }
 
 fn command_exists(cmd: &str) -> bool {
@@ -1165,6 +1175,36 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     Ok(())
 }
 
+/// Map a binary name to its owning crate directory (relative to workspace root).
+///
+/// # Errors
+/// Returns an error when the binary name is not known.
+fn bin_name_to_crate_dir(name: &str) -> Result<&'static str> {
+    match name {
+        "img" => Ok("crates/img"),
+        "vid" => Ok("crates/vid"),
+        // All dev-crate binaries map to crates/dev.
+        "verify"
+        | "cache_cleaner"
+        | "database_manager"
+        | "collect_optimized"
+        | "merge_xmp"
+        | "icloud_import"
+        | "drag_and_drop_processor"
+        | "smart_build"
+        | "check_all"
+        | "install_deps"
+        | "ingest_audit"
+        | "index_gallery"
+        | "session_audit" => Ok("crates/dev"),
+        other => anyhow::bail!(
+            "unknown binary '{other}'; valid: img, vid, or any dev binary \
+             (verify, cache_cleaner, database_manager, collect_optimized, \
+             merge_xmp, icloud_import, drag_and_drop_processor, ...)"
+        ),
+    }
+}
+
 fn main() -> Result<()> {
     let mut args = Args::parse();
     let _ = setup_logger("mfb.smart_build");
@@ -1193,11 +1233,27 @@ fn main() -> Result<()> {
             .with_context(|| format!("write update cache marker {}", cache_file.display()))?;
     }
 
+    // --sync: skip compilation entirely, just push current target/release binaries into .app.
+    if args.sync {
+        println!(
+            "{}{}[sync mode]{} Syncing binaries to app bundle (no build).",
+            style.cyan, style.bold, style.reset
+        );
+        sync_app_bundle(&project_root, &style)?;
+        return Ok(());
+    }
+
     let mut projects_to_build = Vec::new();
     if args.all {
         projects_to_build.push("crates/img");
         projects_to_build.push("crates/vid");
         projects_to_build.push("crates/dev");
+    } else if let Some(ref bin_name) = args.bin {
+        // --bin <name>: resolve the binary to its owning crate.
+        let crate_dir = bin_name_to_crate_dir(bin_name).with_context(|| {
+            format!("unknown binary '{bin_name}'; valid values: img, vid, or any dev binary")
+        })?;
+        projects_to_build.push(crate_dir);
     } else {
         if args.img {
             projects_to_build.push("crates/img");
@@ -1494,6 +1550,40 @@ mod tests {
         assert!(
             env.iter()
                 .any(|(key, value)| { *key == "RUSTUP_TOOLCHAIN" && value == "nightly-test" })
+        );
+    }
+
+    #[test]
+    fn test_bin_flag_maps_img_to_crates_img() {
+        assert_eq!(bin_name_to_crate_dir("img").unwrap(), "crates/img");
+    }
+
+    #[test]
+    fn test_bin_flag_maps_vid_to_crates_vid() {
+        assert_eq!(bin_name_to_crate_dir("vid").unwrap(), "crates/vid");
+    }
+
+    #[test]
+    fn test_bin_flag_maps_dev_binaries_to_crates_dev() {
+        for bin in &[
+            "verify",
+            "cache_cleaner",
+            "database_manager",
+            "drag_and_drop_processor",
+        ] {
+            assert_eq!(
+                bin_name_to_crate_dir(bin).unwrap(),
+                "crates/dev",
+                "binary '{bin}' should map to crates/dev"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bin_flag_rejects_unknown_binary() {
+        assert!(
+            bin_name_to_crate_dir("not_a_real_binary").is_err(),
+            "unknown binary should return Err"
         );
     }
 }

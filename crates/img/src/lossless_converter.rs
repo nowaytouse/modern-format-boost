@@ -2651,7 +2651,7 @@ pub fn convert_to_avif(
     builder
         .speed(4)
         .jobs("all")
-        .quality(q, q)
+        .quality(q)
         .input(input)
         .output(&temp_output);
 
@@ -2665,6 +2665,15 @@ pub fn convert_to_avif(
                 cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF health check failed: {e}"
+                )));
+            }
+            if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+                input,
+                &temp_output,
+            ) {
+                cleanup_temp_output(&temp_output, input);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "AVIF pixel equivalence failed: {e}"
                 )));
             }
             finalize_with_size_check(
@@ -2738,6 +2747,15 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                 cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(format!(
                     "Lossless AVIF health check failed: {e}"
+                )));
+            }
+            if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+                input,
+                &temp_output,
+            ) {
+                cleanup_temp_output(&temp_output, input);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "Lossless AVIF pixel equivalence failed: {e}"
                 )));
             }
             finalize_with_size_check(
