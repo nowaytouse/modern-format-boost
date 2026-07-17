@@ -136,7 +136,7 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
 /// 1. Read `src_orient` from source EXIF.
 /// 2. Decode output to PNG via format-specific tool.
 /// 3. Decode source JPEG. For normal formats, apply `src_orient` transform →
-///    reference pixels. For JXL lossless transcodes that decode to the raw JPEG
+///    reference pixels. For JXL lossless encodes that decode to the raw JPEG
 ///    dimensions, compare against raw source pixels instead of treating the
 ///    EXIF-rotated display dimensions as a hard failure.
 /// 4. Pixel-diff reference vs decoded output.
@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn jxl_orientation_diff_accepts_raw_source_dimensions_for_lossless_transcode() {
+    fn jxl_orientation_diff_accepts_raw_source_dimensions_for_lossless_encode() {
         let raw_source = patterned_image(2, 3);
         let decoded_lossless_jxl = raw_source.clone();
 

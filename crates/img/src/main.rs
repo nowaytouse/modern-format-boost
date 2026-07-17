@@ -30,11 +30,11 @@ use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
     Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
     Gate3Deep, LibraryHandle, PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
-    confirm_import_required, deep_scan_complete_or_later, gate1_complete_or_later,
-    gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
-    marker_checks_from_result, marker_path_for_working_copy, output_prepared_or_later,
-    prepare_jxl_output_dir, read_marker, resolve_working_copy_dir, retry_resume_stage,
-    transcode_complete_or_later, write_marker_atomic,
+    confirm_import_required, deep_scan_complete_or_later, encode_complete_or_later,
+    gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
+    import_complete_or_later, marker_checks_from_result, marker_path_for_working_copy,
+    output_prepared_or_later, prepare_jxl_output_dir, read_marker, resolve_working_copy_dir,
+    retry_resume_stage, write_marker_atomic,
 };
 use foundation::quality_matcher::SourceCodec;
 use foundation::scan_modern_lossy_static_candidates;
@@ -113,7 +113,7 @@ enum Commands {
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
+        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless encode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -184,7 +184,7 @@ enum Commands {
     /// Perform deep diagnostic scan of the database infrastructure and data integrity
     DbHealth,
 
-    /// Fast JPEG-only transcode: true JPEGs → adjacent JXL-only output.
+    /// Fast JPEG-only encode: true JPEGs → adjacent JXL-only output.
     ///
     /// Detects true JPEGs via magic bytes (never extension-only), strips residual
     /// EXIF Orientation tag post-encode, deletes verified source JPEGs, and
@@ -231,7 +231,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         retry: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
+        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless encode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -517,7 +517,7 @@ fn main_inner() -> anyhow::Result<()> {
             if allow_expert_options {
                 log_stat!(
                     foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    "Expert Options Audit: lab-only encoder parameters enabled; JPEG lossless transcode may test cjxl e11"
+                    "Expert Options Audit: lab-only encoder parameters enabled; JPEG lossless encode may test cjxl e11"
                 );
             }
             if !allow_size_tolerance {
@@ -1392,7 +1392,7 @@ fn dispatch_static_conversion(
     let is_lossless = analysis.is_lossless;
 
     // 🔬 Level 4 Feedback: KNN Static Quality Score
-    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
+    // JPEG bypass: cjxl encode is fast enough to skip DB lookup.
     // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
     let quality = if format == "JPEG" {
         None
@@ -1630,7 +1630,7 @@ fn auto_convert_directory(
             total
         ));
         log_detail!(
-            "  Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution",
+            "  Queue Strategy: deeper paths → fast JPEG/direct encodes → smaller files → lower resolution",
         );
     }
 
@@ -2444,7 +2444,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )
     };
     if !resume_local_delivery_for_shortest_path
-        && transcode_complete_or_later(&resume_stage)
+        && encode_complete_or_later(&resume_stage)
         && !fast_img_marker_outputs_current(&marker)?
     {
         println!(
@@ -2457,7 +2457,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             "fast-img marker output proof is not current; downgrading resume stage to output_prepared"
         );
         resume_stage = FastImgStageName::OutputPrepared;
-        marker.transcoded_count = 0;
+        marker.encoded_count = 0;
         marker.gate1_checks = Gate1Checks::default();
         marker.gate2_checks = Gate2Checks::default();
         marker.gate3_checks = Gate3Checks::default();
@@ -2467,8 +2467,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     if !resume_local_delivery_for_shortest_path && !retry_failed_sources_from_cleanup {
         marker.src_jpeg_count = source_jpegs.len();
     }
-    let refresh_transcode_complete_resume_outputs =
-        transcode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
+    let refresh_encode_complete_resume_outputs =
+        encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
     marker.stage = if output_prepared_or_later(&resume_stage) {
         resume_stage
     } else {
@@ -2500,8 +2500,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         write_marker_atomic(&marker)?;
     }
 
-    if !transcode_complete_or_later(&marker.stage) {
-        fast_img_run_transcode_phase(
+    if !encode_complete_or_later(&marker.stage) {
+        fast_img_run_encode_phase(
             &mut marker,
             &source_jpegs,
             &current_source_hashes,
@@ -2514,7 +2514,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )?;
     }
 
-    if refresh_transcode_complete_resume_outputs {
+    if refresh_encode_complete_resume_outputs {
         let refreshed = fast_img_refresh_marker_jxl_deliveries(&mut marker, &src_dir)?;
         if refreshed > 0 {
             write_marker_atomic(&marker)?;
@@ -2699,7 +2699,7 @@ fn exact_bytes_label(bytes: u64) -> String {
     format!("{human} ({} bytes)", group_thousands(bytes))
 }
 
-/// Session-scoped size accounting: ONLY files transcoded in THIS run.
+/// Session-scoped size accounting: ONLY files encoded in THIS run.
 /// Skipped (already exists / resume-reused), failed, and deferred items are
 /// excluded — their bytes never enter these sums.
 fn print_fast_img_session_size_summary(
@@ -2871,7 +2871,7 @@ struct FastImgTranscodeError {
 
 type FastImgJobResult = std::result::Result<FastImgTranscodeOutcome, FastImgTranscodeError>;
 
-fn fast_img_effective_transcode_parallelism(
+fn fast_img_effective_encode_parallelism(
     pending_count: usize,
     configured_parallel_tasks: usize,
     configured_child_threads: usize,
@@ -2884,7 +2884,7 @@ fn fast_img_effective_transcode_parallelism(
     (parallel_tasks, configured_child_threads.max(1))
 }
 
-fn fast_img_run_transcode_job_inner(
+fn fast_img_run_encode_job_inner(
     job: &FastImgTranscodeJob,
     src_dir: &Path,
     working_copy: &Path,
@@ -2961,14 +2961,14 @@ fn fast_img_run_transcode_job_inner(
             ));
         }
         anyhow::bail!(
-            "fast-img transcode skipped without JXL output for {}: reason={skip_reason} message={}",
+            "fast-img encode skipped without JXL output for {}: reason={skip_reason} message={}",
             job.source.display(),
             result.message
         );
     }
     let out_path = result.output_path.as_ref().map(Path::new).ok_or_else(|| {
         anyhow::anyhow!(
-            "transcode produced no output path for {}",
+            "encode produced no output path for {}",
             job.source.display()
         )
     })?;
@@ -3035,7 +3035,7 @@ fn fast_img_run_transcode_job_inner(
     }))
 }
 
-fn fast_img_run_transcode_job(
+fn fast_img_run_encode_job(
     job: &FastImgTranscodeJob,
     src_dir: &Path,
     working_copy: &Path,
@@ -3044,7 +3044,7 @@ fn fast_img_run_transcode_job(
     allow_expert_options: bool,
     strategy: &str,
 ) -> FastImgJobResult {
-    fast_img_run_transcode_job_inner(
+    fast_img_run_encode_job_inner(
         job,
         src_dir,
         working_copy,
@@ -3061,7 +3061,7 @@ fn fast_img_run_transcode_job(
     })
 }
 
-fn fast_img_remove_failed_transcode_output(
+fn fast_img_remove_failed_encode_output(
     working_copy: &Path,
     err: &FastImgTranscodeError,
 ) -> anyhow::Result<()> {
@@ -3221,12 +3221,12 @@ fn fast_img_reconcile_unrecorded_source_disposition(
             rel_key.clone(),
             SkippedSourceEntry {
                 src: src_hash.clone(),
-                reason: "fast-img transcode left source without disposition record; source retained unmodified"
+                reason: "fast-img encode left source without disposition record; source retained unmodified"
                     .to_string(),
             },
         );
         reconciled += 1;
-        println!("[SKIP    ] {rel_key} retained: transcode disposition was not recorded");
+        println!("[SKIP    ] {rel_key} retained: encode disposition was not recorded");
         tracing::warn!(
             target: "fast_img",
             rel = %rel_key,
@@ -4757,7 +4757,7 @@ fn validate_fast_img_marker_source_state(
         && marker.stage != FastImgStageName::OutputPrepared
     {
         anyhow::bail!(
-            "fast-img marker missing BLAKE3 source log for post-transcode JXL-only output; refusing stale resume"
+            "fast-img marker missing BLAKE3 source log for post-encode JXL-only output; refusing stale resume"
         );
     }
     Ok(())
@@ -4892,7 +4892,7 @@ fn print_photos_verifier_proof_summary(library: &LibraryHandle, expected_count: 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fast_img_run_transcode_phase(
+fn fast_img_run_encode_phase(
     marker: &mut WorkingCopyMarker,
     source_jpegs: &[std::path::PathBuf],
     current_source_hashes: &std::collections::BTreeMap<String, String>,
@@ -4903,6 +4903,11 @@ fn fast_img_run_transcode_phase(
     allow_expert_options: bool,
     strategy: &str,
 ) -> anyhow::Result<()> {
+    let encode_label = if strategy == "avif" {
+        "MEME MODE"
+    } else {
+        "ENCODE"
+    };
     let total = source_jpegs.len();
     let mut completed_from_resume = 0usize;
     let mut jobs = Vec::new();
@@ -4956,7 +4961,9 @@ fn fast_img_run_transcode_phase(
                 entry.out = refreshed_out_hash;
                 entry.out_rel = Some(resume_out_rel_key.clone());
             }
-            println!("[TRANSCODE] reused verified output for {rel_key} -> {resume_out_rel_key}");
+            println!(
+                "[{encode_label}] reused verified output for {rel_key} -> {resume_out_rel_key}"
+            );
             completed_from_resume += 1;
             continue;
         }
@@ -4983,21 +4990,18 @@ fn fast_img_run_transcode_phase(
                 target: "fast_img",
                 rel = %rel_key,
                 recorded_out_rel = %recorded_out_rel,
-                "pre-claimed marker output path for stale-proof retranscode"
+                "pre-claimed marker output path for stale-proof reencode"
             );
             let reserved = foundation::conversion::reserve_output_path(source, &recorded_out);
-            let out_rel_key = fast_img_output_rel_key(
-                &reserved,
-                working_copy,
-                "fast_img_resume_retranscode_rel",
-            )?;
+            let out_rel_key =
+                fast_img_output_rel_key(&reserved, working_copy, "fast_img_resume_reencode_rel")?;
             if reserved != recorded_out {
                 tracing::warn!(
                     target: "fast_img",
                     rel = %rel_key,
                     recorded = %recorded_out_rel,
                     actual = %reserved.display(),
-                    "stale-proof retranscode: marker out_rel was already taken by another source; using new path"
+                    "stale-proof reencode: marker out_rel was already taken by another source; using new path"
                 );
             }
             (reserved, out_rel_key)
@@ -5021,13 +5025,13 @@ fn fast_img_run_transcode_phase(
         let thread_config = foundation::thread_manager::get_balanced_thread_config(
             foundation::thread_manager::WorkloadType::Image,
         );
-        let (parallel_tasks, child_threads) = fast_img_effective_transcode_parallelism(
+        let (parallel_tasks, child_threads) = fast_img_effective_encode_parallelism(
             pending,
             thread_config.parallel_tasks,
             thread_config.child_threads,
         );
         println!(
-            "[TRANSCODE] pending {pending}/{total} · skipped {completed_from_resume} · parallel {parallel_tasks} × {child_threads} cjxl threads"
+            "[{encode_label}] pending {pending}/{total} · skipped {completed_from_resume} · parallel {parallel_tasks} × {child_threads} threads"
         );
         tracing::info!(
             target: "fast_img",
@@ -5036,17 +5040,17 @@ fn fast_img_run_transcode_phase(
             total,
             parallel_tasks,
             child_threads,
-            "fast-img parallel transcode start"
+            "fast-img parallel encode start"
         );
         let completed = AtomicUsize::new(0);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallel_tasks)
             .build()
-            .map_err(|err| anyhow::anyhow!("fast-img transcode thread pool init failed: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("fast-img encode thread pool init failed: {err}"))?;
         let results = pool.install(|| {
             jobs.par_iter()
                 .map(|job| {
-                    let result = fast_img_run_transcode_job(
+                    let result = fast_img_run_encode_job(
                         job,
                         src_dir,
                         working_copy,
@@ -5057,14 +5061,14 @@ fn fast_img_run_transcode_phase(
                     );
                     if result.is_ok() {
                         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                        println!("[TRANSCODE] {done}/{pending} {}", job.source.display());
+                        println!("[{encode_label}] {done}/{pending} {}", job.source.display());
                     }
                     result
                 })
                 .collect::<Vec<_>>()
         });
 
-        let mut transcoded = completed_from_resume;
+        let mut encoded = completed_from_resume;
         let mut session_converted: u64 = 0;
         let mut session_source_bytes: u64 = 0;
         let mut session_output_bytes: u64 = 0;
@@ -5075,7 +5079,7 @@ fn fast_img_run_transcode_phase(
                 Ok(outcome) => outcome,
                 Err(err) => {
                     println!("[FAIL    ] {} {}", err.rel_key, err.reason);
-                    fast_img_remove_failed_transcode_output(working_copy, &err)?;
+                    fast_img_remove_failed_encode_output(working_copy, &err)?;
                     marker.blake3_log.remove(&err.rel_key);
                     marker.skipped_sources.remove(&err.rel_key);
                     marker.failed_sources.insert(
@@ -5131,8 +5135,8 @@ fn fast_img_run_transcode_phase(
                             library_asset: None,
                         },
                     );
-                    transcoded += 1;
-                    marker.transcoded_count = transcoded;
+                    encoded += 1;
+                    marker.encoded_count = encoded;
                 }
                 FastImgTranscodeOutcome::Skipped(proof) => {
                     fast_img_emit_explicit_skip(&proof.rel_key, &proof.reason);
@@ -5159,7 +5163,7 @@ fn fast_img_run_transcode_phase(
         )?;
         if session_skipped > 0 {
             println!(
-                "[SKIP    ] {session_skipped} source JPEG(s) explicitly skipped during transcode"
+                "[SKIP    ] {session_skipped} source JPEG(s) explicitly skipped during encode"
             );
             for (rel, entry) in &marker.skipped_sources {
                 let reason = &entry.reason;
@@ -5195,9 +5199,9 @@ fn fast_img_run_transcode_phase(
             );
         }
     } else {
-        marker.transcoded_count = completed_from_resume;
+        marker.encoded_count = completed_from_resume;
         println!(
-            "[TRANSCODE] 0 pending · reused {completed_from_resume}/{total} verified JXL outputs"
+            "[{encode_label}] 0 pending · reused {completed_from_resume}/{total} verified outputs"
         );
         let (resume_source_bytes, resume_output_bytes) =
             fast_img_marker_delivery_byte_totals(marker, src_dir)?;
@@ -5927,13 +5931,13 @@ mod fast_img_hardening_tests {
         fast_img_auto_retry_failed_stage, fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_delete_notice_message,
-        fast_img_delete_verified_source_jpegs_with, fast_img_effective_expected_count,
-        fast_img_effective_transcode_parallelism, fast_img_effective_verify_parallelism,
+        fast_img_delete_verified_source_jpegs_with, fast_img_effective_encode_parallelism,
+        fast_img_effective_expected_count, fast_img_effective_verify_parallelism,
         fast_img_marker_entry_output_path, fast_img_marker_outputs_current, fast_img_pipeline_ctx,
         fast_img_planned_output_rel, fast_img_post_gate1_policy, fast_img_prune_empty_source_dirs,
         fast_img_reconcile_unrecorded_source_disposition, fast_img_refresh_marker_jxl_deliveries,
-        fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_transcode_output,
-        fast_img_retry_marker_source_set_is_stale, fast_img_run_transcode_phase,
+        fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_encode_output,
+        fast_img_retry_marker_source_set_is_stale, fast_img_run_encode_phase,
         fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_jxl_files,
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
@@ -6436,7 +6440,7 @@ mod fast_img_hardening_tests {
         std::fs::write(&out, b"old jxl output")?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
         marker.stage = FastImgStageName::CleanupComplete;
-        marker.transcoded_count = 1;
+        marker.encoded_count = 1;
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
@@ -6513,7 +6517,7 @@ mod fast_img_hardening_tests {
             reason: "pixel-diff: djxl exited non-zero decoding bad.JXL".to_string(),
         };
 
-        fast_img_remove_failed_transcode_output(&wc, &err)?;
+        fast_img_remove_failed_encode_output(&wc, &err)?;
 
         assert!(!out.exists());
         Ok(())
@@ -6575,7 +6579,7 @@ mod fast_img_hardening_tests {
         std::fs::write(&out, b"old jxl output")?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
         marker.stage = FastImgStageName::CleanupComplete;
-        marker.transcoded_count = 1;
+        marker.encoded_count = 1;
         marker.blake3_log.insert(
             "old.jpg".to_string(),
             Blake3Entry {
@@ -6813,7 +6817,7 @@ mod fast_img_hardening_tests {
             },
         );
 
-        fast_img_run_transcode_phase(
+        fast_img_run_encode_phase(
             &mut marker,
             std::slice::from_ref(&src),
             &current_source_hashes,
@@ -6843,7 +6847,7 @@ mod fast_img_hardening_tests {
     /// instead of treating the on-disk `a.JXL` as a foreign collision and
     /// producing `a (1).JXL`.
     #[test]
-    fn stale_proof_retranscode_keeps_marker_out_rel_path() -> anyhow::Result<()> {
+    fn stale_proof_reencode_keeps_marker_out_rel_path() -> anyhow::Result<()> {
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
         {
@@ -6875,12 +6879,12 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&cjxl.stderr)
         );
 
-        // Compute the *current* source hash (needed for the transcode phase scan)
+        // Compute the *current* source hash (needed for the encode phase scan)
         let current_source_hashes =
             fast_img_source_hash_set(&src_root, std::slice::from_ref(&src))?;
 
         // Build a marker with a STALE source hash so hashes won't match,
-        // forcing existing_output_current = false → re-transcode branch
+        // forcing existing_output_current = false → re-encode branch
         let stale_src_hash =
             "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         let stale_out_hash =
@@ -6896,9 +6900,9 @@ mod fast_img_hardening_tests {
             },
         );
 
-        // Run the transcode phase — it will detect stale proof, re-transcode,
+        // Run the encode phase — it will detect stale proof, re-encode,
         // and must write back to a.JXL (not a (1).JXL)
-        fast_img_run_transcode_phase(
+        fast_img_run_encode_phase(
             &mut marker,
             std::slice::from_ref(&src),
             &current_source_hashes,
@@ -6913,41 +6917,41 @@ mod fast_img_hardening_tests {
         let entry = marker
             .blake3_log
             .get("a.jpg")
-            .context("missing marker entry after retranscode")?;
+            .context("missing marker entry after reencode")?;
 
         assert_eq!(
             entry.out_rel.as_deref(),
             Some("a.JXL"),
-            "stale-proof retranscode must keep the marker's recorded out_rel"
+            "stale-proof reencode must keep the marker's recorded out_rel"
         );
         assert!(
             !wc.join("a (1).JXL").exists(),
-            "stale-proof retranscode must not produce a spurious collision path"
+            "stale-proof reencode must not produce a spurious collision path"
         );
         Ok(())
     }
 
     #[test]
-    fn fast_img_transcode_options_force_overwrite_stale_outputs() -> anyhow::Result<()> {
+    fn fast_img_encode_options_force_overwrite_stale_outputs() -> anyhow::Result<()> {
         let source = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
         )?;
         let options_pos = source
             .find("let options = LosslessConvertOptions")
-            .ok_or_else(|| anyhow::anyhow!("fast-img transcode options must exist"))?;
+            .ok_or_else(|| anyhow::anyhow!("fast-img encode options must exist"))?;
         let options_block = &source[options_pos..];
         let force_pos = options_block
             .find("LosslessConvertFlags::FORCE")
             .ok_or_else(|| {
-                anyhow::anyhow!("fast-img transcode must force overwrite stale JXL outputs")
+                anyhow::anyhow!("fast-img encode must force overwrite stale JXL outputs")
             })?;
         let require_output_delivery_pos = options_block
             .find("LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY")
-            .ok_or_else(|| anyhow::anyhow!("fast-img transcode must require output delivery"))?;
+            .ok_or_else(|| anyhow::anyhow!("fast-img encode must require output delivery"))?;
 
         assert!(
             force_pos < require_output_delivery_pos,
-            "fast-img queued transcodes must overwrite stale/corrupt JXL siblings before delivery checks"
+            "fast-img queued encodes must overwrite stale/corrupt JXL siblings before delivery checks"
         );
         Ok(())
     }
@@ -6999,7 +7003,7 @@ mod fast_img_hardening_tests {
         std::fs::write(&out, b"old jxl output")?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 2);
         marker.stage = FastImgStageName::Gate1Failed;
-        marker.transcoded_count = 1;
+        marker.encoded_count = 1;
         marker.blake3_log.insert(
             "old.jpg".to_string(),
             Blake3Entry {
@@ -7104,7 +7108,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn output_prepared_empty_log_accepts_pre_transcode_resume() -> anyhow::Result<()> {
+    fn output_prepared_empty_log_accepts_pre_encode_resume() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let src_root = root.path().join("Photos");
         let wc = root.path().join("Photos_optimized");
@@ -7444,7 +7448,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn transcode_complete_marker_without_log_rejects_resume() -> anyhow::Result<()> {
+    fn encode_complete_marker_without_log_rejects_resume() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let src_root = root.path().join("Photos");
         let wc = root.path().join("Photos_");
@@ -7457,7 +7461,7 @@ mod fast_img_hardening_tests {
         let Err(err) =
             validate_fast_img_marker_source_state(&marker, &src_root, 1, &current_hashes)
         else {
-            anyhow::bail!("transcode-complete marker unexpectedly accepted missing hash log");
+            anyhow::bail!("encode-complete marker unexpectedly accepted missing hash log");
         };
 
         assert!(err.to_string().contains("missing BLAKE3 source log"));
@@ -7652,9 +7656,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn fastmode_parallelism_caps_to_pending_jobs_and_keeps_child_threads() {
-        assert_eq!(fast_img_effective_transcode_parallelism(3, 8, 2), (3, 2));
-        assert_eq!(fast_img_effective_transcode_parallelism(10, 4, 0), (4, 1));
-        assert_eq!(fast_img_effective_transcode_parallelism(0, 4, 2), (1, 2));
+        assert_eq!(fast_img_effective_encode_parallelism(3, 8, 2), (3, 2));
+        assert_eq!(fast_img_effective_encode_parallelism(10, 4, 0), (4, 1));
+        assert_eq!(fast_img_effective_encode_parallelism(0, 4, 2), (1, 2));
     }
 
     #[test]
@@ -7695,7 +7699,7 @@ mod fast_img_hardening_tests {
             "b.jpg".to_string(),
             SkippedSourceEntry {
                 src: "skipped-source-hash".to_string(),
-                reason: "lossless JPEG transcode failed after strict cascade".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
             },
         );
 
@@ -7747,7 +7751,7 @@ mod fast_img_hardening_tests {
             "b.jpg".to_string(),
             SkippedSourceEntry {
                 src: foundation::common_utils::calculate_blake3_hash(&skipped_src)?,
-                reason: "lossless JPEG transcode failed after strict cascade".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
             },
         );
 
@@ -7789,7 +7793,7 @@ mod fast_img_hardening_tests {
                     .get("b.jpg")
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("missing skipped source hash"))?,
-                reason: "lossless JPEG transcode failed after strict cascade".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
             },
         );
 
@@ -7827,7 +7831,7 @@ mod fast_img_hardening_tests {
             "b.jpg".to_string(),
             SkippedSourceEntry {
                 src: skipped_hash,
-                reason: "lossless JPEG transcode failed after strict cascade".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
             },
         );
 

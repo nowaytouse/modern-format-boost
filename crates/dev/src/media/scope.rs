@@ -828,7 +828,7 @@ pub fn classify_missing_entry(
                     return Ok((
                         "pipeline_handoff".to_string(),
                         format!(
-                            "vid ignored as static ({}); not an animated transcode failure",
+                            "vid ignored as static ({}); not an animated encode failure",
                             if reason.is_empty() {
                                 "single-frame"
                             } else {
@@ -887,7 +887,7 @@ pub fn classify_missing_entry(
                 {
                     return Ok((
                         "pipeline_handoff".to_string(),
-                        "img ignored animated asset — both mode expects vid transcode output"
+                        "img ignored animated asset — both mode expects vid encode output"
                             .to_string(),
                     ));
                 }
@@ -898,8 +898,7 @@ pub fn classify_missing_entry(
                 {
                     return Ok((
                         "pipeline_handoff".to_string(),
-                        "img ignored animated asset — videos_only expects vid transcode"
-                            .to_string(),
+                        "img ignored animated asset — videos_only expects vid encode".to_string(),
                     ));
                 }
             }
@@ -977,7 +976,7 @@ pub fn classify_missing_entry(
         return Ok((
             "vid_pipeline_failed".to_string(),
             format!(
-                "{}: session routed pipeline={}; both mode expects vid transcode output — no \
+                "{}: session routed pipeline={}; both mode expects vid encode output — no \
                  optimized counterpart",
                 anim.as_deref().unwrap_or("video-route asset"),
                 routed_note
@@ -1022,7 +1021,7 @@ pub fn classify_missing_entry(
         return Ok((
             "vid_pipeline_failed".to_string(),
             format!(
-                "{}: videos_only expects vid transcode (routed={}) — no optimized counterpart",
+                "{}: videos_only expects vid encode (routed={}) — no optimized counterpart",
                 anim.as_deref().unwrap_or("video-route asset"),
                 routed_note
             ),
@@ -1353,26 +1352,26 @@ pub fn reconcile_handoff(
                 if outcome == Some("ignored") && is_vid_static_ignore(rec) {
                     lines.push(
                         "      ✓ vid ignored static/single-frame — expected gap in videos_only; \
-                         not a transcode failure"
+                         not a encode failure"
                             .to_string(),
                     );
                 } else if outcome == Some("failed") || outcome == Some("skipped") {
                     lines.push(
-                        "      ✗ vid pipeline failed/skipped — both mode expects transcode; this \
+                        "      ✗ vid pipeline failed/skipped — both mode expects encode; this \
                          is a real integrity gap (not img handoff ignore)"
                             .to_string(),
                     );
                 } else {
                     lines.push(
                         "      ⚠ video-route asset missing optimized output; check vid batch logs \
-                         (both mode expects vid transcode, not img ignore)"
+                         (both mode expects vid encode, not img ignore)"
                             .to_string(),
                     );
                 }
             } else {
                 lines.push(
                     "      ⚠ video-route asset missing optimized output; check vid batch logs \
-                     (both mode expects vid transcode, not img ignore)"
+                     (both mode expects vid encode, not img ignore)"
                         .to_string(),
                 );
             }

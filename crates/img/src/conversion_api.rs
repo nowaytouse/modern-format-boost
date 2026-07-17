@@ -132,7 +132,7 @@ pub struct ConversionOutput {
 
 impl ConversionOutput {
     #[must_use]
-    pub fn is_jpeg_transcode(&self) -> bool {
+    pub fn is_jpeg_encode(&self) -> bool {
         // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
@@ -180,7 +180,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             let output_path = Path::new(input_path).with_extension("JXL");
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
-                reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
+                reason: "JPEG lossless encode to JXL, preserving DCT coefficients".to_string(),
                 command: format!(
                     "cjxl '{}' '{}' --lossless_jpeg=1",
                     input_path,

@@ -673,7 +673,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let jxl_indicator = generate_jxl_indicator(format, is_lossless, jpeg_analysis.as_ref(), path);
 
-    // PSNR/SSIM only from reference-transcode measurement (explore pipeline). Never
+    // PSNR/SSIM only from reference-encode measurement (explore pipeline). Never
     // map JPEG Q→PSNR here.
     let (psnr, ssim) = (None, None);
 
@@ -1260,7 +1260,7 @@ fn generate_jxl_indicator(
 
                 JxlIndicator {
                     should_convert: true,
-                    reason: format!("JPEG ({quality_info}), lossless transcode to JXL"),
+                    reason: format!("JPEG ({quality_info}), lossless encode to JXL"),
                     command: format!(
                         "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
                     ),
@@ -1271,7 +1271,7 @@ fn generate_jxl_indicator(
             } else {
                 JxlIndicator {
                     should_convert: true,
-                    reason: "JPEG can be losslessly transcoded to JXL".to_string(),
+                    reason: "JPEG can be losslessly encoded to JXL".to_string(),
                     command: format!(
                         "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
                     ),
@@ -3251,7 +3251,7 @@ fn jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> Jx
         },
         DetectedFormat::JPEG => JxlIndicator {
             should_convert: true,
-            reason: "JPEG can be losslessly transcoded to JXL".to_string(),
+            reason: "JPEG can be losslessly encoded to JXL".to_string(),
             command: format!(
                 "cjxl '{rel_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
             ),
@@ -3488,7 +3488,7 @@ mod tests {
 
         let indicator = jxl_indicator_from_features(&features, "test.jpg");
         assert!(indicator.should_convert);
-        assert!(indicator.reason.contains("losslessly transcoded"));
+        assert!(indicator.reason.contains("losslessly encoded"));
         assert!(indicator.command.contains("--lossless_jpeg=1"));
     }
 

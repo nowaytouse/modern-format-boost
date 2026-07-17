@@ -1384,7 +1384,7 @@ impl FastImgStageName {
         match self {
             Self::ScanComplete => "scan_complete",
             Self::OutputPrepared => "output_prepared",
-            Self::TranscodeComplete => "transcode_complete",
+            Self::TranscodeComplete => "encode_complete",
             Self::Gate1Passed => "gate1_passed",
             Self::ImportComplete => "import_complete",
             Self::Gate2Passed => "gate2_passed",
@@ -1503,7 +1503,7 @@ pub struct WorkingCopyMarker {
     pub started_at: String,
     pub stage: FastImgStageName,
     pub src_jpeg_count: usize,
-    pub transcoded_count: usize,
+    pub encoded_count: usize,
     pub gate1_checks: Gate1Checks,
     pub gate2_checks: Gate2Checks,
     pub gate3_checks: Gate3Checks,
@@ -1516,6 +1516,13 @@ pub struct WorkingCopyMarker {
     #[serde(default)]
     pub tier2_imported_assets: Vec<LibraryAssetRecord>,
     pub error: Option<String>,
+    /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
+    #[serde(default = "default_strategy")]
+    pub strategy: String,
+}
+
+fn default_strategy() -> String {
+    "jxl".to_string()
 }
 
 impl WorkingCopyMarker {
@@ -1528,7 +1535,7 @@ impl WorkingCopyMarker {
             started_at: chrono::Utc::now().to_rfc3339(),
             stage: FastImgStageName::ScanComplete,
             src_jpeg_count,
-            transcoded_count: 0,
+            encoded_count: 0,
             gate1_checks: Gate1Checks::default(),
             gate2_checks: Gate2Checks::default(),
             gate3_checks: Gate3Checks::default(),
@@ -1537,7 +1544,14 @@ impl WorkingCopyMarker {
             failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),
             error: None,
+            strategy: "jxl".to_string(),
         }
+    }
+
+    #[must_use]
+    pub fn with_strategy(mut self, strategy: String) -> Self {
+        self.strategy = strategy;
+        self
     }
 
     #[must_use]
@@ -1823,7 +1837,7 @@ pub const fn output_prepared_or_later(stage: &FastImgStageName) -> bool {
 }
 
 #[must_use]
-pub const fn transcode_complete_or_later(stage: &FastImgStageName) -> bool {
+pub const fn encode_complete_or_later(stage: &FastImgStageName) -> bool {
     matches!(
         stage,
         FastImgStageName::TranscodeComplete
@@ -1903,9 +1917,9 @@ pub const fn confirm_import_required(stage: &FastImgStageName, auto_import: bool
 #[must_use]
 pub const fn resume_action(stage: &FastImgStageName) -> &'static str {
     match stage {
-        FastImgStageName::ScanComplete => "prepare_output_then_transcode",
-        FastImgStageName::OutputPrepared => "skip_prepare_then_transcode",
-        FastImgStageName::TranscodeComplete => "skip_transcode_then_gate1",
+        FastImgStageName::ScanComplete => "prepare_output_then_encode",
+        FastImgStageName::OutputPrepared => "skip_prepare_then_encode",
+        FastImgStageName::TranscodeComplete => "skip_encode_then_gate1",
         FastImgStageName::Gate1Passed => "skip_to_import",
         FastImgStageName::ImportComplete => "skip_to_gate2",
         FastImgStageName::Gate2Passed => "skip_to_deep_scan",
@@ -2032,7 +2046,7 @@ mod working_copy_tests {
             "b.jpg".to_string(),
             SkippedSourceEntry {
                 src: "hash-b".to_string(),
-                reason: "lossless JPEG transcode failed after strict cascade".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
             },
         );
 
@@ -2212,20 +2226,17 @@ mod fast_gate_policy_tests {
 mod rev2_policy_tests {
     use super::{
         FastImgStageName, confirm_import_required, confirm_scan_required,
-        deep_scan_complete_or_later, dir_checksum, gate1_complete_or_later,
-        gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
-        output_prepared_or_later, prepare_jxl_output_dir, resume_action, retry_resume_stage,
-        stage_requires_retry, transcode_complete_or_later,
+        deep_scan_complete_or_later, dir_checksum, encode_complete_or_later,
+        gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
+        import_complete_or_later, output_prepared_or_later, prepare_jxl_output_dir, resume_action,
+        retry_resume_stage, stage_requires_retry,
     };
     use tempfile::TempDir;
 
     #[test]
     fn resume_actions_cover_rev2_stages() {
         let cases = [
-            (
-                FastImgStageName::OutputPrepared,
-                "skip_prepare_then_transcode",
-            ),
+            (FastImgStageName::OutputPrepared, "skip_prepare_then_encode"),
             (FastImgStageName::Gate1Passed, "skip_to_import"),
             (FastImgStageName::Gate2Passed, "skip_to_deep_scan"),
             (FastImgStageName::Gate3Passed, "skip_to_cleanup"),
@@ -2294,7 +2305,7 @@ mod rev2_policy_tests {
     #[test]
     fn stage_predicates_preserve_resume_progress() {
         assert!(output_prepared_or_later(&FastImgStageName::OutputPrepared));
-        assert!(transcode_complete_or_later(
+        assert!(encode_complete_or_later(
             &FastImgStageName::TranscodeComplete
         ));
         assert!(gate1_complete_or_later(&FastImgStageName::Gate1Passed));
@@ -2334,5 +2345,81 @@ mod rev2_policy_tests {
         }
         assert!(!output.join("top.jpg").exists());
         assert!(!output.join("nested/img.jpg").exists());
+    }
+}
+
+#[cfg(test)]
+mod meme_mode_tests {
+    use super::{WorkingCopyMarker, default_strategy};
+    use std::path::PathBuf;
+
+    #[test]
+    fn default_strategy_is_jxl() {
+        assert_eq!(default_strategy(), "jxl");
+    }
+
+    #[test]
+    fn marker_defaults_to_jxl_strategy() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 10);
+        assert_eq!(marker.strategy, "jxl");
+    }
+
+    #[test]
+    fn marker_with_strategy_sets_avif_for_meme_mode() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 10)
+                .with_strategy("avif".to_string());
+        assert_eq!(marker.strategy, "avif");
+    }
+
+    #[test]
+    fn marker_with_strategy_preserves_other_fields() {
+        let marker = WorkingCopyMarker::new(
+            PathBuf::from("/test/photos"),
+            PathBuf::from("/test/photos_optimized"),
+            42,
+        )
+        .with_strategy("avif".to_string());
+
+        assert_eq!(marker.src_jpeg_count, 42);
+        assert_eq!(marker.src_dir, PathBuf::from("/test/photos"));
+        assert_eq!(marker.working_copy, PathBuf::from("/test/photos_optimized"));
+        assert_eq!(marker.strategy, "avif");
+    }
+
+    #[test]
+    fn marker_strategy_is_serializable() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 5)
+                .with_strategy("avif".to_string());
+
+        let json = serde_json::to_string(&marker).expect("serialization failed");
+        assert!(json.contains("\"strategy\":\"avif\""));
+    }
+
+    #[test]
+    fn marker_strategy_defaults_on_deserialize_missing_field() {
+        // Simulate old marker JSON without strategy field
+        let json = r#"{
+            "schema": 1,
+            "src_dir": "src",
+            "working_copy": "src_optimized",
+            "started_at": "2026-07-17T10:00:00Z",
+            "stage": "scan_complete",
+            "src_jpeg_count": 10,
+            "encoded_count": 0,
+            "gate1_checks": {"count": false, "blake3": false, "metadata": false, "size": false, "orient": false, "decode": false},
+            "gate2_checks": {"count": false, "blake3_sample": false, "no_error": false},
+            "gate3_checks": {"count_x3": false, "sync": false, "quarantine": false, "chain": false},
+            "blake3_log": {},
+            "error": null
+        }"#;
+
+        let marker: WorkingCopyMarker = serde_json::from_str(json).expect("deserialization failed");
+        assert_eq!(
+            marker.strategy, "jxl",
+            "strategy should default to jxl for backward compatibility"
+        );
     }
 }

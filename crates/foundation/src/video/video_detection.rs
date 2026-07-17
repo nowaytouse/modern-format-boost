@@ -741,7 +741,7 @@ fn cached_detection_needs_bitstream_repair(cached: &Detection, path: &Path) -> b
 /// empty (e.g. WebP 0×0).
 ///
 /// Returns `true` when `detection.frame_count` was raised above 1 so vid routes
-/// to animated transcode.
+/// to animated encode.
 pub fn promote_animated_container_for_vid(
     path: &Path,
     detection: &mut Detection,

@@ -3151,7 +3151,7 @@ impl<'a> CpuFineTuneSession<'a> {
         else {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "audio_bitrate_absent",
-                "cannot classify audio transcode without measured bit_rate; using Copy",
+                "cannot classify audio encode without measured bit_rate; using Copy",
             );
             return AudioTranscodeStrategy::Copy;
         };

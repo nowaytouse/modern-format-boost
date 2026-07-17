@@ -1,6 +1,6 @@
 //! Shared JPEG XL effort selection policy.
 //!
-//! The policy is intentionally centralized so JPEG bitstream transcode and
+//! The policy is intentionally centralized so JPEG bitstream encode and
 //! direct JXL encode paths do not drift. Large inputs run measured candidate
 //! searches; small inputs stay fixed at e7 to avoid wasting encode time.
 
@@ -84,7 +84,7 @@ pub fn archive_effort_search_plan(kind: JxlEffortSearchKind) -> Vec<JxlEffortPla
 /// Build the measured effort-search plan.
 ///
 /// Production policy skips e9. e11 is included by default only for JPEG
-/// bitstream/lossless exploration because transcode remains materially faster
+/// bitstream/lossless exploration because encode remains materially faster
 /// than decoded-pixel encoding while still improving output size.
 #[must_use]
 pub fn effort_search_plan(
@@ -210,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_mode_hard_overrides_jpeg_lossless_transcode_to_e11() {
+    fn archive_mode_hard_overrides_jpeg_lossless_encode_to_e11() {
         assert_eq!(
             archive_effort_search_plan(JxlEffortSearchKind::JpegLosslessTranscode),
             vec![JxlEffortPlan::Single(

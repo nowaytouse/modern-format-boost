@@ -731,7 +731,7 @@ pub const FEATURE_WEIGHT_MOTION_GINI: f64 = 0.14;
 pub const FEATURE_WEIGHT_PALETTE_DEPTH: f64 = 0.12;
 pub const FEATURE_WEIGHT_TEMPORAL_FLATNESS: f64 = 0.10;
 // New zero-cost signals from existing LoopMeta data:
-// I-frame ratio: GIF→MP4 transcodes produce all-I-frame streams; real video has
+// I-frame ratio: GIF→MP4 encodes produce all-I-frame streams; real video has
 // GOP structure.
 pub const FEATURE_WEIGHT_IFRAME_RATIO: f64 = 0.30;
 // Bytes per frame: GIF-class content has much lower bytes_per_frame than real
@@ -1711,7 +1711,7 @@ pub const LOOP_INTENT_FRAME_COUNT_LONG_LIMIT: u64 = 500;
 pub const LOOP_INTENT_MOTION_ENVELOPE_REDUCTION: f64 = 0.70;
 /// I-frame ratio low-veto threshold for identifying real video (0.15).
 pub const LOOP_INTENT_IFRAME_RATIO_LOW_VETO: f64 = 0.15;
-/// I-frame ratio high-veto threshold for identifying transcoded animations
+/// I-frame ratio high-veto threshold for identifying encoded animations
 /// (0.85).
 pub const LOOP_INTENT_IFRAME_RATIO_HIGH_VETO: f64 = 0.85;
 /// Support relief multiplier for motion gini when loop/periodicity is strong

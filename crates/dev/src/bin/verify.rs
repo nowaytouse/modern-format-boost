@@ -62,7 +62,7 @@ struct Args {
     #[arg(
         long = "strategy",
         default_value = "jxl",
-        help = "Transcode strategy (jxl or avif)."
+        help = "Encoding strategy: jxl (default) or avif (Meme Mode 表情包模式)."
     )]
     strategy: String,
 }
@@ -2227,7 +2227,7 @@ fn main() -> Result<()> {
                 stats.pipeline_handoff
             );
             println!(
-                "   Vid failures:    {} (vid failed/skipped when transcode required)",
+                "   Vid failures:    {} (vid failed/skipped when encode required)",
                 stats.vid_pipeline_failed
             );
             println!(
@@ -2301,7 +2301,7 @@ mod tests {
         fs::write(
             &log,
             format!(
-                "checking {media_str}\n{media_str} → MOV (hevc) (transcode ok) ✅\nTree uncertain \
+                "checking {media_str}\n{media_str} → MOV (hevc) (encode ok) ✅\nTree uncertain \
                  (low confidence) [prob=0.42] falling back to Layer 6 KNN\n"
             ),
         )
@@ -2352,11 +2352,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         fs::create_dir_all(source.join("day1")).unwrap();
         fs::create_dir_all(optimized.join("day1")).unwrap();
 
-        fs::write(
-            optimized.join("day1").join("photo.JXL"),
-            b"\xff\x0atranscoded",
-        )
-        .unwrap();
+        fs::write(optimized.join("day1").join("photo.JXL"), b"\xff\x0aencoded").unwrap();
 
         let marker_path = optimized.join("fastmode_img_marker.json");
         let marker_data = serde_json::json!({
@@ -2430,7 +2426,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         fs::create_dir_all(&optimized).unwrap();
 
         fs::write(source.join("skipped.bin"), b"\xff\xd8\xff\xe0jpeg").unwrap();
-        fs::write(optimized.join("photo.JXL"), b"\xff\x0atranscoded").unwrap();
+        fs::write(optimized.join("photo.JXL"), b"\xff\x0aencoded").unwrap();
 
         let marker_path = optimized.join("fastmode_img_marker.json");
         let marker_data = serde_json::json!({
@@ -2439,7 +2435,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
             "skipped_sources": {
                 "skipped.bin": {
                     "src": "recorded-source-blake3",
-                    "reason": "lossless JPEG transcode failed after strict cascade"
+                    "reason": "lossless JPEG encode failed after strict cascade"
                 }
             },
             "failed_sources": {}
@@ -2477,7 +2473,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
             "skipped_sources": {
                 "missing_eoi.bin": {
                     "src": "recorded-source-blake3",
-                    "reason": "Skipped: JPEG cannot be reversibly transcoded; source remains unmodified"
+                    "reason": "Skipped: JPEG cannot be reversibly encoded; source remains unmodified"
                 }
             },
             "failed_sources": {}
@@ -2507,7 +2503,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         fs::create_dir_all(&optimized).unwrap();
 
         fs::write(source.join("djxl_failed.jpg"), b"\xff\xd8\xff\xe0jpeg").unwrap();
-        fs::write(optimized.join("converted.JXL"), b"\xff\x0atranscoded").unwrap();
+        fs::write(optimized.join("converted.JXL"), b"\xff\x0aencoded").unwrap();
 
         let marker_path = optimized.join("fastmode_img_marker.json");
         let marker_data = serde_json::json!({
@@ -2544,7 +2540,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&optimized).unwrap();
 
-        fs::write(optimized.join("photo.JXL"), b"\xff\x0atranscoded").unwrap();
+        fs::write(optimized.join("photo.JXL"), b"\xff\x0aencoded").unwrap();
 
         let mut report = String::new();
         let stats =

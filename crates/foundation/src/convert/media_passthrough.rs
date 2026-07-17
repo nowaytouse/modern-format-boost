@@ -1,14 +1,14 @@
 //! Audio & subtitle passthrough strategy helpers for container muxing.
 //!
 //! These functions determine whether audio/subtitle streams can be copied
-//! directly (`-c:a copy`, `-c:s copy`) or must be transcoded for the target
+//! directly (`-c:a copy`, `-c:s copy`) or must be encoded for the target
 //! container format (MP4/MOV vs MKV).
 
 /// Determine `FFmpeg` audio arguments for the target container.
 ///
 /// - MKV: always `-c:a copy` (supports every codec).
 /// - MP4/MOV: `-c:a copy` unless the codec is incompatible (opus, vorbis).
-///   Incompatible codecs are transcoded to AAC 256 kbps.
+///   Incompatible codecs are encoded to AAC 256 kbps.
 /// - No audio (`None` codec): returns `-an`.
 #[must_use]
 pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> Vec<String> {
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_mp4_transcode_incompatible() {
+    fn test_audio_mp4_encode_incompatible() {
         assert_eq!(
             audio_args_for_container(Some("opus"), "mp4"),
             vec!["-c:a", "aac", "-b:a", "256k"]

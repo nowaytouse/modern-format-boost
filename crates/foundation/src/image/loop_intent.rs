@@ -1029,7 +1029,7 @@ struct SignalFlags {
 struct DerivedLoopSignals {
     flags: SignalFlags,
     zero_motion_ratio: f64,
-    /// Ratio of I-frames to total frames. GIF→MP4 transcodes produce
+    /// Ratio of I-frames to total frames. GIF→MP4 encodes produce
     /// all-I-frame streams (ratio ≈ 1.0); real video with GOP structure has
     /// ratio ≈ 0.03–0.10.
     iframe_ratio: f64,

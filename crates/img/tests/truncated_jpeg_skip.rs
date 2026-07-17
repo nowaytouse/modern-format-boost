@@ -17,7 +17,7 @@ fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
     let input = tmp_dir.path().join("truncated.jpg");
     fs::write(&input, [0xFFu8, 0xD8u8, 0xFFu8, 0xE0u8])?;
 
-    // Require delivery so the irreversible transcode path emits a skipped result
+    // Require delivery so the irreversible encode path emits a skipped result
     let options = ConvertOptions {
         flags: ConvertFlags::REQUIRE_OUTPUT_DELIVERY,
         ..Default::default()
@@ -25,15 +25,13 @@ fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
 
     let result = convert_jpeg_to_jxl(&input, &options, None)?;
 
-    // Expect the task to be marked as skipped and message to indicate irreversible transcode
+    // Expect the task to be marked as skipped and message to indicate irreversible encode
     assert!(result.skipped, "expected skipped result for truncated JPEG");
     assert!(result.success, "skipped TaskResult should be success=true");
     assert!(result.skip_reason.is_some(), "skip_reason should be set");
     assert!(
-        result
-            .message
-            .contains("JPEG cannot be reversibly transcoded")
-            || result.message.contains("transcode preflight rejected"),
+        result.message.contains("JPEG cannot be reversibly encoded")
+            || result.message.contains("encode preflight rejected"),
         "unexpected skip message: {}",
         result.message
     );

@@ -2322,7 +2322,7 @@ fn media_conversion_session_fixes_no_silent_fabrication() {
     );
     assert!(
         analyzer_prod.contains("let (psnr, ssim) = (None, None)"),
-        "image_analyzer ingest must leave psnr/ssim unset without reference transcode"
+        "image_analyzer ingest must leave psnr/ssim unset without reference encode"
     );
 
     // ── Inference JSON: sparse optional fields policy-silent (M117) ───────────
@@ -2445,7 +2445,7 @@ fn media_conversion_phase2_embed_and_inference_json_hardening_m216() {
     );
     assert!(
         analyzer_prod.contains("let (psnr, ssim) = (None, None)"),
-        "image_analyzer ingest must leave psnr/ssim unset without reference transcode"
+        "image_analyzer ingest must leave psnr/ssim unset without reference encode"
     );
     assert!(
         analyzer.contains("#[cfg(test)]\nmod tests")

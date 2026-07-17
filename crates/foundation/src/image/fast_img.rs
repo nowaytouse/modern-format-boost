@@ -12,7 +12,7 @@
 //! - \[D7\] revised by Part 5: shared magic-byte detection is the admission
 //!   source of truth
 //! - \[D8\] chose: decode-probe-only for AVIF — roundtrip hash valid only for
-//!   JXL lossless transcode
+//!   JXL lossless encode
 //! - \[I1\] chose: shortest-path import uses Photos `AppleScript` UUID import
 //!   plus osxphotos query verifier and fails closed
 //! - \[I2\] chose: default verifier proves Photos local custody; iCloud upload
@@ -50,7 +50,7 @@ pub fn is_true_jpeg(path: &Path) -> Result<bool> {
     Ok(detect_true_format(path)? == FormatKind::Jpeg)
 }
 
-/// Roundtrip BLAKE3 integrity check for a raw JXL lossless transcode
+/// Roundtrip BLAKE3 integrity check for a raw JXL lossless encode
 /// (§Integrity).
 ///
 /// Decodes `jxl_output` back to a JPEG via `djxl`, then compares
@@ -60,7 +60,7 @@ pub fn is_true_jpeg(path: &Path) -> Result<bool> {
 /// bitstream before delivery metadata edits. Final fast-img delivery uses
 /// [`verify_final_jxl_delivery_integrity`] because EXIF/XMP rewrites and
 /// upstream JXL Orientation exclusion can legitimately rewrite container
-/// metadata after the raw transcode proof.
+/// metadata after the raw encode proof.
 ///
 /// Fails closed when `djxl` is unavailable; a JXL integrity proof requires
 /// a decoded roundtrip hash, not a non-empty output file.
@@ -171,7 +171,7 @@ pub fn verify_jxl_roundtrip_integrity(
     })
 }
 
-/// Pixel-equivalence integrity proof for JPEG→JXL transcodes without JBRD.
+/// Pixel-equivalence integrity proof for JPEG→JXL encodes without JBRD.
 ///
 /// This is used for `cjxl --lossless_jpeg=1 --allow_jpeg_reconstruction=0`
 /// and sanitized-tail retries. Those outputs preserve decoded
@@ -188,7 +188,7 @@ pub fn verify_jxl_pixel_equivalence_integrity(
     verify_pixel_equivalence_integrity(source_jpeg, jxl_output, FormatKind::Jxl)
 }
 
-/// Pixel-equivalence integrity proof for modern format transcodes.
+/// Pixel-equivalence integrity proof for modern format encodes.
 ///
 /// Supports JXL (without JBRD), AVIF, and other lossy modern formats.
 /// Uses format-specific pixel diff tolerance from orientation policy.

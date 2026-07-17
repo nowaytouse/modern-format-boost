@@ -3882,7 +3882,7 @@ pub fn explore_gpu_coarse_explore_audit(branch: &'static str, detail: impl AsRef
     explore_gpu_coarse_fallback_audit(branch, detail);
 }
 
-/// Audio bitrate for GPU coarse transcode strategy (`None` when probe omits or
+/// Audio bitrate for GPU coarse encode strategy (`None` when probe omits or
 /// zero `bit_rate`).
 #[must_use]
 pub fn explore_gpu_coarse_audio_bitrate_optional(bit_rate: Option<u64>) -> Option<u64> {

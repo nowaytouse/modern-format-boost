@@ -20,7 +20,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         let p = bin_dir.join("cjxl");
         fs::write(
             &p,
-            "#!/bin/sh\necho 'JPEG XL encoder v0.11.2' >&2\necho 'Encoding [JPEG, lossless transcode, effort: 11]' >&2\necho 'Error while decoding the JPEG image. It may be corrupt (e.g. truncated) or of an unsupported type (e.g. CMYK).' >&2\nexit 1\n",
+            "#!/bin/sh\necho 'JPEG XL encoder v0.11.2' >&2\necho 'Encoding [JPEG, lossless encode, effort: 11]' >&2\necho 'Error while decoding the JPEG image. It may be corrupt (e.g. truncated) or of an unsupported type (e.g. CMYK).' >&2\nexit 1\n",
         )?;
         // make executable
         #[cfg(unix)]

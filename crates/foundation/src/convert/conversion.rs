@@ -594,7 +594,7 @@ impl TaskResult {
     }
 
     #[must_use]
-    pub fn is_jpeg_transcode(&self) -> bool {
+    pub fn is_jpeg_encode(&self) -> bool {
         // After terminology fix, "transcoding" is only used for JPEG bitstream
         // reconstruction (lossless JXL)
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")

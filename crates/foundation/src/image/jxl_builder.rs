@@ -123,17 +123,17 @@ impl ToolBuilder for CjxlBuilder {
         }
 
         if let Some(e) = self.effort {
-            let lossless_transcode_e11 =
+            let lossless_encode_e11 =
                 self.lossless_jpeg && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
             let expert_e11 =
                 self.allow_expert_options && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
             debug_assert!(
                 constants::is_supported_jxl_effort_with_expert(e, self.allow_expert_options)
-                    || lossless_transcode_e11,
+                    || lossless_encode_e11,
                 "unsupported cjxl effort {e}; runtime policy permits e7/e8/e10 by default, e11 \
-                 for JPEG lossless transcode, and e11 for explicit expert options; e9 is disabled"
+                 for JPEG lossless encode, and e11 for explicit expert options; e9 is disabled"
             );
-            if lossless_transcode_e11 || expert_e11 {
+            if lossless_encode_e11 || expert_e11 {
                 cmd.arg(constants::JXL_ARG_ALLOW_EXPERT_OPTIONS);
             }
             cmd.arg(constants::JXL_ARG_EFFORT).arg(e.to_string());
@@ -275,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn cjxl_builder_allows_e11_for_lossless_jpeg_transcode_without_expert_options() {
+    fn cjxl_builder_allows_e11_for_lossless_jpeg_encode_without_expert_options() {
         let mut builder = CjxlBuilder::new();
         builder
             .input(Path::new("in.jpg"))

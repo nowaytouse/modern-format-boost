@@ -44,7 +44,7 @@ pub struct X265Config {
     pub mastering_display: Option<String>,
     /// HDR10 content light level: "MaxCLL,MaxFALL"
     pub max_cll: Option<String>,
-    /// Audio codec of the source (used to decide copy vs transcode in mux step)
+    /// Audio codec of the source (used to decide copy vs encode in mux step)
     pub audio_codec: Option<String>,
     /// Whether the source has subtitle streams
     pub has_subtitles: bool,
@@ -587,7 +587,7 @@ fn mux_hevc_to_container(
         mux_builder.arg("-map").arg("1:a?");
         mux_builder.codec_video("copy");
 
-        // Audio: copy when compatible, transcode only for incompatible codecs
+        // Audio: copy when compatible, encode only for incompatible codecs
         let audio_args =
             crate::audio_args_for_container(config.audio_codec.as_deref(), &config.container);
         for arg in &audio_args {
