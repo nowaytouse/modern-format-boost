@@ -637,7 +637,10 @@ where
     )
 }
 
-fn check_decode_probe(files: &[PathBuf], output_format: Option<crate::format_detect::FormatKind>) -> CheckDetail {
+fn check_decode_probe(
+    files: &[PathBuf],
+    output_format: Option<crate::format_detect::FormatKind>,
+) -> CheckDetail {
     let is_avif = matches!(output_format, Some(crate::format_detect::FormatKind::Avif));
     let tool = if is_avif { "avifdec" } else { "djxl" };
 
@@ -655,7 +658,9 @@ fn check_decode_probe(files: &[PathBuf], output_format: Option<crate::format_det
         .iter()
         .filter_map(|path| {
             if is_avif {
-                avifdec_decode_probe(path).err().map(|err| (path.clone(), err))
+                avifdec_decode_probe(path)
+                    .err()
+                    .map(|err| (path.clone(), err))
             } else {
                 djxl_decode_probe(path).err().map(|err| (path.clone(), err))
             }

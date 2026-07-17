@@ -3368,7 +3368,11 @@ fn fast_img_delete_verified_source_jpegs(
         let parallelism =
             fast_img_effective_verify_parallelism(existing.len(), thread_config.parallel_tasks);
         let format_label = if strategy == "avif" { "AVIF" } else { "JXL" };
-        let tool_label = if strategy == "avif" { "avifdec" } else { "djxl" };
+        let tool_label = if strategy == "avif" {
+            "avifdec"
+        } else {
+            "djxl"
+        };
         println!(
             "[VERIFY  ] final {} delete proofs pending {} · parallel {} {} checks",
             format_label,
