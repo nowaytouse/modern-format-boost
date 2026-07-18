@@ -259,6 +259,7 @@ impl DragDropSession {
             "End Time: {}",
             format_session_stamp(Some(Local::now()))
         )?;
+        writeln!(file, "Verbose Log: {}", self.verbose_log.display())?;
         writeln!(
             file,
             "Images:  {} succeeded, {} skipped, {} failed",
@@ -303,6 +304,14 @@ impl DragDropSession {
             for name in &summary.skipped_file_names {
                 writeln!(file, "  [SKIP] {name}")?;
             }
+        } else if summary.total_failed() > 0 {
+            // If failed count > 0 but no file names, point to verbose log
+            writeln!(
+                file,
+                "Failed: {} file(s) - see verbose log for details: {}",
+                summary.total_failed(),
+                self.verbose_log.display()
+            )?;
         }
         if let Some(block) = size_summary {
             writeln!(file, "{block}")?;
