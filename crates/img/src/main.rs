@@ -1504,13 +1504,11 @@ fn dispatch_static_conversion(
                 // AVIF static delivery: always use quality=100 (lossy max quality).
                 // AVIF advantage is in lossy compression; DB score mapping is not
                 // applicable here — use fixed q=100 per design spec.
-                if config.verbose() {
-                    foundation::log_detail!(&format!(
-                        "{} Lossy→AVIF (q=100): {}",
-                        foundation::infra::static_logs::messages::LABEL_DONE,
-                        input.display()
-                    ));
-                }
+                foundation::log_detail!(&format!(
+                    "{} Lossy→AVIF (q=100) conversion decision for: {}",
+                    foundation::infra::static_logs::messages::LABEL_DONE,
+                    input.display()
+                ));
                 return Ok(img::lossless_converter::convert_to_avif(
                     input,
                     Some(100),
@@ -2902,6 +2900,12 @@ fn fast_img_run_encode_job_inner(
         // Design requirement: both lossy and lossless sources use AVIF lossy q=100,
         // because AVIF's advantage is in lossy compression and memes don't need
         // true lossless quality. Source quality is irrelevant for the output target.
+        let format = foundation::image::format_detect::detect_true_format(&job.source)?;
+        foundation::log_detail!(&format!(
+            "Meme Mode (AVIF): Selected quality=100 encoding for {} (Detected Source Format: {:?})",
+            job.source.display(),
+            format
+        ));
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),

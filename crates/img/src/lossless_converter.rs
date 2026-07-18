@@ -2629,6 +2629,7 @@ pub fn convert_to_avif(
 ) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
+        log_detail!(&format!("validate_input_file failed for {}: {}", input.display(), e));
         return Err(ImgQualityError::ConversionError(e));
     }
 
@@ -2644,7 +2645,11 @@ pub fn convert_to_avif(
     }
 
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            log_detail!(&format!("isolated_temp_path_for_search failed for {}: {}", input.display(), err_msg));
+            ImgQualityError::ConversionError(err_msg)
+        })?;
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
 
     let mut builder = foundation::AvifencBuilder::new();
@@ -2663,6 +2668,7 @@ pub fn convert_to_avif(
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
                 cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!("AVIF health check failed for {}: {}", input.display(), e));
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF health check failed: {e}"
                 )));
@@ -2672,6 +2678,7 @@ pub fn convert_to_avif(
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!("AVIF pixel equivalence verification failed for {}: {}", input.display(), e));
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF pixel equivalence failed: {e}"
                 )));
@@ -2690,12 +2697,14 @@ pub fn convert_to_avif(
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            log_detail!(&format!("avifenc execution failed for {}. Stderr: {}", input.display(), stderr));
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {stderr}"
             )))
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
+            log_detail!(&format!("avifenc tool launch failed for {}: {}", input.display(), e));
             Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
         }
     }
@@ -2708,6 +2717,7 @@ pub fn convert_to_avif(
 pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
+        log_detail!(&format!("validate_input_file failed for {}: {}", input.display(), e));
         return Err(ImgQualityError::ConversionError(e));
     }
 
@@ -2727,7 +2737,11 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     }
 
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            log_detail!(&format!("isolated_temp_path_for_search failed for {}: {}", input.display(), err_msg));
+            ImgQualityError::ConversionError(err_msg)
+        })?;
 
     let mut builder = foundation::AvifencBuilder::new();
     builder
@@ -2745,6 +2759,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
                 cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!("Lossless AVIF health check failed for {}: {}", input.display(), e));
                 return Err(ImgQualityError::ConversionError(format!(
                     "Lossless AVIF health check failed: {e}"
                 )));
@@ -2754,6 +2769,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!("Lossless AVIF pixel equivalence verification failed for {}: {}", input.display(), e));
                 return Err(ImgQualityError::ConversionError(format!(
                     "Lossless AVIF pixel equivalence failed: {e}"
                 )));
@@ -2772,12 +2788,14 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            log_detail!(&format!("avifenc lossless execution failed for {}. Stderr: {}", input.display(), stderr));
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {stderr}"
             )))
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
+            log_detail!(&format!("avifenc lossless tool launch failed for {}: {}", input.display(), e));
             Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
         }
     }
