@@ -1501,17 +1501,21 @@ fn dispatch_static_conversion(
         _ => {
             use foundation::delivery_codec_strategy::ImgStaticDelivery;
             if config.static_delivery == ImgStaticDelivery::Avif {
-                let q = quality.map(|q| {
-                    foundation::numeric_cast::f64_to_u8_sat((q.score * 100.0).clamp(0.0, 100.0))
-                });
+                // AVIF static delivery: always use quality=100 (lossy max quality).
+                // AVIF advantage is in lossy compression; DB score mapping is not
+                // applicable here — use fixed q=100 per design spec.
                 if config.verbose() {
                     foundation::log_detail!(&format!(
-                        "{} Lossy→AVIF: {}",
+                        "{} Lossy→AVIF (q=100): {}",
                         foundation::infra::static_logs::messages::LABEL_DONE,
                         input.display()
                     ));
                 }
-                return Ok(img::lossless_converter::convert_to_avif(input, q, options)?);
+                return Ok(img::lossless_converter::convert_to_avif(
+                    input,
+                    Some(100),
+                    options,
+                )?);
             }
             if config.verbose() {
                 log_detail!(&format!(
@@ -2894,36 +2898,17 @@ fn fast_img_run_encode_job_inner(
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
-        // Determine quality for AVIF encoding based on source format
-        let format = foundation::image::format_detect::detect_true_format(&job.source)?;
-        let quality = match format {
-            foundation::image::format_detect::FormatKind::Jpeg => {
-                // For JPEG: read quality from quantization tables
-                foundation::image_jpeg_analysis::analyze_jpeg_file(&job.source)
-                    .ok()
-                    .map(|analysis| analysis.estimated_quality)
-            }
-            foundation::image::format_detect::FormatKind::Png
-            | foundation::image::format_detect::FormatKind::WebP => {
-                // PNG/WebP are typically lossless or high quality
-                // Use high quality (90) for AVIF encoding
-                Some(90)
-            }
-            foundation::image::format_detect::FormatKind::Heic
-            | foundation::image::format_detect::FormatKind::Heif
-            | foundation::image::format_detect::FormatKind::Avif => {
-                // HEIC/HEIF/AVIF: use balanced quality
-                Some(85)
-            }
-            _ => None, // Other formats: use encoder default
-        };
+        // Meme Mode (AVIF strategy): always encode at quality=100 (lossy max quality).
+        // Design requirement: both lossy and lossless sources use AVIF lossy q=100,
+        // because AVIF's advantage is in lossy compression and memes don't need
+        // true lossless quality. Source quality is irrelevant for the output target.
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: foundation::ConvertFlags::FORCE,
             ..Default::default()
         };
-        img::lossless_converter::convert_to_avif(&job.source, quality, &convert_options)?
+        img::lossless_converter::convert_to_avif(&job.source, Some(100), &convert_options)?
     } else {
         let options = LosslessConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
