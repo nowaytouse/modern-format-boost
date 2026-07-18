@@ -1513,6 +1513,7 @@ pub struct WorkingCopyMarker {
     pub started_at: String,
     pub stage: FastImgStageName,
     pub src_jpeg_count: usize,
+    #[serde(default)]
     pub encoded_count: usize,
     pub gate1_checks: Gate1Checks,
     pub gate2_checks: Gate2Checks,
@@ -2431,5 +2432,30 @@ mod meme_mode_tests {
             marker.strategy, "jxl",
             "strategy should default to jxl for backward compatibility"
         );
+    }
+
+    #[test]
+    fn marker_deserialize_without_encoded_count_defaults_to_zero() {
+        // Regression test for: "missing field `encoded_count`" crash on old markers.
+        // Old marker files written before encoded_count was added must still parse.
+        let json = r#"{
+            "schema": 1,
+            "src_dir": "src",
+            "working_copy": "src_optimized",
+            "started_at": "2026-07-17T10:00:00Z",
+            "stage": "scan_complete",
+            "src_jpeg_count": 42,
+            "gate1_checks": {"count": false, "blake3": false, "metadata": false, "size": false, "orient": false, "decode": false},
+            "gate2_checks": {"count": false, "blake3_sample": false, "no_error": false},
+            "gate3_checks": {"count_x3": false, "sync": false, "quarantine": false, "chain": false},
+            "blake3_log": {},
+            "error": null
+        }"#;
+
+        let marker: WorkingCopyMarker =
+            serde_json::from_str(json).expect("old marker without encoded_count must parse");
+        assert_eq!(marker.encoded_count, 0, "encoded_count must default to 0");
+        assert_eq!(marker.src_jpeg_count, 42);
+        assert_eq!(marker.strategy, "jxl");
     }
 }
