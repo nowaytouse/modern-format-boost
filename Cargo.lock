@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.2"
-source = "git+https://github.com/clap-rs/clap#67c5dfbb5aac9cdbfe195ef6d93d522d171918d9"
+source = "git+https://github.com/clap-rs/clap#0838e824e6d91e49c9c75fa7c5447e05178da560"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -470,7 +470,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.2"
-source = "git+https://github.com/clap-rs/clap#67c5dfbb5aac9cdbfe195ef6d93d522d171918d9"
+source = "git+https://github.com/clap-rs/clap#0838e824e6d91e49c9c75fa7c5447e05178da560"
 dependencies = [
  "anstream",
  "anstyle",
@@ -481,7 +481,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.1"
-source = "git+https://github.com/clap-rs/clap#67c5dfbb5aac9cdbfe195ef6d93d522d171918d9"
+source = "git+https://github.com/clap-rs/clap#0838e824e6d91e49c9c75fa7c5447e05178da560"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -492,7 +492,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#67c5dfbb5aac9cdbfe195ef6d93d522d171918d9"
+source = "git+https://github.com/clap-rs/clap#0838e824e6d91e49c9c75fa7c5447e05178da560"
 
 [[package]]
 name = "cmake"
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#3c8109861d5fc8d6f0f2e3430f0ad4b3431b517a"
+source = "git+https://github.com/console-rs/indicatif#8bb800381656c1092f0f64b6aca536c835305721"
 dependencies = [
  "console",
  "portable-atomic",

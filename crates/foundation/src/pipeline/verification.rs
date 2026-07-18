@@ -641,7 +641,17 @@ fn check_decode_probe(
     files: &[PathBuf],
     output_format: Option<crate::format_detect::FormatKind>,
 ) -> CheckDetail {
-    let is_avif = matches!(output_format, Some(crate::format_detect::FormatKind::Avif));
+    // Detect format from actual file extensions (backward compat: old markers lack strategy)
+    let detected_format = files
+        .first()
+        .and_then(|path| path.extension()?.to_str())
+        .and_then(|ext| match ext.to_ascii_lowercase().as_str() {
+            "avif" => Some(crate::format_detect::FormatKind::Avif),
+            "jxl" => Some(crate::format_detect::FormatKind::Jxl),
+            _ => None,
+        });
+    let actual_format = detected_format.or(output_format);
+    let is_avif = matches!(actual_format, Some(crate::format_detect::FormatKind::Avif));
     let tool = if is_avif { "avifdec" } else { "djxl" };
 
     if !is_command_available(tool) {

@@ -164,7 +164,7 @@ mod tests {
             ]
         );
         assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
-        assert!(!efforts(&plan).contains(&constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT));
+        // e11 is now both ULTIMATE and EXPERIMENTAL, already in plan as ULTIMATE
     }
 
     #[test]
@@ -176,13 +176,13 @@ mod tests {
             JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
             false,
         );
+        // e11 is now both ULTIMATE and EXPERIMENTAL, plan deduplicates
         assert_eq!(
             efforts(&plan),
             vec![
                 constants::JXL_DEFAULT_EFFORT,
                 constants::JXL_DEEP_EFFORT,
                 constants::JXL_ULTIMATE_EFFORT,
-                constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             ]
         );
         assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
@@ -197,13 +197,13 @@ mod tests {
             JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
             true,
         );
+        // e11 is now both ULTIMATE and EXPERIMENTAL, push_unique deduplicates
         assert_eq!(
             efforts(&plan),
             vec![
                 constants::JXL_DEFAULT_EFFORT,
                 constants::JXL_DEEP_EFFORT,
                 constants::JXL_ULTIMATE_EFFORT,
-                constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             ]
         );
         assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
@@ -228,11 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn archive_direct_encode_effort_uses_e10_without_requiring_ultimate() {
+    fn archive_direct_encode_effort_uses_e11_without_requiring_ultimate() {
         assert_eq!(direct_encode_effort_for_archive(false, false), 7);
-        assert_eq!(direct_encode_effort_for_archive(false, true), 10);
-        assert_eq!(direct_encode_effort_for_archive(true, false), 10);
-        assert_eq!(direct_encode_effort_for_archive(true, true), 10);
+        assert_eq!(direct_encode_effort_for_archive(false, true), 11);
+        assert_eq!(direct_encode_effort_for_archive(true, false), 11);
+        assert_eq!(direct_encode_effort_for_archive(true, true), 11);
     }
 
     #[test]

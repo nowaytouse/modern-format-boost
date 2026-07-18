@@ -296,15 +296,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unsupported cjxl effort 11")]
-    fn cjxl_builder_rejects_e11_for_direct_encode_without_expert_options() {
+    fn cjxl_builder_accepts_e11_as_ultimate_effort() {
+        // e11 is now JXL_ULTIMATE_EFFORT, supported by default
         let mut builder = CjxlBuilder::new();
         builder
             .input(Path::new("in.png"))
             .output(Path::new("out.jxl"))
-            .effort(constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT);
+            .effort(constants::JXL_ULTIMATE_EFFORT);
 
-        let _ = builder.build();
+        let _cmd = builder.build(); // Should not panic
     }
 
     #[test]

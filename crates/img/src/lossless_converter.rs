@@ -2614,7 +2614,7 @@ pub fn convert_jpeg_to_jxl(
 /// * `Err(ImgQualityError)` - Conversion failed
 ///
 /// # Behavior
-/// - Uses avifenc with speed 4 and all threads
+/// - Uses avifenc with speed 1 and all threads
 /// - Verifies AVIF health after encoding
 /// - Checks size tolerance and compress mode
 ///
@@ -2649,7 +2649,7 @@ pub fn convert_to_avif(
 
     let mut builder = foundation::AvifencBuilder::new();
     builder
-        .speed(4)
+        .speed(1)
         .jobs("all")
         .quality(q)
         .input(input)
@@ -2732,7 +2732,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     let mut builder = foundation::AvifencBuilder::new();
     builder
         .lossless(true)
-        .speed(4)
+        .speed(1)
         .jobs("all")
         .input(input)
         .output(&temp_output);

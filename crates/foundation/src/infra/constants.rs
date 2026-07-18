@@ -1067,7 +1067,8 @@ pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
 /// Quality distance for ultimate mode (Limit Mode)
 pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
 /// Effort level for ultimate mode (Limit Mode)
-pub const JXL_ULTIMATE_EFFORT: u8 = 10;
+/// Ultimate production effort. Requires --allow_expert_options in cjxl 0.13.0+.
+pub const JXL_ULTIMATE_EFFORT: u8 = 11;
 /// Default effort level for standard mode
 pub const JXL_DEFAULT_EFFORT: u8 = 7;
 /// Deep production effort candidate. e9 is intentionally skipped by policy.
@@ -1087,8 +1088,7 @@ pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
         JXL_DEFAULT_EFFORT
     }
 }
-/// Runtime JXL policy: only production effort-search candidates are supported
-/// by default.
+/// Runtime JXL policy: supports production efforts (7/9/11).
 #[must_use]
 pub const fn is_supported_jxl_effort(effort: u8) -> bool {
     effort == JXL_DEFAULT_EFFORT || effort == JXL_DEEP_EFFORT || effort == JXL_ULTIMATE_EFFORT
@@ -3552,7 +3552,8 @@ mod tests {
         assert!(is_supported_jxl_effort(JXL_DEFAULT_EFFORT));
         assert!(is_supported_jxl_effort(JXL_DEEP_EFFORT));
         assert!(is_supported_jxl_effort(JXL_ULTIMATE_EFFORT));
-        assert!(!is_supported_jxl_effort(JXL_EXPERIMENTAL_LOSSLESS_EFFORT));
+        // e11 is now JXL_ULTIMATE_EFFORT, so both constants resolve to 11
+        assert_eq!(JXL_ULTIMATE_EFFORT, JXL_EXPERIMENTAL_LOSSLESS_EFFORT);
         assert!(is_supported_jxl_effort_with_expert(
             JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             true
