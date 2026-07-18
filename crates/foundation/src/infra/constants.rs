@@ -361,6 +361,8 @@ pub const ENV_DISABLE_DB_FEEDBACK: &str = "MODERN_FORMAT_DISABLE_DB_FEEDBACK";
 /// Independent kill-switch for the static image quality DB (does not affect
 /// GIF/Video KNN).
 pub const ENV_DISABLE_IMAGE_QUALITY_DB: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB";
+/// Enable heuristic quality fallback (default **off** - fails frequently, noisy logs).
+pub const ENV_ENABLE_IMAGE_QUALITY_HEURISTIC: &str = "MODERN_FORMAT_ENABLE_IMAGE_QUALITY_HEURISTIC";
 /// Independent kill-switch for the real static image quality regressor.
 pub const ENV_DISABLE_IMAGE_QUALITY_MODEL: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_MODEL";
 /// Developer override to force KNN database lookup for static quality testing.
