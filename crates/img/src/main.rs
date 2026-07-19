@@ -3656,9 +3656,10 @@ fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<W
     }
 }
 
-fn fast_img_strip_non_jxl_files(working_copy: &Path) -> anyhow::Result<()> {
+fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyhow::Result<()> {
     let mut pending_dirs = vec![working_copy.to_path_buf()];
     let mut files_to_delete = Vec::new();
+    let target_ext = if strategy == "avif" { "avif" } else { "jxl" };
     while let Some(dir) = pending_dirs.pop() {
         for entry in std::fs::read_dir(&dir)
             .with_context(|| format!("read fast-img working-copy dir {}", dir.display()))?
@@ -3677,11 +3678,11 @@ fn fast_img_strip_non_jxl_files(working_copy: &Path) -> anyhow::Result<()> {
             if !file_type.is_file() {
                 continue;
             }
-            let is_jxl = path
+            let is_target = path
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("jxl"));
-            if is_jxl {
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(target_ext));
+            if is_target {
                 continue;
             }
             files_to_delete.push(path);
@@ -3697,14 +3698,16 @@ fn fast_img_strip_non_jxl_files(working_copy: &Path) -> anyhow::Result<()> {
     for path in files_to_delete {
         std::fs::remove_file(&path).with_context(|| {
             format!(
-                "delete non-JXL fast-img working-copy file {}",
+                "delete non-{} fast-img working-copy file {}",
+                target_ext.to_uppercase(),
                 path.display()
             )
         })?;
         tracing::info!(
             target: "fast_img",
             path = %path.display(),
-            "deleted non-JXL working-copy file after Gate 1"
+            "deleted non-{} working-copy file after Gate 1",
+            target_ext.to_uppercase()
         );
     }
     Ok(())
@@ -5307,7 +5310,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         let (source_deleted, source_already_deleted) =
             fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
         let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
-        fast_img_strip_non_jxl_files(working_copy)?;
+        fast_img_strip_non_target_files(working_copy, strategy)?;
         foundation::restore_delivery_directory_metadata(
             saved_dir_timestamps,
             src_dir,
@@ -5528,7 +5531,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     } else {
         0
     };
-    fast_img_strip_non_jxl_files(working_copy)?;
+    fast_img_strip_non_target_files(working_copy, strategy)?;
     foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
         .with_context(|| {
             format!(
@@ -5927,7 +5930,7 @@ mod fast_img_hardening_tests {
         fast_img_reconcile_unrecorded_source_disposition, fast_img_refresh_marker_jxl_deliveries,
         fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_encode_output,
         fast_img_retry_marker_source_set_is_stale, fast_img_run_encode_phase,
-        fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_jxl_files,
+        fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_target_files,
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
@@ -8183,7 +8186,7 @@ mod fast_img_hardening_tests {
         write_jpeg(&jpeg, b"source")?;
         std::fs::write(&jxl, b"jxl")?;
 
-        fast_img_strip_non_jxl_files(&wc)?;
+        fast_img_strip_non_target_files(&wc, "jxl")?;
 
         assert!(!jpeg.exists());
         assert!(jxl.exists());
@@ -8191,6 +8194,27 @@ mod fast_img_hardening_tests {
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(remaining, vec![std::ffi::OsString::from("a.JXL")]);
+        Ok(())
+    }
+
+    #[test]
+    fn wc_contains_only_avif_after_gate1() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let wc = root.path().join("Photos_");
+        std::fs::create_dir_all(&wc)?;
+        let jpeg = wc.join("a.jpg");
+        let avif = wc.join("a.AVIF");
+        write_jpeg(&jpeg, b"source")?;
+        std::fs::write(&avif, b"avif")?;
+
+        fast_img_strip_non_target_files(&wc, "avif")?;
+
+        assert!(!jpeg.exists());
+        assert!(avif.exists());
+        let remaining = std::fs::read_dir(&wc)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(remaining, vec![std::ffi::OsString::from("a.AVIF")]);
         Ok(())
     }
 
