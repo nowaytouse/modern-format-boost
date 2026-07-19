@@ -1205,11 +1205,93 @@ fn bin_name_to_crate_dir(name: &str) -> Result<&'static str> {
     }
 }
 
+fn terminate_running_instances(style: &Style) -> Result<()> {
+    println!(
+        "{}{}{} Checking and terminating running applications and terminal processes...{}",
+        style.yellow,
+        style.bold,
+        pick_symbol("⚠️", "[PROCESS]"),
+        style.reset
+    );
+
+    let mut s = sysinfo::System::new_all();
+    s.refresh_all();
+
+    let target_names = [
+        "Modern Format Boost",
+        "mfb_launcher",
+        "img",
+        "vid",
+        "verify",
+        "cache_cleaner",
+        "database_manager",
+        "collect_optimized",
+        "merge_xmp",
+        "icloud_import",
+        "drag_and_drop_processor",
+    ];
+
+    let mut terminated_pids = Vec::new();
+    let current_pid = std::process::id();
+
+    for (pid, process) in s.processes() {
+        let pid_str = pid.to_string();
+        let pid_val = pid_str.parse::<u32>().unwrap_or(0);
+        if pid_val == current_pid {
+            continue;
+        }
+
+        let name = process.name().to_string_lossy();
+        let matches = target_names.iter().any(|&target| {
+            name == target || (target == "Modern Format Boost" && name.contains("Modern Format Boost"))
+        });
+
+        if matches {
+            println!(
+                "   {} Interrupted running process: {} (PID {})",
+                pick_symbol("⊖", "[-]"),
+                name,
+                pid_str
+            );
+            process.kill_with(sysinfo::Signal::Term);
+            terminated_pids.push(*pid);
+        }
+    }
+
+    if !terminated_pids.is_empty() {
+        // Wait a bit for processes to exit gracefully
+        std::thread::sleep(std::time::Duration::from_millis(800));
+
+        // Refresh and force kill if still alive
+        s.refresh_all();
+        for pid in terminated_pids {
+            if let Some(process) = s.process(pid) {
+                let name = process.name().to_string_lossy();
+                println!(
+                    "   {} Force terminating remaining process: {} (PID {})",
+                    pick_symbol("💥", "[!]"),
+                    name,
+                    pid.to_string()
+                );
+                process.kill_with(sysinfo::Signal::Kill);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = Args::parse();
     let _ = setup_logger("mfb.smart_build");
     let project_root = get_project_root()?;
     let style = Style::current();
+
+    // Interrupt running GUI app and child binaries if forcing full build
+    if args.all && args.force {
+        terminate_running_instances(&style)?;
+    }
+
 
     // --patch implies --force + --rust-only + --verbose
     if args.patch {
