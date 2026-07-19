@@ -847,16 +847,57 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
         }
     }
 
+    let name_lower = name.to_ascii_lowercase();
+    let is_multimedia_tool = name_lower == "avifenc"
+        || name_lower == "avifdec"
+        || name_lower == "cjxl"
+        || name_lower == "djxl"
+        || name_lower == "ffmpeg"
+        || name_lower == "ffprobe"
+        || name_lower == "magick"
+        || name_lower == "exiftool"
+        || name_lower == "gif2webp"
+        || name_lower == "cwebp";
+
     for fallback in &fallbacks {
         let path = std::path::Path::new(fallback);
         if path.is_file() {
-            let resolved = path.to_path_buf();
-            crate::media_conversion_gate::mutex_guard_or_recover(
-                "tool_path_cache",
-                cache_mutex.lock(),
-            )
-            .insert(name.to_string(), Some(resolved.clone()));
-            return Some(resolved);
+            let mut is_healthy = true;
+            if is_multimedia_tool {
+                // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
+                is_healthy = match std::process::Command::new(path)
+                    .arg("-version")
+                    .output()
+                {
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        !stderr.contains("Library not loaded") 
+                            && !stderr.contains("dyld:")
+                            && !stdout.contains("Library not loaded") 
+                            && !stdout.contains("dyld:")
+                    }
+                    Err(_) => false,
+                };
+            }
+
+            if is_healthy {
+                let resolved = path.to_path_buf();
+                crate::media_conversion_gate::mutex_guard_or_recover(
+                    "tool_path_cache",
+                    cache_mutex.lock(),
+                )
+                .insert(name.to_string(), Some(resolved.clone()));
+                return Some(resolved);
+            } else {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "tool_path_smoke_fail",
+                    format!(
+                        "WARNING: Tool candidate at '{}' is corrupt or failed dyld load smoke test; skipping",
+                        path.display()
+                    ),
+                );
+            }
         }
     }
 
@@ -887,12 +928,43 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     // to spuriously failing every file in a batch.
     match which::which(name) {
         Ok(path) => {
-            crate::media_conversion_gate::mutex_guard_or_recover(
-                "tool_path_cache",
-                cache_mutex.lock(),
-            )
-            .insert(name.to_string(), Some(path.clone()));
-            Some(path)
+            let mut is_healthy = true;
+            if is_multimedia_tool {
+                // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
+                is_healthy = match std::process::Command::new(&path)
+                    .arg("-version")
+                    .output()
+                {
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        !stderr.contains("Library not loaded") 
+                            && !stderr.contains("dyld:")
+                            && !stdout.contains("Library not loaded") 
+                            && !stdout.contains("dyld:")
+                    }
+                    Err(_) => false,
+                };
+            }
+
+            if is_healthy {
+                crate::media_conversion_gate::mutex_guard_or_recover(
+                    "tool_path_cache",
+                    cache_mutex.lock(),
+                )
+                .insert(name.to_string(), Some(path.clone()));
+                Some(path)
+            } else {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "tool_path_smoke_fail",
+                    format!(
+                        "WARNING: which resolved path '{}' for '{}' is corrupt or failed dyld load smoke test; skipping",
+                        path.display(),
+                        name
+                    ),
+                );
+                None
+            }
         }
         Err(e) => {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
