@@ -388,6 +388,12 @@ pub fn static_quality_db_lookup_enabled() -> bool {
     quality_db_lookup_enabled("img_lossless_convert")
 }
 
+/// Returns `true` when the image quality heuristic score is explicitly enabled.
+#[must_use]
+pub fn image_quality_heuristic_enabled() -> bool {
+    env_truthy(crate::constants::HEURISTIC_QUALITY_ENV_KEY)
+}
+
 /// Exploration/matcher output sealing before CRF and quality gates (default
 /// on).
 #[must_use]

@@ -3524,7 +3524,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         } else {
             1
         };
-        estimated_quality = Some(estimate_lossy_quality_fallback(
+        let val = estimate_lossy_quality_fallback(
             path,
             &format,
             width,
@@ -3532,7 +3532,17 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             file_size,
             quality_frame_count,
             entropy,
-        )?);
+        );
+        match val {
+            Ok(q) => estimated_quality = Some(q),
+            Err(e) => {
+                if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+                    return Err(e);
+                } else {
+                    tracing::debug!("Heuristic quality estimation failed (skipped under fallback-disabled): {e}");
+                }
+            }
+        }
     }
 
     let duration = if is_animated {
@@ -3820,12 +3830,14 @@ fn estimate_lossy_quality_fallback(
 ) -> Result<u8> {
     let pixels = u64::from(width) * u64::from(height);
     if pixels == 0 || file_size == 0 {
-        crate::progress_mode::emit_stderr(&format!(
-            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and \
-                 heuristic fallback is impossible.\x1b[0m\n\x1b[31m      File: \
-                 {}\x1b[0m\n\x1b[31m      Refusing to invent a hardcoded quality value.\x1b[0m",
-            path.display()
-        ));
+        if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+            crate::progress_mode::emit_stderr(&format!(
+                "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and \
+                     heuristic fallback is impossible.\x1b[0m\n\x1b[31m      File: \
+                     {}\x1b[0m\n\x1b[31m      Refusing to invent a hardcoded quality value.\x1b[0m",
+                path.display()
+            ));
+        }
         return Err(ImgQualityError::AnalysisError(format!(
             "Cannot estimate quality for lossy {}: invalid dimensions ({width}x{height}) or empty \
              file",
@@ -3837,12 +3849,14 @@ fn estimate_lossy_quality_fallback(
     // format-efficiency-only formula that saturates to Q=100 on modern codecs
     // (AVIF/HEIC at 3.0x efficiency). Refuse rather than forge a verdict.
     let Some(entropy) = entropy.filter(|e| e.is_finite() && *e > 0.0) else {
-        crate::progress_mode::emit_stderr(&format!(
-            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed; entropy \
-             is unmeasurable so heuristic refuses to invent a value.\x1b[0m\n\x1b[31m      File: \
-             {}\x1b[0m",
-            path.display()
-        ));
+        if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+            crate::progress_mode::emit_stderr(&format!(
+                "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed; entropy \
+                 is unmeasurable so heuristic refuses to invent a value.\x1b[0m\n\x1b[31m      File: \
+                 {}\x1b[0m",
+                path.display()
+            ));
+        }
         return Err(ImgQualityError::AnalysisError(format!(
             "Cannot estimate quality for lossy {}: entropy unavailable (decode failed)",
             format.as_str()

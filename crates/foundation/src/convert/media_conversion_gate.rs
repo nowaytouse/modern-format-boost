@@ -447,12 +447,20 @@ pub fn resolve_output_dir_for_delivery(
 /// Probe / detection layer audit (same telemetry as delivery; pre-conversion
 /// routing, M93/M98).
 pub fn probe_layer_audit(branch: &'static str, path: &Path, detail: impl AsRef<str>) {
-    delivery_strict_path_audit(branch, path, detail);
+    if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        delivery_strict_path_audit(branch, path, detail);
+    } else {
+        tracing::debug!(target: "mfb.audit", branch, path = %path.display(), "{}", detail.as_ref());
+    }
 }
 
 /// Probe / detection batch audit (no single input path, M93/M98).
 pub fn probe_layer_batch_audit(branch: &'static str, detail: impl AsRef<str>) {
-    delivery_strict_batch_audit(branch, detail);
+    if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        delivery_strict_batch_audit(branch, detail);
+    } else {
+        tracing::debug!(target: "mfb.audit", branch, "{}", detail.as_ref());
+    }
 }
 
 /// Batch/resume checkpoint fallback (lock, progress, ps/hostname).

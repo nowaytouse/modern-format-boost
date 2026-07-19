@@ -1434,9 +1434,7 @@ pub fn lookup_image_quality_with_path(
     analysis: &ImageAnalysis,
     path: Option<&Path>,
 ) -> Option<QualityScore> {
-    // HEURISTIC DISABLED BY DEFAULT: feature extraction fails frequently,
-    // pollutes logs with ☢️ RARE ERROR warnings. Enable with env var if needed.
-    if !static_quality_env_truthy(crate::constants::ENV_ENABLE_IMAGE_QUALITY_HEURISTIC) {
+    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
         return None;
     }
     if analysis.is_animated {
