@@ -2710,6 +2710,94 @@ pub fn convert_to_avif(
     }
 }
 
+/// Probe AVIF encoding at a given quality without committing to disk or performing size checks.
+///
+/// Used by the Meme Mode quality exploration loop to test different quality levels.
+/// Returns `(temp_output_path, output_size_bytes)` on success.
+/// The caller is responsible for cleaning up the temp file when done.
+///
+/// # Errors
+/// Returns an error if avifenc fails to execute or health/pixel checks fail.
+pub fn convert_to_avif_probe(
+    input: &Path,
+    quality: u8,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64)> {
+    // Validate input file
+    if let Err(e) = foundation::conversion::validate_input_file(input) {
+        log_detail!(&format!(
+            "convert_to_avif_probe: validate_input_file failed for {}: {}",
+            input.display(),
+            e
+        ));
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
+    let output = get_output_path(input, EXT_AVIF, options)?;
+    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output).map_err(
+        |e| {
+            ImgQualityError::ConversionError(format!(
+                "isolated_temp_path_for_search failed for {}: {}",
+                input.display(),
+                e
+            ))
+        },
+    )?;
+
+    let mut builder = foundation::AvifencBuilder::new();
+    builder
+        .speed(0)
+        .jobs("all")
+        .quality(quality)
+        .input(input)
+        .output(&temp_output);
+
+    let result = builder.build().output();
+
+    match result {
+        Ok(output_cmd) if output_cmd.status.success() => {
+            // Copy metadata into the temp file to get an exact size estimate containing EXIF/XMP
+            let _ = foundation::metadata::preserve_for_delivery(input, &temp_output);
+            let output_size = fs::metadata(&temp_output)?.len();
+            if let Err(e) =
+                foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
+            {
+                cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!(
+                    "convert_to_avif_probe: AVIF health check failed for {} at q={quality}: {}",
+                    input.display(),
+                    e
+                ));
+                return Err(ImgQualityError::ConversionError(format!(
+                    "AVIF health check failed at q={quality}: {e}"
+                )));
+            }
+            Ok((temp_output, output_size))
+        }
+        Ok(output_cmd) => {
+            cleanup_temp_output(&temp_output, input);
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            log_detail!(&format!(
+                "convert_to_avif_probe: avifenc failed for {} at q={quality}. Stderr: {}",
+                input.display(),
+                stderr
+            ));
+            Err(ImgQualityError::ConversionError(format!(
+                "avifenc failed at q={quality}: {stderr}"
+            )))
+        }
+        Err(e) => {
+            cleanup_temp_output(&temp_output, input);
+            log_detail!(&format!(
+                "convert_to_avif_probe: avifenc launch failed for {} at q={quality}: {}",
+                input.display(),
+                e
+            ));
+            Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
+        }
+    }
+}
+
 /// Convert to AVIF losslessly.
 ///
 /// # Errors

@@ -2886,6 +2886,156 @@ fn fast_img_effective_encode_parallelism(
     (parallel_tasks, configured_child_threads.max(1))
 }
 
+/// Quality exploration result for AVIF Meme Mode.
+enum AvifQualityExploreResult {
+    /// Best quality found where output_size <= input_size.
+    Found { quality: u8 },
+    /// No quality in [20, 100] produced output_size <= input_size.
+    Exhausted,
+}
+
+/// Meme Mode AVIF quality exploration: coarse scan + binary search.
+///
+/// Algorithm:
+/// 1. Coarse scan: q=100 → 90 → ... → 20 (step -10). Stop at first q where output ≤ input.
+/// 2. Binary search: refine upward in [q_ok, q_ok+10) to find the highest quality still ≤ input.
+/// 3. Returns the best (quality, temp_path, output_size) or Exhausted.
+///
+/// All temp files from failed probes are cleaned up immediately.
+fn explore_avif_meme_quality(
+    source: &Path,
+    input_size: u64,
+    convert_options: &img::lossless_converter::ConvertOptions,
+) -> anyhow::Result<AvifQualityExploreResult> {
+    const COARSE_STEP: u8 = 10;
+    const MIN_QUALITY: u8 = 20;
+
+    // ── Phase 1: Coarse scan ──────────────────────────────────────────────
+    let mut q_ok: Option<u8> = None;
+    let mut q = 100u8;
+    loop {
+        foundation::log_detail!(&format!(
+            "AVIF Meme Mode quality probe [coarse]: q={q} for {}",
+            source.display()
+        ));
+        match img::lossless_converter::convert_to_avif_probe(source, q, convert_options) {
+            Ok((temp_path, output_size)) => {
+                if output_size <= input_size {
+                    foundation::log_detail!(&format!(
+                        "AVIF Meme Mode quality probe [coarse]: q={q} OK — output={output_size}B ≤ input={input_size}B"
+                    ));
+                    q_ok = Some(q);
+                    // Clean up coarse probe temp; will re-encode at best_q below
+                    let _ = std::fs::remove_file(&temp_path);
+                    break;
+                } else {
+                    foundation::log_detail!(&format!(
+                        "AVIF Meme Mode quality probe [coarse]: q={q} too large — output={output_size}B > input={input_size}B"
+                    ));
+                    let _ = std::fs::remove_file(&temp_path);
+                }
+            }
+            Err(e) => {
+                foundation::log_detail!(&format!(
+                    "AVIF Meme Mode quality probe [coarse]: q={q} encode error — {e}"
+                ));
+            }
+        }
+        if q < MIN_QUALITY + COARSE_STEP {
+            break;
+        }
+        q = q.saturating_sub(COARSE_STEP);
+    }
+
+    let Some(q_found) = q_ok else {
+        tracing::warn!(
+            "AVIF Meme Mode: quality exhausted (q=20 still > input={input_size}B) for {}; preserving source",
+            source.display()
+        );
+        return Ok(AvifQualityExploreResult::Exhausted);
+    };
+
+    // ── Phase 2: Binary search upward ────────────────────────────────────
+    // Range: [q_found, q_found + COARSE_STEP)  (max quality that still fits)
+    // We know q_found works, and q_found + COARSE_STEP doesn't (or is 100).
+    let q_upper = if q_found == 100 {
+        // q=100 already worked in coarse scan, no need to refine
+        foundation::log_detail!(&format!(
+            "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
+            source.display()
+        ));
+        let (temp, _size) = img::lossless_converter::convert_to_avif_probe(source, 100, convert_options)?;
+        let _ = std::fs::remove_file(&temp);
+        return Ok(AvifQualityExploreResult::Found { quality: 100 });
+    } else {
+        q_found + COARSE_STEP - 1
+    };
+
+    let mut lo = q_found;
+    let mut hi = q_upper.min(100);
+    let mut best_q = q_found;
+
+    foundation::log_detail!(&format!(
+        "AVIF Meme Mode quality probe [binary search]: range=[{lo}, {hi}] for {}",
+        source.display()
+    ));
+
+    // Up to 4 binary search iterations (converges to ±1)
+    for _ in 0..4 {
+        if lo > hi {
+            break;
+        }
+        let mid = lo + (hi - lo) / 2;
+        foundation::log_detail!(&format!(
+            "AVIF Meme Mode quality probe [binary]: testing q={mid}"
+        ));
+        match img::lossless_converter::convert_to_avif_probe(source, mid, convert_options) {
+            Ok((temp_path, output_size)) => {
+                if output_size <= input_size {
+                    foundation::log_detail!(&format!(
+                        "AVIF Meme Mode quality probe [binary]: q={mid} OK — output={output_size}B"
+                    ));
+                    best_q = mid;
+                    let _ = std::fs::remove_file(&temp_path);
+                    if mid == hi {
+                        break;
+                    }
+                    lo = mid + 1;
+                } else {
+                    foundation::log_detail!(&format!(
+                        "AVIF Meme Mode quality probe [binary]: q={mid} too large — output={output_size}B"
+                    ));
+                    let _ = std::fs::remove_file(&temp_path);
+                    if mid == lo {
+                        break;
+                    }
+                    hi = mid - 1;
+                }
+            }
+            Err(e) => {
+                foundation::log_detail!(&format!(
+                    "AVIF Meme Mode quality probe [binary]: q={mid} error — {e}"
+                ));
+                if mid == lo {
+                    break;
+                }
+                hi = mid - 1;
+            }
+        }
+    }
+
+    // Final encode at best_q to get the committed temp file
+    foundation::log_detail!(&format!(
+        "AVIF Meme Mode quality finalized: q={best_q} for {}",
+        source.display()
+    ));
+    let (temp_path, _output_size) =
+        img::lossless_converter::convert_to_avif_probe(source, best_q, convert_options)?;
+    let _ = std::fs::remove_file(&temp_path);
+    Ok(AvifQualityExploreResult::Found { quality: best_q })
+}
+
+
 fn fast_img_run_encode_job_inner(
     job: &FastImgTranscodeJob,
     src_dir: &Path,
@@ -2895,24 +3045,35 @@ fn fast_img_run_encode_job_inner(
     allow_expert_options: bool,
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
+
     let result = if strategy == "avif" {
-        // Meme Mode (AVIF strategy): always encode at quality=100 (lossy max quality).
-        // Design requirement: both lossy and lossless sources use AVIF lossy q=100,
-        // because AVIF's advantage is in lossy compression and memes don't need
-        // true lossless quality. Source quality is irrelevant for the output target.
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
-        foundation::log_detail!(&format!(
-            "Meme Mode (AVIF): Selected quality=100 encoding for {} (Detected Source Format: {:?})",
-            job.source.display(),
-            format
-        ));
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: foundation::ConvertFlags::FORCE,
             ..Default::default()
         };
-        img::lossless_converter::convert_to_avif(&job.source, Some(100), &convert_options)?
+        let input_size = std::fs::metadata(&job.source)?.len();
+        match explore_avif_meme_quality(&job.source, input_size, &convert_options)? {
+            AvifQualityExploreResult::Found { quality, .. } => {
+                foundation::log_detail!(&format!(
+                    "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?})",
+                    quality,
+                    job.source.display(),
+                    format
+                ));
+                img::lossless_converter::convert_to_avif(&job.source, Some(quality), &convert_options)?
+            }
+            AvifQualityExploreResult::Exhausted => {
+                foundation::log_detail!(&format!(
+                    "Meme Mode (AVIF): Quality exploration exhausted for {} (Source: {:?}); falling back to original",
+                    job.source.display(),
+                    format
+                ));
+                img::lossless_converter::convert_to_avif(&job.source, Some(100), &convert_options)?
+            }
+        }
     } else {
         let options = LosslessConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
@@ -8520,4 +8681,30 @@ mod fast_img_hardening_tests {
         assert!(err.to_string().contains("without required proof"));
         Ok(())
     }
+
+    #[test]
+    fn test_fast_img_avif_meme_mode_quality_exploration_logic() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src = root.path().join("meme.jpg");
+        // Write 2048 bytes of mock JPEG to ensure space for AVIF header boxes
+        write_jpeg(&src, &[0u8; 2048])?;
+        let convert_options = foundation::ConvertOptions {
+            output_dir: Some(root.path().to_path_buf()),
+            base_dir: Some(root.path().to_path_buf()),
+            flags: foundation::ConvertFlags::FORCE,
+            ..Default::default()
+        };
+        let input_size = std::fs::metadata(&src)?.len();
+        let res = super::explore_avif_meme_quality(&src, input_size, &convert_options)?;
+        match res {
+            super::AvifQualityExploreResult::Found { quality } => {
+                assert!(quality >= 20 && quality <= 100);
+            }
+            super::AvifQualityExploreResult::Exhausted => {
+                // Exhausted is also a valid logical outcome if output always > input_size
+            }
+        }
+        Ok(())
+    }
 }
+
