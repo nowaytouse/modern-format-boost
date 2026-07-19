@@ -1071,7 +1071,7 @@ pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
 /// Quality distance for ultimate mode (Limit Mode)
 pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
 /// Effort level for ultimate mode (Limit Mode)
-/// Ultimate production effort. Requires --allow_expert_options in cjxl 0.13.0+.
+/// Ultimate production effort. Requires `--allow_expert_options` in `cjxl` 0.13.0+.
 pub const JXL_ULTIMATE_EFFORT: u8 = 11;
 /// Default effort level for standard mode
 pub const JXL_DEFAULT_EFFORT: u8 = 7;
@@ -1095,7 +1095,10 @@ pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
 /// Runtime JXL policy: supports production efforts (7/9/11).
 #[must_use]
 pub const fn is_supported_jxl_effort(effort: u8) -> bool {
-    effort == JXL_DEFAULT_EFFORT || effort == JXL_DEEP_EFFORT || effort == JXL_ULTIMATE_EFFORT
+    effort == JXL_DEFAULT_EFFORT
+        || effort == JXL_DEEP_EFFORT
+        || effort == 10
+        || effort == JXL_ULTIMATE_EFFORT
 }
 /// Runtime JXL policy with explicit expert/lab opt-in for e11.
 #[must_use]

@@ -150,9 +150,12 @@ fn merge_target(target: &Path, args: &Args) -> Result<MergeSummary> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Check exiftool availability
-    if Command::new("exiftool").arg("-ver").output().is_err() {
-        bail!("exiftool not found — install with: brew install exiftool");
+    // Resolve through the shared policy so GUI launches and tool overrides agree.
+    let Some(exiftool) = foundation::common_utils::resolve_tool_path("exiftool") else {
+        bail!("exiftool was not found or failed its runtime health check");
+    };
+    if Command::new(exiftool).arg("-ver").output().is_err() {
+        bail!("exiftool could not be started");
     }
 
     println!();

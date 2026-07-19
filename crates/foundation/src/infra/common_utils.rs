@@ -822,29 +822,55 @@ static TOOL_PATH_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, Option<std::path::PathBuf>>>,
 > = std::sync::OnceLock::new();
 
+fn tool_override_env_name(name: &str) -> String {
+    let mut key = String::from("MFB_TOOL_");
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_uppercase());
+        } else {
+            key.push('_');
+        }
+    }
+    key
+}
+
 #[must_use]
 pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     let cache_mutex =
         TOOL_PATH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-    // GUI-launched macOS apps often miss shell PATH. Check stable install paths
-    // first so common Homebrew/user installs do not emit fallback warnings.
-    let mut fallbacks = vec![
-        format!("/opt/homebrew/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-        format!("/usr/bin/{name}"),
-        format!("/bin/{name}"),
-    ];
-
+    // GUI-launched macOS apps often miss shell PATH. An explicit developer
+    // override and an explicitly selected PATH entry take priority over fixed
+    // install locations, so nightly or locally built tools can be used safely.
+    let explicit_override = std::env::var_os(tool_override_env_name(name));
+    let mut fallbacks = Vec::new();
     let mut home_error = None;
-    match std::env::var(crate::constants::ENV_HOME) {
-        Ok(home_dir) => {
-            fallbacks.push(format!("{home_dir}/.local/bin/{name}"));
-            fallbacks.push(format!("{home_dir}/.cargo/bin/{name}"));
+    if let Some(path) = explicit_override.as_ref() {
+        fallbacks.push(path.to_string_lossy().into_owned());
+    } else {
+        match which::which(name) {
+            Ok(path) => fallbacks.push(path.to_string_lossy().into_owned()),
+            Err(error) => crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_path_lookup",
+                format!("PATH lookup did not resolve {name}; checking fixed paths: {error}"),
+            ),
         }
-        Err(e) => {
-            home_error = Some(e);
+        match std::env::var(crate::constants::ENV_HOME) {
+            Ok(home_dir) => {
+                fallbacks.push(format!("{home_dir}/.local/bin/{name}"));
+                fallbacks.push(format!("{home_dir}/.cargo/bin/{name}"));
+            }
+            Err(e) => {
+                home_error = Some(e);
+            }
         }
+
+        fallbacks.extend([
+            format!("/opt/homebrew/bin/{name}"),
+            format!("/usr/local/bin/{name}"),
+            format!("/usr/bin/{name}"),
+            format!("/bin/{name}"),
+        ]);
     }
 
     let name_lower = name.to_ascii_lowercase();
@@ -856,30 +882,37 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
         || name_lower == "ffprobe"
         || name_lower == "magick"
         || name_lower == "exiftool"
+        || name_lower == "heif-convert"
+        || name_lower == "heif-enc"
         || name_lower == "gif2webp"
-        || name_lower == "cwebp";
+        || name_lower == "gifski"
+        || name_lower == "webpmux"
+        || name_lower == "cwebp"
+        || name_lower == "dwebp";
 
     for fallback in &fallbacks {
         let path = std::path::Path::new(fallback);
         if path.is_file() {
-            let mut is_healthy = true;
-            if is_multimedia_tool {
+            let is_healthy = !is_multimedia_tool || {
                 // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
-                is_healthy = match std::process::Command::new(path)
-                    .arg("-version")
-                    .output()
-                {
+                match std::process::Command::new(path).arg("-version").output() {
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         let stdout = String::from_utf8_lossy(&output.stdout);
-                        !stderr.contains("Library not loaded") 
+                        !stderr.contains("Library not loaded")
                             && !stderr.contains("dyld:")
-                            && !stdout.contains("Library not loaded") 
+                            && !stdout.contains("Library not loaded")
                             && !stdout.contains("dyld:")
                     }
-                    Err(_) => false,
-                };
-            }
+                    Err(err) => {
+                        crate::media_conversion_gate::delivery_runtime_batch_audit(
+                            "dyld_smoke_err",
+                            format!("dyld/version smoke check failed with IO error: {err:?}"),
+                        );
+                        false
+                    }
+                }
+            };
 
             if is_healthy {
                 let resolved = path.to_path_buf();
@@ -889,16 +922,25 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                 )
                 .insert(name.to_string(), Some(resolved.clone()));
                 return Some(resolved);
-            } else {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "tool_path_smoke_fail",
-                    format!(
-                        "WARNING: Tool candidate at '{}' is corrupt or failed dyld load smoke test; skipping",
-                        path.display()
-                    ),
-                );
             }
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_path_smoke_fail",
+                format!(
+                    "WARNING: Tool candidate at '{}' is corrupt or failed dyld load smoke test; skipping",
+                    path.display()
+                ),
+            );
         }
+    }
+
+    if explicit_override.is_some() {
+        crate::media_conversion_gate::delivery_runtime_batch_audit(
+            "tool_path_override",
+            format!(
+                "explicit override for {name} is unavailable or failed its runtime health check"
+            ),
+        );
+        return None;
     }
 
     {
@@ -928,24 +970,26 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     // to spuriously failing every file in a batch.
     match which::which(name) {
         Ok(path) => {
-            let mut is_healthy = true;
-            if is_multimedia_tool {
+            let is_healthy = !is_multimedia_tool || {
                 // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
-                is_healthy = match std::process::Command::new(&path)
-                    .arg("-version")
-                    .output()
-                {
+                match std::process::Command::new(&path).arg("-version").output() {
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         let stdout = String::from_utf8_lossy(&output.stdout);
-                        !stderr.contains("Library not loaded") 
+                        !stderr.contains("Library not loaded")
                             && !stderr.contains("dyld:")
-                            && !stdout.contains("Library not loaded") 
+                            && !stdout.contains("Library not loaded")
                             && !stdout.contains("dyld:")
                     }
-                    Err(_) => false,
-                };
-            }
+                    Err(err) => {
+                        crate::media_conversion_gate::delivery_runtime_batch_audit(
+                            "dyld_smoke_err",
+                            format!("dyld/version smoke check failed with IO error: {err:?}"),
+                        );
+                        false
+                    }
+                }
+            };
 
             if is_healthy {
                 crate::media_conversion_gate::mutex_guard_or_recover(
@@ -953,18 +997,17 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                     cache_mutex.lock(),
                 )
                 .insert(name.to_string(), Some(path.clone()));
-                Some(path)
-            } else {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "tool_path_smoke_fail",
-                    format!(
-                        "WARNING: which resolved path '{}' for '{}' is corrupt or failed dyld load smoke test; skipping",
-                        path.display(),
-                        name
-                    ),
-                );
-                None
+                return Some(path);
             }
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_path_smoke_fail",
+                format!(
+                    "WARNING: which resolved path '{}' for '{}' is corrupt or failed dyld load smoke test; skipping",
+                    path.display(),
+                    name
+                ),
+            );
+            None
         }
         Err(e) => {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
@@ -1328,6 +1371,12 @@ mod tests {
 
         assert_eq!(resolve_tool_path(&tool_name), Some(primary));
         Ok(())
+    }
+
+    #[test]
+    fn tool_override_env_name_is_stable_and_shell_safe() {
+        assert_eq!(tool_override_env_name("avifenc"), "MFB_TOOL_AVIFENC");
+        assert_eq!(tool_override_env_name("avif-enc"), "MFB_TOOL_AVIF_ENC");
     }
 
     #[test]

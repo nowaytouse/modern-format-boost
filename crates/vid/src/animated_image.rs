@@ -19,6 +19,290 @@ struct VideoStreamInfo {
     pix_fmt: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AvifAnimationEncoder {
+    SvtAv1,
+    LibAomAv1,
+}
+
+impl AvifAnimationEncoder {
+    const fn ffmpeg_name(self) -> &'static str {
+        match self {
+            Self::SvtAv1 => "libsvtav1",
+            Self::LibAomAv1 => "libaom-av1",
+        }
+    }
+
+    fn append_quality_args(self, builder: &mut foundation::FfmpegBuilder) {
+        match self {
+            Self::SvtAv1 => {
+                builder
+                    .arg(foundation::constants::FFMPEG_ARG_CRF)
+                    .arg("18")
+                    .arg(foundation::constants::FFMPEG_ARG_PRESET)
+                    .arg(foundation::constants::FFMPEG_SVTAV1_SLOWEST_PRESET);
+            }
+            Self::LibAomAv1 => {
+                builder
+                    .arg(foundation::constants::FFMPEG_ARG_CRF)
+                    .arg("18")
+                    .arg("-b:v")
+                    .arg("0")
+                    .arg("-cpu-used")
+                    .arg("0")
+                    .arg("-row-mt")
+                    .arg("1");
+            }
+        }
+    }
+}
+
+fn ffmpeg_listing_has_token(listing: &str, token: &str) -> bool {
+    listing
+        .lines()
+        .any(|line| line.split_whitespace().any(|part| part == token))
+}
+
+fn select_avif_animation_encoder_from_listing(listing: &str) -> Option<AvifAnimationEncoder> {
+    if ffmpeg_listing_has_token(listing, AvifAnimationEncoder::SvtAv1.ffmpeg_name()) {
+        Some(AvifAnimationEncoder::SvtAv1)
+    } else if ffmpeg_listing_has_token(listing, AvifAnimationEncoder::LibAomAv1.ffmpeg_name()) {
+        Some(AvifAnimationEncoder::LibAomAv1)
+    } else {
+        None
+    }
+}
+
+fn avif_muxer_available_from_listing(listing: &str) -> bool {
+    ffmpeg_listing_has_token(listing, "avif")
+}
+
+fn parse_avifdec_sequence_frame_count(info: &str) -> std::result::Result<Option<u64>, String> {
+    for line in info.lines() {
+        let line = line.trim();
+        if let Some(start) = line.find("Image Sequence Frames: (") {
+            let after_start = &line[start + "Image Sequence Frames: (".len()..];
+            if let Some(end) = after_start.find(" expected frames") {
+                let frames = after_start[..end].trim().parse::<u64>().map_err(|error| {
+                    format!("invalid avifdec image sequence frame count: {error}")
+                })?;
+                return Ok(Some(frames));
+            }
+        }
+    }
+
+    for line in info.lines() {
+        let line = line.trim();
+        if !line.contains("timescales") {
+            continue;
+        }
+        let parts: Vec<_> = line.split_whitespace().collect();
+        for pair in parts.windows(2) {
+            if pair[1] == "frames" {
+                let count = pair[0]
+                    .parse::<u64>()
+                    .map_err(|error| format!("invalid avifdec timescale frame count: {error}"))?;
+                return Ok(Some(count));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn animated_avif_sequence_frame_count(path: &Path) -> Result<u64> {
+    let tool = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
+        .ok_or_else(|| {
+            VidQualityError::ConversionError(
+                "avifdec is required to verify animated AVIF meme output".to_string(),
+            )
+        })?;
+    let output = std::process::Command::new(tool)
+        .arg("--info")
+        .arg(path)
+        .output()
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "avifdec --info failed to start for {}: {err}",
+                path.display()
+            ))
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let info = format!("{stdout}\n{stderr}");
+    if !output.status.success() {
+        let stderr_tail = foundation::io_utils::tail_error_lines(&stderr, 5);
+        return Err(VidQualityError::ConversionError(format!(
+            "avifdec --info failed for {}: {stderr_tail}",
+            path.display()
+        )));
+    }
+    let frame_count = parse_avifdec_sequence_frame_count(&info).map_err(|error| {
+        VidQualityError::ConversionError(format!(
+            "avifdec --info reported an invalid frame count for {}: {error}",
+            path.display()
+        ))
+    })?;
+    frame_count.ok_or_else(|| {
+        VidQualityError::ConversionError(format!(
+            "avifdec --info did not report image sequence frames for {}",
+            path.display()
+        ))
+    })
+}
+
+fn validate_animated_avif_output(path: &Path) -> Result<u64> {
+    let output_size = fs::metadata(path)
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Failed to read animated AVIF output metadata for {}: {err}",
+                path.display()
+            ))
+        })?
+        .len();
+    let detected_format =
+        foundation::image::format_detect::detect_true_format(path).map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Animated AVIF output format detection failed for {}: {err}",
+                path.display()
+            ))
+        })?;
+    if output_size == 0
+        || detected_format != foundation::image::format_detect::FormatKind::Avif
+        || get_input_dimensions(path).is_err()
+        || !matches!(animated_avif_sequence_frame_count(path), Ok(count) if count > 1)
+    {
+        return Err(VidQualityError::ConversionError(format!(
+            "animated AVIF validation failed for {}",
+            path.display()
+        )));
+    }
+    Ok(output_size)
+}
+
+fn encode_animated_avif_with_ffmpeg(
+    actual_input: &Path,
+    temp_output: &Path,
+    effective_stream_idx: usize,
+    max_threads: usize,
+    vf_args: &[String],
+    encoder: AvifAnimationEncoder,
+) -> std::io::Result<std::process::Output> {
+    let mut builder = foundation::FfmpegBuilder::new();
+    builder
+        .overwrite()
+        .loglevel("error")
+        .threads(max_threads)
+        .input(actual_input)
+        .arg(foundation::constants::FFMPEG_ARG_MAP)
+        .arg(format!("0:{effective_stream_idx}"))
+        .arg(foundation::constants::FFMPEG_ARG_NO_AUDIO)
+        .arg("-sn")
+        .arg(foundation::constants::FFMPEG_ARG_CODEC_VIDEO)
+        .arg(encoder.ffmpeg_name());
+    encoder.append_quality_args(&mut builder);
+    for arg in vf_args {
+        builder.arg(arg);
+    }
+    builder.format("avif").output(temp_output);
+    builder.build().output()
+}
+
+fn encode_animated_avif_with_avifenc(
+    actual_input: &Path,
+    temp_y4m: &Path,
+    temp_output: &Path,
+    effective_stream_idx: usize,
+    max_threads: usize,
+    vf_args: &[String],
+    avifenc: &Path,
+) -> std::io::Result<std::process::Output> {
+    let mut raster = foundation::FfmpegBuilder::new();
+    raster
+        .overwrite()
+        .loglevel("error")
+        .threads(max_threads)
+        .input(actual_input)
+        .arg(foundation::constants::FFMPEG_ARG_MAP)
+        .arg(format!("0:{effective_stream_idx}"))
+        .arg(foundation::constants::FFMPEG_ARG_NO_AUDIO)
+        .arg("-sn");
+    for arg in vf_args {
+        raster.arg(arg);
+    }
+    raster
+        .pix_fmt_str("yuv420p")
+        .format("yuv4mpegpipe")
+        .output(temp_y4m);
+    let raster_output = raster.build().output()?;
+    if !raster_output.status.success() {
+        return Ok(raster_output);
+    }
+
+    std::process::Command::new(avifenc)
+        .arg("--speed")
+        .arg("0")
+        .arg("--jobs")
+        .arg("all")
+        .arg("-q")
+        .arg("100")
+        .arg(temp_y4m)
+        .arg(temp_output)
+        .output()
+}
+
+fn ffmpeg_muxers_listing() -> Result<String> {
+    let mut command = foundation::FfmpegBuilder::new().get_resolved_command();
+    let output = command
+        .arg(foundation::constants::FFMPEG_ARG_HIDE_BANNER)
+        .arg("-muxers")
+        .output()
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!("ffmpeg -muxers failed to start: {err}"))
+        })?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = stderr
+            .lines()
+            .chain(stdout.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(5)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return Err(VidQualityError::ConversionError(format!(
+            "ffmpeg -muxers failed{}",
+            if summary.is_empty() {
+                format!(" with status {}", output.status)
+            } else {
+                format!(": {summary}")
+            }
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn ensure_avif_animation_ffmpeg_support() -> Result<AvifAnimationEncoder> {
+    let muxers = ffmpeg_muxers_listing()?;
+    if !avif_muxer_available_from_listing(&muxers) {
+        return Err(VidQualityError::ConversionError(
+            "ffmpeg does not expose the AVIF muxer required for animated AVIF meme mode"
+                .to_string(),
+        ));
+    }
+
+    let encoders = foundation::FfmpegBuilder::list_encoders().map_err(|err| {
+        VidQualityError::ConversionError(format!("ffmpeg -encoders failed: {err}"))
+    })?;
+    select_avif_animation_encoder_from_listing(&encoders).ok_or_else(|| {
+        VidQualityError::ConversionError(
+            "ffmpeg does not expose libsvtav1 or libaom-av1 for animated AVIF meme mode"
+                .to_string(),
+        )
+    })
+}
+
 fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
     if let Err(e) = fs::remove_file(temp_output)
         && e.kind() != std::io::ErrorKind::NotFound
@@ -2200,6 +2484,303 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
     }
 }
 
+/// Convert animated/video input to AVIF for meme mode without loop-intent filtering.
+///
+/// # Errors
+/// Returns an error if encoding fails.
+///
+/// # Panics
+/// Panics if the tolerance ratio cannot be converted to a finite rational number.
+pub fn convert_to_avif_meme(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
+    if !options.force() && is_already_processed(input) {
+        return skipped_already_processed(input, options);
+    }
+
+    if is_static_animated_image(input)? {
+        if options.verbose() {
+            log_detail!(
+                "   Detected static animated image (1 frame), ignoring outside vid domain: {}",
+                input.display(),
+            );
+        }
+        return ignored_static_animated(input);
+    }
+
+    let input_size = fs::metadata(input)?.len();
+
+    let prep = match prepare_animated_raster_for_encode(
+        input,
+        options,
+        &format!("meme avif {}", input.display()),
+    ) {
+        PrepareAnimatedRasterOutcome::Ready(p) => p,
+        PrepareAnimatedRasterOutcome::Early(task) => return Ok(task),
+    };
+    let input_ext = prep.input_ext;
+    let actual_input = prep.actual_input;
+    let temp_apng_file = prep.temp_apng;
+    let preprocessed_to_apng = temp_apng_file.is_some();
+
+    let output = get_output_path(input, "avif", options)?;
+
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if output.exists() && !options.force() {
+        return skipped_output_exists(input, &output, input_size);
+    }
+
+    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
+    let _temp_output_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
+
+    let (width, height) = get_input_dimensions(&actual_input)?;
+    let has_alpha = input_ext == foundation::constants::EXT_WEBP
+        || input_ext == foundation::constants::EXT_GIF
+        || input_ext == foundation::constants::EXT_JXL
+        || input_ext == foundation::constants::EXT_APNG
+        || input_ext == foundation::constants::EXT_PNG
+        || (input_ext == foundation::constants::EXT_AVIF && preprocessed_to_apng);
+    let mut vf_args = foundation::get_ffmpeg_dimension_args(width, height, has_alpha);
+
+    let color_info = foundation::ffprobe_json::extract_color_info(input);
+    let targeted_info =
+        foundation::hdr::infer_bt709_if_modern(color_info, width, height, &input_ext);
+    vf_args.extend(foundation::hdr::color_info_to_ffmpeg_args(&targeted_info));
+
+    let max_threads = get_max_threads(options);
+    let effective_stream_idx = if input_ext == foundation::constants::EXT_JXL
+        || input_ext == foundation::constants::EXT_WEBP
+        || preprocessed_to_apng
+    {
+        0
+    } else {
+        foundation::probe_video(input)
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!(
+                    "ffprobe failed to determine stream index for {} (refusing to silently default to stream 0): {e}",
+                    input.display()
+                ))
+            })?
+            .stream_index
+    };
+
+    let can_use_official_avifenc = !has_alpha;
+    let result = if can_use_official_avifenc {
+        let temp_y4m = temp_output.with_extension("mfb-y4m");
+        let _temp_y4m_guard = foundation::conversion::TempOutputGuard::new(temp_y4m.clone());
+        match foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFENC) {
+            Some(avifenc) => match encode_animated_avif_with_avifenc(
+                &actual_input,
+                &temp_y4m,
+                &temp_output,
+                effective_stream_idx,
+                max_threads,
+                &vf_args,
+                &avifenc,
+            ) {
+                Ok(output)
+                    if output.status.success()
+                        && validate_animated_avif_output(&temp_output).is_ok() =>
+                {
+                    log_detail!(
+                        "Animated AVIF Meme Mode: used official avifenc frame-sequence encoder for {}",
+                        input.display()
+                    );
+                    Ok(output)
+                }
+                Ok(_output) => {
+                    cleanup_temp_output(&temp_output, input);
+                    log_detail!(
+                        "Animated AVIF Meme Mode: avifenc frame-sequence attempt was unsuitable; trying FFmpeg fallback for {}",
+                        input.display()
+                    );
+                    match ensure_avif_animation_ffmpeg_support() {
+                        Ok(encoder) => encode_animated_avif_with_ffmpeg(
+                            &actual_input,
+                            &temp_output,
+                            effective_stream_idx,
+                            max_threads,
+                            &vf_args,
+                            encoder,
+                        ),
+                        Err(err) => Err(std::io::Error::other(err.to_string())),
+                    }
+                }
+                Err(err) => {
+                    cleanup_temp_output(&temp_output, input);
+                    log_detail!(
+                        "Animated AVIF Meme Mode: avifenc launch failed ({err}); trying FFmpeg fallback for {}",
+                        input.display()
+                    );
+                    match ensure_avif_animation_ffmpeg_support() {
+                        Ok(encoder) => encode_animated_avif_with_ffmpeg(
+                            &actual_input,
+                            &temp_output,
+                            effective_stream_idx,
+                            max_threads,
+                            &vf_args,
+                            encoder,
+                        ),
+                        Err(err) => Err(std::io::Error::other(err.to_string())),
+                    }
+                }
+            },
+            None => match ensure_avif_animation_ffmpeg_support() {
+                Ok(encoder) => encode_animated_avif_with_ffmpeg(
+                    &actual_input,
+                    &temp_output,
+                    effective_stream_idx,
+                    max_threads,
+                    &vf_args,
+                    encoder,
+                ),
+                Err(err) => Err(std::io::Error::other(err.to_string())),
+            },
+        }
+    } else {
+        log_detail!(
+            "Animated AVIF Meme Mode: preserving alpha with FFmpeg AV1 encoder for {}",
+            input.display()
+        );
+        match ensure_avif_animation_ffmpeg_support() {
+            Ok(encoder) => encode_animated_avif_with_ffmpeg(
+                &actual_input,
+                &temp_output,
+                effective_stream_idx,
+                max_threads,
+                &vf_args,
+                encoder,
+            ),
+            Err(err) => Err(std::io::Error::other(err.to_string())),
+        }
+    };
+    drop(temp_apng_file);
+
+    match result {
+        Ok(output_cmd) if output_cmd.status.success() && temp_output.exists() => {
+            let output_size = fs::metadata(&temp_output)
+                .map_err(|e| {
+                    cleanup_temp_output(&temp_output, input);
+                    VidQualityError::ConversionError(format!(
+                        "Failed to read AVIF meme output metadata for {}: {e}",
+                        temp_output.display()
+                    ))
+                })?
+                .len();
+
+            let detected_format = foundation::image::format_detect::detect_true_format(
+                &temp_output,
+            )
+            .map_err(|err| {
+                cleanup_temp_output(&temp_output, input);
+                VidQualityError::ConversionError(format!(
+                    "AVIF meme output format detection failed for {}: {err}",
+                    temp_output.display()
+                ))
+            })?;
+            let dimensions_ok = get_input_dimensions(&temp_output).is_ok();
+            let sequence_frame_count = animated_avif_sequence_frame_count(&temp_output);
+            let sequence_ok = matches!(sequence_frame_count.as_ref(), Ok(count) if *count > 1);
+            if output_size == 0
+                || detected_format != foundation::image::format_detect::FormatKind::Avif
+                || !dimensions_ok
+                || !sequence_ok
+            {
+                let sequence_detail = match &sequence_frame_count {
+                    Ok(count) => format!("{count} frame(s)"),
+                    Err(err) => err.to_string(),
+                };
+                cleanup_temp_output(&temp_output, input);
+                foundation::media_conversion_gate::delivery_api_path_fallback_audit(
+                    "avif_meme_invalid_output",
+                    input,
+                    format!(
+                        "AVIF meme output empty, unreadable, wrong format ({detected_format:?}), or not animated ({sequence_detail}); copying original"
+                    ),
+                );
+                return failed_with_fallback(
+                    input,
+                    options,
+                    "AVIF meme output invalid or static; original copied",
+                    "avif_meme_invalid_output",
+                );
+            }
+
+            if !foundation::conversion::commit_temp_to_output_with_metadata(
+                &temp_output,
+                &output,
+                options.force(),
+                Some(input),
+            )? {
+                return skipped_output_exists(input, &output, input_size);
+            }
+
+            mark_as_processed(input);
+
+            if options.should_delete_original()
+                && let Err(e) = foundation::conversion::safe_delete_original(
+                    input,
+                    &output,
+                    foundation::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                )
+            {
+                foundation::media_conversion_gate::delivery_api_path_fallback_audit(
+                    "delete_original_failed",
+                    input,
+                    format!("after AVIF meme mode, output {}: {e}", output.display()),
+                );
+            }
+
+            Ok(TaskResult::success(
+                input,
+                &output,
+                input_size,
+                output_size,
+                "AVIF",
+                Some("Meme Mode"),
+                options.quality_label.as_deref(),
+            ))
+        }
+        Ok(output_cmd) => {
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            cleanup_temp_output(&temp_output, input);
+            foundation::media_conversion_gate::delivery_api_path_fallback_audit(
+                "avif_meme_encode_failed",
+                input,
+                format!(
+                    "ffmpeg AVIF meme encode failed; copying original ({})",
+                    foundation::io_utils::tail_error_lines(&stderr, 5)
+                ),
+            );
+            failed_with_fallback_owned(
+                input,
+                options,
+                format!(
+                    "AVIF meme encode failed; original copied ({})",
+                    foundation::io_utils::tail_error_lines(&stderr, 5)
+                ),
+                "avif_meme_encode_failed".to_string(),
+            )
+        }
+        Err(err) => {
+            cleanup_temp_output(&temp_output, input);
+            foundation::media_conversion_gate::delivery_api_path_fallback_audit(
+                "avif_meme_encode_start_failed",
+                input,
+                format!("ffmpeg AVIF meme encode failed to start; copying original: {err}"),
+            );
+            failed_with_fallback_owned(
+                input,
+                options,
+                format!("AVIF meme encode failed to start; original copied ({err})"),
+                "avif_meme_encode_start_failed".to_string(),
+            )
+        }
+    }
+}
+
 /// Convert to GIF with Apple compatibility.
 ///
 /// # Errors
@@ -2589,6 +3170,67 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::Builder;
+
+    #[test]
+    fn avif_animation_encoder_prefers_svt_then_aom() {
+        let listing = "
+ V....D libaom-av1           libaom AV1
+ V....D libsvtav1            SVT-AV1
+";
+
+        assert_eq!(
+            select_avif_animation_encoder_from_listing(listing),
+            Some(AvifAnimationEncoder::SvtAv1)
+        );
+    }
+
+    #[test]
+    fn avif_animation_encoder_falls_back_to_libaom() {
+        let listing = "
+ V....D libaom-av1           libaom AV1
+";
+
+        assert_eq!(
+            select_avif_animation_encoder_from_listing(listing),
+            Some(AvifAnimationEncoder::LibAomAv1)
+        );
+    }
+
+    #[test]
+    fn avif_animation_muxer_parser_requires_exact_token() {
+        assert!(avif_muxer_available_from_listing(" E avif           AVIF"));
+        assert!(!avif_muxer_available_from_listing(
+            " E notavif        Different muxer"
+        ));
+    }
+
+    #[test]
+    fn avif_animation_frame_count_parser_reads_sequence_frames() {
+        let info = " * Image Sequence Frames: (12 expected frames)";
+
+        assert_eq!(parse_avifdec_sequence_frame_count(info), Ok(Some(12)));
+    }
+
+    #[test]
+    fn avif_animation_frame_count_parser_reads_timescale_summary() {
+        let info = " * 12288 timescales per second, 2.00 seconds (24576 timescales), 12 frames";
+
+        assert_eq!(parse_avifdec_sequence_frame_count(info), Ok(Some(12)));
+    }
+
+    #[test]
+    fn avif_animation_frame_count_parser_rejects_still_info() {
+        let info = "Image decoded: still.avif\n * Resolution     : 64x64";
+
+        assert_eq!(parse_avifdec_sequence_frame_count(info), Ok(None));
+    }
+
+    #[test]
+    fn avif_animation_frame_count_parser_rejects_malformed_frame_count() {
+        let info = " * Image Sequence Frames: (not-a-count expected frames)";
+
+        assert!(parse_avifdec_sequence_frame_count(info).is_err());
+    }
 
     #[test]
     fn test_alpha_aux_detection_rejects_poster_plus_animation_avif() {

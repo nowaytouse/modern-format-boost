@@ -272,7 +272,10 @@ fn project_root() -> Result<PathBuf> {
 }
 
 fn run_ffmpeg(args: &[&str], output: &Path) -> bool {
-    let status = Command::new("ffmpeg")
+    let Some(ffmpeg) = foundation::common_utils::resolve_tool_path("ffmpeg") else {
+        return false;
+    };
+    let status = Command::new(ffmpeg)
         .args(args)
         .args(["-y"])
         .arg(output)

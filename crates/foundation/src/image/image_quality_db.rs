@@ -2298,6 +2298,23 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn image_quality_heuristic_lookup_is_disabled_without_truthy_opt_in() {
+        let _guard =
+            crate::common_utils::EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let analysis = ImageAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 500_000,
+            format: "PNG".to_string(),
+            is_lossless: true,
+            ..ImageAnalysis::default()
+        };
+
+        assert!(lookup_image_quality_with_path(&analysis, None).is_none());
+    }
+
+    #[test]
     fn heuristic_branches_do_not_populate_knn_score_column() {
         assert!(StaticQualityDbBranch::CorpusImmatureHeuristic.is_heuristic_only_branch());
         assert!(StaticQualityDbBranch::DbUnavailableHeuristic.is_heuristic_only_branch());

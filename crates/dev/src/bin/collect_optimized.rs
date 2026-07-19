@@ -97,7 +97,13 @@ fn append_plain_audit_line(path: &Path, line: &str) -> Result<()> {
 /// Returns `(Some(codec), None)` on success or `(None, Some(error))` on
 /// failure.
 fn probe_video_codec(path: &Path) -> (Option<String>, Option<String>) {
-    let mut child = match Command::new("ffprobe")
+    let Some(ffprobe) = foundation::common_utils::resolve_tool_path("ffprobe") else {
+        return (
+            None,
+            Some("ffprobe is not installed or failed its runtime health check".to_owned()),
+        );
+    };
+    let mut child = match Command::new(ffprobe)
         .args([
             "-v",
             "error",

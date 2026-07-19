@@ -92,9 +92,17 @@ fn creates_heic_hq_live_photo_with_metadata() -> Result<()> {
 #[test]
 fn fails_when_required_dependency_is_missing() -> Result<()> {
     let fixture = Fixture::new()?;
-    fs::remove_file(fixture.bin_dir.join("makelive"))?;
+    let makelive = fixture.bin_dir.join("makelive");
+    fs::remove_file(&makelive)?;
 
-    let out = run_live_photo(&fixture, &[fixture.input.to_str().context("utf8 input")?])?;
+    let out = run_live_photo_with_env(
+        &fixture,
+        &[fixture.input.to_str().context("utf8 input")?],
+        &[(
+            "MFB_TOOL_MAKELIVE",
+            makelive.to_str().context("utf8 makelive")?,
+        )],
+    )?;
     assert!(!out.status.success());
     assert!(stdout(&out).contains("Missing required dependencies: makelive"));
 

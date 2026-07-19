@@ -1219,7 +1219,9 @@ mod tests {
             .unwrap();
 
         // 2. Create a valid destination MP4 using FFmpeg
-        let status = std::process::Command::new("ffmpeg")
+        let ffmpeg = crate::common_utils::resolve_tool_path("ffmpeg")
+            .expect("ffmpeg must pass the shared runtime health check for this test");
+        let status = std::process::Command::new(ffmpeg)
             .arg("-y")
             .arg("-f")
             .arg("lavfi")

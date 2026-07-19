@@ -6,8 +6,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dev::infra::logger::setup_logger;
 use dev::infra::ui_tokens::pick_symbol;
-use foundation::tracing::{debug, error, info, warn};
-use std::collections::HashSet;
+use foundation::tracing::{debug, error, info};
 use std::ffi::OsString;
 use std::fs;
 use std::io::IsTerminal;
@@ -42,6 +41,18 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
     "drag_and_drop_processor",
 ];
 const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
+const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
+const GUI_SOURCE_EXTENSIONS: &[&str] = &[
+    "css", "html", "ico", "js", "json", "lock", "png", "svg", "toml", "ts", "tsx", "vue",
+];
+const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "coverage",
+    "__pycache__",
+];
 
 // ANSI Colors
 const RED: &str = "\x1b[38;5;196m";
@@ -441,66 +452,73 @@ fn toolchain_env(toolchain: &RustToolchain) -> Vec<(&'static str, OsString)> {
     env
 }
 
-fn get_newest_source_mtime(project_root: &Path, project_dir: &str) -> f64 {
-    let mut newest = 0.0;
-    let src_extensions: HashSet<&str> = ["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"]
-        .iter()
-        .copied()
-        .collect();
+fn is_ignored_source_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| IGNORED_SOURCE_DIRECTORIES.contains(&name))
+}
 
-    let mut check_file = |p: &Path| {
-        let m = get_mtime(p);
-        if m > newest {
-            newest = m;
-        }
-    };
-
-    // 1. Scan the project's own directory
-    let proj_path = project_root.join(project_dir);
-    if proj_path.is_dir() {
-        for entry in walkdir::WalkDir::new(&proj_path) {
-            match entry {
-                Ok(entry) => {
-                    let path = entry.path();
-                    if path.is_file()
-                        && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                        && src_extensions.contains(ext)
-                    {
-                        check_file(path);
-                    }
-                }
-                Err(_err) => {}
-            }
-        }
-        check_file(&proj_path.join("Cargo.toml"));
+fn newest_source_mtime_in_dir(dir: &Path, extensions: &[&str]) -> f64 {
+    if !dir.is_dir() {
+        return 0.0;
     }
 
-    // 2. Scan foundation (global dependency)
-    let shared_path = project_root.join("crates/foundation");
-    if shared_path.is_dir() && project_dir != "crates/foundation" {
-        for entry in walkdir::WalkDir::new(&shared_path) {
-            match entry {
-                Ok(entry) => {
-                    let path = entry.path();
-                    if path.is_file()
-                        && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                        && src_extensions.contains(ext)
-                    {
-                        check_file(path);
-                    }
-                }
-                Err(_err) => {}
-            }
+    let mut newest = get_mtime(&dir.join("Cargo.toml"));
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir() || !is_ignored_source_directory(entry.path())
+        })
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extensions.contains(&extension))
+        {
+            newest = newest.max(get_mtime(path));
         }
-        check_file(&shared_path.join("Cargo.toml"));
     }
-
-    // 3. Scan workspace configuration
-    check_file(&project_root.join("Cargo.toml"));
-    check_file(&project_root.join("Cargo.lock"));
-    check_file(&project_root.join("rust-toolchain.toml"));
-
     newest
+}
+
+fn direct_workspace_dependencies(project_dir: &str) -> &'static [&'static str] {
+    match project_dir {
+        "crates/img" => &["crates/vid", "crates/foundation"],
+        "crates/vid" => &["crates/foundation"],
+        "crates/dev" => &["crates/img", "crates/vid", "crates/foundation"],
+        _ => &[],
+    }
+}
+
+fn get_newest_source_mtime(project_root: &Path, project_dir: &str) -> f64 {
+    let mut newest =
+        newest_source_mtime_in_dir(&project_root.join(project_dir), RUST_SOURCE_EXTENSIONS);
+    for dependency in direct_workspace_dependencies(project_dir) {
+        newest = newest.max(newest_source_mtime_in_dir(
+            &project_root.join(dependency),
+            RUST_SOURCE_EXTENSIONS,
+        ));
+    }
+    for config in ["Cargo.toml", "Cargo.lock", RUST_TOOLCHAIN_FILE] {
+        newest = newest.max(get_mtime(&project_root.join(config)));
+    }
+    newest
+}
+
+fn gui_needs_rebuild(project_root: &Path) -> bool {
+    let mut newest_input = get_newest_source_mtime(project_root, "crates/dev");
+    newest_input = newest_input.max(newest_source_mtime_in_dir(
+        &vue_dir(project_root),
+        GUI_SOURCE_EXTENSIONS,
+    ));
+    let bundle_binary = tauri_app_bundle_path(project_root)
+        .join("Contents")
+        .join("MacOS")
+        .join("Modern Format Boost");
+    !bundle_binary.is_file() || newest_input > get_mtime(&bundle_binary)
 }
 
 fn clean_old_binaries(project_root: &Path, targets: &[&str], style: Style) -> Result<i32> {
@@ -599,18 +617,9 @@ fn decide_build_action(
 fn build_project(
     project_root: &Path,
     project_dir: &str,
-    retry_count: i32,
     args: &Args,
     style: Style,
 ) -> Result<bool> {
-    if args.force && retry_count == 0 {
-        let pkg = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
-        let _ = Command::new("cargo")
-            .args(["clean", "-p", pkg, "--release"])
-            .current_dir(project_root)
-            .status();
-    }
-
     let compile_start_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs_f64(),
         Err(_err) => 0.0,
@@ -660,13 +669,9 @@ fn build_project(
         return Ok(false);
     }
 
-    // Always verify timestamps: a mismatched mtime means Cargo reused a cached
-    // binary without recompiling, which would silently deploy stale code.
-    // For multi-binary crates, Cargo might rebuild only the changed binaries.
-    // We must check if AT LEAST ONE expected binary was successfully updated.
+    // For non-forced builds, an unchanged output after a source-triggered build
+    // is suspicious. A forced build is also allowed to reuse Cargo's cache.
     {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-
         let expected_binaries = match project_dir {
             "crates/img" => vec!["img"],
             "crates/vid" => vec!["vid"],
@@ -708,47 +713,23 @@ fn build_project(
             return Ok(false);
         }
 
-        if !any_updated {
-            if retry_count < 2 {
-                warn!(
-                    "Timestamp verification failed for {project_dir}. Retrying ({}/2).",
-                    retry_count + 1
-                );
-                println!(
-                    "{}Retry {}/2: Rebuilding with clean...{}",
-                    style.yellow,
-                    retry_count + 1,
-                    style.reset
-                );
-                let pkg = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
-                warn!(
-                    "[AUDIT] DESTRUCTIVE ACTION: cargo clean -p {} --release",
-                    pkg
-                );
-                let _ = Command::new("cargo")
-                    .args(["clean", "-p", pkg, "--release"])
-                    .current_dir(project_root)
-                    .status();
-                return build_project(project_root, project_dir, retry_count + 1, args, style);
-            } else {
-                println!(
-                    "{}FAILURE: Timestamp verification failed after 2 retries{}",
-                    style.red, style.reset
-                );
-                return Ok(false);
-            }
-        } else {
-            // Timestamp verified — print confirmation matching Python smart_build output.
-            let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
-                .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                .into();
-            let mtime_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+        if !any_updated && !args.force {
             println!(
-                "   {}\u{2713} timestamp OK{}  {}{}{}",
-                style.green, style.reset, style.dim, mtime_str, style.reset
+                "{}FAILURE: Cargo returned success but did not refresh an expected binary{}",
+                style.red, style.reset
             );
+            return Ok(false);
         }
+
+        let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .into();
+        let mtime_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+        println!(
+            "   {}\u{2713} outputs ready{}  {}{}{}",
+            style.green, style.reset, style.dim, mtime_str, style.reset
+        );
     }
 
     Ok(true)
@@ -1024,6 +1005,24 @@ fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()
     Ok(())
 }
 
+fn bundle_file_needs_sync(src: &Path, dest: &Path) -> bool {
+    let Ok(src_meta) = fs::metadata(src) else {
+        return false;
+    };
+    let Ok(dest_meta) = fs::metadata(dest) else {
+        return true;
+    };
+
+    if src_meta.len() != dest_meta.len() {
+        return true;
+    }
+
+    match (src_meta.modified(), dest_meta.modified()) {
+        (Ok(src_modified), Ok(dest_modified)) => src_modified > dest_modified,
+        _ => true,
+    }
+}
+
 fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
     let app_res_dir = project_root
         .join("Modern Format Boost.app")
@@ -1039,21 +1038,35 @@ fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
     );
     let target_release = project_root.join("target").join("release");
 
+    let mut changed_bins = Vec::new();
     for bin in APP_BUNDLE_RESOURCE_BINARIES {
         let src = target_release.join(bin);
         if src.is_file() {
             let dest = app_res_dir.join(bin);
-            let _ = fs::copy(&src, &dest);
+            if bundle_file_needs_sync(&src, &dest) {
+                fs::copy(&src, &dest)
+                    .with_context(|| format!("sync {} to App bundle", src.display()))?;
+                changed_bins.push(*bin);
+            }
         }
     }
-    println!("{}App Bundle updated.{}", style.green, style.reset);
+    if changed_bins.is_empty() {
+        println!("{}App Bundle already current.{}", style.dim, style.reset);
+        return Ok(());
+    }
+    println!(
+        "{}App Bundle updated ({} binary file(s)).{}",
+        style.green,
+        changed_bins.len(),
+        style.reset
+    );
 
-    sign_app_bundle(project_root, style)?;
+    sign_app_bundle(project_root, style, &changed_bins)?;
 
     Ok(())
 }
 
-fn sign_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
+fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) -> Result<()> {
     let app_bundle = project_root.join("Modern Format Boost.app");
     if !app_bundle.is_dir() {
         return Ok(());
@@ -1075,7 +1088,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
         .join("src-tauri")
         .join("entitlements.plist");
     let app_resources = app_bundle.join("Contents").join("Resources");
-    for bin in APP_BUNDLE_RESOURCE_BINARIES {
+    for bin in changed_bins {
         let bundled = app_resources.join(bin);
         if bundled.is_file() {
             let mut command = Command::new("codesign");
@@ -1096,7 +1109,6 @@ fn sign_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
     let mut command = Command::new("codesign");
     command
         .arg("--force")
-        .arg("--deep")
         .arg("--sign")
         .arg(app_bundle_codesign_identity());
     if entitlements.is_file() {
@@ -1205,21 +1217,36 @@ fn bin_name_to_crate_dir(name: &str) -> Result<&'static str> {
     }
 }
 
-fn terminate_running_instances(style: &Style) -> Result<()> {
-    println!(
-        "{}{}{} Checking and terminating running applications and terminal processes...{}",
-        style.yellow,
-        style.bold,
-        pick_symbol("⚠️", "[PROCESS]"),
-        style.reset
-    );
+fn process_cmd_joined_lower(process: &sysinfo::Process) -> String {
+    process
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-    let mut s = sysinfo::System::new_all();
-    s.refresh_all();
+fn process_path_is_under_project(path: Option<&Path>, project_root: &Path) -> bool {
+    path.is_some_and(|path| path.starts_with(project_root))
+}
 
+fn command_mentions_project(cmd_joined: &str, project_root: &Path) -> bool {
+    let root = project_root.to_string_lossy().to_lowercase();
+    cmd_joined.contains(root.as_str())
+}
+
+fn process_belongs_to_project(
+    process: &sysinfo::Process,
+    project_root: &Path,
+    cmd_joined: &str,
+) -> bool {
+    process_path_is_under_project(process.exe(), project_root)
+        || process_path_is_under_project(process.cwd(), project_root)
+        || command_mentions_project(cmd_joined, project_root)
+}
+
+fn process_name_matches_project_tool(name: &str, cmd_joined: &str) -> bool {
     let target_names = [
-        "Modern Format Boost",
-        "mfb_launcher",
         "img",
         "vid",
         "verify",
@@ -1230,23 +1257,63 @@ fn terminate_running_instances(style: &Style) -> Result<()> {
         "icloud_import",
         "drag_and_drop_processor",
     ];
+    let name_lower = name.to_lowercase();
+    let is_project_vite_node =
+        name == "node" && (cmd_joined.contains("vite") || cmd_joined.contains("tauri"));
+    target_names.contains(&name) || name_lower.contains("vite") || is_project_vite_node
+}
+
+fn should_terminate_process_identity(
+    name: &str,
+    cmd_joined: &str,
+    belongs_to_project: bool,
+) -> bool {
+    if name == "Modern Format Boost"
+        || name.contains("Modern Format Boost")
+        || name == "mfb_launcher"
+    {
+        return true;
+    }
+    belongs_to_project && process_name_matches_project_tool(name, cmd_joined)
+}
+
+fn should_terminate_running_instance(process: &sysinfo::Process, project_root: &Path) -> bool {
+    let name = process.name().to_string_lossy();
+    let cmd_joined = process_cmd_joined_lower(process);
+    should_terminate_process_identity(
+        &name,
+        &cmd_joined,
+        process_belongs_to_project(process, project_root, &cmd_joined),
+    )
+}
+
+fn terminate_running_instances(style: &Style, project_root: &Path) -> Result<()> {
+    println!(
+        "{}{}{} Checking and terminating project-scoped running applications and terminal processes...{}",
+        style.yellow,
+        style.bold,
+        pick_symbol("⚠️", "[PROCESS]"),
+        style.reset
+    );
+
+    let mut s = sysinfo::System::new_all();
+    s.refresh_all();
+    let project_root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_err| project_root.to_path_buf());
 
     let mut terminated_pids = Vec::new();
     let current_pid = std::process::id();
 
     for (pid, process) in s.processes() {
         let pid_str = pid.to_string();
-        let pid_val = pid_str.parse::<u32>().unwrap_or(0);
+        let pid_val = pid_str.parse::<u32>().unwrap_or_default();
         if pid_val == current_pid {
             continue;
         }
 
-        let name = process.name().to_string_lossy();
-        let matches = target_names.iter().any(|&target| {
-            name == target || (target == "Modern Format Boost" && name.contains("Modern Format Boost"))
-        });
-
-        if matches {
+        if should_terminate_running_instance(process, &project_root) {
+            let name = process.name().to_string_lossy();
             println!(
                 "   {} Interrupted running process: {} (PID {})",
                 pick_symbol("⊖", "[-]"),
@@ -1271,7 +1338,7 @@ fn terminate_running_instances(style: &Style) -> Result<()> {
                     "   {} Force terminating remaining process: {} (PID {})",
                     pick_symbol("💥", "[!]"),
                     name,
-                    pid.to_string()
+                    pid
                 );
                 process.kill_with(sysinfo::Signal::Kill);
             }
@@ -1289,9 +1356,8 @@ fn main() -> Result<()> {
 
     // Interrupt running GUI app and child binaries if forcing full build
     if args.all && args.force {
-        terminate_running_instances(&style)?;
+        terminate_running_instances(&style, &project_root)?;
     }
-
 
     // --patch implies --force + --rust-only + --verbose
     if args.patch {
@@ -1393,12 +1459,10 @@ fn main() -> Result<()> {
         style.reset
     );
 
-    // Always remove stale binaries left over from previous build locations.
-    let targets = APP_BUNDLE_RESOURCE_BINARIES.to_vec();
-    clean_old_binaries(&project_root, &targets, style)?;
-
     if args.clean {
         println!("{}Cleaning build artifacts...{}", style.yellow, style.reset);
+        let targets = APP_BUNDLE_RESOURCE_BINARIES.to_vec();
+        clean_old_binaries(&project_root, &targets, style)?;
         for proj in &projects_to_build {
             let pkg = proj.strip_prefix("crates/").unwrap_or(proj);
             let _ = Command::new("cargo")
@@ -1414,9 +1478,14 @@ fn main() -> Result<()> {
         clean_with_kondo(&project_root, style)?;
     }
 
-    // GUI build: triggered by --gui flag or --all, but not when --rust-only / --patch
+    // An explicit --gui or --force is a request to rebuild. --all otherwise keeps
+    // the GUI incremental just like the Rust binaries.
     if (args.gui || args.all) && !args.rust_only {
-        build_and_sync_gui(&project_root, &style)?;
+        if args.gui || args.force || gui_needs_rebuild(&project_root) {
+            build_and_sync_gui(&project_root, &style)?;
+        } else {
+            println!("[OK] GUI bundle up-to-date (skipped)");
+        }
     }
 
     let mut rebuilt = 0;
@@ -1442,7 +1511,7 @@ fn main() -> Result<()> {
                 "[BUILD] {}{}{} {}({}){}",
                 style.bold, proj, style.reset, style.dim, reason, style.reset
             );
-            if build_project(&project_root, proj, 0, &args, style)? {
+            if build_project(&project_root, proj, &args, style)? {
                 println!("[OK] {}{}{} - compiled", style.bold, proj, style.reset);
                 rebuilt += 1;
             } else {
@@ -1532,6 +1601,42 @@ mod tests {
     }
 
     #[test]
+    fn test_img_source_inputs_include_direct_workspace_dependencies() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let binary = root.join("target/release/img");
+        fs::create_dir_all(binary.parent().unwrap())?;
+        fs::write(&binary, b"img")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let dependency = root.join("crates/vid/src/lib.rs");
+        fs::create_dir_all(dependency.parent().unwrap())?;
+        fs::write(dependency, "pub fn changed() {}")?;
+
+        let (action, reason) = decide_build_action(root, "crates/img", "img", false);
+        assert_eq!((action, reason), ("rebuild", "source-newer"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_source_scan_skips_node_modules() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let binary = root.join("target/release/verify");
+        fs::create_dir_all(binary.parent().unwrap())?;
+        fs::write(&binary, b"verify")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let ignored = root.join("crates/dev/src/vue/node_modules/pkg/index.js");
+        fs::create_dir_all(ignored.parent().unwrap())?;
+        fs::write(ignored, "export default 'ignored';")?;
+
+        let (action, reason) = decide_build_action(root, "crates/dev", "verify", false);
+        assert_eq!((action, reason), ("skip", ""));
+        Ok(())
+    }
+
+    #[test]
     fn test_toolchain_name_from_cargo_path_matches_python_helper() {
         let cargo = Path::new("/tmp/rustup/toolchains/nightly-test/bin/cargo");
         assert_eq!(
@@ -1557,6 +1662,22 @@ mod tests {
     }
 
     #[test]
+    fn test_bundle_file_needs_sync_detects_missing_and_current_files() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let src = tempdir.path().join("source");
+        let dest = tempdir.path().join("dest");
+        fs::write(&src, b"compiled binary")?;
+
+        assert!(bundle_file_needs_sync(&src, &dest));
+        fs::copy(&src, &dest)?;
+        assert!(!bundle_file_needs_sync(&src, &dest));
+
+        fs::write(&src, b"new compiled binary")?;
+        assert!(bundle_file_needs_sync(&src, &dest));
+        Ok(())
+    }
+
+    #[test]
     fn test_tauri_app_bundle_path_matches_workspace_root_target() {
         let project_root = Path::new("/tmp/mfb");
         assert_eq!(
@@ -1573,6 +1694,26 @@ mod tests {
     #[test]
     fn test_vue_update_scripts_validate_dependency_updates() {
         assert_eq!(vue_update_script_names(), &["deps:update", "deps:check"]);
+    }
+
+    #[test]
+    fn test_project_process_detection_requires_project_scope_for_generic_tools() {
+        let project_root = Path::new("/work/modern_format_boost");
+
+        assert!(should_terminate_process_identity(
+            "node",
+            "/work/modern_format_boost/crates/dev/src/vue/node_modules/.bin/vite",
+            command_mentions_project(
+                "/work/modern_format_boost/crates/dev/src/vue/node_modules/.bin/vite",
+                project_root
+            ),
+        ));
+        assert!(!should_terminate_process_identity(
+            "node",
+            "/other/project/node_modules/.bin/vite",
+            command_mentions_project("/other/project/node_modules/.bin/vite", project_root),
+        ));
+        assert!(!should_terminate_process_identity("img", "", false));
     }
 
     #[test]

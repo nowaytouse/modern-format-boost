@@ -3538,9 +3538,10 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             Err(e) => {
                 if crate::algorithm_runtime::image_quality_heuristic_enabled() {
                     return Err(e);
-                } else {
-                    tracing::debug!("Heuristic quality estimation failed (skipped under fallback-disabled): {e}");
                 }
+                tracing::debug!(
+                    "Heuristic quality estimation failed (skipped under fallback-disabled): {e}"
+                );
             }
         }
     }

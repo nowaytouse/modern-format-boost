@@ -115,7 +115,7 @@ fn create_live_photo(args: &Args) -> Result<()> {
     if inject_metadata {
         println!("\nInjecting metadata using makelive...");
         match run_quiet(
-            Command::new("makelive")
+            Command::new(command_path("makelive")?)
                 .args(["-p", "-v"])
                 .arg(&img_path)
                 .arg(&mov_path),
@@ -174,19 +174,18 @@ fn check_dependencies(needs_heif: bool, needs_makelive: bool) -> Result<()> {
 }
 
 fn command_exists(program: &str) -> Result<()> {
-    let path = std::env::var_os("PATH").context("PATH is not set")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(program);
-        if is_executable(&candidate) {
-            return Ok(());
-        }
-    }
-    bail!("{program} not found")
+    command_path(program).map(|_| ())
+}
+
+fn command_path(program: &str) -> Result<PathBuf> {
+    foundation::common_utils::resolve_tool_path(program)
+        .with_context(|| format!("{program} was not found or failed its runtime health check"))
 }
 
 fn get_video_info(video_path: &Path) -> Result<(f64, String)> {
+    let ffprobe = command_path("ffprobe")?;
     let duration = command_output(
-        Command::new("ffprobe")
+        Command::new(&ffprobe)
             .args([
                 "-v",
                 "error",
@@ -202,7 +201,7 @@ fn get_video_info(video_path: &Path) -> Result<(f64, String)> {
     .context("parse ffprobe duration")?;
 
     let resolution = command_output(
-        Command::new("ffprobe")
+        Command::new(ffprobe)
             .args([
                 "-v",
                 "error",
@@ -230,14 +229,14 @@ fn extract_heic_cover(
 ) -> Result<()> {
     let temp_png = output_dir.join(format!("{base_name}_temp.png"));
     run_quiet(
-        Command::new("ffmpeg")
+        Command::new(command_path("ffmpeg")?)
             .args(["-y", "-i"])
             .arg(video_path)
             .args(["-ss", "00:00:01", "-vframes", "1", "-pix_fmt", "rgb24"])
             .arg(&temp_png),
     )?;
 
-    let mut cmd = Command::new("heif-enc");
+    let mut cmd = Command::new(command_path("heif-enc")?);
     if hq {
         cmd.arg("--lossless");
     } else {
@@ -250,7 +249,7 @@ fn extract_heic_cover(
 
 fn extract_jpg_cover(video_path: &Path, img_path: &Path, hq: bool) -> Result<()> {
     run_quiet(
-        Command::new("ffmpeg")
+        Command::new(command_path("ffmpeg")?)
             .args(["-y", "-i"])
             .arg(video_path)
             .args(["-ss", "00:00:01", "-vframes", "1", "-q:v"])
@@ -265,7 +264,7 @@ fn convert_mov(video_path: &Path, duration: f64, mov_path: &Path, hq: bool) -> R
     } else {
         duration.to_string()
     };
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = Command::new(command_path("ffmpeg")?);
     cmd.args(["-y", "-i"]).arg(video_path).args([
         "-t",
         &duration_s,
@@ -331,25 +330,4 @@ fn expand_tilde(path: &Path) -> PathBuf {
         return PathBuf::from(home).join(rest);
     }
     path.to_path_buf()
-}
-
-fn is_executable(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        match path.metadata() {
-            Ok(meta) => meta.permissions().mode() & 0o111 != 0,
-            Err(err) => {
-                eprintln!("[LIVE-PHOTO] metadata failed ({}): {err}", path.display());
-                false
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }

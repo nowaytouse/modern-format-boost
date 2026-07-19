@@ -2481,7 +2481,7 @@ pub struct BitstreamMediaInfo {
     pub bit_depth: Option<u8>,
 }
 
-/// Tries header parsing, then the `image` crate, then `ImageMagick identify`.
+/// Tries header parsing, then the `image` crate, then `ImageMagick` identify.
 ///
 /// Width/height may be available before channel/depth. Optional fields remain
 /// unknown unless a bitstream analyzer measured them directly.
@@ -2546,16 +2546,11 @@ pub fn media_info_without_ffprobe(input: &Path) -> anyhow::Result<Option<Bitstre
             if let Some(line) = s.lines().next() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 4 {
+                    let depth_field = parts[parts.len() - 1];
                     let parsed = parts[0]
                         .parse::<u32>()
                         .and_then(|w| parts[1].parse::<u32>().map(|h| (w, h)))
-                        .and_then(|(w, h)| {
-                            parts
-                                .last()
-                                .unwrap()
-                                .parse::<u8>()
-                                .map(|depth| (w, h, depth))
-                        });
+                        .and_then(|(w, h)| depth_field.parse::<u8>().map(|depth| (w, h, depth)));
                     match parsed {
                         Ok((w, h, depth)) if w > 0 && h > 0 => {
                             return Ok(Some(BitstreamMediaInfo {
@@ -4510,23 +4505,15 @@ mod tests {
         super::clear_reserved_output_paths_for_test();
     }
 
-    /// **Validates: Requirements 1.1, 1.2**
+    /// Validates requirements 1.1 and 1.2.
     ///
-    /// Bug condition exploration test for 5-field ImageMagick output parsing.
+    /// Regression test for five-field `ImageMagick` output parsing.
     ///
-    /// **CRITICAL**: This test is EXPECTED TO FAIL on unfixed code.
-    /// Test failure with "invalid digit found in string" confirms the bug exists.
+    /// `ImageMagick` can return five whitespace-separated fields where
+    /// `parts[3]` contains a float (for example, `3.0`) and `parts[4]` contains
+    /// the actual bit depth.
     ///
-    /// The bug manifests when ImageMagick returns 5 whitespace-separated fields
-    /// where parts[3] contains a float (e.g., "3.0") and parts[4] contains the
-    /// actual bit depth. The current parser hardcodes parts[3] for depth parsing,
-    /// causing parse errors when parts[3] is not a valid u8.
-    ///
-    /// This test simulates the parsing logic on 5-field inputs and verifies that
-    /// the depth is correctly extracted from the last field (parts[4]).
-    ///
-    /// When the fix is implemented (using parts.last() instead of parts[3]),
-    /// this test will pass, confirming the expected behavior is satisfied.
+    /// This test verifies that the depth is extracted from the final field.
     #[test]
     fn test_imagemagick_five_field_depth_parsing_bug_condition() {
         use proptest::prelude::*;
@@ -4543,29 +4530,23 @@ mod tests {
             depth in prop::sample::select(vec![8u8, 16u8, 24u8, 32u8])
         )| {
             // Simulate 5-field ImageMagick output
-            let line = format!("{} {} {} {} {}", width, height, channel, float_val, depth);
+            let line = format!("{width} {height} {channel} {float_val} {depth}");
             let parts: Vec<&str> = line.split_whitespace().collect();
 
             // Verify we have 5 fields
             prop_assert_eq!(parts.len(), 5);
 
-            // Current parsing logic (UNFIXED):
-            // Attempts to parse parts[3] as depth, which is the float value
+            // Historical parsing attempted to use the fourth field as depth.
             let current_parse_result = parts[0]
                 .parse::<u32>()
                 .and_then(|w| parts[1].parse::<u32>().map(|h| (w, h)))
                 .and_then(|(w, h)| parts[3].parse::<u8>().map(|d| (w, h, d)));
 
-            // EXPECTED OUTCOME ON UNFIXED CODE:
-            // Parse should fail with "invalid digit found in string"
-            // because parts[3] contains a float like "3.0" or "1.5"
-
-            // EXPECTED BEHAVIOR (for when fix is implemented):
-            // Parse should succeed using parts.last() which contains the valid depth
+            // The corrected parser accepts the final field as the depth.
             let expected_parse_result = parts[0]
                 .parse::<u32>()
                 .and_then(|w| parts[1].parse::<u32>().map(|h| (w, h)))
-                .and_then(|(w, h)| parts.last().unwrap().parse::<u8>().map(|d| (w, h, d)));
+                .and_then(|(w, h)| parts[4].parse::<u8>().map(|d| (w, h, d)));
 
             // Verify expected behavior: depth should equal the last field
             match expected_parse_result {
@@ -4575,23 +4556,22 @@ mod tests {
                     prop_assert_eq!(parsed_depth, depth);
                 }
                 Err(e) => {
-                    prop_assert!(false, "Expected parsing should succeed but got error: {}", e);
+                    prop_assert!(false, "Expected parsing should succeed but got error: {e}");
                 }
             }
 
-            // Document counterexample on unfixed code
-            if current_parse_result.is_err() {
-                println!("COUNTEREXAMPLE FOUND (bug confirmed):");
-                println!("  Input: {}", line);
+            if let Err(error) = current_parse_result {
+                println!("Historical parser rejected the optional float field:");
+                println!("  Input: {line}");
                 println!("  parts[3]: {} (float, not valid u8)", parts[3]);
                 println!("  parts[4]: {} (actual depth)", parts[4]);
-                println!("  Current parser error: {:?}", current_parse_result.unwrap_err());
-                println!("  Expected depth: {}", depth);
+                println!("  Historical parser error: {error:?}");
+                println!("  Expected depth: {depth}");
             }
         });
     }
 
-    /// Concrete test cases for 5-field parsing from design document
+    /// Concrete test cases for five-field parsing from the design document.
     #[test]
     fn test_imagemagick_five_field_concrete_examples() {
         // Test case 1: "1080 1080 srgb 3.0 8" from Bug Condition
@@ -4599,10 +4579,10 @@ mod tests {
         let parts1: Vec<&str> = line1.split_whitespace().collect();
         assert_eq!(parts1.len(), 5);
 
-        // Current parsing (UNFIXED) - tries parts[3] which is "3.0"
+        // Historical parsing tries `parts[3]`, which is `3.0`.
         let current_result1 = parts1[3].parse::<u8>();
 
-        // This should fail on unfixed code with "invalid digit found in string"
+        // The historical parser rejects the non-integer field.
         assert!(
             current_result1.is_err(),
             "Expected parse error on unfixed code for '{}', but got: {:?}",
@@ -4610,7 +4590,7 @@ mod tests {
             current_result1
         );
 
-        // Expected parsing (FIXED) - uses parts.last() which is "8"
+        // Correct parsing uses the final field, which is `8`.
         let expected_result1 = parts1.last().unwrap().parse::<u8>();
         assert_eq!(
             expected_result1.unwrap(),
@@ -4658,10 +4638,7 @@ mod tests {
             "Expected depth should be 8 from last field"
         );
 
-        println!("\n=== BUG CONDITION EXPLORATION RESULTS ===");
-        println!("All test cases confirmed: parts[3] fails to parse (bug exists)");
-        println!("All test cases verified: parts.last() parses correctly (expected behavior)");
-        println!("Counterexamples documented for bug analysis");
+        println!("All five-field parsing regression cases passed");
     }
 
     // ========================================================================
@@ -4677,12 +4654,12 @@ mod tests {
     // ========================================================================
 
     proptest! {
-        /// **Property 2: Preservation** - Four-Field Backward Compatibility
+        /// Preserves four-field backward compatibility.
         ///
-        /// For all 4-field ImageMagick output in format "w h ch depth",
-        /// the parser SHALL correctly extract depth from parts[3].
+        /// For all four-field `ImageMagick` output in format `w h ch depth`,
+        /// the parser extracts depth from `parts[3]`.
         ///
-        /// **Validates: Requirements 3.1, 3.2, 3.3, 3.4**
+        /// Validates requirements 3.1 through 3.4.
         #[test]
         fn test_preservation_four_field_parsing(
             width in 1u32..10000u32,
@@ -4691,7 +4668,7 @@ mod tests {
             channel in proptest::sample::select(vec!["srgb", "srgba", "rgb", "rgba", "gray"])
         ) {
             // Construct 4-field output: "w h ch depth"
-            let line = format!("{} {} {} {}", width, height, channel, depth);
+            let line = format!("{width} {height} {channel} {depth}");
             let parts: Vec<&str> = line.split_whitespace().collect();
 
             // Verify this is 4-field format
@@ -4701,8 +4678,7 @@ mod tests {
             let parsed_depth = parts[3].parse::<u8>();
             assert!(
                 parsed_depth.is_ok(),
-                "4-field depth parsing from parts[3] should succeed on unfixed code: {}",
-                line
+                "4-field depth parsing from parts[3] should succeed: {line}"
             );
             assert_eq!(
                 parsed_depth.unwrap(),
@@ -4718,8 +4694,7 @@ mod tests {
 
             assert!(
                 parsed.is_ok(),
-                "Full 4-field parsing should succeed: {}",
-                line
+                "Full 4-field parsing should succeed: {line}"
             );
 
             let (w, h, d) = parsed.unwrap();
@@ -4729,9 +4704,7 @@ mod tests {
         }
     }
 
-    /// **Validates: Requirement 3.3**
-    /// WHEN parsed dimensions are zero or invalid
-    /// THEN the system SHALL CONTINUE TO reject the result
+    /// Validates requirement 3.3: zero or invalid dimensions remain rejected.
     #[test]
     fn test_preservation_zero_dimensions_rejected() {
         let test_cases = vec![
@@ -4751,23 +4724,18 @@ mod tests {
 
             match parsed {
                 Ok((w, h, _d)) => {
-                    // Parsing succeeded, but validation should reject zero dimensions
+                    // Parsing succeeded, but validation should reject zero dimensions.
                     assert!(
                         w == 0 || h == 0,
-                        "Zero dimension case should parse but be rejected: {}",
-                        line
+                        "Zero dimension case should parse but be rejected: {line}"
                     );
                 }
-                Err(_) => {
-                    // Parse error is acceptable for malformed input
-                }
+                Err(error) => panic!("zero-dimension fixture must parse: {line}: {error}"),
             }
         }
     }
 
-    /// **Validates: Requirement 3.4**
-    /// WHEN ImageMagick identify returns incomplete output (fewer than 4 fields)
-    /// THEN the system SHALL CONTINUE TO log "incomplete line" and fall back
+    /// Validates requirement 3.4: incomplete `ImageMagick` output falls back.
     #[test]
     fn test_preservation_incomplete_output_rejected() {
         let test_cases = vec![
@@ -4793,9 +4761,7 @@ mod tests {
         }
     }
 
-    /// **Validates: Requirement 3.1**
-    /// WHEN ImageMagick identify returns standard 4-field format
-    /// THEN the system SHALL CONTINUE TO parse width, height, channel_type, and depth correctly
+    /// Validates requirement 3.1: standard four-field `ImageMagick` output.
     #[test]
     fn test_preservation_standard_formats() {
         let test_cases = vec![
@@ -4817,15 +4783,14 @@ mod tests {
 
             assert!(
                 parsed.is_ok(),
-                "Standard 4-field format should parse successfully: {}",
-                line
+                "Standard 4-field format should parse successfully: {line}"
             );
 
             let (w, h, d) = parsed.unwrap();
-            assert_eq!(w, expected_w, "Width mismatch for: {}", line);
-            assert_eq!(h, expected_h, "Height mismatch for: {}", line);
-            assert_eq!(d, expected_d, "Depth mismatch for: {}", line);
-            assert_eq!(parts[2], expected_ch, "Channel type mismatch for: {}", line);
+            assert_eq!(w, expected_w, "Width mismatch for: {line}");
+            assert_eq!(h, expected_h, "Height mismatch for: {line}");
+            assert_eq!(d, expected_d, "Depth mismatch for: {line}");
+            assert_eq!(parts[2], expected_ch, "Channel type mismatch for: {line}");
         }
     }
 }

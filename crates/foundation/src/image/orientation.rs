@@ -35,9 +35,8 @@ impl DiffTolerance {
     const fn max_delta(self) -> u8 {
         match self {
             Self::Exact => 0,
-            Self::JxlOrientation => u8::MAX,
+            Self::JxlOrientation | Self::LossyAvif => u8::MAX,
             Self::LsbAvif => 1,
-            Self::LossyAvif => 255,
         }
     }
 }
@@ -151,56 +150,11 @@ pub fn verify_orientation_pixel_diff(
     fmt: FormatKind,
     diff_tolerance: DiffTolerance,
 ) -> Result<PixelDiffResult> {
-    let (decoder_tool, decode_cmd): (
-        &'static str,
-        Box<dyn Fn(&Path, &Path) -> std::io::Result<std::process::Output>>,
-    ) = match fmt {
-        FormatKind::Jxl => (
-            "djxl",
-            Box::new(|inp: &Path, out: &Path| {
-                std::process::Command::new("djxl")
-                    .arg(inp)
-                    .arg(out)
-                    .output()
-            }),
-        ),
-        FormatKind::Avif => (
-            "avifdec",
-            Box::new(|inp: &Path, out: &Path| {
-                std::process::Command::new("avifdec")
-                    .arg(inp)
-                    .arg(out)
-                    .output()
-            }),
-        ),
-        FormatKind::Heif => (
-            "heif-convert",
-            Box::new(|inp: &Path, out: &Path| {
-                std::process::Command::new("heif-convert")
-                    .arg(inp)
-                    .arg(out)
-                    .output()
-            }),
-        ),
-        FormatKind::Heic => (
-            "heif-convert",
-            Box::new(|inp: &Path, out: &Path| {
-                std::process::Command::new("heif-convert")
-                    .arg(inp)
-                    .arg(out)
-                    .output()
-            }),
-        ),
-        FormatKind::WebP => (
-            "dwebp",
-            Box::new(|inp: &Path, out: &Path| {
-                std::process::Command::new("dwebp")
-                    .arg(inp)
-                    .args(["-o"])
-                    .arg(out)
-                    .output()
-            }),
-        ),
+    let decoder_tool = match fmt {
+        FormatKind::Jxl => "djxl",
+        FormatKind::Avif => "avifdec",
+        FormatKind::Heif | FormatKind::Heic => "heif-convert",
+        FormatKind::WebP => "dwebp",
         FormatKind::Jpeg
         | FormatKind::Png
         | FormatKind::Gif
@@ -224,8 +178,7 @@ pub fn verify_orientation_pixel_diff(
             });
         }
     };
-
-    if !crate::common_utils::is_command_available(decoder_tool) {
+    let Some(decoder_path) = crate::common_utils::resolve_tool_path(decoder_tool) else {
         tracing::warn!(
             target: "orientation_pixel_diff",
             tool = %decoder_tool,
@@ -233,7 +186,15 @@ pub fn verify_orientation_pixel_diff(
             "[D11] decode tool absent — skipping pixel-diff for this file"
         );
         return Ok(PixelDiffResult::SkippedToolAbsent { tool: decoder_tool });
-    }
+    };
+    let decode_cmd = |inp: &Path, out: &Path| {
+        let mut command = std::process::Command::new(&decoder_path);
+        command.arg(inp);
+        if fmt == FormatKind::WebP {
+            command.arg("-o");
+        }
+        command.arg(out).output()
+    };
 
     let primary_temp_suffix = decode_temp_extension_for_format(fmt).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
@@ -327,7 +288,14 @@ fn verify_pixel_diff_against_decoded_image(
 
                     // Decode HEIC to PNG using heif-convert
                     let temp_png = orientation_decode_tempfile(".png")?;
-                    let heif_decode_output = std::process::Command::new("heif-convert")
+                    let heif_convert = crate::common_utils::resolve_tool_path("heif-convert")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError(
+                                "pixel-diff: heif-convert was not found or failed its runtime health check"
+                                    .to_string(),
+                            )
+                        })?;
+                    let heif_decode_output = std::process::Command::new(heif_convert)
                         .arg(source_image)
                         .arg(temp_png.path())
                         .output()

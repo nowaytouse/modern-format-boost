@@ -1,6 +1,6 @@
 //! Shared verification gate model for fast/full media pipelines.
 
-use crate::common_utils::{calculate_blake3_hash, is_command_available};
+use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -88,22 +88,19 @@ impl VerificationGate for Gate1Local {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
-        let ext = ctx
-            .output_format
-            .and_then(output_format_extension)
-            .unwrap_or_else(|| detect_output_extension(&ctx.working_copy));
-        let jxl_files = match collect_output_files(&ctx.working_copy, ext) {
-            Ok(files) => files,
-            Err(err) => {
-                return gate_result(vec![detail(
-                    "count",
-                    false,
-                    ctx.expected_count.to_string(),
-                    format!("walkdir traversal failed: {err}"),
-                    vec![ctx.working_copy.clone()],
-                )]);
-            }
-        };
+        let jxl_files =
+            match collect_output_files_multiple_extensions(&ctx.working_copy, &["jxl", "avif"]) {
+                Ok(files) => files,
+                Err(err) => {
+                    return gate_result(vec![detail(
+                        "count",
+                        false,
+                        ctx.expected_count.to_string(),
+                        format!("walkdir traversal failed: {err}"),
+                        vec![ctx.working_copy.clone()],
+                    )]);
+                }
+            };
         let checks = vec![
             check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
             check_blake3_logged_outputs(ctx),
@@ -570,7 +567,7 @@ fn check_nonzero_size(expected: usize, files: &[PathBuf]) -> CheckDetail {
     detail(
         "size",
         failures.is_empty() && files.len() == expected,
-        format!("{expected} non-empty JXL files"),
+        format!("{expected} non-empty JXL/AVIF files"),
         format!(
             "{} non-empty, {} empty/missing",
             files.len().saturating_sub(failures.len()),
@@ -639,27 +636,34 @@ where
 
 fn check_decode_probe(
     files: &[PathBuf],
-    output_format: Option<crate::format_detect::FormatKind>,
+    _output_format: Option<crate::format_detect::FormatKind>,
 ) -> CheckDetail {
-    // Detect format from actual file extensions (backward compat: old markers lack strategy)
-    let detected_format = files
-        .first()
-        .and_then(|path| path.extension()?.to_str())
-        .and_then(|ext| match ext.to_ascii_lowercase().as_str() {
-            "avif" => Some(crate::format_detect::FormatKind::Avif),
-            "jxl" => Some(crate::format_detect::FormatKind::Jxl),
-            _ => None,
-        });
-    let actual_format = detected_format.or(output_format);
-    let is_avif = matches!(actual_format, Some(crate::format_detect::FormatKind::Avif));
-    let tool = if is_avif { "avifdec" } else { "djxl" };
+    let has_avif = files.iter().any(|path| {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("avif"))
+    });
+    let has_jxl = files.iter().any(|path| {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
+    });
 
-    if !is_command_available(tool) {
+    if has_avif && !is_command_available("avifdec") {
         return detail(
             "decode",
             false,
-            format!("{tool} available and every file decodes"),
-            format!("{tool} unavailable"),
+            "avifdec available and every file decodes".to_string(),
+            "avifdec unavailable".to_string(),
+            files.to_vec(),
+        );
+    }
+    if has_jxl && !is_command_available("djxl") {
+        return detail(
+            "decode",
+            false,
+            "djxl available and every file decodes".to_string(),
+            "djxl unavailable".to_string(),
             files.to_vec(),
         );
     }
@@ -667,7 +671,9 @@ fn check_decode_probe(
     let failures = files
         .iter()
         .filter_map(|path| {
-            if is_avif {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let file_is_avif = ext.eq_ignore_ascii_case("avif");
+            if file_is_avif {
                 avifdec_decode_probe(path)
                     .err()
                     .map(|err| (path.clone(), err))
@@ -692,7 +698,7 @@ fn check_decode_probe(
     detail(
         "decode",
         failures.is_empty(),
-        format!("{} {} decode probes pass", files.len(), tool),
+        format!("{} decode probes pass", files.len()),
         actual,
         failure_paths,
     )
@@ -719,9 +725,35 @@ fn collect_output_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, wa
     Ok(files)
 }
 
+fn collect_output_files_multiple_extensions(
+    root: &Path,
+    extensions: &[&str],
+) -> Result<Vec<PathBuf>, walkdir::Error> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry?;
+        if entry.file_type().is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| extensions.iter().any(|&e| ext.eq_ignore_ascii_case(e)))
+        {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 /// Convert a known output format to its canonical file extension.
 /// Returns `None` for formats that are not valid fast-img output targets.
-fn output_format_extension(fmt: crate::image::format_detect::FormatKind) -> Option<&'static str> {
+const fn output_format_extension(
+    fmt: crate::image::format_detect::FormatKind,
+) -> Option<&'static str> {
     use crate::image::format_detect::FormatKind;
     match fmt {
         FormatKind::Jxl => Some("jxl"),
@@ -756,7 +788,13 @@ fn detect_output_extension(root: &Path) -> &'static str {
 }
 
 fn orientation_tag_present(path: &Path) -> std::io::Result<bool> {
-    let output = std::process::Command::new("exiftool")
+    let exiftool = resolve_tool_path("exiftool").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "exiftool was not found or failed its runtime health check",
+        )
+    })?;
+    let output = std::process::Command::new(exiftool)
         .arg("-s3")
         .arg("-Orientation")
         .arg(path)
@@ -783,7 +821,9 @@ fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
         Some(".png"),
     )
     .map_err(|err| format!("avifdec decode probe scratch tempfile failed: {err}"))?;
-    let output = std::process::Command::new("avifdec")
+    let avifdec = resolve_tool_path("avifdec")
+        .ok_or_else(|| "avifdec was not found or failed its runtime health check".to_string())?;
+    let output = std::process::Command::new(avifdec)
         .arg(path)
         .arg(temp.path())
         .stdout(std::process::Stdio::null())
@@ -812,7 +852,9 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
         Some(".png"),
     )
     .map_err(|err| format!("decode probe scratch tempfile failed: {err}"))?;
-    let output = std::process::Command::new("djxl")
+    let djxl = resolve_tool_path("djxl")
+        .ok_or_else(|| "djxl was not found or failed its runtime health check".to_string())?;
+    let output = std::process::Command::new(&djxl)
         .arg(path)
         .arg(temp.path())
         .stdout(std::process::Stdio::null())
@@ -829,7 +871,7 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             Some(".jpg"),
         )
         .map_err(|err| format!("decode probe JPEG scratch tempfile failed: {err}"))?;
-        let jpeg_output = std::process::Command::new("djxl")
+        let jpeg_output = std::process::Command::new(&djxl)
             .arg(path)
             .arg(jpeg_temp.path())
             .stdout(std::process::Stdio::null())

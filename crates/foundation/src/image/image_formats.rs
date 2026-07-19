@@ -1309,7 +1309,12 @@ pub mod tiff_family {
 
     /// Detect if a TIFF-family file (TIFF, DNG) is lossless using `exiftool` to target the main image IFD.
     pub fn is_lossless_tiff_family(path: &Path) -> Result<bool> {
-        let output = Command::new("exiftool")
+        let exiftool = crate::common_utils::resolve_tool_path("exiftool").ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "exiftool was not found or failed its runtime health check".to_string(),
+            )
+        })?;
+        let output = Command::new(exiftool)
             .arg("-n")
             .arg("-j")
             .arg("-G1")

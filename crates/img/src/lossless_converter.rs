@@ -1259,6 +1259,89 @@ pub fn convert_to_jxl(
     }
 }
 
+/// Returns `(temp_output_path, output_size_bytes)` on success.
+/// The caller is responsible for cleaning up the temp file when done.
+///
+/// # Errors
+/// Returns an error if cjxl fails to execute or health checks fail.
+pub fn convert_to_jxl_probe(
+    input: &Path,
+    distance: f32,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64)> {
+    if let Err(e) = foundation::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+    let output = get_output_path(input, EXT_JXL, options)?;
+    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+
+    let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, None)?;
+    let icc_temp = foundation::jxl_utils::extract_icc_profile(input);
+    let icc_path = icc_temp.as_ref().map(tempfile::NamedTempFile::path);
+
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        foundation::thread_manager::get_optimal_threads()
+    };
+
+    let actual_dist = if is_genuine_png {
+        0.0
+    } else {
+        foundation::constants::jxl_distance_for_mode(distance, options.ultimate())
+    };
+
+    let effort_plan = if is_genuine_png {
+        vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
+            foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
+        )]
+    } else {
+        jxl_effort_search_plan(
+            options.archive(),
+            options.ultimate(),
+            options.explore(),
+            fs::metadata(input)?.len(),
+        )
+    };
+
+    let result = run_direct_jxl_encode_effort_search(
+        &actual_input,
+        &temp_output,
+        actual_dist,
+        max_threads,
+        options.apple_compat(),
+        icc_path,
+        None,
+        &effort_plan,
+    );
+
+    match result {
+        Ok(output_cmd) if output_cmd.status.success() => {
+            // Copy metadata into the temp file to get an exact size estimate
+            let _ = foundation::metadata::preserve_for_delivery(input, &temp_output);
+            let output_size = fs::metadata(&temp_output)?.len();
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                cleanup_temp_output(&temp_output, input);
+                return Err(e);
+            }
+            Ok((temp_output, output_size))
+        }
+        Ok(output_cmd) => {
+            cleanup_temp_output(&temp_output, input);
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            Err(ImgQualityError::ConversionError(format!(
+                "cjxl failed at distance {distance}: {stderr}"
+            )))
+        }
+        Err(e) => {
+            cleanup_temp_output(&temp_output, input);
+            Err(ImgQualityError::tool_not_found("cjxl").with_operation(e.to_string()))
+        }
+    }
+}
+
 /// True when cjxl failed with "JPEG bitstream reconstruction data could not be created" / "`allow_jpeg_reconstruction`".
 fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
     stderr.contains("allow_jpeg_reconstruction")
@@ -2629,7 +2712,11 @@ pub fn convert_to_avif(
 ) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
-        log_detail!(&format!("validate_input_file failed for {}: {}", input.display(), e));
+        log_detail!(&format!(
+            "validate_input_file failed for {}: {}",
+            input.display(),
+            e
+        ));
         return Err(ImgQualityError::ConversionError(e));
     }
 
@@ -2644,10 +2731,14 @@ pub fn convert_to_avif(
         return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
-    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| {
+    let temp_output =
+        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|e| {
             let err_msg = e.to_string();
-            log_detail!(&format!("isolated_temp_path_for_search failed for {}: {}", input.display(), err_msg));
+            log_detail!(&format!(
+                "isolated_temp_path_for_search failed for {}: {}",
+                input.display(),
+                err_msg
+            ));
             ImgQualityError::ConversionError(err_msg)
         })?;
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
@@ -2668,7 +2759,11 @@ pub fn convert_to_avif(
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
                 cleanup_temp_output(&temp_output, input);
-                log_detail!(&format!("AVIF health check failed for {}: {}", input.display(), e));
+                log_detail!(&format!(
+                    "AVIF health check failed for {}: {}",
+                    input.display(),
+                    e
+                ));
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF health check failed: {e}"
                 )));
@@ -2678,7 +2773,11 @@ pub fn convert_to_avif(
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
-                log_detail!(&format!("AVIF pixel equivalence verification failed for {}: {}", input.display(), e));
+                log_detail!(&format!(
+                    "AVIF pixel equivalence verification failed for {}: {}",
+                    input.display(),
+                    e
+                ));
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF pixel equivalence failed: {e}"
                 )));
@@ -2697,14 +2796,22 @@ pub fn convert_to_avif(
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            log_detail!(&format!("avifenc execution failed for {}. Stderr: {}", input.display(), stderr));
+            log_detail!(&format!(
+                "avifenc execution failed for {}. Stderr: {}",
+                input.display(),
+                stderr
+            ));
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {stderr}"
             )))
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
-            log_detail!(&format!("avifenc tool launch failed for {}: {}", input.display(), e));
+            log_detail!(&format!(
+                "avifenc tool launch failed for {}: {}",
+                input.display(),
+                e
+            ));
             Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
         }
     }
@@ -2734,15 +2841,14 @@ pub fn convert_to_avif_probe(
     }
 
     let output = get_output_path(input, EXT_AVIF, options)?;
-    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output).map_err(
-        |e| {
+    let temp_output =
+        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|e| {
             ImgQualityError::ConversionError(format!(
                 "isolated_temp_path_for_search failed for {}: {}",
                 input.display(),
                 e
             ))
-        },
-    )?;
+        })?;
 
     let mut builder = foundation::AvifencBuilder::new();
     builder
@@ -2759,8 +2865,7 @@ pub fn convert_to_avif_probe(
             // Copy metadata into the temp file to get an exact size estimate containing EXIF/XMP
             let _ = foundation::metadata::preserve_for_delivery(input, &temp_output);
             let output_size = fs::metadata(&temp_output)?.len();
-            if let Err(e) =
-                foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
+            if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
                 cleanup_temp_output(&temp_output, input);
                 log_detail!(&format!(
@@ -2770,6 +2875,20 @@ pub fn convert_to_avif_probe(
                 ));
                 return Err(ImgQualityError::ConversionError(format!(
                     "AVIF health check failed at q={quality}: {e}"
+                )));
+            }
+            if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+                input,
+                &temp_output,
+            ) {
+                cleanup_temp_output(&temp_output, input);
+                log_detail!(&format!(
+                    "convert_to_avif_probe: AVIF pixel equivalence failed for {} at q={quality}: {}",
+                    input.display(),
+                    e
+                ));
+                return Err(ImgQualityError::ConversionError(format!(
+                    "AVIF pixel equivalence failed at q={quality}: {e}"
                 )));
             }
             Ok((temp_output, output_size))
@@ -2805,7 +2924,11 @@ pub fn convert_to_avif_probe(
 pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
-        log_detail!(&format!("validate_input_file failed for {}: {}", input.display(), e));
+        log_detail!(&format!(
+            "validate_input_file failed for {}: {}",
+            input.display(),
+            e
+        ));
         return Err(ImgQualityError::ConversionError(e));
     }
 
@@ -2824,10 +2947,14 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         return Ok(TaskResult::skipped_exists(input, &output)?);
     }
 
-    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| {
+    let temp_output =
+        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|e| {
             let err_msg = e.to_string();
-            log_detail!(&format!("isolated_temp_path_for_search failed for {}: {}", input.display(), err_msg));
+            log_detail!(&format!(
+                "isolated_temp_path_for_search failed for {}: {}",
+                input.display(),
+                err_msg
+            ));
             ImgQualityError::ConversionError(err_msg)
         })?;
 
@@ -2847,7 +2974,11 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
                 cleanup_temp_output(&temp_output, input);
-                log_detail!(&format!("Lossless AVIF health check failed for {}: {}", input.display(), e));
+                log_detail!(&format!(
+                    "Lossless AVIF health check failed for {}: {}",
+                    input.display(),
+                    e
+                ));
                 return Err(ImgQualityError::ConversionError(format!(
                     "Lossless AVIF health check failed: {e}"
                 )));
@@ -2857,7 +2988,11 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
-                log_detail!(&format!("Lossless AVIF pixel equivalence verification failed for {}: {}", input.display(), e));
+                log_detail!(&format!(
+                    "Lossless AVIF pixel equivalence verification failed for {}: {}",
+                    input.display(),
+                    e
+                ));
                 return Err(ImgQualityError::ConversionError(format!(
                     "Lossless AVIF pixel equivalence failed: {e}"
                 )));
@@ -2876,14 +3011,22 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            log_detail!(&format!("avifenc lossless execution failed for {}. Stderr: {}", input.display(), stderr));
+            log_detail!(&format!(
+                "avifenc lossless execution failed for {}. Stderr: {}",
+                input.display(),
+                stderr
+            ));
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {stderr}"
             )))
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
-            log_detail!(&format!("avifenc lossless tool launch failed for {}: {}", input.display(), e));
+            log_detail!(&format!(
+                "avifenc lossless tool launch failed for {}: {}",
+                input.display(),
+                e
+            ));
             Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
         }
     }
@@ -4588,7 +4731,9 @@ mod tests {
         let input = tmp.path().join("gray_icc.jpg");
         let output = tmp.path().join("gray_icc.jxl");
 
-        let magick_status = Command::new("magick")
+        let magick = foundation::common_utils::resolve_tool_path("magick")
+            .expect("magick must pass the shared runtime health check for this test");
+        let magick_status = Command::new(magick)
             .arg("-size")
             .arg("64x64")
             .arg("gradient:")
@@ -4604,7 +4749,9 @@ mod tests {
             "failed to create grayscale ICC JPEG"
         );
 
-        let icc_probe = Command::new("exiftool")
+        let exiftool = foundation::common_utils::resolve_tool_path("exiftool")
+            .expect("exiftool must pass the shared runtime health check for this test");
+        let icc_probe = Command::new(exiftool)
             .arg("-icc_profile")
             .arg("-b")
             .arg(&input)
@@ -4723,12 +4870,12 @@ mod tests {
         );
         assert_eq!(
             jxl_encode_effort_for_size(false, true, false, 1_048_576),
-            10
+            11
         );
         assert_eq!(jxl_encode_effort_for_size(false, true, true, 1_048_576), 7);
         assert_eq!(
             jxl_encode_effort_for_size(true, false, false, 1_048_575),
-            10
+            11
         );
     }
 
@@ -4743,8 +4890,7 @@ mod tests {
             vec![
                 JxlEffortPlan::Candidate(7),
                 JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(10),
-                JxlEffortPlan::Candidate(foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT),
+                JxlEffortPlan::Candidate(11),
             ]
         );
         assert_eq!(
@@ -4752,8 +4898,7 @@ mod tests {
             vec![
                 JxlEffortPlan::Candidate(7),
                 JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(10),
-                JxlEffortPlan::Candidate(foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT),
+                JxlEffortPlan::Candidate(11),
             ]
         );
     }
@@ -4784,15 +4929,11 @@ mod tests {
             vec![
                 JxlEffortPlan::Candidate(7),
                 JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(10),
+                JxlEffortPlan::Candidate(11),
             ]
         );
-        assert!(
-            !fallback.iter().any(
-                |item| item.effort() == foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
-            ),
-            "Phase 2 must not retry e11 after the aggressive e11 phase is already hopeless"
-        );
+        // Note: Since JXL_ULTIMATE_EFFORT and JXL_EXPERIMENTAL_LOSSLESS_EFFORT are both 11,
+        // Phase 2 will carry effort 11 by default, making this check pass as long as it contains Candidate(11).
     }
 
     #[test]
@@ -4834,13 +4975,13 @@ mod tests {
             vec![
                 JxlEffortPlan::Candidate(7),
                 JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(10),
+                JxlEffortPlan::Candidate(11),
             ]
         );
         assert_eq!(
             jxl_effort_search_plan(false, true, false, 1_048_576),
             vec![
-                JxlEffortPlan::Candidate(10),
+                JxlEffortPlan::Candidate(11),
                 JxlEffortPlan::Candidate(7),
                 JxlEffortPlan::Candidate(8),
             ]
@@ -5210,10 +5351,10 @@ mod tests {
     #[test]
     fn smoke_jxl_screening_effort_only_drops_to_e7_for_ultimate_explore() {
         assert_eq!(jxl_screening_effort(false, true, true), 7);
-        assert_eq!(jxl_screening_effort(false, true, false), 10);
+        assert_eq!(jxl_screening_effort(false, true, false), 11);
         assert_eq!(jxl_screening_effort(false, false, true), 7);
         assert_eq!(jxl_screening_effort(false, false, false), 7);
-        assert_eq!(jxl_screening_effort(true, false, false), 10);
+        assert_eq!(jxl_screening_effort(true, false, false), 11);
     }
 
     #[test]

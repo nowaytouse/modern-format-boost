@@ -24,6 +24,19 @@ All notable changes to this project will be documented in this file.
 
 ### Developer Experience & Tooling
 
+- **Incremental Smart Build & App Sync**: Smart Build now compares relevant Rust,
+  direct workspace-dependency, and Vue/Tauri source mtimes while ignoring generated
+  trees. Small edits reuse Cargo's incremental outputs, skip unchanged Vue builds,
+  and synchronize only changed release binaries/resources into the signed macOS app
+  bundle. `--force --all` remains the explicit full release/package path.
+- **Authoritative Tool Resolution**: Media-tool call sites now share the verified
+  resolver, honoring explicit `MFB_TOOL_*` overrides before project-local and
+  upstream/system tools. Resolved multimedia executables receive a startup smoke
+  check so a broken dynamic-library link is rejected before a conversion begins.
+- **CI Media Toolchain**: Quality jobs now install FFmpeg from FFmpeg's official
+  development snapshot, libvmaf from Netflix upstream, and the required libheif
+  release from its upstream project. This replaces the expired third-party FFmpeg
+  build URL that blocked the quality gates.
 - **Rust Primary Launcher**: Migrated `drag_and_drop_processor` from Python to Rust as the primary binary, retaining Python version as compatibility reference only.
   - **Interactive TUI Menu**: Always displays when terminal attached (matches Python `select_mode()` behavior unconditionally).
   - **Binary Path Discovery**: Fixed `project_root()` to prioritize `current_exe()` path traversal, solving macOS app launch failures where `cwd` defaults to user home directory.
@@ -45,6 +58,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fast-Img & Media Pipeline
 
+- **Target-Format Exploration**: AVIF fast-img delivery now begins at quality 100,
+  explores lower quality only as needed to meet the size gate, and validates every
+  retained candidate before falling back. JPEG-to-JXL fast-img remains restricted
+  to cjxl's reversible JPEG reconstruction path; unsupported inputs are preserved
+  instead of being mislabeled as lossless JXL output.
+- **Animated AVIF Authority**: Animated sources are normalized to Y4M frames and
+  encoded with libavif's official `avifenc`; FFmpeg is retained for frame
+  extraction/rasterization where libavif does not accept the source container.
 - **UltraHDR Fast-Img Skip**: UltraHDR JPEGs are now explicitly skipped in fast-img delivery mode (`REQUIRE_OUTPUT_DELIVERY`) because HDR synthesis cannot reconstruct the original SDR JPEG bitstream, violating the reversibility contract. Sources remain unmodified with proper audit logging.
 - **Photos Import Hardening**:
   - Increased import timeout from 3600s to 86400s (24 hours) for large batch operations.

@@ -236,7 +236,7 @@ enum Commands {
         allow_expert_options: bool,
 
         /// Meme mode strategy. "jxl" (default) or "avif" (Meme Mode).
-        #[arg(long, default_value = "jxl")]
+        #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
         strategy: String,
     },
 
@@ -2159,6 +2159,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     if auto_import.0 && !shortest_path.0 {
         anyhow::bail!("--auto-import requires --shortest-path");
     }
+    if strategy == "avif"
+        && let Err(err) = foundation::tools::require(&["avifenc", "avifdec"])
+    {
+        foundation::log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
 
     let input_plan = FastImgInputPlan::from_input(input, recursive.0)?;
     let src_dir = input_plan.src_root;
@@ -2888,18 +2894,18 @@ fn fast_img_effective_encode_parallelism(
 
 /// Quality exploration result for AVIF Meme Mode.
 enum AvifQualityExploreResult {
-    /// Best quality found where output_size <= input_size.
+    /// Best quality whose output fits the source size limit.
     Found { quality: u8 },
-    /// No quality in [20, 100] produced output_size <= input_size.
+    /// No quality in the supported range produced a size-compliant output.
     Exhausted,
 }
 
 /// Meme Mode AVIF quality exploration: coarse scan + binary search.
 ///
 /// Algorithm:
-/// 1. Coarse scan: q=100 → 90 → ... → 20 (step -10). Stop at first q where output ≤ input.
-/// 2. Binary search: refine upward in [q_ok, q_ok+10) to find the highest quality still ≤ input.
-/// 3. Returns the best (quality, temp_path, output_size) or Exhausted.
+/// 1. Coarse scan from quality 100 down to 20 in ten-point steps.
+/// 2. Refine the best candidate with a bounded binary search.
+/// 3. Return the best quality or [`AvifQualityExploreResult::Exhausted`].
 ///
 /// All temp files from failed probes are cleaned up immediately.
 fn explore_avif_meme_quality(
@@ -2926,14 +2932,19 @@ fn explore_avif_meme_quality(
                     ));
                     q_ok = Some(q);
                     // Clean up coarse probe temp; will re-encode at best_q below
-                    let _ = std::fs::remove_file(&temp_path);
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img_probe_cleanup",
+                        &temp_path,
+                    );
                     break;
-                } else {
-                    foundation::log_detail!(&format!(
-                        "AVIF Meme Mode quality probe [coarse]: q={q} too large — output={output_size}B > input={input_size}B"
-                    ));
-                    let _ = std::fs::remove_file(&temp_path);
                 }
+                foundation::log_detail!(&format!(
+                    "AVIF Meme Mode quality probe [coarse]: q={q} too large — output={output_size}B > input={input_size}B"
+                ));
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "fast_img_probe_cleanup",
+                    &temp_path,
+                );
             }
             Err(e) => {
                 foundation::log_detail!(&format!(
@@ -2958,18 +2969,21 @@ fn explore_avif_meme_quality(
     // ── Phase 2: Binary search upward ────────────────────────────────────
     // Range: [q_found, q_found + COARSE_STEP)  (max quality that still fits)
     // We know q_found works, and q_found + COARSE_STEP doesn't (or is 100).
-    let q_upper = if q_found == 100 {
+    if q_found == 100 {
         // q=100 already worked in coarse scan, no need to refine
         foundation::log_detail!(&format!(
             "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
             source.display()
         ));
-        let (temp, _size) = img::lossless_converter::convert_to_avif_probe(source, 100, convert_options)?;
-        let _ = std::fs::remove_file(&temp);
+        let (temp, _size) =
+            img::lossless_converter::convert_to_avif_probe(source, 100, convert_options)?;
+        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+            "fast_img_probe_cleanup",
+            &temp,
+        );
         return Ok(AvifQualityExploreResult::Found { quality: 100 });
-    } else {
-        q_found + COARSE_STEP - 1
-    };
+    }
+    let q_upper = q_found + COARSE_STEP - 1;
 
     let mut lo = q_found;
     let mut hi = q_upper.min(100);
@@ -2980,8 +2994,8 @@ fn explore_avif_meme_quality(
         source.display()
     ));
 
-    // Up to 4 binary search iterations (converges to ±1)
-    for _ in 0..4 {
+    // Three probes keep the whole search within the documented 13-encode cap.
+    for _ in 0..3 {
         if lo > hi {
             break;
         }
@@ -2996,7 +3010,10 @@ fn explore_avif_meme_quality(
                         "AVIF Meme Mode quality probe [binary]: q={mid} OK — output={output_size}B"
                     ));
                     best_q = mid;
-                    let _ = std::fs::remove_file(&temp_path);
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img_probe_cleanup",
+                        &temp_path,
+                    );
                     if mid == hi {
                         break;
                     }
@@ -3005,7 +3022,10 @@ fn explore_avif_meme_quality(
                     foundation::log_detail!(&format!(
                         "AVIF Meme Mode quality probe [binary]: q={mid} too large — output={output_size}B"
                     ));
-                    let _ = std::fs::remove_file(&temp_path);
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img_probe_cleanup",
+                        &temp_path,
+                    );
                     if mid == lo {
                         break;
                     }
@@ -3031,10 +3051,12 @@ fn explore_avif_meme_quality(
     ));
     let (temp_path, _output_size) =
         img::lossless_converter::convert_to_avif_probe(source, best_q, convert_options)?;
-    let _ = std::fs::remove_file(&temp_path);
+    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+        "fast_img_probe_cleanup",
+        &temp_path,
+    );
     Ok(AvifQualityExploreResult::Found { quality: best_q })
 }
-
 
 fn fast_img_run_encode_job_inner(
     job: &FastImgTranscodeJob,
@@ -3045,7 +3067,6 @@ fn fast_img_run_encode_job_inner(
     allow_expert_options: bool,
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
-
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
         let convert_options = foundation::ConvertOptions {
@@ -3063,15 +3084,25 @@ fn fast_img_run_encode_job_inner(
                     job.source.display(),
                     format
                 ));
-                img::lossless_converter::convert_to_avif(&job.source, Some(quality), &convert_options)?
+                img::lossless_converter::convert_to_avif(
+                    &job.source,
+                    Some(quality),
+                    &convert_options,
+                )?
             }
             AvifQualityExploreResult::Exhausted => {
                 foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): Quality exploration exhausted for {} (Source: {:?}); falling back to original",
+                    "Meme Mode (AVIF): Quality exploration exhausted for {} (Source: {:?}); preserving source",
                     job.source.display(),
                     format
                 ));
-                img::lossless_converter::convert_to_avif(&job.source, Some(100), &convert_options)?
+                return Ok(FastImgTranscodeOutcome::Skipped(
+                    FastImgSkippedSourceProof {
+                        rel_key: job.rel_key.clone(),
+                        src_hash: calculate_blake3_hash(&job.source)?,
+                        reason: "AVIF quality exploration exhausted without a size-compliant target output".to_string(),
+                    },
+                ));
             }
         }
     } else {
@@ -3100,21 +3131,13 @@ fn fast_img_run_encode_job_inner(
         convert_jpeg_to_jxl(&job.source, &options, None)?
     };
     if result.skipped && result.output_path.is_none() {
-        let skip_reason = result.skip_reason.as_deref().unwrap_or("<none>");
-        if skip_reason == img::lossless_converter::JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON {
-            return Ok(FastImgTranscodeOutcome::Skipped(
-                FastImgSkippedSourceProof {
-                    rel_key: job.rel_key.clone(),
-                    src_hash: calculate_blake3_hash(&job.source)?,
-                    reason: result.message,
-                },
-            ));
-        }
-        anyhow::bail!(
-            "fast-img encode skipped without JXL output for {}: reason={skip_reason} message={}",
-            job.source.display(),
-            result.message
-        );
+        return Ok(FastImgTranscodeOutcome::Skipped(
+            FastImgSkippedSourceProof {
+                rel_key: job.rel_key.clone(),
+                src_hash: calculate_blake3_hash(&job.source)?,
+                reason: result.message,
+            },
+        ));
     }
     let out_path = result.output_path.as_ref().map(Path::new).ok_or_else(|| {
         anyhow::anyhow!(
@@ -3123,7 +3146,11 @@ fn fast_img_run_encode_job_inner(
         )
     })?;
 
-    let orientation_tolerance = if strategy == "avif" {
+    let is_avif_output = strategy == "avif"
+        || out_path
+            .extension()
+            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"));
+    let orientation_tolerance = if is_avif_output {
         orientation_diff_tolerance_for_format(FormatKind::Avif).ok_or_else(|| {
             anyhow::anyhow!("missing shared orientation tolerance for AVIF output")
         })?
@@ -3131,7 +3158,7 @@ fn fast_img_run_encode_job_inner(
         orientation_diff_tolerance_for_format(FormatKind::Jxl)
             .ok_or_else(|| anyhow::anyhow!("missing shared orientation tolerance for JXL output"))?
     };
-    let output_format = if strategy == "avif" {
+    let output_format = if is_avif_output {
         FormatKind::Avif
     } else {
         FormatKind::Jxl
@@ -3517,11 +3544,27 @@ fn fast_img_delete_verified_source_jpegs(
         );
         let parallelism =
             fast_img_effective_verify_parallelism(existing.len(), thread_config.parallel_tasks);
-        let format_label = if strategy == "avif" { "AVIF" } else { "JXL" };
-        let tool_label = if strategy == "avif" {
-            "avifdec"
-        } else {
-            "djxl"
+        let has_avif = existing.iter().any(|candidate| {
+            candidate
+                .output
+                .extension()
+                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"))
+        });
+        let has_jxl = existing.iter().any(|candidate| {
+            candidate
+                .output
+                .extension()
+                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("jxl"))
+        });
+        let format_label = match (has_jxl, has_avif) {
+            (true, true) => "JXL/AVIF",
+            (false, true) => "AVIF",
+            _ => "JXL",
+        };
+        let tool_label = match (has_jxl, has_avif) {
+            (true, true) => "djxl/avifdec",
+            (false, true) => "avifdec",
+            _ => "djxl",
         };
         println!(
             "[VERIFY  ] final {} delete proofs pending {} · parallel {} {} checks",
@@ -3545,7 +3588,11 @@ fn fast_img_delete_verified_source_jpegs(
             existing
                 .par_iter()
                 .map(|candidate| {
-                    let integrity = if strategy == "avif" {
+                    let is_avif = strategy == "avif"
+                        || candidate.output
+                            .extension()
+                            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"));
+                    let integrity = if is_avif {
                         verify_final_avif_delivery_integrity(&candidate.source, &candidate.output)
                             .map_err(|err| {
                                 anyhow::anyhow!(
@@ -3842,7 +3889,9 @@ fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyho
             let is_target = path
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| extension.eq_ignore_ascii_case(target_ext));
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("jxl") || extension.eq_ignore_ascii_case("avif")
+                });
             if is_target {
                 continue;
             }
@@ -6100,6 +6149,7 @@ mod fast_img_hardening_tests {
     };
     use anyhow::Context;
     use clap::Parser;
+    use clap::error::ErrorKind;
     use foundation::fast_img::{
         FastImgLibraryAssetProbe, IntegrityResult, apply_library_assets_to_marker, is_true_jpeg,
         library_handle_from_probes,
@@ -7743,6 +7793,15 @@ mod fast_img_hardening_tests {
         assert_eq!(strategy, "avif");
         Ok(())
     }
+
+    #[test]
+    fn fast_img_command_rejects_unknown_strategy_flag() {
+        assert!(matches!(
+            Cli::try_parse_from(["img", "fast-img", "/photos", "--strategy", "gif"]),
+            Err(err) if err.kind() == ErrorKind::InvalidValue
+        ));
+    }
+
     #[test]
     fn run_command_accepts_archive_flag() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["img", "run", "/photos", "--archive"])?;
@@ -8698,7 +8757,7 @@ mod fast_img_hardening_tests {
         let res = super::explore_avif_meme_quality(&src, input_size, &convert_options)?;
         match res {
             super::AvifQualityExploreResult::Found { quality } => {
-                assert!(quality >= 20 && quality <= 100);
+                assert!((20..=100).contains(&quality));
             }
             super::AvifQualityExploreResult::Exhausted => {
                 // Exhausted is also a valid logical outcome if output always > input_size
@@ -8707,4 +8766,3 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 }
-

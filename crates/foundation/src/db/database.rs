@@ -6063,13 +6063,13 @@ mod tests {
 
     #[test]
     fn sample_from_path_result_accepts_mp4_without_gif_header_scan() {
-        if which::which("ffmpeg").is_err() {
+        let Some(ffmpeg) = crate::common_utils::resolve_tool_path("ffmpeg") else {
             eprintln!("skipping mp4 loop sample regression: ffmpeg unavailable");
             return;
-        }
+        };
         let dir = tempfile::tempdir().expect("temp dir");
         let file = dir.path().join("loop_candidate.mp4");
-        let output = Command::new("ffmpeg")
+        let output = Command::new(ffmpeg)
             .arg("-y")
             .arg("-v")
             .arg("error")
