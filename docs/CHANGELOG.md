@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Reliability, Delivery & CI Repairs
+
+- **FastImg AVIF Meme Mode**: Static-image AVIF delivery now uses the official
+  `avifenc --speed 0 --jobs all` path, a bounded quality search (three normal
+  binary probes; four only with `--extreme-precision`), no Tier-2 scan during
+  selection, and a recovery path for stale `_optimized` files or links.
+- **Photos Import Safety**: FastImg JXL shortest-path import is rejected before
+  writes. `icloud_import` now performs a no-side-effect preflight that detects
+  JXL by extension and container/codestream signature before it can rename a
+  directory or invoke Photos; verified AVIF output uses the recorded output
+  paths for generic library-side verification.
+- **Actionable Logs**: Successful per-file forensic validation is retained in
+  trace session logs while terminal output focuses on progress, failures, and
+  final decisions.
+- **CI Quality Gates**: Linux PTY `EIO` after slave closure is treated as EOF,
+  and the deep-audit job installs the locked Vue lint dependencies before
+  invoking its quality check. The libheif build now uses its supported CMake
+  options to suppress local configuration warnings.
+- **Smarter Packaging**: Smart Build no longer rebuilds Tauri for unrelated
+  dev-binary edits; `--all` incrementally refreshes every app-bundled Rust
+  resource and rebuilds the GUI only when Vue or Tauri inputs changed.
+
 ### Core Features & Capabilities
 
 - **TIFF/DNG Processing**: Added `MFB_ENABLE_TIFF` environment gate. TIFF processing is now disabled by default and requires explicit opt-in.

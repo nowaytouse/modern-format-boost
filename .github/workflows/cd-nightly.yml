@@ -184,7 +184,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DWITH_EXAMPLES=OFF \
-            -DWITH_TESTING=OFF
+            -DBUILD_TESTING=OFF \
+            -DWITH_OPENH264=OFF
           cmake --build build --parallel
           sudo cmake --install build
           sudo ldconfig

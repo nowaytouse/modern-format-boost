@@ -187,6 +187,13 @@ fn pty_winsize() -> libc::winsize {
     winsize
 }
 
+/// Linux reports `EIO` from the PTY master after its slave has closed.
+/// This is the terminal equivalent of EOF, not a failed child process read.
+#[cfg(unix)]
+fn pty_read_error_is_end_of_stream(error: &std::io::Error) -> bool {
+    cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO)
+}
+
 #[cfg(unix)]
 fn stream_process_with_pty_unix<F, H>(
     cmd: &[String],
@@ -302,6 +309,7 @@ where
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
+            Err(err) if pty_read_error_is_end_of_stream(&err) => break,
             Err(err) if matches!(err.kind(), io::ErrorKind::Interrupted) => {}
             Err(err) => return Err(err).context("read pty child output"),
         }
@@ -408,6 +416,19 @@ mod tests {
     #[test]
     fn test_pty_available_on_unix() {
         assert!(pty_available());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pty_eio_end_of_stream_is_linux_specific() {
+        let eio = std::io::Error::from_raw_os_error(libc::EIO);
+        assert_eq!(
+            pty_read_error_is_end_of_stream(&eio),
+            cfg!(target_os = "linux")
+        );
+        assert!(!pty_read_error_is_end_of_stream(
+            &std::io::Error::from_raw_os_error(libc::EBADF)
+        ));
     }
 
     #[cfg(unix)]

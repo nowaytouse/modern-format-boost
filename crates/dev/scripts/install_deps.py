@@ -359,7 +359,7 @@ def main():
         f"{pick_symbol('🌟', ('[STAR]'))} All dependencies installed successfully!",
     )
     print(
-        "You can now run 'python3 crates/dev/scripts/check_all.py' to verify the workspace."
+        "You can now run 'cargo run --locked -p dev --bin check_all' to verify the workspace."
     )
     print_c(
         DIM,

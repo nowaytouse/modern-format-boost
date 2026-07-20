@@ -136,7 +136,8 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DCMAKE_WARN_DEPRECATED=OFF \
             -DWITH_EXAMPLES=OFF \
-            -DWITH_TESTING=OFF \
+            -DBUILD_TESTING=OFF \
+            -DWITH_OPENH264=OFF \
             > /tmp/libheif-cmake.log 2>&1
           cmake --build build --parallel
           sudo cmake --install build
@@ -211,7 +212,25 @@ jobs:
         continue-on-error: true
         run: just fmt-check
 
-      - name: Install upstream media and MPC dependencies
+      - name: Install MPC downloader bootstrap dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y curl meson ninja-build nasm
+
+      - name: Install upstream media dependencies before compiling the MPC downloader
+        env:
+          MFB_SKIP_MPC_INSTALL: "1"
+        run: bash scripts/ci/install_media_dependencies.sh
+
+      - name: Download GNU MPC with mirror failover
+        run: |
+          archive="$RUNNER_TEMP/mpc-1.4.1.tar.xz"
+          cargo run --locked -p dev --bin download_gnu_mpc -- "$archive"
+          echo "MFB_MPC_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Install GNU MPC from the mirror-verified archive
+        env:
+          MFB_MPC_ONLY: "1"
         run: bash scripts/ci/install_media_dependencies.sh
 
       - name: Install Vue quality dependencies
@@ -327,6 +346,16 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.13.0
+          cache: npm
+          cache-dependency-path: crates/dev/src/vue/package-lock.json
+
+      - name: Install Vue quality dependencies
+        run: npm ci --prefix crates/dev/src/vue --ignore-scripts
 
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@v1

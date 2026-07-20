@@ -120,7 +120,7 @@ struct Args {
     #[arg(long, short = 'v')]
     verbose: bool,
 
-    /// Build everything: img + vid + verify + Tauri GUI
+    /// Build every Rust binary packaged inside the app, then refresh the Tauri GUI only when its inputs changed
     #[arg(long, short = 'a')]
     all: bool,
 
@@ -493,21 +493,6 @@ fn direct_workspace_dependencies(project_dir: &str) -> &'static [&'static str] {
     }
 }
 
-fn get_newest_source_mtime(project_root: &Path, project_dir: &str) -> f64 {
-    let mut newest =
-        newest_source_mtime_in_dir(&project_root.join(project_dir), RUST_SOURCE_EXTENSIONS);
-    for dependency in direct_workspace_dependencies(project_dir) {
-        newest = newest.max(newest_source_mtime_in_dir(
-            &project_root.join(dependency),
-            RUST_SOURCE_EXTENSIONS,
-        ));
-    }
-    for config in ["Cargo.toml", "Cargo.lock", RUST_TOOLCHAIN_FILE] {
-        newest = newest.max(get_mtime(&project_root.join(config)));
-    }
-    newest
-}
-
 fn newest_dev_binary_source_mtime(project_root: &Path, binary_name: &str) -> f64 {
     let dev_dir = project_root.join("crates/dev");
     if !dev_dir.is_dir() {
@@ -569,10 +554,13 @@ fn get_newest_binary_source_mtime(
 }
 
 fn gui_needs_rebuild(project_root: &Path) -> bool {
-    let mut newest_input = get_newest_source_mtime(project_root, "crates/dev");
+    let vue_root = vue_dir(project_root);
+    let mut newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
+    // Tauri's Rust entry points belong to the GUI bundle, but ordinary dev-bin
+    // changes are copied into an existing app bundle after their own incremental build.
     newest_input = newest_input.max(newest_source_mtime_in_dir(
-        &vue_dir(project_root),
-        GUI_SOURCE_EXTENSIONS,
+        &vue_root.join("src-tauri"),
+        RUST_SOURCE_EXTENSIONS,
     ));
     let bundle_binary = tauri_app_bundle_path(project_root)
         .join("Contents")
@@ -1576,9 +1564,13 @@ fn main() -> Result<()> {
 
     let mut targets_to_build: Vec<(&str, String, bool)> = Vec::new();
     if args.all {
-        targets_to_build.push(("crates/img", "img".to_string(), false));
-        targets_to_build.push(("crates/vid", "vid".to_string(), false));
-        targets_to_build.push(("crates/dev", "verify".to_string(), true));
+        // Check every app-bundled tool, but still compile only binaries whose own
+        // sources are newer. This makes --all complete without turning it into a
+        // forced workspace rebuild.
+        for binary_name in APP_BUNDLE_RESOURCE_BINARIES {
+            let crate_dir = bin_name_to_crate_dir(binary_name)?;
+            targets_to_build.push((crate_dir, (*binary_name).to_string(), false));
+        }
     } else if let Some(ref bin_name) = args.bin {
         // --bin <name>: resolve the binary to its owning crate.
         let crate_dir = bin_name_to_crate_dir(bin_name).with_context(|| {
@@ -1661,16 +1653,6 @@ fn main() -> Result<()> {
         clean_with_kondo(&project_root, style)?;
     }
 
-    // An explicit --gui or --force is a request to rebuild. --all otherwise keeps
-    // the GUI incremental just like the Rust binaries.
-    if (args.gui || args.all) && !args.rust_only {
-        if args.gui || args.force || gui_needs_rebuild(&project_root) {
-            build_and_sync_gui(&project_root, &style)?;
-        } else {
-            println!("[OK] GUI bundle up-to-date (skipped)");
-        }
-    }
-
     let mut rebuilt = 0;
     let mut skipped = 0;
     let mut failed = 0;
@@ -1743,6 +1725,17 @@ fn main() -> Result<()> {
             style.red, failed, style.reset
         );
         std::process::exit(1);
+    }
+
+    // Build the GUI only when its own Vue/Tauri inputs changed. Running it after
+    // native compilation ensures the generated app receives the current bundled
+    // binaries during the following sync step.
+    if (args.gui || args.all) && !args.rust_only {
+        if args.force || gui_needs_rebuild(&project_root) {
+            build_and_sync_gui(&project_root, &style)?;
+        } else {
+            println!("[OK] GUI bundle up-to-date (skipped)");
+        }
     }
 
     if rebuilt == 0 {
@@ -1939,6 +1932,35 @@ mod tests {
     #[test]
     fn test_vue_update_scripts_validate_dependency_updates() {
         assert_eq!(vue_update_script_names(), &["deps:update", "deps:check"]);
+    }
+
+    #[test]
+    fn gui_rebuild_ignores_unrelated_dev_binary_sources() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let vue_source = root.join("crates/dev/src/vue/src/App.vue");
+        fs::create_dir_all(vue_source.parent().unwrap())?;
+        fs::write(&vue_source, "<template><main /></template>")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let bundle_binary = tauri_app_bundle_path(root)
+            .join("Contents")
+            .join("MacOS")
+            .join("Modern Format Boost");
+        fs::create_dir_all(bundle_binary.parent().unwrap())?;
+        fs::write(&bundle_binary, "app")?;
+        assert!(!gui_needs_rebuild(root));
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let dev_binary = root.join("crates/dev/src/bin/icloud_import.rs");
+        fs::create_dir_all(dev_binary.parent().unwrap())?;
+        fs::write(&dev_binary, "fn main() {}")?;
+        assert!(!gui_needs_rebuild(root));
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&vue_source, "<template><main>updated</main></template>")?;
+        assert!(gui_needs_rebuild(root));
+        Ok(())
     }
 
     #[test]

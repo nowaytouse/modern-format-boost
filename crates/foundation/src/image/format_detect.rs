@@ -427,7 +427,9 @@ fn validate_format_with_tool(
         })?;
 
     if output.status.success() {
-        tracing::info!(
+        // Per-file success is retained in debug logs; printing thousands of lines in
+        // FastImg obscures progress and actionable failures.
+        tracing::debug!(
             target: "mfb.format_detect",
             format = ?policy.format,
             tool = %tool.display(),

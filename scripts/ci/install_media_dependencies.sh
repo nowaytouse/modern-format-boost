@@ -26,6 +26,33 @@ prepend_media_paths() {
   fi
 }
 
+install_gnu_mpc() {
+  # CI supplies a mirror-verified archive after the Rust downloader can link
+  # against the freshly installed upstream libheif. Direct script invocations
+  # retain the same Rust downloader fallback.
+  cd "$workdir"
+  local mpc_archive="${MFB_MPC_ARCHIVE:-}"
+  if [[ -z "$mpc_archive" ]]; then
+    mpc_archive="$workdir/mpc.tar.xz"
+    cargo run --locked --manifest-path "$workspace/Cargo.toml" -p dev --bin download_gnu_mpc -- "$mpc_archive"
+  elif [[ ! -s "$mpc_archive" ]]; then
+    echo "MFB_MPC_ARCHIVE is missing or empty: $mpc_archive" >&2
+    exit 1
+  fi
+  tar xf "$mpc_archive"
+  cd mpc-1.4.1
+  ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
+  make -j"$(nproc)"
+  sudo make install
+  sudo ldconfig
+  prepend_media_paths
+}
+
+if [[ "${MFB_MPC_ONLY:-0}" == "1" ]]; then
+  install_gnu_mpc
+  exit 0
+fi
+
 sudo apt-get update -qq
 sudo apt-get install -y \
   libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev \
@@ -95,27 +122,18 @@ cmake -S libheif-1.21.0 -B libheif-build -G Ninja \
   -DCMAKE_INSTALL_PREFIX=/usr/local \
   -DCMAKE_WARN_DEPRECATED=OFF \
   -DWITH_EXAMPLES=OFF \
-  -DWITH_TESTING=OFF
+  -DBUILD_TESTING=OFF \
+  -DWITH_OPENH264=OFF
 cmake --build libheif-build --parallel
 sudo cmake --install libheif-build
 sudo ldconfig
 
 # gmp-mpfr-sys needs GNU MPC 1.4.1 when the system feature matrix is enabled.
-# CI downloads this through the Rust mirror-aware helper first. Keep a local
-# fallback for direct script use, but require a supplied archive to be valid.
-cd "$workdir"
-mpc_archive="${MFB_MPC_ARCHIVE:-}"
-if [[ -z "$mpc_archive" ]]; then
-  mpc_archive="$workdir/mpc.tar.xz"
-  cargo run --locked --manifest-path "$workspace/Cargo.toml" -p dev --bin download_gnu_mpc -- "$mpc_archive"
-elif [[ ! -s "$mpc_archive" ]]; then
-  echo "MFB_MPC_ARCHIVE is missing or empty: $mpc_archive" >&2
-  exit 1
+# CI deliberately installs its upstream media stack first, so the Rust
+# downloader's dependency graph sees libheif through pkg-config. It then calls
+# this script in MFB_MPC_ONLY mode with its mirror-verified archive.
+if [[ "${MFB_SKIP_MPC_INSTALL:-0}" == "1" ]]; then
+  echo "Skipping GNU MPC installation until the CI mirror downloader completes."
+else
+  install_gnu_mpc
 fi
-tar xf "$mpc_archive"
-cd mpc-1.4.1
-./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
-make -j"$(nproc)"
-sudo make install
-sudo ldconfig
-prepend_media_paths

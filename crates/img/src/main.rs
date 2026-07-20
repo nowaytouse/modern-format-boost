@@ -13,11 +13,9 @@ use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::{
-    IntegrityResult, apply_library_assets_to_marker, apply_tier2_library_assets_to_marker,
-    delete_verified_modern_lossy_static_sources, import_jxl_outputs_with_library_verifier,
-    import_modern_lossy_static_tier, is_true_jpeg, library_handle_from_marker_import_proof,
-    library_handle_from_marker_tier2_proof, prompt_user_confirm,
-    prune_empty_source_dirs_for_tier2_assets, safe_delete_jpeg_source,
+    IntegrityResult, apply_library_assets_to_marker, build_fast_img_output_import_candidates,
+    import_media_outputs_with_library_verifier, is_true_jpeg,
+    library_handle_from_marker_import_proof, prompt_user_confirm, safe_delete_jpeg_source,
     safe_delete_matching_xmp_sidecar, verify_final_avif_delivery_integrity,
     verify_final_jxl_delivery_integrity,
 };
@@ -25,7 +23,6 @@ use foundation::image::format_detect::FormatKind;
 use foundation::image::orientation::{
     PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
 };
-use foundation::modern_lossy_static::ModernLossyStaticCandidate;
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
     Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
@@ -34,10 +31,9 @@ use foundation::pipeline::verification::{
     gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
     import_complete_or_later, marker_checks_from_result, marker_path_for_working_copy,
     output_prepared_or_later, prepare_jxl_output_dir, read_marker, resolve_working_copy_dir,
-    retry_resume_stage, write_marker_atomic,
+    retry_resume_stage, working_copy_dir, write_marker_atomic,
 };
 use foundation::quality_matcher::SourceCodec;
-use foundation::scan_modern_lossy_static_candidates;
 use foundation::{
     PauseController, Summary, check_dangerous_directory, disk_full_pause_reason, log_detail,
     log_failure, log_fatal, log_hint, log_skip, log_stat, log_success, log_summary_header,
@@ -184,18 +180,18 @@ enum Commands {
     /// Perform deep diagnostic scan of the database infrastructure and data integrity
     DbHealth,
 
-    /// Fast JPEG-only transcode: true JPEGs → adjacent JXL-only output.
+    /// Fast image encoding: true JPEGs → reversible JXL, or static images → AVIF.
     ///
     /// Detects true JPEGs via magic bytes (never extension-only), strips residual
-    /// EXIF Orientation tag post-encode, deletes verified source JPEGs, and
-    /// optionally imports verified JXLs to Photos/iCloud in shortest-path mode.
+    /// EXIF Orientation tag post-encode, deletes verified sources only after all
+    /// gates pass, and supports verified AVIF Photos/iCloud import in Meme Mode.
     ///
     /// Locked decisions: D1=Photos import required, D2=abort on delete failure,
     /// D3=pixel-diff plus tag assert, D4=Rust-only, D5=subcommand,
     /// D6=verified source delete mandatory, D7=JPEG-path-only detection.
     #[command(name = "fast-img")]
     FastImg {
-        /// Input directory (or single file) containing source JPEGs.
+        /// Input directory or single static image. Reversible JXL encoding accepts true JPEG only.
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
@@ -203,7 +199,7 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Deprecated for Rev2 fast mode; verified source JPEG cleanup is mandatory.
+        /// Deprecated for fast-img; verified source cleanup is mandatory.
         #[arg(long, default_value_t = false)]
         delete_source: bool,
 
@@ -219,7 +215,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         auto_import: bool,
 
-        /// Enable shortest-path Photos import workflow after the shared JXL-only local output passes Gate 1.
+        /// Enable verified AVIF Photos import after Gate 1. JXL stays local-only.
         #[arg(long = "shortest-path", default_value_t = false)]
         shortest_path: bool,
 
@@ -238,6 +234,10 @@ enum Commands {
         /// Meme mode strategy. "jxl" (default) or "avif" (Meme Mode).
         #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
         strategy: String,
+
+        /// Use four AVIF binary quality probes. Normal Meme Mode uses three.
+        #[arg(long = "extreme-precision", default_value_t = false)]
+        extreme_precision: bool,
     },
 
     /// Restore true JXL files back to JPEG in an adjacent output tree.
@@ -861,6 +861,7 @@ fn main_inner() -> anyhow::Result<()> {
             retry,
             allow_expert_options,
             strategy,
+            extreme_precision,
         } => {
             let options = FastImgRunOptions {
                 input: &input,
@@ -874,6 +875,7 @@ fn main_inner() -> anyhow::Result<()> {
                 archive,
                 allow_expert_options,
                 strategy: &strategy,
+                extreme_precision,
             };
             run_fast_img(options)?;
         }
@@ -2121,11 +2123,12 @@ struct FastImgRunOptions<'a> {
     archive: bool,
     allow_expert_options: bool,
     strategy: &'a str,
+    extreme_precision: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FastImgPostGate1Policy {
-    JxlOnlyDelivery,
+    LocalOnlyDelivery,
     ShortestPathImportAndVerify,
 }
 
@@ -2172,22 +2175,29 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         archive,
         allow_expert_options,
         strategy,
+        extreme_precision,
     } = options;
+    let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
 
     if let Some(output_dir) = output_dir {
         anyhow::bail!(
-            "--output is not supported by Rev2 fast-img; adjacent JXL output is fixed by source path ({} ignored)",
+            "--output is not supported by fast-img; the adjacent target-format output is fixed by source path ({} ignored)",
             output_dir.display()
         );
     }
     if delete_source.0 {
         tracing::warn!(
             target: "fast_img",
-            "--delete-source is redundant; Rev2 fast-img always deletes verified source JPEGs"
+            "--delete-source is redundant; fast-img always deletes verified source files"
         );
     }
     if auto_import.0 && !shortest_path.0 {
         anyhow::bail!("--auto-import requires --shortest-path");
+    }
+    if strategy == "jxl" && shortest_path.0 {
+        anyhow::bail!(
+            "JXL shortest-path Photos import is disabled because it can leave Photos/iCloud uploads stuck. No files were changed. Use local reversible JXL encoding without --shortest-path, or use --strategy avif --shortest-path for verified Photos import."
+        );
     }
     if strategy == "avif"
         && let Err(err) = foundation::tools::require(&["avifenc", "avifdec"])
@@ -2204,12 +2214,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         )
     })?;
-    let working_copy = resolve_working_copy_dir(&src_dir);
+    let working_copy = fast_img_resolve_working_copy_for_run(&src_dir, dry_run)?;
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
     if strategy == "avif" {
         println!(
-            "[FASTIMG ] selecting static image containers in {}",
+            "[FASTIMG ] enumerating static image containers in {} (no quality scan)",
             src_dir.display()
         );
     } else {
@@ -2218,12 +2228,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         );
     }
-    let lossy_modern_static_candidates = if shortest_path.0 {
-        println!("[TIER 2  ] inspecting modern source containers for requested Photos import");
-        scan_modern_lossy_static_candidates(&src_dir, &input_plan.candidates)?
-    } else {
-        Vec::new()
-    };
     let mut source_jpegs = Vec::new();
     for path in input_plan.candidates {
         if strategy == "avif" {
@@ -2260,6 +2264,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             src_dir.display()
         );
+        println!(
+            "[MEME    ] AVIF quality search: coarse q=100..20, then {} binary probes",
+            avif_meme_binary_probe_count(extreme_precision)
+        );
     } else {
         println!(
             "[FASTIMG ] selected {} true JPEGs in {}",
@@ -2267,13 +2275,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         );
     }
-    if !lossy_modern_static_candidates.is_empty() {
-        println!(
-            "[TIER 2  ] found {} lossy modern static image(s) eligible for Photos import",
-            lossy_modern_static_candidates.len()
-        );
-    }
-
     if let Some(marker) = &existing_marker
         && marker.stage != FastImgStageName::CleanupComplete
         && fast_img_marker_input_state_is_stale(
@@ -2345,13 +2346,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     }
                 }
                 println!(
-                    "[RESUME  ] existing cleanup marker belongs to a completed run, but original source JPEGs were restored; rebuilding from restored sources"
+                    "[RESUME  ] existing cleanup marker belongs to a completed run, but original source files were restored; rebuilding from restored sources"
                 );
                 tracing::warn!(
                     target: "fast_img",
                     working_copy = %working_copy.display(),
                     source_count = source_jpegs.len(),
-                    "fast-img cleanup marker ignored because original source JPEGs were restored after cleanup"
+                    "fast-img cleanup marker ignored because original source files were restored after cleanup"
                 );
                 existing_marker = None;
             }
@@ -2377,7 +2378,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     target: "fast_img",
                     working_copy = %working_copy.display(),
                     source_count = source_jpegs.len(),
-                    "fast-img cleanup marker ignored because current source JPEGs no longer match the completed run"
+                    "fast-img cleanup marker ignored because current source files no longer match the completed run"
                 );
                 existing_marker = None;
             }
@@ -2397,12 +2398,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )?;
         if !retry.0 {
             anyhow::bail!(
-                "fast-img previous cleanup completed with {} failed source(s); rerun with --retry to retry retained source JPEGs",
+                "fast-img previous cleanup completed with {} failed source(s); rerun with --retry to retry retained source files",
                 marker.failed_sources.len()
             );
         }
         println!(
-            "[RESUME  ] existing cleanup marker contains {} failed source(s); retrying retained source JPEGs",
+            "[RESUME  ] existing cleanup marker contains {} failed source(s); retrying retained source files",
             marker.failed_sources.len()
         );
         tracing::warn!(
@@ -2434,17 +2435,17 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )?;
         if !fast_img_marker_outputs_current(marker)? && !source_jpegs.is_empty() {
             println!(
-                "[RESUME  ] existing cleanup marker has missing/drifted JXL output; rebuilding from source JPEGs"
+                "[RESUME  ] existing cleanup marker has missing/drifted {output_format_name} output; rebuilding from source files"
             );
             tracing::warn!(
                 target: "fast_img",
                 working_copy = %working_copy.display(),
-                "fast-img cleanup marker output proof is not current; rebuilding because source JPEGs still exist"
+                "fast-img cleanup marker output proof is not current; rebuilding because source files still exist"
             );
             false
         } else if resume_local_delivery_for_shortest_path {
             println!(
-                "[RESUME  ] existing JXL-only delivery will continue to shortest-path Photos import"
+                "[RESUME  ] existing {output_format_name}-only delivery will continue to shortest-path Photos import"
             );
             true
         } else {
@@ -2548,7 +2549,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         && !fast_img_marker_outputs_current(&marker)?
     {
         println!(
-            "[RESUME  ] existing marker has missing/drifted JXL output; rebuilding local JXL outputs"
+            "[RESUME  ] existing marker has missing/drifted {output_format_name} output; rebuilding local {output_format_name} outputs"
         );
         tracing::warn!(
             target: "fast_img",
@@ -2578,21 +2579,19 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     write_marker_atomic(&marker)?;
 
     if marker.stage == FastImgStageName::ScanComplete {
-        let msg = fast_img_delete_notice_message(
-            source_jpegs.len(),
-            lossy_modern_static_candidates.len(),
-            &src_dir,
-            strategy,
-        );
+        let msg = fast_img_delete_notice_message(source_jpegs.len(), &src_dir, strategy);
         println!("{msg}");
         tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
     }
 
     if !output_prepared_or_later(&marker.stage) {
-        println!("[PREPARE ] JXL output {}", working_copy.display());
+        println!(
+            "[PREPARE ] {output_format_name} output {}",
+            working_copy.display()
+        );
         prepare_jxl_output_dir(&working_copy).with_context(|| {
             format!(
-                "create fast-img adjacent JXL output directory {}",
+                "create fast-img adjacent {output_format_name} output directory {}",
                 working_copy.display()
             )
         })?;
@@ -2611,6 +2610,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             archive,
             allow_expert_options,
             strategy,
+            extreme_precision,
         )?;
     }
 
@@ -2642,7 +2642,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         shortest_path,
         auto_import,
         reuse_marker_import_proof,
-        &lossy_modern_static_candidates,
         strategy,
     )?;
 
@@ -2653,7 +2652,7 @@ const fn fast_img_post_gate1_policy(shortest_path: ShortestPathFlag) -> FastImgP
     if shortest_path.0 {
         FastImgPostGate1Policy::ShortestPathImportAndVerify
     } else {
-        FastImgPostGate1Policy::JxlOnlyDelivery
+        FastImgPostGate1Policy::LocalOnlyDelivery
     }
 }
 
@@ -2682,12 +2681,7 @@ fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool
         })
 }
 
-fn fast_img_delete_notice_message(
-    jpeg_count: usize,
-    tier2_count: usize,
-    src_dir: &Path,
-    strategy: &str,
-) -> String {
+fn fast_img_delete_notice_message(jpeg_count: usize, src_dir: &Path, strategy: &str) -> String {
     let mode_name = if strategy == "avif" {
         "AVIF-only (Meme Mode)"
     } else {
@@ -2704,16 +2698,9 @@ fn fast_img_delete_notice_message(
         "JPEG"
     };
 
-    let tier2_notice = if tier2_count > 0 {
-        format!(
-            " It will also delete {tier2_count} verified tier-2 lossy modern static source file(s) after Photos import."
-        )
-    } else {
-        String::new()
-    };
     format!(
         "[NOTICE  ] fast-img {mode_name} delivery for {jpeg_count} {source_type_plural} from {}. \
-         This workflow will directly delete original {source_type_singular} files after strict verification.{tier2_notice} \
+         This workflow will directly delete original {source_type_singular} files after strict verification. \
          Back up the source folder first if you need to keep them.",
         src_dir.display()
     )
@@ -3054,6 +3041,17 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
             && message.contains("Unrecognized file format"))
 }
 
+const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 3;
+const AVIF_MEME_EXTREME_BINARY_PROBES: usize = 4;
+
+const fn avif_meme_binary_probe_count(extreme_precision: bool) -> usize {
+    if extreme_precision {
+        AVIF_MEME_EXTREME_BINARY_PROBES
+    } else {
+        AVIF_MEME_NORMAL_BINARY_PROBES
+    }
+}
+
 /// Meme Mode AVIF quality exploration: coarse scan + binary search.
 ///
 /// Algorithm:
@@ -3067,6 +3065,7 @@ fn explore_avif_meme_quality(
     encoder_input: &Path,
     input_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
+    binary_probe_count: usize,
 ) -> anyhow::Result<AvifQualityExploreResult> {
     const COARSE_STEP: u8 = 10;
     const MIN_QUALITY: u8 = 20;
@@ -3170,8 +3169,8 @@ fn explore_avif_meme_quality(
         source.display()
     ));
 
-    // Three probes keep the whole search within the documented 13-encode cap.
-    for _ in 0..3 {
+    // Normal Meme Mode uses three probes; explicit extreme precision uses four.
+    for _ in 0..binary_probe_count {
         if lo > hi {
             break;
         }
@@ -3264,6 +3263,7 @@ fn fast_img_run_encode_job_inner(
     archive: bool,
     allow_expert_options: bool,
     strategy: &str,
+    extreme_precision: bool,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
@@ -3297,6 +3297,7 @@ fn fast_img_run_encode_job_inner(
             &encoder_input.path,
             input_size,
             &convert_options,
+            avif_meme_binary_probe_count(extreme_precision),
         )? {
             AvifQualityExploreResult::Found { quality, .. } => {
                 foundation::log_detail!(&format!(
@@ -3457,6 +3458,7 @@ fn fast_img_run_encode_job(
     archive: bool,
     allow_expert_options: bool,
     strategy: &str,
+    extreme_precision: bool,
 ) -> FastImgJobResult {
     fast_img_run_encode_job_inner(
         job,
@@ -3466,6 +3468,7 @@ fn fast_img_run_encode_job(
         archive,
         allow_expert_options,
         strategy,
+        extreme_precision,
     )
     .map_err(|err| FastImgTranscodeError {
         rel_key: job.rel_key.clone(),
@@ -4152,20 +4155,95 @@ fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<Op
                 });
             }
         }
-        std::fs::rename(working_copy, &archived).with_context(|| {
-            format!(
-                "archive stale fast-img working copy {} at {}",
-                working_copy.display(),
-                archived.display()
-            )
-        })?;
-        return Ok(Some(archived));
+        match std::fs::rename(working_copy, &archived) {
+            Ok(()) => return Ok(Some(archived)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "archive stale fast-img working copy {} at {}",
+                        working_copy.display(),
+                        archived.display()
+                    )
+                });
+            }
+        }
     }
 
     anyhow::bail!(
         "could not choose an archive path for stale fast-img working copy {}",
         working_copy.display()
     )
+}
+
+fn fast_img_recover_non_directory_working_copy(
+    working_copy: &Path,
+    dry_run: DryRunFlag,
+) -> anyhow::Result<()> {
+    let metadata = match std::fs::symlink_metadata(working_copy) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect fast-img working copy before opening marker {}",
+                    working_copy.display()
+                )
+            });
+        }
+    };
+    if metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    if dry_run.0 {
+        println!(
+            "[DRY-RUN ] stale fast-img output is not a directory; would archive {}",
+            working_copy.display()
+        );
+        return Ok(());
+    }
+    if let Some(archived) = fast_img_archive_stale_working_copy(working_copy)? {
+        println!(
+            "[RECOVER ] stale fast-img output was not a directory; archived it at {}",
+            archived.display()
+        );
+    }
+    Ok(())
+}
+
+/// Prefer the conventional output directory after recovering a stale plain file.
+///
+/// `resolve_working_copy_dir` intentionally skips any occupied path without a
+/// working-copy marker. For `FastImg`, though, that path can be the interrupted
+/// plain-file placeholder that we know how to archive safely. Recover it first
+/// so a normal run recreates the expected `<source>_optimized` directory.
+fn fast_img_resolve_working_copy_for_run(
+    src_dir: &Path,
+    dry_run: DryRunFlag,
+) -> anyhow::Result<PathBuf> {
+    let preferred_working_copy = working_copy_dir(src_dir);
+    match std::fs::symlink_metadata(&preferred_working_copy) {
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            fast_img_recover_non_directory_working_copy(&preferred_working_copy, dry_run)?;
+            if !dry_run.0 {
+                return Ok(preferred_working_copy);
+            }
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect preferred fast-img working copy {}",
+                    preferred_working_copy.display()
+                )
+            });
+        }
+    }
+
+    let working_copy = resolve_working_copy_dir(src_dir);
+    fast_img_recover_non_directory_working_copy(&working_copy, dry_run)?;
+    Ok(working_copy)
 }
 
 fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyhow::Result<()> {
@@ -5425,11 +5503,17 @@ fn fast_img_run_encode_phase(
     archive: bool,
     allow_expert_options: bool,
     strategy: &str,
+    extreme_precision: bool,
 ) -> anyhow::Result<()> {
     let encode_label = if strategy == "avif" {
         "MEME MODE"
     } else {
         "ENCODE"
+    };
+    let source_kind = if strategy == "avif" {
+        "static image"
+    } else {
+        "source JPEG"
     };
     let total = source_jpegs.len();
     let mut completed_from_resume = 0usize;
@@ -5581,6 +5665,7 @@ fn fast_img_run_encode_phase(
                         archive,
                         allow_expert_options,
                         strategy,
+                        extreme_precision,
                     );
                     if result.is_ok() {
                         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -5686,7 +5771,7 @@ fn fast_img_run_encode_phase(
         )?;
         if session_skipped > 0 {
             println!(
-                "[SKIP    ] {session_skipped} source JPEG(s) explicitly skipped during encode"
+                "[SKIP    ] {session_skipped} {source_kind}(s) explicitly skipped during encode"
             );
             for (rel, entry) in &marker.skipped_sources {
                 let reason = &entry.reason;
@@ -5700,7 +5785,7 @@ fn fast_img_run_encode_phase(
             }
         }
         if session_failed > 0 {
-            println!("[FAIL    ] {session_failed} source JPEG(s) failed and were left in place");
+            println!("[FAIL    ] {session_failed} {source_kind}(s) failed and were left in place");
             // Enumerate per-file reasons so the user knows exactly which files
             // failed without grepping log shards.
             for (rel, entry) in &marker.failed_sources {
@@ -5743,7 +5828,7 @@ fn fast_img_run_encode_phase(
         current_source_hashes,
     )?;
     if reconciled > 0 {
-        println!("[SKIP    ] {reconciled} source JPEG(s) reconciled as explicit skips");
+        println!("[SKIP    ] {reconciled} {source_kind}(s) reconciled as explicit skips");
     }
     marker.stage = FastImgStageName::TranscodeComplete;
     write_marker_atomic(marker)?;
@@ -5763,7 +5848,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
     shortest_path: ShortestPathFlag,
     auto_import: AutoImportFlag,
     reuse_marker_import_proof: bool,
-    lossy_modern_static_candidates: &[ModernLossyStaticCandidate],
     strategy: &str,
 ) -> anyhow::Result<()> {
     let mode_name = if strategy == "avif" {
@@ -5777,6 +5861,11 @@ fn fast_img_run_verification_and_delivery_pipeline(
     } else {
         "JPEGs"
     };
+    let source_kind = if strategy == "avif" {
+        "static image"
+    } else {
+        "source JPEG"
+    };
     let reconciled = fast_img_reconcile_unrecorded_source_disposition(
         marker,
         src_dir,
@@ -5786,7 +5875,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     if reconciled > 0 {
         write_marker_atomic(marker)?;
         println!(
-            "[SKIP    ] {reconciled} source JPEG(s) reconciled as explicit skips before delivery"
+            "[SKIP    ] {reconciled} {source_kind}(s) reconciled as explicit skips before delivery"
         );
     }
     let expected_count = fast_img_effective_expected_count(
@@ -5798,9 +5887,8 @@ fn fast_img_run_verification_and_delivery_pipeline(
     // Fail early if all sources failed during encoding
     if expected_count == 0 && !marker.failed_sources.is_empty() {
         anyhow::bail!(
-            "All {} source {}(s) failed during encoding; no outputs to verify. Check logs for per-file failure reasons.",
+            "All {} {source_kind}(s) failed during encoding; no outputs to verify. Check logs for per-file failure reasons.",
             marker.failed_sources.len(),
-            source_type
         );
     }
 
@@ -5822,7 +5910,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         }
     }
 
-    if fast_img_post_gate1_policy(shortest_path) == FastImgPostGate1Policy::JxlOnlyDelivery {
+    if fast_img_post_gate1_policy(shortest_path) == FastImgPostGate1Policy::LocalOnlyDelivery {
         if retry_failed_sources_from_cleanup {
             fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
                 marker,
@@ -5849,7 +5937,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         )
         .with_context(|| {
             format!(
-                "restore fast-img directory metadata {} -> {} after JXL-only cleanup",
+                "restore fast-img directory metadata {} -> {} after local-only cleanup",
                 src_dir.display(),
                 working_copy.display()
             )
@@ -5857,30 +5945,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
         marker.stage = FastImgStageName::CleanupComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
-        if !lossy_modern_static_candidates.is_empty() {
-            println!(
-                "[TIER 2  ] importing {} lossy modern static source(s) to Photos",
-                lossy_modern_static_candidates.len()
-            );
-            let tier2_handle =
-                import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates).map_err(
-                    |err| {
-                        anyhow::anyhow!("fast-img tier-2 modern lossy static import failed: {err}")
-                    },
-                )?;
-            apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
-                anyhow::anyhow!("fast-img tier-2 marker import proof failed: {err}")
-            })?;
-            tracing::info!(
-                target: "fast_img",
-                imported = tier2_handle.imported_assets.len(),
-                "fast-img tier-2 Photos import completed"
-            );
-            println!(
-                "[TIER 2  ] imported {} lossy modern static asset(s) to Photos",
-                tier2_handle.imported_assets.len()
-            );
-        }
         println!(
             "[DELIVER ] Gate 1 passed; {mode_name} output at {}; source {source_type} deleted={} already_absent={} empty_dirs_pruned={}",
             working_copy.display(),
@@ -5891,6 +5955,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         return Ok(());
     }
 
+    let import_candidates = build_fast_img_output_import_candidates(marker);
     let library_handle = if import_complete_or_later(&marker.stage) {
         let library_handle = if reuse_marker_import_proof
             && let Some(library_handle) = library_handle_from_marker_import_proof(marker)
@@ -5903,9 +5968,9 @@ fn fast_img_run_verification_and_delivery_pipeline(
             );
             library_handle
         } else {
-            import_jxl_outputs_with_library_verifier(marker).map_err(|err| {
+            import_media_outputs_with_library_verifier(&import_candidates).map_err(|err| {
                 anyhow::anyhow!(
-                    "fast-img shortest-path resume requires fresh Photos/iCloud verification: {err}"
+                    "fast-img shortest-path AVIF resume requires fresh Photos/iCloud verification: {err}"
                 )
             })?
         };
@@ -5916,7 +5981,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     } else {
         if confirm_import_required(&marker.stage, auto_import.0) {
             let confirmed = prompt_user_confirm(&format!(
-                "Gate 1 passed. Import {expected_count} JXLs to Photos? [y/N] "
+                "Gate 1 passed. Import {expected_count} {ext_name} file(s) to Photos? [y/N] "
             ))?;
             if !confirmed {
                 marker.stage = FastImgStageName::Aborted;
@@ -5928,66 +5993,17 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 );
             }
         }
-        let library_handle = import_jxl_outputs_with_library_verifier(marker).map_err(|err| {
-            anyhow::anyhow!("fast-img shortest-path import verifier failed: {err}")
-        })?;
+        let library_handle = import_media_outputs_with_library_verifier(&import_candidates)
+            .map_err(|err| {
+                anyhow::anyhow!("fast-img shortest-path AVIF import verifier failed: {err}")
+            })?;
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
-        if !lossy_modern_static_candidates.is_empty() {
-            println!(
-                "[TIER 2  ] importing {} lossy modern static source(s) to Photos",
-                lossy_modern_static_candidates.len()
-            );
-            let tier2_handle =
-                import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates).map_err(
-                    |err| {
-                        anyhow::anyhow!("fast-img tier-2 modern lossy static import failed: {err}")
-                    },
-                )?;
-            apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
-                anyhow::anyhow!("fast-img tier-2 marker import proof failed: {err}")
-            })?;
-            tracing::info!(
-                target: "fast_img",
-                imported = tier2_handle.imported_assets.len(),
-                "fast-img tier-2 Photos import completed"
-            );
-            println!(
-                "[TIER 2  ] imported {} lossy modern static asset(s) to Photos",
-                tier2_handle.imported_assets.len()
-            );
-        }
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
         library_handle
     };
-
-    if import_complete_or_later(&marker.stage)
-        && !lossy_modern_static_candidates.is_empty()
-        && marker.tier2_imported_assets.is_empty()
-    {
-        println!(
-            "[TIER 2  ] importing {} lossy modern static source(s) to Photos (resume/backfill)",
-            lossy_modern_static_candidates.len()
-        );
-        let tier2_handle = import_modern_lossy_static_tier(src_dir, lossy_modern_static_candidates)
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "fast-img tier-2 modern lossy static import failed on resume: {err}"
-                )
-            })?;
-        apply_tier2_library_assets_to_marker(marker, &tier2_handle).map_err(|err| {
-            anyhow::anyhow!("fast-img tier-2 marker import proof failed on resume: {err}")
-        })?;
-        write_marker_atomic(marker)?;
-        println!(
-            "[TIER 2  ] imported {} lossy modern static asset(s) to Photos (resume/backfill)",
-            tier2_handle.imported_assets.len()
-        );
-    }
-
-    let tier2_library_handle = library_handle_from_marker_tier2_proof(marker);
 
     if !gate2_complete_or_later(&marker.stage) {
         print_photos_verifier_proof_summary(&library_handle, expected_count);
@@ -6039,29 +6055,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let (source_deleted, source_already_deleted) =
         fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
     let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
-    let (tier2_deleted, tier2_already_deleted) = if let Some(tier2_library_handle) =
-        tier2_library_handle.as_ref()
-    {
-        if !tier2_library_handle.imported_assets.is_empty() {
-            println!(
-                "[DELETE  ] removing {} verified tier-2 lossy modern static source(s)",
-                tier2_library_handle.imported_assets.len()
-            );
-        }
-        delete_verified_modern_lossy_static_sources(src_dir, tier2_library_handle, true).map_err(
-            |err| anyhow::anyhow!("fast-img tier-2 source delete failed after Gate 3: {err}"),
-        )?
-    } else {
-        (0, 0)
-    };
-    let tier2_dirs_pruned = if let Some(tier2_library_handle) = tier2_library_handle.as_ref() {
-        prune_empty_source_dirs_for_tier2_assets(src_dir, &tier2_library_handle.imported_assets)
-            .map_err(|err| {
-                anyhow::anyhow!("fast-img tier-2 empty source dir prune failed: {err}")
-            })?
-    } else {
-        0
-    };
     fast_img_strip_non_target_files(working_copy, strategy)?;
     foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
         .with_context(|| {
@@ -6075,10 +6068,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         target: "fast_img",
         deleted = source_deleted,
         already_absent = source_already_deleted,
-        tier2_deleted,
-        tier2_already_deleted,
         empty_dirs_pruned = source_dirs_pruned,
-        tier2_empty_dirs_pruned = tier2_dirs_pruned,
         src_dir = %src_dir.display(),
         "fast-img deleted verified source files after Gate 3"
     );
@@ -6086,24 +6076,13 @@ fn fast_img_run_verification_and_delivery_pipeline(
     marker.stage = FastImgStageName::CleanupComplete;
     marker.error = None;
     write_marker_atomic(marker)?;
-    if tier2_deleted + tier2_already_deleted > 0 {
-        println!(
-            "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} tier-2 modern static deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
-            ctx.expected_count,
-            source_deleted,
-            tier2_deleted,
-            source_dirs_pruned + tier2_dirs_pruned,
-            working_copy.display()
-        );
-    } else {
-        println!(
-            "[DONE    ] {} files · {} source {source_type} deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
-            ctx.expected_count,
-            source_deleted,
-            source_dirs_pruned,
-            working_copy.display()
-        );
-    }
+    println!(
+        "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
+        ctx.expected_count,
+        source_deleted,
+        source_dirs_pruned,
+        working_copy.display()
+    );
     Ok(())
 }
 
@@ -6461,8 +6440,9 @@ mod fast_img_hardening_tests {
         fast_img_marker_input_state_is_stale, fast_img_marker_outputs_current,
         fast_img_pipeline_ctx, fast_img_planned_output_rel, fast_img_post_gate1_policy,
         fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
-        fast_img_refresh_marker_jxl_deliveries, fast_img_refresh_reused_jxl_delivery,
-        fast_img_remove_failed_encode_output, fast_img_run_encode_phase,
+        fast_img_recover_non_directory_working_copy, fast_img_refresh_marker_jxl_deliveries,
+        fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_encode_output,
+        fast_img_resolve_working_copy_for_run, fast_img_run_encode_phase,
         fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_target_files,
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
@@ -7003,6 +6983,7 @@ mod fast_img_hardening_tests {
             archive: false,
             allow_expert_options: false,
             strategy: "jxl",
+            extreme_precision: false,
         })?;
 
         Ok(())
@@ -7145,6 +7126,7 @@ mod fast_img_hardening_tests {
             archive: false,
             allow_expert_options: false,
             strategy: "jxl",
+            extreme_precision: false,
         })?;
 
         Ok(())
@@ -7366,6 +7348,7 @@ mod fast_img_hardening_tests {
             false,
             false,
             "jxl",
+            false,
         )?;
 
         let entry = marker
@@ -7451,6 +7434,7 @@ mod fast_img_hardening_tests {
             false,
             false,
             "jxl",
+            false,
         )?;
 
         let entry = marker
@@ -7584,6 +7568,68 @@ mod fast_img_hardening_tests {
 
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
         assert_eq!(std::fs::read(&archived)?, b"interrupted output placeholder");
+        Ok(())
+    }
+
+    #[test]
+    fn non_directory_fast_img_working_copy_is_recovered_before_marker_read() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let working_copy = root.path().join("Photos_optimized");
+        std::fs::write(&working_copy, b"interrupted output placeholder")?;
+
+        fast_img_recover_non_directory_working_copy(&working_copy, DryRunFlag(false))?;
+
+        assert!(std::fs::symlink_metadata(&working_copy).is_err());
+        let archived = std::fs::read_dir(root.path())?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|name| name.starts_with("Photos_optimized.stale-"))
+            })
+            .context("recovery did not archive the stale non-directory output")?;
+        assert_eq!(std::fs::read(archived)?, b"interrupted output placeholder");
+        Ok(())
+    }
+
+    #[test]
+    fn non_directory_preferred_fast_img_output_is_archived_and_reused() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source_dir = root.path().join("Photos");
+        std::fs::create_dir(&source_dir)?;
+        let working_copy = foundation::pipeline::verification::working_copy_dir(&source_dir);
+        std::fs::write(&working_copy, b"interrupted output placeholder")?;
+
+        let resolved = fast_img_resolve_working_copy_for_run(&source_dir, DryRunFlag(false))?;
+
+        assert_eq!(resolved, working_copy);
+        assert!(std::fs::symlink_metadata(&working_copy).is_err());
+        let archived = std::fs::read_dir(root.path())?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|name| name.starts_with("Photos_optimized.stale-"))
+            })
+            .context("resolver did not archive the stale preferred output")?;
+        assert_eq!(std::fs::read(archived)?, b"interrupted output placeholder");
+        Ok(())
+    }
+
+    #[test]
+    fn non_directory_fast_img_working_copy_dry_run_does_not_mutate() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let working_copy = root.path().join("Photos_optimized");
+        std::fs::write(&working_copy, b"interrupted output placeholder")?;
+
+        fast_img_recover_non_directory_working_copy(&working_copy, DryRunFlag(true))?;
+
+        assert_eq!(
+            std::fs::read(&working_copy)?,
+            b"interrupted output placeholder"
+        );
         Ok(())
     }
 
@@ -8079,10 +8125,10 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn default_policy_is_jxl_only_delivery() {
+    fn default_policy_is_local_only_delivery() {
         assert_eq!(
             fast_img_post_gate1_policy(ShortestPathFlag(false)),
-            FastImgPostGate1Policy::JxlOnlyDelivery
+            FastImgPostGate1Policy::LocalOnlyDelivery
         );
     }
 
@@ -8155,6 +8201,7 @@ mod fast_img_hardening_tests {
             retry: false,
             allow_expert_options: false,
             strategy: "jxl".to_string(),
+            extreme_precision: false,
         };
 
         assert!(!command_requires_database(&command));
@@ -8262,15 +8309,16 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn delete_notice_warns_source_jpegs_are_deleted_without_prompting() {
-        let message = fast_img_delete_notice_message(3, 0, std::path::Path::new("/photos"), "jxl");
+        let message = fast_img_delete_notice_message(3, std::path::Path::new("/photos"), "jxl");
         assert!(message.contains("will directly delete original JPEG files"));
         assert!(message.contains("JXL-only delivery"));
     }
 
     #[test]
-    fn delete_notice_mentions_tier2_sources_when_present() {
-        let message = fast_img_delete_notice_message(2, 4, std::path::Path::new("/photos"), "jxl");
-        assert!(message.contains("will also delete 4 verified tier-2 lossy"));
+    fn delete_notice_does_not_claim_extra_source_scans() {
+        let message = fast_img_delete_notice_message(2, std::path::Path::new("/photos"), "avif");
+        assert!(message.contains("AVIF-only (Meme Mode)"));
+        assert!(!message.contains("tier-2"));
     }
 
     #[test]
@@ -9149,27 +9197,15 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn test_fast_img_avif_meme_mode_quality_exploration_logic() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let src = root.path().join("meme.jpg");
-        // Write 2048 bytes of mock JPEG to ensure space for AVIF header boxes
-        write_jpeg(&src, &[0u8; 2048])?;
-        let convert_options = foundation::ConvertOptions {
-            output_dir: Some(root.path().to_path_buf()),
-            base_dir: Some(root.path().to_path_buf()),
-            flags: foundation::ConvertFlags::FORCE,
-            ..Default::default()
-        };
-        let input_size = std::fs::metadata(&src)?.len();
-        let res = super::explore_avif_meme_quality(&src, &src, input_size, &convert_options)?;
-        match res {
-            super::AvifQualityExploreResult::Found { quality } => {
-                assert!((20..=100).contains(&quality));
-            }
-            super::AvifQualityExploreResult::Exhausted
-            | super::AvifQualityExploreResult::SourceUnavailable { .. } => {}
-        }
-        Ok(())
+    fn fast_img_avif_meme_quality_probe_count_respects_precision_mode() {
+        assert_eq!(
+            super::avif_meme_binary_probe_count(false),
+            super::AVIF_MEME_NORMAL_BINARY_PROBES
+        );
+        assert_eq!(
+            super::avif_meme_binary_probe_count(true),
+            super::AVIF_MEME_EXTREME_BINARY_PROBES
+        );
     }
 
     #[test]

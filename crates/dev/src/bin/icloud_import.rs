@@ -18,10 +18,11 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use dev::infra::ui_tokens::pick_symbol;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use walkdir::WalkDir;
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,84 @@ struct Args {
     /// Skip the interactive 'yes' confirmation prompt
     #[arg(long)]
     yes: bool,
+
+    /// Inspect the directory and refuse JXL input before any import-side effect
+    #[arg(long)]
+    preflight_only: bool,
+}
+
+const JXL_CODESTREAM_MAGIC: [u8; 2] = [0xFF, 0x0A];
+const JXL_CONTAINER_MAGIC: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+];
+
+#[derive(Debug, Default)]
+struct ImportPreflight {
+    regular_files: usize,
+    jxl_files: Vec<PathBuf>,
+}
+
+fn file_looks_like_jxl(path: &Path) -> Result<bool> {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jxl"))
+    {
+        return Ok(true);
+    }
+
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut header = [0_u8; JXL_CONTAINER_MAGIC.len()];
+    let bytes_read = file
+        .read(&mut header)
+        .with_context(|| format!("read header from {}", path.display()))?;
+    Ok(header[..bytes_read].starts_with(&JXL_CODESTREAM_MAGIC)
+        || (bytes_read >= JXL_CONTAINER_MAGIC.len() && header == JXL_CONTAINER_MAGIC))
+}
+
+fn preflight_import_target(target: &Path) -> Result<ImportPreflight> {
+    if !target.is_dir() {
+        bail!("{} is not a directory", target.display());
+    }
+
+    let mut report = ImportPreflight::default();
+    for entry in WalkDir::new(target).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk import target {}", target.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        report.regular_files += 1;
+        if file_looks_like_jxl(entry.path())? {
+            report.jxl_files.push(entry.into_path());
+        }
+    }
+    report.jxl_files.sort_unstable();
+    Ok(report)
+}
+
+fn ensure_safe_to_import(target: &Path) -> Result<ImportPreflight> {
+    let report = preflight_import_target(target)?;
+    println!(
+        "[PREFLIGHT] inspected {} file(s); JXL detected: {}",
+        report.regular_files,
+        report.jxl_files.len()
+    );
+    if report.jxl_files.is_empty() {
+        return Ok(report);
+    }
+
+    let examples = report
+        .jxl_files
+        .iter()
+        .take(20)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    bail!(
+        "Photos/iCloud import refused: detected {} JXL file(s) by extension or file signature. \\
+         No folder was renamed and no import started. Decode copies to JPEG or AVIF first; \\
+         use --preflight-only to diagnose safely.\n  {examples}",
+        report.jxl_files.len()
+    );
 }
 
 // ── process lock (mirrors fcntl.flock in py) ─────────────────────────────────
@@ -417,6 +496,16 @@ fn select_import_mode() -> ImportMode {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // This preflight must run before tool discovery, locks, folder rename, or Photos access.
+    let target = args
+        .target
+        .canonicalize()
+        .with_context(|| format!("resolve target: {}", args.target.display()))?;
+    ensure_safe_to_import(&target)?;
+    if args.preflight_only {
+        return Ok(());
+    }
+
     // 1. Check osxphotos
     let osxphotos = find_osxphotos().ok_or_else(|| {
         anyhow::anyhow!(
@@ -437,11 +526,6 @@ fn main() -> Result<()> {
     let mode = args.mode.unwrap_or_else(select_import_mode);
 
     // 4. Run
-    let target = args
-        .target
-        .canonicalize()
-        .with_context(|| format!("resolve target: {}", args.target.display()))?;
-
     let ok = match mode {
         ImportMode::Optimized => run_optimized_import(&target, &osxphotos, args.yes)?,
         ImportMode::Simple => run_simple_import(&target, &osxphotos, args.yes)?,
@@ -511,5 +595,31 @@ mod tests {
         let p = lock_path();
         assert!(p.to_string_lossy().contains("mfb_test"));
         assert_eq!(p.file_name().unwrap(), "photos_import.lock");
+    }
+
+    #[test]
+    fn test_preflight_accepts_non_jxl_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::write(dir.path().join("safe.png"), b"not a JXL")?;
+
+        let report = ensure_safe_to_import(dir.path())?;
+        assert_eq!(report.regular_files, 1);
+        assert!(report.jxl_files.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_preflight_refuses_jxl_extension_and_signature() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let declared_jxl = dir.path().join("declared.jxl");
+        let disguised_jxl = dir.path().join("renamed.jpg");
+        std::fs::write(&declared_jxl, b"not necessarily a valid JXL")?;
+        std::fs::write(&disguised_jxl, JXL_CONTAINER_MAGIC)?;
+
+        let report = preflight_import_target(dir.path())?;
+        assert_eq!(report.jxl_files, vec![declared_jxl, disguised_jxl]);
+        let error = ensure_safe_to_import(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("import refused"));
+        Ok(())
     }
 }

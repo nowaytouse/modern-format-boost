@@ -70,27 +70,7 @@ def can_prompt_user() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def resolve_python_executable() -> str | None:
-    if sys.executable:
-        return sys.executable
-    return shutil.which("python3") or shutil.which("python")
-
-
 def run_post_cleanup_rebuild(project_root: Path, *, force: bool = False) -> bool:
-    smart_build = SCRIPT_DIR / "smart_build.py"
-    if not smart_build.is_file():
-        print(
-            f"{RED}{pick_symbol('❌', ('[ERROR]'))} Error: rebuild script not found: {smart_build}{RESET}"
-        )
-        return False
-
-    python_exe = resolve_python_executable()
-    if not python_exe:
-        print(
-            f"{RED}{pick_symbol('❌', ('[ERROR]'))} Error: no Python interpreter found for rebuild step.{RESET}"
-        )
-        return False
-
     if not shutil.which("cargo"):
         print(
             f"{RED}{pick_symbol('❌', ('[ERROR]'))} Error: cargo not found in PATH; cannot rebuild project.{RESET}"
@@ -107,7 +87,22 @@ def run_post_cleanup_rebuild(project_root: Path, *, force: bool = False) -> bool
             f"{DIM}Running smart_build (incremental if artifacts are current)...{RESET}\n"
         )
 
-    build_cmd = [python_exe, str(smart_build)]
+    release_smart_build = project_root / "target" / "release" / "smart_build"
+    build_cmd = (
+        [str(release_smart_build)]
+        if release_smart_build.is_file()
+        else [
+            "cargo",
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "smart_build",
+            "--",
+        ]
+    )
     if force:
         build_cmd.append("--force")
 
@@ -130,7 +125,9 @@ def run_post_cleanup_rebuild(project_root: Path, *, force: bool = False) -> bool
             f"\n{RED}{pick_symbol('❌', ('[ERROR]'))} Error: Rebuild failed to start: {exc}{RESET}"
         )
 
-    print(f"{YELLOW}Please run '{python_exe} {smart_build} --force' manually.{RESET}")
+    print(
+        f"{YELLOW}Please run 'cargo run --release --locked -p dev --bin smart_build -- --force' manually.{RESET}"
+    )
     return False
 
 

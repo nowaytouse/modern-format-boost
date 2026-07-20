@@ -1122,6 +1122,32 @@ pub fn import_media_outputs_with_library_verifier(
     )
 }
 
+/// Build Photos import rows from the exact outputs recorded by a fast-img run.
+///
+/// Unlike the legacy JXL-only importer, this preserves each marker entry's
+/// output extension so shortest-path AVIF delivery can use the same custody
+/// verification without treating AVIF files as JXL.
+#[must_use]
+pub fn build_fast_img_output_import_candidates(
+    marker: &WorkingCopyMarker,
+) -> Vec<PhotosImportCandidate> {
+    let mut candidates = marker
+        .blake3_log
+        .iter()
+        .map(|(source_rel, entry)| {
+            let rel_path = marker_entry_out_rel(source_rel, entry);
+            PhotosImportCandidate {
+                path: marker.working_copy.join(&rel_path),
+                album_name: fast_img_optimized_import_album_name(marker, &rel_path),
+                rel_path,
+                blake3: entry.out.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    candidates
+}
+
 /// Build Photos import rows for fast-img tier 2 (lossy modern static originals).
 #[must_use]
 pub fn build_modern_lossy_static_import_candidates(
@@ -4359,6 +4385,30 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, wc.join("微信/a.JXL"));
         assert_eq!(entries[0].1, "✨/✨Batch/微信");
+    }
+
+    #[test]
+    fn fast_img_output_import_candidates_preserve_recorded_avif_extension() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let src_root = temp_dir.path().join("src");
+        let wc = temp_dir.path().join("Meme_optimized");
+        let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
+        marker.blake3_log.insert(
+            "nested/source.png".to_string(),
+            Blake3Entry {
+                out_rel: Some("nested/source.avif".to_string()),
+                src: "source-hash".to_string(),
+                out: "avif-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let candidates = build_fast_img_output_import_candidates(&marker);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].rel_path, "nested/source.avif");
+        assert_eq!(candidates[0].path, wc.join("nested/source.avif"));
+        assert_eq!(candidates[0].blake3, "avif-hash");
     }
 
     #[test]
