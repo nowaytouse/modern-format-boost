@@ -31,7 +31,7 @@ sudo apt-get install -y \
   libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev \
   librsvg2-dev libglib2.0-dev pkg-config clang cmake nasm ninja-build meson \
   libgmp-dev libmpfr-dev libmpc-dev libjxl-dev libjxl-tools libnuma-dev \
-  libde265-dev libx264-dev libx265-dev libaom-dev libdav1d-dev libsvtav1-dev \
+  libde265-dev libx264-dev libx265-dev libaom-dev libdav1d-dev \
   exiftool imagemagick jpeginfo pngcheck exiv2 jhead libjpeg-turbo-progs \
   libavif-bin curl build-essential
 
@@ -45,6 +45,20 @@ ninja -C vmaf-build
 sudo ninja -C vmaf-build install
 sudo ldconfig
 prepend_media_paths
+
+# Ubuntu's libsvtav1-dev package does not reliably ship the SvtAv1Enc pkg-config
+# manifest required by FFmpeg. Build the encoder from its upstream project so
+# the FFmpeg snapshot always uses a current, explicitly discoverable SVT-AV1.
+git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-av1
+cmake -S svt-av1 -B svt-av1-build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr/local \
+  -DBUILD_SHARED_LIBS=ON
+cmake --build svt-av1-build --parallel
+sudo cmake --install svt-av1-build
+sudo ldconfig
+prepend_media_paths
+pkg-config --exists 'SvtAv1Enc >= 0.9.0'
 
 # Use FFmpeg's own current development snapshot, not a third-party repackaging.
 download "https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2" ffmpeg-snapshot.tar.bz2
