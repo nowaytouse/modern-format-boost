@@ -492,6 +492,7 @@ pub struct AvifencBuilder {
     threads: Option<String>,
     depth: Option<u8>,
     yuv: Option<String>,
+    ignore_xmp: bool,
 }
 
 impl AvifencBuilder {
@@ -541,6 +542,12 @@ impl AvifencBuilder {
         self.yuv = Some(yuv.as_ref().to_string());
         self
     }
+
+    /// Ignore embedded XMP metadata from the input image.
+    pub const fn ignore_xmp(&mut self, enabled: bool) -> &mut Self {
+        self.ignore_xmp = enabled;
+        self
+    }
 }
 
 crate::impl_base_builder_accessors_full!(AvifencBuilder);
@@ -581,6 +588,10 @@ impl ToolBuilder for AvifencBuilder {
 
         if let Some(yuv) = &self.yuv {
             cmd.arg(constants::AVIFENC_ARG_YUV).arg(yuv);
+        }
+
+        if self.ignore_xmp {
+            cmd.arg(constants::AVIFENC_ARG_IGNORE_XMP);
         }
 
         self.base.apply_to_command(&mut cmd);
@@ -927,7 +938,8 @@ mod tests {
             .speed(6)
             .jobs("all")
             .quality(70)
-            .depth(10);
+            .depth(10)
+            .ignore_xmp(true);
 
         let cmd = builder.build();
         let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
@@ -943,6 +955,7 @@ mod tests {
         assert!(!args.contains(&"--max"));
         assert!(args.contains(&"--depth"));
         assert!(args.contains(&"10"));
+        assert!(args.contains(&"--ignore-xmp"));
     }
 
     #[test]

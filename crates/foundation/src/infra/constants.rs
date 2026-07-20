@@ -3061,6 +3061,8 @@ pub const AVIFENC_ARG_QUALITY: &str = "-q";
 pub const AVIFENC_ARG_QUALITY_ALPHA: &str = "--qalpha";
 pub const AVIFENC_ARG_DEPTH: &str = "--depth";
 pub const AVIFENC_ARG_YUV: &str = "--yuv";
+/// Ignore malformed embedded XMP while retaining other AVIF encoder inputs.
+pub const AVIFENC_ARG_IGNORE_XMP: &str = "--ignore-xmp";
 
 pub const SIPS_ARG_S: &str = "-s";
 pub const SIPS_ARG_FORMAT: &str = "format";

@@ -204,7 +204,7 @@ jobs:
       - name: Install MPC downloader bootstrap dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake meson ninja-build pkg-config
+          sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config
 
       - name: Download GNU MPC from upstream mirror chain
         run: |
@@ -338,7 +338,7 @@ jobs:
       - name: Install MPC downloader bootstrap dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake meson ninja-build pkg-config
+          sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config
 
       - name: Download GNU MPC from upstream mirror chain
         run: |

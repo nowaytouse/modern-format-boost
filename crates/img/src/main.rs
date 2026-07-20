@@ -2990,6 +2990,68 @@ enum AvifQualityExploreResult {
     Found { quality: u8 },
     /// No quality in the supported range produced a size-compliant output.
     Exhausted,
+    /// The source cannot produce a verifiable AVIF at any quality.
+    SourceUnavailable { reason: String },
+}
+
+struct FastImgAvifEncoderInput {
+    path: PathBuf,
+    _temp: Option<tempfile::NamedTempFile>,
+}
+
+/// `avifenc` deliberately accepts only JPEG, PNG, and Y4M. Decode static WebP
+/// once through its official decoder, then keep the original file as the
+/// delivery and verification source.
+fn prepare_fast_img_avif_encoder_input(
+    source: &Path,
+    format: FormatKind,
+) -> anyhow::Result<FastImgAvifEncoderInput> {
+    if format != FormatKind::WebP {
+        return Ok(FastImgAvifEncoderInput {
+            path: source.to_path_buf(),
+            _temp: None,
+        });
+    }
+
+    let temp = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "fast_img_webp_avif_input",
+        None,
+        Some(".png"),
+    )
+    .context("FastImg could not allocate a temporary PNG for official WebP decode")?;
+    let temp_path = temp.path().to_path_buf();
+    let mut builder = foundation::image_builders::DwebpBuilder::new();
+    builder.input(source).output(&temp_path);
+    let output = builder.build().output().with_context(|| {
+        format!(
+            "FastImg could not launch official dwebp for static WebP {}",
+            source.display()
+        )
+    })?;
+
+    if output.status.success() && temp_path.is_file() {
+        foundation::log_detail!(&format!(
+            "FastImg AVIF: decoded static WebP once with official dwebp: {}",
+            source.display()
+        ));
+        return Ok(FastImgAvifEncoderInput {
+            path: temp_path,
+            _temp: Some(temp),
+        });
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!(
+        "official dwebp could not decode static WebP {}: {}",
+        source.display(),
+        stderr.trim()
+    );
+}
+
+fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
+    message.contains("pixel-diff: cannot open source image")
+        || (message.contains("avifenc failed at q=")
+            && message.contains("Unrecognized file format"))
 }
 
 /// Meme Mode AVIF quality exploration: coarse scan + binary search.
@@ -3002,6 +3064,7 @@ enum AvifQualityExploreResult {
 /// All temp files from failed probes are cleaned up immediately.
 fn explore_avif_meme_quality(
     source: &Path,
+    encoder_input: &Path,
     input_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
 ) -> anyhow::Result<AvifQualityExploreResult> {
@@ -3016,7 +3079,12 @@ fn explore_avif_meme_quality(
             "AVIF Meme Mode quality probe [coarse]: q={q} for {}",
             source.display()
         ));
-        match img::lossless_converter::convert_to_avif_probe(source, q, convert_options) {
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+            source,
+            encoder_input,
+            q,
+            convert_options,
+        ) {
             Ok((temp_path, output_size)) => {
                 if output_size <= input_size {
                     foundation::log_detail!(&format!(
@@ -3039,9 +3107,13 @@ fn explore_avif_meme_quality(
                 );
             }
             Err(e) => {
+                let reason = e.to_string();
                 foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe [coarse]: q={q} encode error — {e}"
+                    "AVIF Meme Mode quality probe [coarse]: q={q} encode error — {reason}"
                 ));
+                if avif_quality_probe_error_is_source_invariant(&reason) {
+                    return Ok(AvifQualityExploreResult::SourceUnavailable { reason });
+                }
             }
         }
         if q < MIN_QUALITY + COARSE_STEP {
@@ -3067,8 +3139,20 @@ fn explore_avif_meme_quality(
             "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
             source.display()
         ));
-        let (temp, _size) =
-            img::lossless_converter::convert_to_avif_probe(source, 100, convert_options)?;
+        let (temp, _size) = match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+            source,
+            encoder_input,
+            100,
+            convert_options,
+        ) {
+            Ok(result) => result,
+            Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
+                return Ok(AvifQualityExploreResult::SourceUnavailable {
+                    reason: e.to_string(),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "fast_img_probe_cleanup",
             &temp,
@@ -3095,7 +3179,12 @@ fn explore_avif_meme_quality(
         foundation::log_detail!(&format!(
             "AVIF Meme Mode quality probe [binary]: testing q={mid}"
         ));
-        match img::lossless_converter::convert_to_avif_probe(source, mid, convert_options) {
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+            source,
+            encoder_input,
+            mid,
+            convert_options,
+        ) {
             Ok((temp_path, output_size)) => {
                 if output_size <= input_size {
                     foundation::log_detail!(&format!(
@@ -3125,9 +3214,13 @@ fn explore_avif_meme_quality(
                 }
             }
             Err(e) => {
+                let reason = e.to_string();
                 foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe [binary]: q={mid} error — {e}"
+                    "AVIF Meme Mode quality probe [binary]: q={mid} error — {reason}"
                 ));
+                if avif_quality_probe_error_is_source_invariant(&reason) {
+                    return Ok(AvifQualityExploreResult::SourceUnavailable { reason });
+                }
                 if mid == lo {
                     break;
                 }
@@ -3142,7 +3235,20 @@ fn explore_avif_meme_quality(
         source.display()
     ));
     let (temp_path, _output_size) =
-        img::lossless_converter::convert_to_avif_probe(source, best_q, convert_options)?;
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+            source,
+            encoder_input,
+            best_q,
+            convert_options,
+        ) {
+            Ok(result) => result,
+            Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
+                return Ok(AvifQualityExploreResult::SourceUnavailable {
+                    reason: e.to_string(),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
     foundation::media_conversion_gate::delivery_remove_file_or_audit(
         "fast_img_probe_cleanup",
         &temp_path,
@@ -3168,7 +3274,30 @@ fn fast_img_run_encode_job_inner(
             ..Default::default()
         };
         let input_size = std::fs::metadata(&job.source)?.len();
-        match explore_avif_meme_quality(&job.source, input_size, &convert_options)? {
+        let encoder_input = match prepare_fast_img_avif_encoder_input(&job.source, format) {
+            Ok(input) => input,
+            Err(err) => {
+                let reason =
+                    format!("AVIF target conversion unavailable after official WebP decode: {err}");
+                foundation::log_detail!(&format!(
+                    "Meme Mode (AVIF): {reason}; preserving source {}",
+                    job.source.display()
+                ));
+                return Ok(FastImgTranscodeOutcome::Skipped(
+                    FastImgSkippedSourceProof {
+                        rel_key: job.rel_key.clone(),
+                        src_hash: calculate_blake3_hash(&job.source)?,
+                        reason,
+                    },
+                ));
+            }
+        };
+        match explore_avif_meme_quality(
+            &job.source,
+            &encoder_input.path,
+            input_size,
+            &convert_options,
+        )? {
             AvifQualityExploreResult::Found { quality, .. } => {
                 foundation::log_detail!(&format!(
                     "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?})",
@@ -3176,8 +3305,9 @@ fn fast_img_run_encode_job_inner(
                     job.source.display(),
                     format
                 ));
-                img::lossless_converter::convert_to_avif(
+                img::lossless_converter::convert_to_avif_from_encoder_input(
                     &job.source,
+                    &encoder_input.path,
                     Some(quality),
                     &convert_options,
                 )?
@@ -3193,6 +3323,21 @@ fn fast_img_run_encode_job_inner(
                         rel_key: job.rel_key.clone(),
                         src_hash: calculate_blake3_hash(&job.source)?,
                         reason: "AVIF quality exploration exhausted without a size-compliant target output".to_string(),
+                    },
+                ));
+            }
+            AvifQualityExploreResult::SourceUnavailable { reason } => {
+                foundation::log_detail!(&format!(
+                    "Meme Mode (AVIF): source cannot produce a verifiable AVIF; preserving {}: {reason}",
+                    job.source.display()
+                ));
+                return Ok(FastImgTranscodeOutcome::Skipped(
+                    FastImgSkippedSourceProof {
+                        rel_key: job.rel_key.clone(),
+                        src_hash: calculate_blake3_hash(&job.source)?,
+                        reason: format!(
+                            "AVIF source preflight could not produce a verifiable target output: {reason}"
+                        ),
                     },
                 ));
             }
@@ -7420,7 +7565,8 @@ mod fast_img_hardening_tests {
             "jxl",
         )?);
 
-        let archived = fast_img_archive_stale_working_copy(&wc)?.expect("stale output exists");
+        let archived = fast_img_archive_stale_working_copy(&wc)?
+            .ok_or_else(|| anyhow::anyhow!("test precondition: stale output exists"))?;
         assert!(!wc.exists());
         assert!(archived.join("old.JXL").is_file());
 
@@ -7433,8 +7579,8 @@ mod fast_img_hardening_tests {
         let working_copy = root.path().join("Photos_optimized");
         std::fs::write(&working_copy, b"interrupted output placeholder")?;
 
-        let archived =
-            fast_img_archive_stale_working_copy(&working_copy)?.expect("stale output exists");
+        let archived = fast_img_archive_stale_working_copy(&working_copy)?
+            .ok_or_else(|| anyhow::anyhow!("test precondition: stale output exists"))?;
 
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
         assert_eq!(std::fs::read(&archived)?, b"interrupted output placeholder");
@@ -7448,8 +7594,8 @@ mod fast_img_hardening_tests {
         let working_copy = root.path().join("Photos_optimized");
         std::os::unix::fs::symlink(root.path().join("missing-output"), &working_copy)?;
 
-        let archived =
-            fast_img_archive_stale_working_copy(&working_copy)?.expect("stale output exists");
+        let archived = fast_img_archive_stale_working_copy(&working_copy)?
+            .ok_or_else(|| anyhow::anyhow!("test precondition: stale output exists"))?;
 
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
         assert!(
@@ -9015,15 +9161,27 @@ mod fast_img_hardening_tests {
             ..Default::default()
         };
         let input_size = std::fs::metadata(&src)?.len();
-        let res = super::explore_avif_meme_quality(&src, input_size, &convert_options)?;
+        let res = super::explore_avif_meme_quality(&src, &src, input_size, &convert_options)?;
         match res {
             super::AvifQualityExploreResult::Found { quality } => {
                 assert!((20..=100).contains(&quality));
             }
-            super::AvifQualityExploreResult::Exhausted => {
-                // Exhausted is also a valid logical outcome if output always > input_size
-            }
+            super::AvifQualityExploreResult::Exhausted
+            | super::AvifQualityExploreResult::SourceUnavailable { .. } => {}
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_fast_img_avif_stops_repeating_source_invariant_probe_errors() {
+        assert!(super::avif_quality_probe_error_is_source_invariant(
+            "AVIF pixel equivalence failed at q=90: pixel-diff: cannot open source image: malformed GIF header"
+        ));
+        assert!(super::avif_quality_probe_error_is_source_invariant(
+            "avifenc failed at q=90: Unrecognized file format"
+        ));
+        assert!(!super::avif_quality_probe_error_is_source_invariant(
+            "AVIF health check failed at q=90: temporary I/O error"
+        ));
     }
 }

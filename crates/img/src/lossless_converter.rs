@@ -2685,6 +2685,58 @@ pub fn convert_jpeg_to_jxl(
     }
 }
 
+fn avifenc_rejects_malformed_xmp(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr)
+        .contains("XMP extraction failed: invalid multiple standard XMP segments")
+}
+
+fn build_avifenc_command(
+    input: &Path,
+    output: &Path,
+    quality: Option<u8>,
+    lossless: bool,
+    ignore_xmp: bool,
+) -> std::process::Command {
+    let mut builder = foundation::AvifencBuilder::new();
+    builder.speed(0).jobs("all");
+
+    if lossless {
+        builder.lossless(true);
+    }
+    if let Some(quality) = quality {
+        builder.quality(quality);
+    }
+    if ignore_xmp {
+        builder.ignore_xmp(true);
+    }
+
+    builder.input(input).output(output);
+    builder.build()
+}
+
+fn run_avifenc_with_malformed_xmp_retry(
+    input: &Path,
+    temp_output: &Path,
+    quality: Option<u8>,
+    lossless: bool,
+) -> std::io::Result<Output> {
+    let output = build_avifenc_command(input, temp_output, quality, lossless, false).output()?;
+    if output.status.success() || !avifenc_rejects_malformed_xmp(&output.stderr) {
+        return Ok(output);
+    }
+
+    cleanup_temp_output(temp_output, input);
+    log_detail!(&format!(
+        "avifenc rejected malformed embedded XMP for {}; retrying with official --ignore-xmp",
+        input.display()
+    ));
+    tracing::warn!(
+        source = %input.display(),
+        "avifenc rejected malformed embedded XMP; retrying with --ignore-xmp"
+    );
+    build_avifenc_command(input, temp_output, quality, lossless, true).output()
+}
+
 /// Convert an image to AVIF format with specified quality.
 ///
 /// # Arguments
@@ -2710,6 +2762,22 @@ pub fn convert_to_avif(
     quality: Option<u8>,
     options: &ConvertOptions,
 ) -> Result<TaskResult> {
+    convert_to_avif_from_encoder_input(input, input, quality, options)
+}
+
+/// Convert an image to AVIF while keeping the delivery and verification source
+/// separate from the encoder input.
+///
+/// This is used when an official decoder must normalize a source container
+/// before the official AVIF encoder can read it. The delivered filename,
+/// metadata, size gate, and pixel proof always remain tied to `source`.
+pub fn convert_to_avif_from_encoder_input(
+    source: &Path,
+    encoder_input: &Path,
+    quality: Option<u8>,
+    options: &ConvertOptions,
+) -> Result<TaskResult> {
+    let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
         log_detail!(&format!(
@@ -2743,15 +2811,7 @@ pub fn convert_to_avif(
         })?;
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
 
-    let mut builder = foundation::AvifencBuilder::new();
-    builder
-        .speed(0)
-        .jobs("all")
-        .quality(q)
-        .input(input)
-        .output(&temp_output);
-
-    let result = builder.build().output();
+    let result = run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -2830,6 +2890,18 @@ pub fn convert_to_avif_probe(
     quality: u8,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64)> {
+    convert_to_avif_probe_from_encoder_input(input, input, quality, options)
+}
+
+/// Probe AVIF encoding while preserving the original source for delivery
+/// metadata and pixel validation.
+pub fn convert_to_avif_probe_from_encoder_input(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64)> {
+    let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
         log_detail!(&format!(
@@ -2850,15 +2922,8 @@ pub fn convert_to_avif_probe(
             ))
         })?;
 
-    let mut builder = foundation::AvifencBuilder::new();
-    builder
-        .speed(0)
-        .jobs("all")
-        .quality(quality)
-        .input(input)
-        .output(&temp_output);
-
-    let result = builder.build().output();
+    let result =
+        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(quality), false);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -2958,15 +3023,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             ImgQualityError::ConversionError(err_msg)
         })?;
 
-    let mut builder = foundation::AvifencBuilder::new();
-    builder
-        .lossless(true)
-        .speed(0)
-        .jobs("all")
-        .input(input)
-        .output(&temp_output);
-
-    let result = builder.build().output();
+    let result = run_avifenc_with_malformed_xmp_retry(input, &temp_output, None, true);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -4622,6 +4679,36 @@ mod tests {
             0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
         ]));
         assert!(!has_jxl_magic(b"not-jxl"));
+    }
+
+    #[test]
+    fn malformed_xmp_retry_keeps_avifenc_at_speed_zero() {
+        assert!(avifenc_rejects_malformed_xmp(
+            b"XMP extraction failed: invalid multiple standard XMP segments"
+        ));
+        assert!(!avifenc_rejects_malformed_xmp(
+            b"XMP extraction failed for another reason"
+        ));
+
+        let command = build_avifenc_command(
+            Path::new("input.jpeg"),
+            Path::new("output.avif"),
+            Some(95),
+            false,
+            true,
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            args.windows(2)
+                .find(|pair| pair[0] == "--speed")
+                .map(|pair| pair[1].as_str()),
+            Some("0")
+        );
+        assert!(args.iter().any(|arg| arg == "--ignore-xmp"));
     }
 
     #[test]
