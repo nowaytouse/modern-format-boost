@@ -38,7 +38,14 @@ All notable changes to this project will be documented in this file.
   direct workspace-dependency, and Vue/Tauri source mtimes while ignoring generated
   trees. Small edits reuse Cargo's incremental outputs, skip unchanged Vue builds,
   and synchronize only changed release binaries/resources into the signed macOS app
-  bundle. `--force --all` remains the explicit full release/package path.
+  bundle. Default Rust builds include the packaged terminal launcher and use
+  binary-scoped dev-crate mtimes, so an unrelated dev utility edit does not trigger
+  an unnecessary launcher rebuild. `--force --all` remains the explicit full
+  release/package path.
+- **Complete Session Transcripts**: PTY process output is now teed reliably to the
+  verbose transcript and the user-facing session log, alongside explicit pipeline
+  spawn, exit, statistics, and error events. This preserves diagnosis evidence even
+  when a conversion process exits before producing a summary.
 - **Authoritative Tool Resolution**: Media-tool call sites now share the verified
   resolver, honoring explicit `MFB_TOOL_*` overrides before project-local and
   upstream/system tools. Resolved multimedia executables receive a startup smoke
@@ -73,7 +80,9 @@ All notable changes to this project will be documented in this file.
   invokes full JPEG quality/entropy analysis or the optional Tier-2 scan unless
   Photos import was explicitly requested. Stale or strategy-mismatched resume
   markers now archive the prior working copy and rebuild from current sources
-  instead of failing after a long run because the source count changed.
+  instead of failing after a long run because the source count changed. Existing
+  stale output directories, ordinary files, and dangling symlinks are all preserved
+  under a timestamped archive name before the fresh run begins.
 - **Target-Format Exploration**: AVIF fast-img delivery now begins at quality 100,
   explores lower quality only as needed to meet the size gate, and validates every
   retained candidate before falling back. JPEG-to-JXL fast-img remains restricted

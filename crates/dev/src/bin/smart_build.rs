@@ -100,11 +100,11 @@ impl Style {
     }
 }
 
-/// Smart Build — builds img / vid / verify (crates/dev) and optionally the
-/// Tauri GUI.
+/// Smart Build — builds img / vid plus the packaged terminal launcher and
+/// verification tool, and optionally the Tauri GUI.
 ///
-/// Default (no flags): build img + vid + verify if sources are newer than
-/// binaries.
+/// Default (no flags): build img + vid + verify + drag_and_drop_processor if
+/// sources are newer than binaries.
 #[derive(Parser, Debug)]
 #[command(about = "Smart Build System — incremental Rust + Tauri builder")]
 struct Args {
@@ -508,6 +508,66 @@ fn get_newest_source_mtime(project_root: &Path, project_dir: &str) -> f64 {
     newest
 }
 
+fn newest_dev_binary_source_mtime(project_root: &Path, binary_name: &str) -> f64 {
+    let dev_dir = project_root.join("crates/dev");
+    if !dev_dir.is_dir() {
+        return 0.0;
+    }
+
+    let source_dir = dev_dir.join("src");
+    let bin_dir = source_dir.join("bin");
+    let bin_file = bin_dir.join(format!("{binary_name}.rs"));
+    let bin_module_dir = bin_dir.join(binary_name);
+    let mut newest =
+        get_mtime(&dev_dir.join("Cargo.toml")).max(get_mtime(&dev_dir.join("build.rs")));
+
+    for entry in walkdir::WalkDir::new(&source_dir)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir() || !is_ignored_source_directory(entry.path())
+        })
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if !path.is_file()
+            || !path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| RUST_SOURCE_EXTENSIONS.contains(&extension))
+        {
+            continue;
+        }
+        if path.starts_with(&bin_dir) && path != bin_file && !path.starts_with(&bin_module_dir) {
+            continue;
+        }
+        newest = newest.max(get_mtime(path));
+    }
+
+    newest
+}
+
+fn get_newest_binary_source_mtime(
+    project_root: &Path,
+    project_dir: &str,
+    binary_name: &str,
+) -> f64 {
+    let mut newest = if project_dir == "crates/dev" {
+        newest_dev_binary_source_mtime(project_root, binary_name)
+    } else {
+        newest_source_mtime_in_dir(&project_root.join(project_dir), RUST_SOURCE_EXTENSIONS)
+    };
+    for dependency in direct_workspace_dependencies(project_dir) {
+        newest = newest.max(newest_source_mtime_in_dir(
+            &project_root.join(dependency),
+            RUST_SOURCE_EXTENSIONS,
+        ));
+    }
+    for config in ["Cargo.toml", "Cargo.lock", RUST_TOOLCHAIN_FILE] {
+        newest = newest.max(get_mtime(&project_root.join(config)));
+    }
+    newest
+}
+
 fn gui_needs_rebuild(project_root: &Path) -> bool {
     let mut newest_input = get_newest_source_mtime(project_root, "crates/dev");
     newest_input = newest_input.max(newest_source_mtime_in_dir(
@@ -604,7 +664,7 @@ fn decide_build_action(
         return ("rebuild", "binary-missing");
     }
 
-    let source_mtime = get_newest_source_mtime(project_root, project_dir);
+    let source_mtime = get_newest_binary_source_mtime(project_root, project_dir, binary_name);
     let binary_mtime = get_mtime(&binary_path);
 
     if source_mtime > binary_mtime {
@@ -770,7 +830,7 @@ fn build_workspace_projects(
     let mut packages = Vec::new();
     for (project_dir, _, _) in projects {
         let package = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
-        if !packages.iter().any(|existing| *existing == package) {
+        if !packages.contains(&package) {
             packages.push(package);
         }
     }
@@ -1140,10 +1200,6 @@ fn bundle_file_needs_sync(src: &Path, dest: &Path) -> bool {
     let Ok(dest_meta) = fs::metadata(dest) else {
         return true;
     };
-
-    if src_meta.len() != dest_meta.len() {
-        return true;
-    }
 
     match (src_meta.modified(), dest_meta.modified()) {
         (Ok(src_modified), Ok(dest_modified)) => src_modified > dest_modified,
@@ -1542,6 +1598,7 @@ fn main() -> Result<()> {
         targets_to_build.push(("crates/img", "img".to_string(), false));
         targets_to_build.push(("crates/vid", "vid".to_string(), false));
         targets_to_build.push(("crates/dev", "verify".to_string(), false));
+        targets_to_build.push(("crates/dev", "drag_and_drop_processor".to_string(), false));
     }
 
     // Quiet mode check
@@ -1792,6 +1849,25 @@ mod tests {
     }
 
     #[test]
+    fn test_dev_binary_source_scan_ignores_unrelated_bins() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let binary = root.join("target/release/drag_and_drop_processor");
+        fs::create_dir_all(binary.parent().unwrap())?;
+        fs::write(&binary, b"launcher")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let unrelated_bin = root.join("crates/dev/src/bin/verify.rs");
+        fs::create_dir_all(unrelated_bin.parent().unwrap())?;
+        fs::write(unrelated_bin, "fn main() {}")?;
+
+        let (action, reason) =
+            decide_build_action(root, "crates/dev", "drag_and_drop_processor", false);
+        assert_eq!((action, reason), ("skip", ""));
+        Ok(())
+    }
+
+    #[test]
     fn test_toolchain_name_from_cargo_path_matches_python_helper() {
         let cargo = Path::new("/tmp/rustup/toolchains/nightly-test/bin/cargo");
         assert_eq!(
@@ -1827,8 +1903,22 @@ mod tests {
         fs::copy(&src, &dest)?;
         assert!(!bundle_file_needs_sync(&src, &dest));
 
+        std::thread::sleep(std::time::Duration::from_millis(10));
         fs::write(&src, b"new compiled binary")?;
         assert!(bundle_file_needs_sync(&src, &dest));
+        Ok(())
+    }
+
+    #[test]
+    fn test_bundle_file_needs_sync_ignores_code_signature_size_delta() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let src = tempdir.path().join("source");
+        let dest = tempdir.path().join("dest");
+        fs::write(&src, b"compiled binary")?;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(&dest, b"compiled binary plus code signature")?;
+
+        assert!(!bundle_file_needs_sync(&src, &dest));
         Ok(())
     }
 

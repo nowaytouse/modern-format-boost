@@ -2129,7 +2129,7 @@ enum FastImgPostGate1Policy {
     ShortestPathImportAndVerify,
 }
 
-/// FastImg candidate collection only needs container metadata. Keep it out of
+/// `FastImg` candidate collection only needs container metadata. Keep it out of
 /// `image_analyzer`: that path performs full quality/entropy analysis.
 fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Result<bool> {
     let detected_format = match format {
@@ -3933,9 +3933,16 @@ fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<W
 }
 
 fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<PathBuf> {
-    if !working_copy.is_dir() {
+    let metadata = std::fs::symlink_metadata(working_copy).with_context(|| {
+        format!(
+            "inspect stale fast-img working copy {}",
+            working_copy.display()
+        )
+    })?;
+    let file_type = metadata.file_type();
+    if !(file_type.is_dir() || file_type.is_file() || file_type.is_symlink()) {
         anyhow::bail!(
-            "fast-img stale working copy is not a directory: {}",
+            "fast-img stale working copy has unsupported filesystem type: {}",
             working_copy.display()
         );
     }
@@ -3958,8 +3965,17 @@ fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<Pa
             format!("{base_name}.stale-{timestamp}-{attempt}")
         };
         let archived = parent.join(suffix);
-        if archived.exists() {
-            continue;
+        match std::fs::symlink_metadata(&archived) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "inspect stale fast-img archive destination {}",
+                        archived.display()
+                    )
+                });
+            }
         }
         std::fs::rename(working_copy, &archived).with_context(|| {
             format!(
@@ -7349,7 +7365,7 @@ mod fast_img_hardening_tests {
         std::fs::create_dir_all(&wc)?;
         let out = wc.join("old.JXL");
         std::fs::write(&out, b"old jxl output")?;
-        let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 2);
+        let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 2);
         marker.stage = FastImgStageName::Gate1Failed;
         marker.encoded_count = 1;
         marker.blake3_log.insert(
@@ -7378,6 +7394,37 @@ mod fast_img_hardening_tests {
         assert!(!wc.exists());
         assert!(archived.join("old.JXL").is_file());
 
+        Ok(())
+    }
+
+    #[test]
+    fn stale_fast_img_file_is_archived_before_fresh_run() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let working_copy = root.path().join("Photos_optimized");
+        std::fs::write(&working_copy, b"interrupted output placeholder")?;
+
+        let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+
+        assert!(std::fs::symlink_metadata(&working_copy).is_err());
+        assert_eq!(std::fs::read(&archived)?, b"interrupted output placeholder");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_fast_img_dangling_symlink_is_archived_before_fresh_run() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let working_copy = root.path().join("Photos_optimized");
+        std::os::unix::fs::symlink(root.path().join("missing-output"), &working_copy)?;
+
+        let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+
+        assert!(std::fs::symlink_metadata(&working_copy).is_err());
+        assert!(
+            std::fs::symlink_metadata(&archived)?
+                .file_type()
+                .is_symlink()
+        );
         Ok(())
     }
 

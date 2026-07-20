@@ -385,6 +385,14 @@ impl LaunchCommand {
         parts.join(" ")
     }
 
+    fn pipeline_label(&self) -> &'static str {
+        match self.program.file_name().and_then(|name| name.to_str()) {
+            Some("img") => "IMG",
+            Some("vid") => "VID",
+            _ => "CMD",
+        }
+    }
+
     #[allow(dead_code)]
     fn run(&self, dry_run: bool) -> Result<()> {
         self.run_with_session(dry_run, None).map(|_| ())
@@ -419,27 +427,14 @@ impl LaunchCommand {
             );
         }
         if let Some(sess) = session {
-            let pipeline = if self
-                .program
-                .file_name()
-                .and_then(|s| s.to_str())
-                .is_some_and(|n| n == "img")
-            {
-                "IMG"
-            } else if self
-                .program
-                .file_name()
-                .and_then(|s| s.to_str())
-                .is_some_and(|n| n == "vid")
-            {
-                "VID"
-            } else {
-                "CMD"
-            };
-            append_jsonl_audit_record(
-                &sess.session_audit,
-                &format!("{pipeline}_PIPELINE_SPAWN cmd={}", self.display()),
-            )?;
+            let event = format!(
+                "{}_PIPELINE_SPAWN cmd={}",
+                self.pipeline_label(),
+                self.display()
+            );
+            append_jsonl_audit_record(&sess.session_audit, &event)?;
+            sess.append_line(&sess.session_log, &event)?;
+            sess.append_line(&sess.verbose_log, &event)?;
         }
 
         let mut cmd = Command::new(&self.program);
@@ -455,20 +450,18 @@ impl LaunchCommand {
             set_child_active(true);
             let result = stream_process_with_pty(
                 &argv,
-                None,
+                Some(&verbose),
                 |line| {
                     println!("{line}");
                     let _ = io::stdout().flush();
-                    let _ = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&verbose)
-                        .and_then(|mut file| writeln!(file, "{line}"));
-                    let _ = fs::OpenOptions::new()
+                    if let Err(error) = fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(&session_log)
-                        .and_then(|mut file| writeln!(file, "{line}"));
+                        .and_then(|mut file| writeln!(file, "{line}"))
+                    {
+                        eprintln!("[LOG] session stream write failed: {error}");
+                    }
                 },
                 || {
                     if last_heartbeat.elapsed() >= std::time::Duration::from_mins(1) {
@@ -496,34 +489,28 @@ impl LaunchCommand {
             }
         };
         if let Some(sess) = session {
-            append_jsonl_audit_record(
-                &sess.session_audit,
-                &format!(
-                    "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={}",
-                    if self
-                        .program
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|n| n == "img")
-                    {
-                        "IMG"
-                    } else if self
-                        .program
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|n| n == "vid")
-                    {
-                        "VID"
-                    } else {
-                        "CMD"
-                    },
+            let event = format!(
+                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={}",
+                self.pipeline_label(),
+                stats.exit_code,
+                stats.succeeded,
+                stats.skipped,
+                stats.ignored,
+                stats.failed
+            );
+            append_jsonl_audit_record(&sess.session_audit, &event)?;
+            sess.append_line(&sess.session_log, &event)?;
+            sess.append_line(&sess.verbose_log, &event)?;
+            if stats.exit_code != 0 {
+                let error_event = format!(
+                    "{}_PIPELINE_ERROR command failed with exit {}: {}",
+                    self.pipeline_label(),
                     stats.exit_code,
-                    stats.succeeded,
-                    stats.skipped,
-                    stats.ignored,
-                    stats.failed
-                ),
-            )?;
+                    self.display()
+                );
+                sess.append_line(&sess.session_log, &error_event)?;
+                sess.append_line(&sess.verbose_log, &error_event)?;
+            }
         }
         if stats.exit_code != 0 && bail_on_failure {
             bail!(

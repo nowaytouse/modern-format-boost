@@ -143,7 +143,7 @@ fn push_line<F: FnMut(&str)>(
     stats: &mut ProcessorStats,
     line_handler: &mut F,
 ) {
-    let mut line = line.to_string();
+    let mut line = line.trim_end_matches('\r').to_string();
     if let Some(pos) = line.rfind('\r') {
         line = line[pos + 1..].to_string();
     }
@@ -241,12 +241,29 @@ where
     if flags >= 0 {
         let _ = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
+    let mut log_file = log_path
+        .map(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .with_context(|| format!("open PTY stream log {}", path.display()))
+        })
+        .transpose()?;
 
     let mut stats = ProcessorStats::default();
     let mut output_tail = String::new();
     let mut log_buffer = String::new();
     let mut last_heartbeat = Instant::now();
     let mut buf = [0u8; 16 * 1024];
+    let mut emit_line = |line: &str| {
+        if let Some(file) = log_file.as_mut()
+            && let Err(error) = writeln!(file, "{line}")
+        {
+            eprintln!("[PROCESS] stream log write failed: {error}");
+        }
+        line_handler(line);
+    };
 
     loop {
         if last_heartbeat.elapsed() >= Duration::from_secs(60) {
@@ -263,9 +280,6 @@ where
             }
             Ok(n) => {
                 let chunk = &buf[..n];
-                let _ = io::stdout().write_all(chunk);
-                let _ = io::stdout().flush();
-
                 let text = String::from_utf8_lossy(chunk);
                 output_tail.push_str(&text);
                 if output_tail.len() > 50_000 {
@@ -275,19 +289,7 @@ where
                     }
                     output_tail = output_tail[start..].to_string();
                 }
-                if let Some(path) = log_path {
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .map(|mut file| {
-                            push_chunk_log_lines(&mut log_buffer, &text, &mut stats, &mut |line| {
-                                let _ = writeln!(file, "{line}");
-                            });
-                        });
-                } else {
-                    push_chunk_log_lines(&mut log_buffer, &text, &mut stats, &mut line_handler);
-                }
+                push_chunk_log_lines(&mut log_buffer, &text, &mut stats, &mut emit_line);
             }
             Err(err)
                 if matches!(
@@ -307,7 +309,7 @@ where
 
     if !log_buffer.trim().is_empty() {
         let final_line = log_buffer.clone();
-        push_line(&mut log_buffer, &final_line, &mut stats, &mut line_handler);
+        push_line(&mut log_buffer, &final_line, &mut stats, &mut emit_line);
     }
     for line in output_tail.lines() {
         ingest_stats_line(&mut stats, line);
@@ -340,7 +342,7 @@ where
 pub fn stream_process_with_pty<F, H>(
     cmd: &[String],
     log_path: Option<&Path>,
-    line_handler: F,
+    mut line_handler: F,
     heartbeat_cb: H,
 ) -> Result<ProcessorStats>
 where
@@ -356,7 +358,23 @@ where
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn process for streaming")?;
-    stream_child_output_collecting(child, line_handler)
+    let mut log_file = log_path
+        .map(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .with_context(|| format!("open process stream log {}", path.display()))
+        })
+        .transpose()?;
+    stream_child_output_collecting(child, |line| {
+        if let Some(file) = log_file.as_mut()
+            && let Err(error) = writeln!(file, "{line}")
+        {
+            eprintln!("[PROCESS] stream log write failed: {error}");
+        }
+        line_handler(line);
+    })
 }
 
 #[cfg(test)]
@@ -373,9 +391,51 @@ mod tests {
         assert_eq!(stats.failed, 1);
     }
 
+    #[test]
+    fn test_push_line_keeps_pty_crlf_content() {
+        let mut stats = ProcessorStats::default();
+        let mut buffer = String::new();
+        let mut handled = Vec::new();
+
+        push_line(&mut buffer, "first\r", &mut stats, &mut |line| {
+            handled.push(line.to_string());
+        });
+
+        assert_eq!(handled, vec!["first".to_string()]);
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn test_pty_available_on_unix() {
         assert!(pty_available());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pty_stream_tees_output_to_log_and_handler() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let log_path = temp.path().join("child.log");
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'first\\nsecond\\n'".to_string(),
+        ];
+        let mut handled = Vec::new();
+
+        let stats = stream_process_with_pty(
+            &command,
+            Some(&log_path),
+            |line| {
+                handled.push(line.to_string());
+            },
+            || {},
+        )?;
+
+        assert_eq!(stats.exit_code, 0);
+        assert_eq!(handled, vec!["first".to_string(), "second".to_string()]);
+        let log = std::fs::read_to_string(log_path)?;
+        assert!(log.contains("first"));
+        assert!(log.contains("second"));
+        Ok(())
     }
 }
