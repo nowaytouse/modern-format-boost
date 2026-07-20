@@ -30,6 +30,7 @@ pub fn png_heuristic_enabled() -> bool {
             value.trim(),
             "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
         ),
+        Err(std::env::VarError::NotPresent) => false,
         Err(e) => {
             tracing::debug!("PNG heuristic env var error: {}", e);
             false
