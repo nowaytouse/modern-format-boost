@@ -82,21 +82,6 @@ fn env_i64_at_least(key: &str, floor: i64) -> i64 {
     }
 }
 
-#[inline]
-fn env_disable_flag_is_set(key: &str) -> bool {
-    match std::env::var(key) {
-        Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
-        Err(std::env::VarError::NotPresent) => false,
-        Err(e) => {
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "algorithm_runtime_env",
-                format!("failed to read disable flag {key}: {e}; treating as disabled"),
-            );
-            false
-        }
-    }
-}
-
 /// Strict corpus maturity floors (150/30 loop, 50/20 quality) unless disabled.
 #[inline]
 fn strict_algorithm_corpus_enabled() -> bool {
@@ -315,34 +300,27 @@ pub(crate) const fn loop_feature_stats_fail_open_on_parse_error() -> bool {
 /// disabled.
 #[must_use]
 pub(crate) fn static_quality_inference_logging_enabled() -> bool {
-    !env_disable_flag_is_set(crate::constants::ENV_DISABLE_DB_FEEDBACK)
-        && !env_disable_flag_is_set(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
+    quality_db_stack_globally_enabled() && quality_inference_log_heuristic_fallbacks_enabled()
 }
 
 /// Immature/fallback heuristic paths may insert into quality `inference_log`
-/// tables (default on).
+/// tables only after both explicit heuristic opt-ins are enabled.
 #[must_use]
 pub(crate) fn quality_inference_log_heuristic_fallbacks_enabled() -> bool {
-    #[cfg(test)]
-    {
-        algorithm_gate_enabled(crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS)
-    }
-    #[cfg(not(test))]
-    {
-        static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            algorithm_gate_enabled(crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS)
-        })
-    }
+    image_quality_heuristic_enabled()
+        && env_truthy(crate::constants::QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY)
+        && algorithm_gate_enabled(crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS)
 }
 
 #[inline]
 fn quality_db_stack_globally_enabled() -> bool {
-    !env_truthy(crate::constants::ENV_DISABLE_DB_FEEDBACK)
+    image_quality_heuristic_enabled()
+        && !env_truthy(crate::constants::ENV_DISABLE_DB_FEEDBACK)
         && !env_truthy(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
 }
 
-/// Fuse DB quality scores into detection outputs (default on).
+/// Fuse DB quality scores into detection outputs when heuristic quality is
+/// explicitly enabled.
 #[must_use]
 pub(crate) fn quality_db_fusion_enabled(pipeline: &str) -> bool {
     if !quality_db_stack_globally_enabled() {
@@ -359,8 +337,8 @@ pub(crate) fn quality_db_fusion_enabled(pipeline: &str) -> bool {
     }
 }
 
-/// Runtime Postgres quality lookup (default on; fusion-on pipelines always
-/// allow lookup).
+/// Runtime Postgres quality lookup when heuristic quality is explicitly
+/// enabled; fusion-on pipelines always allow lookup.
 #[must_use]
 pub(crate) fn quality_db_lookup_enabled(pipeline: &str) -> bool {
     if !quality_db_stack_globally_enabled() {
@@ -528,8 +506,7 @@ pub(crate) fn loop_intent_algorithm_seal_enabled() -> bool {
 pub(crate) fn scenario_quality_inference_logging_enabled(
     branch_logs_heuristic_fallback: bool,
 ) -> bool {
-    static_quality_inference_logging_enabled()
-        && (branch_logs_heuristic_fallback || quality_inference_log_heuristic_fallbacks_enabled())
+    static_quality_inference_logging_enabled() && branch_logs_heuristic_fallback
 }
 
 #[cfg(test)]
@@ -587,6 +564,11 @@ mod tests {
     #[test]
     #[serial]
     fn static_quality_logging_off_when_quality_db_disabled() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
+        let _logs = EnvGuard::set(
+            crate::constants::QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY,
+            "1",
+        );
         let _feedback = EnvGuard::set(crate::constants::ENV_DISABLE_DB_FEEDBACK, "0");
         let _db = EnvGuard::set(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB, "1");
         assert!(!static_quality_inference_logging_enabled());
@@ -594,7 +576,19 @@ mod tests {
 
     #[test]
     #[serial]
-    fn scenario_quality_db_fusion_on_by_default() {
+    fn scenario_quality_db_fusion_requires_explicit_heuristic_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let _guard = EnvGuard::set(
+            crate::constants::ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION,
+            "0",
+        );
+        assert!(!quality_db_fusion_enabled("video_detection"));
+    }
+
+    #[test]
+    #[serial]
+    fn scenario_quality_db_fusion_enabled_after_explicit_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _guard = EnvGuard::set(
             crate::constants::ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION,
             "0",
@@ -605,6 +599,7 @@ mod tests {
     #[test]
     #[serial]
     fn scenario_quality_db_fusion_disable_kill_switch() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _guard = EnvGuard::set(
             crate::constants::ENV_DISABLE_SCENARIO_QUALITY_DB_FUSION,
             "1",
@@ -614,7 +609,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn static_quality_db_fusion_on_by_default() {
+    fn static_quality_db_fusion_requires_explicit_heuristic_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let _guard = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "0");
+        assert!(!quality_db_fusion_enabled("image_detection_static"));
+    }
+
+    #[test]
+    #[serial]
+    fn static_quality_db_fusion_enabled_after_explicit_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _guard = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "0");
         assert!(quality_db_fusion_enabled("image_detection_static"));
     }
@@ -622,13 +626,25 @@ mod tests {
     #[test]
     #[serial]
     fn static_quality_db_fusion_disable_kill_switch() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _guard = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "1");
         assert!(!quality_db_fusion_enabled("image_detection_static"));
     }
 
     #[test]
     #[serial]
-    fn static_quality_db_lookup_on_by_default() {
+    fn static_quality_db_lookup_requires_explicit_heuristic_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let _lookup = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "0");
+        let _fusion = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "0");
+        let _force = EnvGuard::set(crate::constants::ENV_FORCE_QUALITY_KNN, "0");
+        assert!(!static_quality_db_lookup_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn static_quality_db_lookup_enabled_after_explicit_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _lookup = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "0");
         let _fusion = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "0");
         let _force = EnvGuard::set(crate::constants::ENV_FORCE_QUALITY_KNN, "0");
@@ -638,6 +654,7 @@ mod tests {
     #[test]
     #[serial]
     fn static_quality_db_lookup_disable_kill_switch() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _lookup = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "1");
         let _fusion = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_FUSION, "1");
         let _force = EnvGuard::set(crate::constants::ENV_FORCE_QUALITY_KNN, "0");
@@ -646,7 +663,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn static_quality_db_lookup_force_knn_overrides_disable() {
+    fn static_quality_db_lookup_force_knn_does_not_override_heuristic_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let _lookup = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "1");
+        let _force = EnvGuard::set(crate::constants::ENV_FORCE_QUALITY_KNN, "1");
+        assert!(!static_quality_db_lookup_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn static_quality_db_lookup_force_knn_after_explicit_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
         let _lookup = EnvGuard::set(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "1");
         let _force = EnvGuard::set(crate::constants::ENV_FORCE_QUALITY_KNN, "1");
         assert!(static_quality_db_lookup_enabled());
@@ -883,20 +910,47 @@ mod tests {
 
     #[test]
     #[serial]
-    fn heuristic_inference_logs_on_by_default() {
-        let _guard = EnvGuard::set(
+    fn heuristic_inference_logs_off_by_default() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let _enable_logs = EnvGuard::set(
+            crate::constants::QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY,
+            "1",
+        );
+        let _disable_logs = EnvGuard::set(
+            crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS,
+            "0",
+        );
+        assert!(!quality_inference_log_heuristic_fallbacks_enabled());
+        assert!(!scenario_quality_inference_logging_enabled(false));
+        assert!(!scenario_quality_inference_logging_enabled(true));
+    }
+
+    #[test]
+    #[serial]
+    fn heuristic_inference_logs_require_explicit_opt_in() {
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
+        let _enable_logs = EnvGuard::set(
+            crate::constants::QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY,
+            "1",
+        );
+        let _disable_logs = EnvGuard::set(
             crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS,
             "0",
         );
         assert!(quality_inference_log_heuristic_fallbacks_enabled());
-        assert!(scenario_quality_inference_logging_enabled(false));
+        assert!(!scenario_quality_inference_logging_enabled(false));
         assert!(scenario_quality_inference_logging_enabled(true));
     }
 
     #[test]
     #[serial]
     fn heuristic_inference_logs_disable_kill_switch() {
-        let _guard = EnvGuard::set(
+        let _heuristic = EnvGuard::set(crate::constants::HEURISTIC_QUALITY_ENV_KEY, "1");
+        let _enable_logs = EnvGuard::set(
+            crate::constants::QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY,
+            "1",
+        );
+        let _disable_logs = EnvGuard::set(
             crate::constants::ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS,
             "1",
         );

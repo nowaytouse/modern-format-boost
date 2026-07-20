@@ -148,8 +148,8 @@ struct Args {
     #[arg(long, short = 'r')]
     rust_only: bool,
 
-    /// Patch-cycle shortcut: --force + --rust-only + --verbose.
-    /// Use after small source edits to rebuild and verify timestamps immediately.
+    /// Patch-cycle shortcut: incremental Rust-only build with verbose verification.
+    /// Use after small source edits without forcing unrelated targets to rebuild.
     #[arg(long, short = 'p')]
     patch: bool,
 
@@ -617,6 +617,8 @@ fn decide_build_action(
 fn build_project(
     project_root: &Path,
     project_dir: &str,
+    binary_name: &str,
+    build_all_bins: bool,
     args: &Args,
     style: Style,
 ) -> Result<bool> {
@@ -652,13 +654,16 @@ fn build_project(
     for (key, value) in toolchain_env(&toolchain) {
         command.env(key, value);
     }
-    let status = command
+    command
         .arg("build")
         .arg("--release")
+        .arg("--locked")
         .arg("--manifest-path")
-        .arg(&manifest)
-        .current_dir(project_root)
-        .status()?;
+        .arg(&manifest);
+    if !build_all_bins {
+        command.arg("--bin").arg(binary_name);
+    }
+    let status = command.current_dir(project_root).status()?;
 
     if !status.success() {
         error!("Cargo compilation failed for {project_dir} with status {status}");
@@ -672,18 +677,22 @@ fn build_project(
     // For non-forced builds, an unchanged output after a source-triggered build
     // is suspicious. A forced build is also allowed to reuse Cargo's cache.
     {
-        let expected_binaries = match project_dir {
-            "crates/img" => vec!["img"],
-            "crates/vid" => vec!["vid"],
-            _ => vec![
-                "verify",
-                "cache_cleaner",
-                "database_manager",
-                "collect_optimized",
-                "merge_xmp",
-                "icloud_import",
-                "drag_and_drop_processor",
-            ],
+        let expected_binaries = if build_all_bins {
+            match project_dir {
+                "crates/img" => vec!["img"],
+                "crates/vid" => vec!["vid"],
+                _ => vec![
+                    "verify",
+                    "cache_cleaner",
+                    "database_manager",
+                    "collect_optimized",
+                    "merge_xmp",
+                    "icloud_import",
+                    "drag_and_drop_processor",
+                ],
+            }
+        } else {
+            vec![binary_name]
         };
 
         let mut any_updated = false;
@@ -732,6 +741,125 @@ fn build_project(
         );
     }
 
+    Ok(true)
+}
+
+/// Compile several changed single-binary workspace members in one Cargo
+/// invocation. This keeps the common img + vid + verify path incremental while
+/// avoiding repeated Cargo process startup and dependency graph resolution.
+fn build_workspace_projects(
+    project_root: &Path,
+    projects: &[(&str, String, bool)],
+    args: &Args,
+    style: Style,
+) -> Result<bool> {
+    if projects.len() < 2
+        || projects
+            .iter()
+            .any(|(_, _, build_all_bins)| *build_all_bins)
+    {
+        anyhow::bail!("workspace batching requires two or more single-binary targets");
+    }
+
+    let compile_start_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs_f64(),
+        Err(_err) => 0.0,
+    };
+    let toolchain = resolve_rust_toolchain_from(&current_toolchain_input());
+    let manifest = project_root.join("Cargo.toml");
+    let mut packages = Vec::new();
+    for (project_dir, _, _) in projects {
+        let package = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
+        if !packages.iter().any(|existing| *existing == package) {
+            packages.push(package);
+        }
+    }
+
+    info!(
+        "Executing one batched cargo build for {} targets",
+        projects.len()
+    );
+    debug!(
+        "Cargo batch command: {} build --release --manifest-path {}",
+        toolchain.cargo.display(),
+        manifest.display()
+    );
+    if let Some(name) = &toolchain.name {
+        debug!("Using rustup toolchain: {name}");
+    }
+    let mut command = if matches!(
+        std::process::Command::new("which")
+            .arg("rtk")
+            .output()
+            .map(|o| o.status.success()),
+        Ok(true)
+    ) {
+        let mut c = Command::new("rtk");
+        c.arg(&toolchain.cargo);
+        c
+    } else {
+        Command::new(&toolchain.cargo)
+    };
+    for (key, value) in toolchain_env(&toolchain) {
+        command.env(key, value);
+    }
+    command
+        .arg("build")
+        .arg("--release")
+        .arg("--locked")
+        .arg("--manifest-path")
+        .arg(&manifest);
+    for package in packages {
+        command.arg("-p").arg(package);
+    }
+    for (_, binary_name, _) in projects {
+        command.arg("--bin").arg(binary_name);
+    }
+    let status = command.current_dir(project_root).status()?;
+    if !status.success() {
+        println!(
+            "{}FAILURE: batched compilation failed for {} targets{}",
+            style.red,
+            projects.len(),
+            style.reset
+        );
+        return Ok(false);
+    }
+
+    let mut any_updated = false;
+    let mut newest_mtime = 0.0_f64;
+    for (_, binary_name, _) in projects {
+        let path = get_binary_path(project_root, binary_name);
+        if !path.is_file() {
+            println!(
+                "{}ERROR: TIMESTAMP VERIFICATION FAILED: Binary not found{}",
+                style.red, style.reset
+            );
+            return Ok(false);
+        }
+        let mtime = get_mtime(&path);
+        newest_mtime = newest_mtime.max(mtime);
+        any_updated |= mtime >= (compile_start_time - 2.0);
+    }
+    if !any_updated && !args.force {
+        println!(
+            "{}FAILURE: Cargo returned success but did not refresh an expected binary{}",
+            style.red, style.reset
+        );
+        return Ok(false);
+    }
+    let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
+        .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        .into();
+    println!(
+        "   {}\u{2713} batched outputs ready{}  {}{}{}",
+        style.green,
+        style.reset,
+        style.dim,
+        datetime.format("%Y-%m-%d %H:%M:%S"),
+        style.reset
+    );
     Ok(true)
 }
 
@@ -1359,13 +1487,12 @@ fn main() -> Result<()> {
         terminate_running_instances(&style, &project_root)?;
     }
 
-    // --patch implies --force + --rust-only + --verbose
+    // Keep patch cycles incremental; callers who need a clean rebuild opt into --force.
     if args.patch {
-        args.force = true;
         args.rust_only = true;
         args.verbose = true;
         println!(
-            "{}{}[patch mode]{} force + rust-only + verbose",
+            "{}{}[patch mode]{} incremental + rust-only + verbose",
             style.cyan, style.bold, style.reset
         );
     }
@@ -1391,42 +1518,37 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut projects_to_build = Vec::new();
+    let mut targets_to_build: Vec<(&str, String, bool)> = Vec::new();
     if args.all {
-        projects_to_build.push("crates/img");
-        projects_to_build.push("crates/vid");
-        projects_to_build.push("crates/dev");
+        targets_to_build.push(("crates/img", "img".to_string(), false));
+        targets_to_build.push(("crates/vid", "vid".to_string(), false));
+        targets_to_build.push(("crates/dev", "verify".to_string(), true));
     } else if let Some(ref bin_name) = args.bin {
         // --bin <name>: resolve the binary to its owning crate.
         let crate_dir = bin_name_to_crate_dir(bin_name).with_context(|| {
             format!("unknown binary '{bin_name}'; valid values: img, vid, or any dev binary")
         })?;
-        projects_to_build.push(crate_dir);
+        targets_to_build.push((crate_dir, bin_name.clone(), false));
     } else {
         if args.img {
-            projects_to_build.push("crates/img");
+            targets_to_build.push(("crates/img", "img".to_string(), false));
         }
         if args.vid {
-            projects_to_build.push("crates/vid");
+            targets_to_build.push(("crates/vid", "vid".to_string(), false));
         }
     }
 
-    if projects_to_build.is_empty() {
-        projects_to_build.push("crates/img");
-        projects_to_build.push("crates/vid");
-        projects_to_build.push("crates/dev");
+    if targets_to_build.is_empty() {
+        targets_to_build.push(("crates/img", "img".to_string(), false));
+        targets_to_build.push(("crates/vid", "vid".to_string(), false));
+        targets_to_build.push(("crates/dev", "verify".to_string(), false));
     }
 
     // Quiet mode check
     if args.quiet && !args.force {
         let mut needs_work = false;
-        for proj in &projects_to_build {
-            let bin = match *proj {
-                "crates/img" => "img",
-                "crates/vid" => "vid",
-                _ => "verify",
-            };
-            let (action, _) = decide_build_action(&project_root, proj, bin, false);
+        for (project_dir, binary_name, _) in &targets_to_build {
+            let (action, _) = decide_build_action(&project_root, project_dir, binary_name, false);
             if action != "skip" {
                 needs_work = true;
                 break;
@@ -1455,7 +1577,11 @@ fn main() -> Result<()> {
         style.cyan,
         style.reset,
         style.bold,
-        projects_to_build.join(" "),
+        targets_to_build
+            .iter()
+            .map(|(_, binary_name, _)| binary_name.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
         style.reset
     );
 
@@ -1463,8 +1589,8 @@ fn main() -> Result<()> {
         println!("{}Cleaning build artifacts...{}", style.yellow, style.reset);
         let targets = APP_BUNDLE_RESOURCE_BINARIES.to_vec();
         clean_old_binaries(&project_root, &targets, style)?;
-        for proj in &projects_to_build {
-            let pkg = proj.strip_prefix("crates/").unwrap_or(proj);
+        for (project_dir, _, _) in &targets_to_build {
+            let pkg = project_dir.strip_prefix("crates/").unwrap_or(project_dir);
             let _ = Command::new("cargo")
                 .args(["clean", "-p", pkg, "--release"])
                 .current_dir(&project_root)
@@ -1492,27 +1618,56 @@ fn main() -> Result<()> {
     let mut skipped = 0;
     let mut failed = 0;
 
-    for proj in &projects_to_build {
-        let bin = match *proj {
-            "crates/img" => "img",
-            "crates/vid" => "vid",
-            _ => "verify",
-        };
-        let (action, reason) = decide_build_action(&project_root, proj, bin, args.force);
+    let mut pending_projects = Vec::new();
+    for (project_dir, binary_name, build_all_bins) in &targets_to_build {
+        let (action, reason) =
+            decide_build_action(&project_root, project_dir, binary_name, args.force);
 
         if action == "skip" {
             println!(
                 "[OK] {}{}{} {}(up-to-date){}",
-                style.bold, proj, style.reset, style.dim, style.reset
+                style.bold, binary_name, style.reset, style.dim, style.reset
             );
             skipped += 1;
         } else {
             println!(
                 "[BUILD] {}{}{} {}({}){}",
-                style.bold, proj, style.reset, style.dim, reason, style.reset
+                style.bold, binary_name, style.reset, style.dim, reason, style.reset
             );
-            if build_project(&project_root, proj, &args, style)? {
-                println!("[OK] {}{}{} - compiled", style.bold, proj, style.reset);
+            pending_projects.push((*project_dir, binary_name.clone(), *build_all_bins));
+        }
+    }
+
+    if pending_projects.len() > 1
+        && pending_projects
+            .iter()
+            .all(|(_, _, build_all_bins)| !build_all_bins)
+    {
+        if build_workspace_projects(&project_root, &pending_projects, &args, style)? {
+            for (_, binary_name, _) in &pending_projects {
+                println!(
+                    "[OK] {}{}{} - compiled",
+                    style.bold, binary_name, style.reset
+                );
+            }
+            rebuilt += pending_projects.len();
+        } else {
+            failed += pending_projects.len();
+        }
+    } else {
+        for (project_dir, binary_name, build_all_bins) in &pending_projects {
+            if build_project(
+                &project_root,
+                project_dir,
+                binary_name,
+                *build_all_bins,
+                &args,
+                style,
+            )? {
+                println!(
+                    "[OK] {}{}{} - compiled",
+                    style.bold, binary_name, style.reset
+                );
                 rebuilt += 1;
             } else {
                 failed += 1;

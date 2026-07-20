@@ -3501,7 +3501,10 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         None
     };
 
-    if estimated_quality.is_none() && compression == CompressionType::Lossy {
+    if crate::algorithm_runtime::image_quality_heuristic_enabled()
+        && estimated_quality.is_none()
+        && compression == CompressionType::Lossy
+    {
         let quality_frame_count = if is_animated {
             if let Some(count) = frame_count {
                 count

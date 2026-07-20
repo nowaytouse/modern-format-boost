@@ -436,6 +436,9 @@ fn lookup_with_pipeline(
 /// Animated-image quality lookup (KNN + heuristic; no `LightGBM` yet).
 #[must_use]
 pub fn lookup_animated_image_quality(path: &Path) -> Option<QualityScore> {
+    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        return None;
+    }
     const PIPELINE: &str = "animated_image_quality_db";
     let features = match AnimatedImageQualityFeatures::from_path(path) {
         Ok(features) => features,
@@ -463,6 +466,9 @@ pub fn lookup_animated_image_quality(path: &Path) -> Option<QualityScore> {
 /// `lookup_image_quality`).
 #[must_use]
 pub fn lookup_media_quality_by_path(path: &Path) -> Option<QualityScore> {
+    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        return None;
+    }
     match crate::image_detection::detect_format_from_bytes(path) {
         Ok(format) => {
             let (is_animated, _, _) = match crate::image_detection::detect_animation(path, &format)
@@ -499,6 +505,9 @@ pub fn lookup_media_quality_by_path(path: &Path) -> Option<QualityScore> {
 /// Video-container quality lookup (KNN + heuristic; no `LightGBM` yet).
 #[must_use]
 pub fn lookup_video_quality(path: &Path) -> Option<QualityScore> {
+    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        return None;
+    }
     const PIPELINE: &str = "video_quality_db";
     let features = match VideoQualityFeatures::from_path(path) {
         Ok(features) => features,

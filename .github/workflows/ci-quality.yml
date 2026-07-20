@@ -201,6 +201,11 @@ jobs:
         continue-on-error: true
         run: just fmt-check
 
+      - name: Install MPC downloader bootstrap dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake meson ninja-build pkg-config
+
       - name: Download GNU MPC from upstream mirror chain
         run: |
           archive="$RUNNER_TEMP/mfb-mpc.tar.xz"
@@ -209,6 +214,9 @@ jobs:
 
       - name: Install system dependencies
         run: bash scripts/ci/install_media_dependencies.sh
+
+      - name: Install Vue quality dependencies
+        run: npm ci --prefix crates/dev/src/vue --ignore-scripts
 
       - name: Just read-only quality gate (after MPC/GMP/MPFR for gmp-mpfr-sys)
         id: fix_gate
@@ -326,6 +334,11 @@ jobs:
         with:
           toolchain: nightly-2026-07-13
           components: clippy, rustfmt, miri, rust-src, llvm-tools
+
+      - name: Install MPC downloader bootstrap dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake meson ninja-build pkg-config
 
       - name: Download GNU MPC from upstream mirror chain
         run: |

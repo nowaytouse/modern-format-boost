@@ -50,7 +50,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
 #[command(name = "img")]
@@ -2129,6 +2129,36 @@ enum FastImgPostGate1Policy {
     ShortestPathImportAndVerify,
 }
 
+/// FastImg candidate collection only needs container metadata. Keep it out of
+/// `image_analyzer`: that path performs full quality/entropy analysis.
+fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Result<bool> {
+    let detected_format = match format {
+        FormatKind::Jpeg => return Ok(true),
+        FormatKind::Png => foundation::image_detection::DetectedFormat::PNG,
+        FormatKind::WebP => foundation::image_detection::DetectedFormat::WebP,
+        FormatKind::Heic | FormatKind::Heif | FormatKind::Avif => {
+            return foundation::image_detection::is_isobmff_animated_sequence(path)
+                .map(|is_animated| !is_animated)
+                .with_context(|| {
+                    format!(
+                        "FastImg could not read ISOBMFF sequence metadata for {}",
+                        path.display()
+                    )
+                });
+        }
+        _ => return Ok(false),
+    };
+
+    foundation::image_detection::detect_animation(path, &detected_format)
+        .map(|(is_animated, _, _)| !is_animated)
+        .with_context(|| {
+            format!(
+                "FastImg could not read static-container metadata for {}",
+                path.display()
+            )
+        })
+}
+
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let FastImgRunOptions {
         input,
@@ -2178,12 +2208,22 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
     if strategy == "avif" {
-        println!("[SCAN    ] scanning static images in {}", src_dir.display());
+        println!(
+            "[FASTIMG ] selecting static image containers in {}",
+            src_dir.display()
+        );
     } else {
-        println!("[SCAN    ] scanning true JPEGs in {}", src_dir.display());
+        println!(
+            "[FASTIMG ] selecting true JPEG containers in {}",
+            src_dir.display()
+        );
     }
-    let lossy_modern_static_candidates =
-        scan_modern_lossy_static_candidates(&src_dir, &input_plan.candidates)?;
+    let lossy_modern_static_candidates = if shortest_path.0 {
+        println!("[TIER 2  ] inspecting modern source containers for requested Photos import");
+        scan_modern_lossy_static_candidates(&src_dir, &input_plan.candidates)?
+    } else {
+        Vec::new()
+    };
     let mut source_jpegs = Vec::new();
     for path in input_plan.candidates {
         if strategy == "avif" {
@@ -2197,15 +2237,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     | foundation::image::format_detect::FormatKind::Heif
                     | foundation::image::format_detect::FormatKind::Avif
             ) {
-                match foundation::image_analyzer::analyze_image(&path) {
-                    Ok(analysis) => {
-                        if !analysis.is_animated {
-                            source_jpegs.push(path);
-                        }
-                    }
+                match fast_img_container_is_static(&path, format) {
+                    Ok(true) => source_jpegs.push(path),
+                    Ok(false) => {}
                     Err(e) => {
                         println!(
-                            "[ERROR   ] Failed to analyze image {}: {}",
+                            "[ERROR   ] Failed to read static-container metadata for {}: {}",
                             path.display(),
                             e
                         );
@@ -2219,41 +2256,57 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let current_source_hashes = fast_img_source_hash_set(&src_dir, &source_jpegs)?;
     if strategy == "avif" {
         println!(
-            "[SCAN    ] Found {} static images in {}",
+            "[FASTIMG ] selected {} static images in {}",
             source_jpegs.len(),
             src_dir.display()
         );
     } else {
         println!(
-            "[SCAN    ] Found {} true JPEGs in {}",
+            "[FASTIMG ] selected {} true JPEGs in {}",
             source_jpegs.len(),
             src_dir.display()
         );
     }
     if !lossy_modern_static_candidates.is_empty() {
         println!(
-            "[SCAN    ] Found {} lossy modern static image(s) eligible for tier-2 Photos import",
+            "[TIER 2  ] found {} lossy modern static image(s) eligible for Photos import",
             lossy_modern_static_candidates.len()
         );
     }
 
     if let Some(marker) = &existing_marker
-        && retry.0
-        && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
-        && fast_img_retry_marker_source_set_is_stale(marker, &src_dir, source_jpegs.len())
+        && marker.stage != FastImgStageName::CleanupComplete
+        && fast_img_marker_input_state_is_stale(
+            marker,
+            &src_dir,
+            source_jpegs.len(),
+            &current_source_hashes,
+            strategy,
+        )?
     {
-        println!(
-            "[RESUME  ] existing {} marker is stale for the current source set; rebuilding from current sources",
-            marker.stage.as_str()
-        );
-        tracing::warn!(
-            target: "fast_img",
-            stage = %marker.stage.as_str(),
-            working_copy = %working_copy.display(),
-            marker_count = marker.src_jpeg_count,
-            source_count = source_jpegs.len(),
-            "fast-img retry marker ignored because current source JPEGs no longer match failed run"
-        );
+        if dry_run.0 {
+            println!(
+                "[DRY-RUN ] existing {} marker has stale inputs; would archive {} and rebuild",
+                marker.stage.as_str(),
+                working_copy.display()
+            );
+        } else {
+            let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+            println!(
+                "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
+                marker.stage.as_str(),
+                archived.display()
+            );
+            tracing::warn!(
+                target: "fast_img",
+                stage = %marker.stage.as_str(),
+                working_copy = %working_copy.display(),
+                archived = %archived.display(),
+                marker_count = marker.src_jpeg_count,
+                source_count = source_jpegs.len(),
+                "fast-img stale marker was archived before rebuilding from current sources"
+            );
+        }
         existing_marker = None;
     }
 
@@ -2266,6 +2319,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             &current_source_hashes,
         ) {
             Ok(FastImgCleanupCompleteSourceState::RestoredOriginal) => {
+                if !dry_run.0 {
+                    let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+                    println!(
+                        "[RESUME  ] archived completed output at {} before rebuilding restored sources",
+                        archived.display()
+                    );
+                }
                 println!(
                     "[RESUME  ] existing cleanup marker belongs to a completed run, but original source JPEGs were restored; rebuilding from restored sources"
                 );
@@ -2279,6 +2339,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             }
             Ok(FastImgCleanupCompleteSourceState::DeletedConverted) => {}
             Ok(FastImgCleanupCompleteSourceState::StaleCurrent) => {
+                if !dry_run.0 {
+                    let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+                    println!(
+                        "[RESUME  ] archived stale completed output at {} before rebuilding",
+                        archived.display()
+                    );
+                }
                 println!(
                     "[RESUME  ] existing cleanup marker is stale for the current source set; rebuilding from current sources"
                 );
@@ -2420,6 +2487,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
 
     let mut marker = existing_marker.unwrap_or_else(|| {
         WorkingCopyMarker::new(src_dir.clone(), working_copy.clone(), source_jpegs.len())
+            .with_strategy(strategy.to_string())
     });
     if retry_failed_sources_from_cleanup {
         validate_cleanup_retry_marker_source_state(
@@ -3864,6 +3932,51 @@ fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<W
     }
 }
 
+fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<PathBuf> {
+    if !working_copy.is_dir() {
+        anyhow::bail!(
+            "fast-img stale working copy is not a directory: {}",
+            working_copy.display()
+        );
+    }
+    let parent = working_copy
+        .parent()
+        .context("fast-img working copy has no parent directory")?;
+    let base_name = working_copy
+        .file_name()
+        .context("fast-img working copy has no final path component")?
+        .to_string_lossy();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("{base_name}.stale-{timestamp}")
+        } else {
+            format!("{base_name}.stale-{timestamp}-{attempt}")
+        };
+        let archived = parent.join(suffix);
+        if archived.exists() {
+            continue;
+        }
+        std::fs::rename(working_copy, &archived).with_context(|| {
+            format!(
+                "archive stale fast-img working copy {} at {}",
+                working_copy.display(),
+                archived.display()
+            )
+        })?;
+        return Ok(archived);
+    }
+
+    anyhow::bail!(
+        "could not choose an archive path for stale fast-img working copy {}",
+        working_copy.display()
+    )
+}
+
 fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyhow::Result<()> {
     let mut pending_dirs = vec![working_copy.to_path_buf()];
     let mut files_to_delete = Vec::new();
@@ -4965,18 +5078,35 @@ fn validate_fast_img_marker_source_state(
     Ok(())
 }
 
-fn fast_img_retry_marker_source_set_is_stale(
+fn fast_img_marker_input_state_is_stale(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
     current_count: usize,
-) -> bool {
-    if marker.src_dir != src_dir {
-        return true;
+    current_source_hashes: &BTreeMap<String, String>,
+    strategy: &str,
+) -> anyhow::Result<bool> {
+    if marker.src_dir != src_dir
+        || marker.src_jpeg_count != current_count
+        || marker.strategy != strategy
+    {
+        return Ok(true);
     }
-    if marker.src_jpeg_count != current_count {
-        return true;
+
+    let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
+    if marker_hashes.is_empty() {
+        return Ok(output_prepared_or_later(&marker.stage)
+            && marker.stage != FastImgStageName::OutputPrepared);
     }
-    false
+    let partial_log_allowed = marker.stage == FastImgStageName::Gate1Failed
+        || marker.stage == FastImgStageName::OutputPrepared;
+    if partial_log_allowed {
+        return Ok(!marker_hashes.iter().all(|(rel, hash)| {
+            current_source_hashes
+                .get(rel)
+                .is_some_and(|current| current == hash)
+        }));
+    }
+    Ok(marker_hashes != *current_source_hashes)
 }
 
 fn fast_img_skip_hashes_match(src: &Path, out: &Path, entry: &Blake3Entry) -> anyhow::Result<bool> {
@@ -6129,17 +6259,19 @@ mod fast_img_hardening_tests {
         AutoImportFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
         FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
         FastImgRunOptions, FastImgTranscodeError, RecursiveFlag, RetryFlag, ShortestPathFlag,
-        command_requires_database, fast_img_auto_retry_failed_marker,
-        fast_img_auto_retry_failed_stage, fast_img_cleanup_complete_has_shortest_path_proof,
+        command_requires_database, fast_img_archive_stale_working_copy,
+        fast_img_auto_retry_failed_marker, fast_img_auto_retry_failed_stage,
+        fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
-        fast_img_cleanup_complete_source_state, fast_img_delete_notice_message,
-        fast_img_delete_verified_source_jpegs_with, fast_img_effective_encode_parallelism,
-        fast_img_effective_expected_count, fast_img_effective_verify_parallelism,
-        fast_img_marker_entry_output_path, fast_img_marker_outputs_current, fast_img_pipeline_ctx,
-        fast_img_planned_output_rel, fast_img_post_gate1_policy, fast_img_prune_empty_source_dirs,
-        fast_img_reconcile_unrecorded_source_disposition, fast_img_refresh_marker_jxl_deliveries,
-        fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_encode_output,
-        fast_img_retry_marker_source_set_is_stale, fast_img_run_encode_phase,
+        fast_img_cleanup_complete_source_state, fast_img_container_is_static,
+        fast_img_delete_notice_message, fast_img_delete_verified_source_jpegs_with,
+        fast_img_effective_encode_parallelism, fast_img_effective_expected_count,
+        fast_img_effective_verify_parallelism, fast_img_marker_entry_output_path,
+        fast_img_marker_input_state_is_stale, fast_img_marker_outputs_current,
+        fast_img_pipeline_ctx, fast_img_planned_output_rel, fast_img_post_gate1_policy,
+        fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
+        fast_img_refresh_marker_jxl_deliveries, fast_img_refresh_reused_jxl_delivery,
+        fast_img_remove_failed_encode_output, fast_img_run_encode_phase,
         fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_target_files,
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
@@ -6248,6 +6380,19 @@ mod fast_img_hardening_tests {
         let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0];
         bytes.extend_from_slice(payload);
         std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_jpeg_selection_does_not_require_full_analysis() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("header-only.jpg");
+        write_jpeg(&path, &[0x00])?;
+
+        assert!(fast_img_container_is_static(
+            &path,
+            foundation::image::format_detect::FormatKind::Jpeg,
+        )?);
         Ok(())
     }
 
@@ -7191,7 +7336,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn retry_marker_stale_source_count_is_discarded_for_fresh_run() -> anyhow::Result<()> {
+    fn stale_fast_img_marker_is_archived_before_fresh_run() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let src_root_raw = root.path().join("Photos");
@@ -7220,19 +7365,18 @@ mod fast_img_hardening_tests {
         std::fs::remove_file(&stale_src)?;
         write_jpeg(&src_root.join("new.jpg"), b"new source")?;
 
-        run_fast_img(FastImgRunOptions {
-            input: &src_root,
-            output_dir: None,
-            delete_source: DeleteSourceFlag(false),
-            dry_run: DryRunFlag(true),
-            recursive: RecursiveFlag(true),
-            auto_import: AutoImportFlag(false),
-            shortest_path: ShortestPathFlag(false),
-            retry: RetryFlag(true),
-            archive: false,
-            allow_expert_options: false,
-            strategy: "jxl",
-        })?;
+        let current_hashes = fast_img_source_hash_set(&src_root, &[src_root.join("new.jpg")])?;
+        assert!(fast_img_marker_input_state_is_stale(
+            &marker,
+            &src_root,
+            1,
+            &current_hashes,
+            "jxl",
+        )?);
+
+        let archived = fast_img_archive_stale_working_copy(&wc)?;
+        assert!(!wc.exists());
+        assert!(archived.join("old.JXL").is_file());
 
         Ok(())
     }
@@ -7245,9 +7389,14 @@ mod fast_img_hardening_tests {
         let src = src_root.join("a.jpg");
         write_jpeg(&src, b"current")?;
         let marker = WorkingCopyMarker::new(src_root.clone(), wc, 2);
-        assert!(fast_img_retry_marker_source_set_is_stale(
-            &marker, &src_root, 1
-        ));
+        let current_hashes = fast_img_source_hash_set(&src_root, &[src])?;
+        assert!(fast_img_marker_input_state_is_stale(
+            &marker,
+            &src_root,
+            1,
+            &current_hashes,
+            "jxl",
+        )?);
         Ok(())
     }
 
@@ -7272,15 +7421,39 @@ mod fast_img_hardening_tests {
         write_jpeg(&src, b"new")?;
         let current_hashes = fast_img_source_hash_set(&src_root, &[src])?;
 
-        assert!(!fast_img_retry_marker_source_set_is_stale(
-            &marker, &src_root, 1
-        ));
+        assert!(fast_img_marker_input_state_is_stale(
+            &marker,
+            &src_root,
+            1,
+            &current_hashes,
+            "jxl",
+        )?);
         let Err(err) =
             validate_fast_img_marker_source_state(&marker, &src_root, 1, &current_hashes)
         else {
             anyhow::bail!("retry marker unexpectedly accepted same-count source drift");
         };
         assert!(err.to_string().contains("source hash set changed"));
+        Ok(())
+    }
+
+    #[test]
+    fn retry_marker_strategy_change_rebuilds_from_current_sources() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_root = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let src = src_root.join("a.jpg");
+        write_jpeg(&src, b"current")?;
+        let marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
+        let current_hashes = fast_img_source_hash_set(&src_root, &[src])?;
+
+        assert!(fast_img_marker_input_state_is_stale(
+            &marker,
+            &src_root,
+            1,
+            &current_hashes,
+            "avif",
+        )?);
         Ok(())
     }
 

@@ -7,9 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 const MIRRORS: &[&str] = &[
-    "https://ftpmirror.gnu.org/mpc/mpc-1.4.1.tar.xz",
     "https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz",
-    "https://mirror.math.princeton.edu/pub/gnu/mpc/mpc-1.4.1.tar.xz",
+    "https://ftpmirror.gnu.org/mpc/mpc-1.4.1.tar.xz",
 ];
 
 const fn help_text() -> &'static str {
@@ -69,5 +68,16 @@ mod tests {
         let text = help_text();
         assert!(text.contains("download_gnu_mpc [OUTPUT]"));
         assert!(text.contains("mpc.tar.xz"));
+    }
+
+    #[test]
+    fn tries_gnu_primary_before_official_mirror_redirector() {
+        assert_eq!(
+            MIRRORS,
+            [
+                "https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz",
+                "https://ftpmirror.gnu.org/mpc/mpc-1.4.1.tar.xz",
+            ]
+        );
     }
 }

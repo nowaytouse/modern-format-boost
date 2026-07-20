@@ -4846,6 +4846,22 @@ fn media_conversion_ci_mpc_mirror_download_m241() {
                 .contains("download_with_retry \"https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz\""),
             "{workflow} must not use single-host MPC download without mirrors"
         );
+        if workflow == ".github/workflows/ci-quality.yml" {
+            let bootstrap_pos = content
+                .find("Install MPC downloader bootstrap dependencies")
+                .expect("ci-quality must install Meson/Ninja before the MPC downloader");
+            let downloader_pos = content
+                .find("--bin download_gnu_mpc")
+                .expect("ci-quality must invoke the MPC downloader");
+            assert!(
+                bootstrap_pos < downloader_pos,
+                "ci-quality must install Meson/Ninja before compiling the MPC downloader"
+            );
+            assert!(
+                content.contains("npm ci --prefix crates/dev/src/vue --ignore-scripts"),
+                "ci-quality must install Vue quality-gate dependencies before running fix-gate"
+            );
+        }
     }
 }
 

@@ -409,14 +409,13 @@ pub const ENV_LOOP_FEATURE_STATS_FAIL_OPEN: &str = "MODERN_FORMAT_LOOP_FEATURE_S
 /// [`ENV_LOOP_FEATURE_STATS_FAIL_OPEN`] is set.
 pub const ENV_DISABLE_LOOP_FEATURE_STATS_FAIL_OPEN: &str =
     "MODERN_FORMAT_DISABLE_LOOP_FEATURE_STATS_FAIL_OPEN";
-/// Legacy name only — use [`ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS`]
-/// (default **on**).
-#[deprecated(
-    since = "0.11.4",
-    note = "Default-on gate; set MODERN_FORMAT_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS=1 to relax"
-)]
+/// Explicit opt-in for quality `inference_log` rows on heuristic/fallback
+/// branches. This has no effect unless image-quality heuristics are enabled.
 pub const ENV_ENABLE_QUALITY_INFERENCE_HEURISTIC_LOGS: &str =
     "MODERN_FORMAT_ENABLE_QUALITY_INFERENCE_HEURISTIC_LOGS";
+/// Audit-safe alias for the explicit quality-inference-log opt-in.
+pub const QUALITY_INFERENCE_HEURISTIC_LOG_ENV_KEY: &str =
+    ENV_ENABLE_QUALITY_INFERENCE_HEURISTIC_LOGS;
 /// Kill-switch: skip `inference_log` inserts on immature/heuristic/fallback
 /// quality branches.
 pub const ENV_DISABLE_QUALITY_INFERENCE_HEURISTIC_LOGS: &str =

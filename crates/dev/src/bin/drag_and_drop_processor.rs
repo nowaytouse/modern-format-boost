@@ -884,6 +884,35 @@ fn verify_database_mandatory(project_root: &Path) -> Result<()> {
 
 /// Trigger `smart_build` if the required `img`/`vid` release binaries are
 /// absent.  Mirrors `ensure_tools_ready()` in the Python implementation.
+fn smart_build_command(project_root: &Path, needs_img: bool, needs_vid: bool) -> Command {
+    let smart_build_bin = cli_binary(project_root, "smart_build");
+    let mut command = if smart_build_bin.is_file() {
+        Command::new(smart_build_bin)
+    } else {
+        let mut cargo = Command::new("cargo");
+        cargo.args([
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "smart_build",
+            "--",
+        ]);
+        cargo
+    };
+
+    // Tool launch should stay incremental and must never refresh dependencies.
+    command.arg("--rust-only");
+    if needs_img && !needs_vid {
+        command.arg("--img");
+    } else if needs_vid && !needs_img {
+        command.arg("--vid");
+    }
+    command
+}
+
 fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
@@ -904,47 +933,19 @@ fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
         return Ok(());
     }
 
+    if (!needs_img || img_bin.is_file()) && (!needs_vid || vid_bin.is_file()) {
+        return Ok(());
+    }
+
     eprintln!(
-        "{} Ensuring release binaries are up-to-date via smart_build…",
+        "{} Required release binary is missing; running smart_build…",
         pick_symbol("⚙️", "[BUILD]")
     );
 
-    let use_rtk = std::process::Command::new("which")
-        .arg("rtk")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    let mut build_cmd = if use_rtk {
-        let mut c = Command::new("rtk");
-        c.arg("cargo");
-        c
-    } else {
-        Command::new("cargo")
-    };
-    build_cmd.args([
-        "run",
-        "--release",
-        "--locked",
-        "-p",
-        "dev",
-        "--bin",
-        "smart_build",
-        "--",
-        "--update",
-    ]);
-    if needs_img && !needs_vid {
-        build_cmd.arg("--img");
-    } else if needs_vid && !needs_img {
-        build_cmd.arg("--vid");
-    } else {
-        build_cmd.arg("--all");
-    }
-
-    let status = build_cmd
+    let status = smart_build_command(project_root, needs_img, needs_vid)
         .current_dir(project_root)
         .status()
-        .context("run smart_build via cargo")?;
+        .context("run smart_build")?;
     if !status.success() {
         bail!("smart_build failed — check the logs and retry");
     }
@@ -2612,6 +2613,39 @@ mod tests {
             cli_binary(Path::new("/repo"), "img"),
             PathBuf::from("/repo/target/release/img")
         );
+    }
+
+    #[test]
+    fn smart_build_uses_release_launcher_without_dependency_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let launcher = temp.path().join("target/release/smart_build");
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::fs::File::create(&launcher).unwrap();
+
+        let command = smart_build_command(temp.path(), true, false);
+        assert_eq!(command.get_program(), launcher.as_os_str());
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--rust-only".to_string()));
+        assert!(args.contains(&"--img".to_string()));
+        assert!(!args.contains(&"--update".to_string()));
+    }
+
+    #[test]
+    fn smart_build_falls_back_to_cargo_when_launcher_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = smart_build_command(temp.path(), false, true);
+        assert_eq!(command.get_program(), "cargo");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--locked".to_string()));
+        assert!(args.contains(&"--rust-only".to_string()));
+        assert!(args.contains(&"--vid".to_string()));
+        assert!(!args.contains(&"--update".to_string()));
     }
 
     #[cfg(target_os = "macos")]

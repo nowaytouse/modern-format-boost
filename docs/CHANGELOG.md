@@ -24,6 +24,16 @@ All notable changes to this project will be documented in this file.
 
 ### Developer Experience & Tooling
 
+- **Fast Launch and Incremental Builds**: FastImg now bypasses full image
+  quality/entropy analysis while selecting candidates, and the Rust launcher
+  does not invoke Cargo or dependency refresh when its release tools already
+  exist. Missing tools use the local release `smart_build`; `--patch` is now an
+  incremental Rust-only verification shortcut, while `--force` remains the
+  explicit full-rebuild request.
+- **CI Bootstrap Reliability**: GitHub quality jobs install the minimal Meson /
+  Ninja bootstrap before compiling the MPC downloader, install Vue's locked
+  lint dependencies before `check_all`, and try the GNU primary MPC host before
+  GNU's official mirror redirector.
 - **Incremental Smart Build & App Sync**: Smart Build now compares relevant Rust,
   direct workspace-dependency, and Vue/Tauri source mtimes while ignoring generated
   trees. Small edits reuse Cargo's incremental outputs, skip unchanged Vue builds,
@@ -58,6 +68,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fast-Img & Media Pipeline
 
+- **FastImg Lightweight Selection & Recovery**: Candidate selection now reads
+  only the container metadata needed to exclude animated inputs; it no longer
+  invokes full JPEG quality/entropy analysis or the optional Tier-2 scan unless
+  Photos import was explicitly requested. Stale or strategy-mismatched resume
+  markers now archive the prior working copy and rebuild from current sources
+  instead of failing after a long run because the source count changed.
 - **Target-Format Exploration**: AVIF fast-img delivery now begins at quality 100,
   explores lower quality only as needed to meet the size gate, and validates every
   retained candidate before falling back. JPEG-to-JXL fast-img remains restricted
