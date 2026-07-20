@@ -2290,8 +2290,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 marker.stage.as_str(),
                 working_copy.display()
             );
-        } else {
-            let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+        } else if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
             println!(
                 "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
                 marker.stage.as_str(),
@@ -2305,6 +2304,19 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 marker_count = marker.src_jpeg_count,
                 source_count = source_jpegs.len(),
                 "fast-img stale marker was archived before rebuilding from current sources"
+            );
+        } else {
+            println!(
+                "[RESUME  ] existing {} marker has stale inputs, but prior output is already absent; rebuilding",
+                marker.stage.as_str()
+            );
+            tracing::warn!(
+                target: "fast_img",
+                stage = %marker.stage.as_str(),
+                working_copy = %working_copy.display(),
+                marker_count = marker.src_jpeg_count,
+                source_count = source_jpegs.len(),
+                "fast-img stale marker had no working copy; rebuilding from current sources"
             );
         }
         existing_marker = None;
@@ -2320,11 +2332,17 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         ) {
             Ok(FastImgCleanupCompleteSourceState::RestoredOriginal) => {
                 if !dry_run.0 {
-                    let archived = fast_img_archive_stale_working_copy(&working_copy)?;
-                    println!(
-                        "[RESUME  ] archived completed output at {} before rebuilding restored sources",
-                        archived.display()
-                    );
+                    if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
+                        println!(
+                            "[RESUME  ] archived completed output at {} before rebuilding restored sources",
+                            archived.display()
+                        );
+                    } else {
+                        println!(
+                            "[RESUME  ] completed output at {} is already absent; rebuilding restored sources",
+                            working_copy.display()
+                        );
+                    }
                 }
                 println!(
                     "[RESUME  ] existing cleanup marker belongs to a completed run, but original source JPEGs were restored; rebuilding from restored sources"
@@ -2340,11 +2358,17 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             Ok(FastImgCleanupCompleteSourceState::DeletedConverted) => {}
             Ok(FastImgCleanupCompleteSourceState::StaleCurrent) => {
                 if !dry_run.0 {
-                    let archived = fast_img_archive_stale_working_copy(&working_copy)?;
-                    println!(
-                        "[RESUME  ] archived stale completed output at {} before rebuilding",
-                        archived.display()
-                    );
+                    if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
+                        println!(
+                            "[RESUME  ] archived stale completed output at {} before rebuilding",
+                            archived.display()
+                        );
+                    } else {
+                        println!(
+                            "[RESUME  ] stale completed output at {} is already absent; rebuilding",
+                            working_copy.display()
+                        );
+                    }
                 }
                 println!(
                     "[RESUME  ] existing cleanup marker is stale for the current source set; rebuilding from current sources"
@@ -3932,13 +3956,19 @@ fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<W
     }
 }
 
-fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<PathBuf> {
-    let metadata = std::fs::symlink_metadata(working_copy).with_context(|| {
-        format!(
-            "inspect stale fast-img working copy {}",
-            working_copy.display()
-        )
-    })?;
+fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let metadata = match std::fs::symlink_metadata(working_copy) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect stale fast-img working copy {}",
+                    working_copy.display()
+                )
+            });
+        }
+    };
     let file_type = metadata.file_type();
     if !(file_type.is_dir() || file_type.is_file() || file_type.is_symlink()) {
         anyhow::bail!(
@@ -3984,7 +4014,7 @@ fn fast_img_archive_stale_working_copy(working_copy: &Path) -> anyhow::Result<Pa
                 archived.display()
             )
         })?;
-        return Ok(archived);
+        return Ok(Some(archived));
     }
 
     anyhow::bail!(
@@ -7390,7 +7420,7 @@ mod fast_img_hardening_tests {
             "jxl",
         )?);
 
-        let archived = fast_img_archive_stale_working_copy(&wc)?;
+        let archived = fast_img_archive_stale_working_copy(&wc)?.expect("stale output exists");
         assert!(!wc.exists());
         assert!(archived.join("old.JXL").is_file());
 
@@ -7403,7 +7433,8 @@ mod fast_img_hardening_tests {
         let working_copy = root.path().join("Photos_optimized");
         std::fs::write(&working_copy, b"interrupted output placeholder")?;
 
-        let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+        let archived =
+            fast_img_archive_stale_working_copy(&working_copy)?.expect("stale output exists");
 
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
         assert_eq!(std::fs::read(&archived)?, b"interrupted output placeholder");
@@ -7417,7 +7448,8 @@ mod fast_img_hardening_tests {
         let working_copy = root.path().join("Photos_optimized");
         std::os::unix::fs::symlink(root.path().join("missing-output"), &working_copy)?;
 
-        let archived = fast_img_archive_stale_working_copy(&working_copy)?;
+        let archived =
+            fast_img_archive_stale_working_copy(&working_copy)?.expect("stale output exists");
 
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
         assert!(
@@ -7425,6 +7457,15 @@ mod fast_img_hardening_tests {
                 .file_type()
                 .is_symlink()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_stale_fast_img_working_copy_rebuilds_without_archive() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let working_copy = root.path().join("Photos_optimized");
+
+        assert!(fast_img_archive_stale_working_copy(&working_copy)?.is_none());
         Ok(())
     }
 
