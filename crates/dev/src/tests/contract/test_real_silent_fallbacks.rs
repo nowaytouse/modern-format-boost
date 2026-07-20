@@ -4861,6 +4861,11 @@ fn media_conversion_ci_mpc_mirror_download_m241() {
                 content.contains("npm ci --prefix crates/dev/src/vue --ignore-scripts"),
                 "ci-quality must install Vue quality-gate dependencies before running fix-gate"
             );
+            assert!(
+                content.contains("actions/setup-node@v6")
+                    && content.contains("node-version: 24.13.0"),
+                "ci-quality must pin the supported Node runtime for Vue production builds"
+            );
         }
     }
 }

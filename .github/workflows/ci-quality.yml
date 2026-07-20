@@ -182,6 +182,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.13.0
+          cache: npm
+          cache-dependency-path: crates/dev/src/vue/package-lock.json
+
+      - name: Verify Node.js runtime
+        run: node --version && npm --version
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
