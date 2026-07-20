@@ -14,7 +14,7 @@
     "lint": "npm run lint:oxlint && npm run lint:eslint && npm run lint:tsc",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "deps:check": "env npm_config_allow_scripts= npm ci --ignore-scripts --dry-run && env npm_config_allow_scripts= npm audit --audit-level=high",
+    "deps:check": "env npm_config_allow_scripts= npm_config_registry=https://registry.npmjs.org npm ci --ignore-scripts --dry-run && env npm_config_allow_scripts= npm_config_registry=https://registry.npmjs.org npm audit --audit-level=high",
     "deps:update": "npm update --package-lock-only"
   },
   "dependencies": {
