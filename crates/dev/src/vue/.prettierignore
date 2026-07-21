@@ -8,3 +8,6 @@ dev.log
 # Tauri generates schemas and Cargo build output during SmartBuild.
 src-tauri/gen/
 src-tauri/target/
+Modern Format Boost.app/
+*.app/
+

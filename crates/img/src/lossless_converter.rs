@@ -2690,6 +2690,29 @@ fn avifenc_rejects_malformed_xmp(stderr: &[u8]) -> bool {
         .contains("XMP extraction failed: invalid multiple standard XMP segments")
 }
 
+const AVIFENC_TIMEOUT_SECS_ENV: &str = "MFB_AVIFENC_TIMEOUT_SECS";
+
+fn avifenc_timeout() -> anyhow::Result<Duration> {
+    let raw = match std::env::var(AVIFENC_TIMEOUT_SECS_ENV) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(Duration::from_mins(15)),
+        Err(err) => {
+            anyhow::bail!("Failed to read {AVIFENC_TIMEOUT_SECS_ENV} for avifenc timeout: {err}");
+        }
+    };
+    let value = raw.trim();
+    if value.is_empty() {
+        anyhow::bail!("{AVIFENC_TIMEOUT_SECS_ENV} must not be empty");
+    }
+    let seconds = value.parse::<u64>().map_err(|err| {
+        anyhow::anyhow!("Failed to parse {AVIFENC_TIMEOUT_SECS_ENV}={value:?}: {err}")
+    })?;
+    if seconds == 0 {
+        anyhow::bail!("{AVIFENC_TIMEOUT_SECS_ENV} must be greater than zero");
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
 fn build_avifenc_command(
     input: &Path,
     output: &Path,
@@ -2714,14 +2737,22 @@ fn build_avifenc_command(
     builder.build()
 }
 
+fn run_avifenc_command(
+    command: &mut std::process::Command,
+) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    foundation::process_runner::ManagedProcess::spawn(command)?
+        .wait_timeout(avifenc_timeout()?, "official avifenc --speed 0")
+}
+
 fn run_avifenc_with_malformed_xmp_retry(
     input: &Path,
     temp_output: &Path,
     quality: Option<u8>,
     lossless: bool,
-) -> std::io::Result<Output> {
-    let output = build_avifenc_command(input, temp_output, quality, lossless, false).output()?;
-    if output.status.success() || !avifenc_rejects_malformed_xmp(&output.stderr) {
+) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    let mut command = build_avifenc_command(input, temp_output, quality, lossless, false);
+    let output = run_avifenc_command(&mut command)?;
+    if output.status.success() || !avifenc_rejects_malformed_xmp(output.stderr.as_bytes()) {
         return Ok(output);
     }
 
@@ -2734,7 +2765,8 @@ fn run_avifenc_with_malformed_xmp_retry(
         source = %input.display(),
         "avifenc rejected malformed embedded XMP; retrying with --ignore-xmp"
     );
-    build_avifenc_command(input, temp_output, quality, lossless, true).output()
+    let mut retry = build_avifenc_command(input, temp_output, quality, lossless, true);
+    run_avifenc_command(&mut retry)
 }
 
 /// Convert an image to AVIF format with specified quality.
@@ -2855,7 +2887,7 @@ pub fn convert_to_avif_from_encoder_input(
         }
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            let stderr = output_cmd.stderr;
             log_detail!(&format!(
                 "avifenc execution failed for {}. Stderr: {}",
                 input.display(),
@@ -2868,11 +2900,13 @@ pub fn convert_to_avif_from_encoder_input(
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
             log_detail!(&format!(
-                "avifenc tool launch failed for {}: {}",
+                "avifenc execution failed for {}: {}",
                 input.display(),
                 e
             ));
-            Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
+            Err(ImgQualityError::ConversionError(format!(
+                "avifenc execution failed: {e}"
+            )))
         }
     }
 }
@@ -2960,7 +2994,7 @@ pub fn convert_to_avif_probe_from_encoder_input(
         }
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            let stderr = output_cmd.stderr;
             log_detail!(&format!(
                 "convert_to_avif_probe: avifenc failed for {} at q={quality}. Stderr: {}",
                 input.display(),
@@ -2973,11 +3007,13 @@ pub fn convert_to_avif_probe_from_encoder_input(
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
             log_detail!(&format!(
-                "convert_to_avif_probe: avifenc launch failed for {} at q={quality}: {}",
+                "convert_to_avif_probe: avifenc execution failed for {} at q={quality}: {}",
                 input.display(),
                 e
             ));
-            Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
+            Err(ImgQualityError::ConversionError(format!(
+                "avifenc execution failed at q={quality}: {e}"
+            )))
         }
     }
 }
@@ -3067,7 +3103,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         }
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            let stderr = output_cmd.stderr;
             log_detail!(&format!(
                 "avifenc lossless execution failed for {}. Stderr: {}",
                 input.display(),
@@ -3080,11 +3116,13 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
             log_detail!(&format!(
-                "avifenc lossless tool launch failed for {}: {}",
+                "avifenc lossless execution failed for {}: {}",
                 input.display(),
                 e
             ));
-            Err(ImgQualityError::tool_not_found("avifenc").with_operation(e.to_string()))
+            Err(ImgQualityError::ConversionError(format!(
+                "avifenc lossless execution failed: {e}"
+            )))
         }
     }
 }
@@ -4712,6 +4750,63 @@ mod tests {
     }
 
     #[test]
+    fn avifenc_command_builder_always_uses_speed_zero_and_jobs_all() {
+        for (quality, lossless) in [(Some(85), false), (Some(100), false), (None, true)] {
+            let command = build_avifenc_command(
+                Path::new("test_src.png"),
+                Path::new("test_out.avif"),
+                quality,
+                lossless,
+                false,
+            );
+            let args: Vec<_> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "--speed")
+                    .map(|pair| pair[1].as_str()),
+                Some("0"),
+                "avifenc must always run at speed 0"
+            );
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "-j" || pair[0] == "--jobs")
+                    .map(|pair| pair[1].as_str()),
+                Some("all"),
+                "avifenc must use all CPU threads"
+            );
+        }
+    }
+
+    #[test]
+    fn test_real_avif_encoding_with_synthetic_png_temp_copy() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let png_input = temp_dir.path().join("synthetic_input.png");
+        let status = std::process::Command::new("magick")
+            .args(["-size", "64x64", "xc:blue", png_input.to_str().unwrap()])
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            // Fallback if magick is unavailable: skip test gracefully
+            return Ok(());
+        }
+
+        let options = ConvertOptions {
+            output_dir: Some(temp_dir.path().to_path_buf()),
+            flags: ConvertFlags::FORCE,
+            ..Default::default()
+        };
+
+        let (temp_avif, output_size) = convert_to_avif_probe(&png_input, 85, &options)?;
+        assert!(temp_avif.exists(), "AVIF probe output file must exist");
+        assert!(output_size > 0, "AVIF probe output size must be non-zero");
+        let _ = std::fs::remove_file(&temp_avif);
+        Ok(())
+    }
+
+    #[test]
     fn magick_intermediate_depth_uses_single_fail_closed_parse() {
         let source = include_str!("lossless_converter.rs");
         let needle = ["if let ", "Ok(depth) = depth_str.", "parse::<u8>()"].concat();
@@ -5481,6 +5576,31 @@ mod tests {
             match previous {
                 Some(value) => std::env::set_var(CJXL_TIMEOUT_SECS_ENV, value),
                 None => std::env::remove_var(CJXL_TIMEOUT_SECS_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn avifenc_timeout_malformed_env_returns_error_not_default() {
+        let previous = match std::env::var(AVIFENC_TIMEOUT_SECS_ENV) {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(err) => panic!("test env var read failed: {err}"),
+        };
+        unsafe {
+            std::env::set_var(AVIFENC_TIMEOUT_SECS_ENV, "invalid-secs");
+        }
+
+        let err = avifenc_timeout().expect_err("malformed avifenc timeout must fail closed");
+        assert!(
+            err.to_string().contains(AVIFENC_TIMEOUT_SECS_ENV),
+            "unexpected error: {err}"
+        );
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(AVIFENC_TIMEOUT_SECS_ENV, value),
+                None => std::env::remove_var(AVIFENC_TIMEOUT_SECS_ENV),
             }
         }
     }

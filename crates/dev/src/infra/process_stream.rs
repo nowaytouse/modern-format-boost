@@ -316,7 +316,14 @@ where
             // EPIPE after slave close), treat it as end-of-stream rather than
             // a real error. The child's exit code is captured in child.wait()
             // below, so no information is lost.
-            Err(_) if child.try_wait().context("check pty child on error")?.is_some() => break,
+            Err(_)
+                if child
+                    .try_wait()
+                    .context("check pty child on error")?
+                    .is_some() =>
+            {
+                break;
+            }
             Err(err) => return Err(err).context("read pty child output"),
         }
     }

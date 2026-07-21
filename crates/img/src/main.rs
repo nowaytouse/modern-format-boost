@@ -3041,7 +3041,7 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
             && message.contains("Unrecognized file format"))
 }
 
-const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 3;
+const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 7;
 const AVIF_MEME_EXTREME_BINARY_PROBES: usize = 4;
 
 const fn avif_meme_binary_probe_count(extreme_precision: bool) -> usize {

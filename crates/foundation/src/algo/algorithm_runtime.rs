@@ -1013,9 +1013,10 @@ mod tests {
     fn training_corpus_maturity_status_reports_both_shortfalls() {
         let min_loop = min_gif_samples_per_class();
         let min_static = min_quality_samples_per_class();
+        let min_static_total = min_quality_samples_total();
         let loop_total = min_gif_samples_total() + 100;
         let static_high = min_static - 1;
-        let static_low = min_static;
+        let static_low = min_static_total - static_high;
         let maturity = evaluate_training_corpus_maturity(
             loop_total,
             min_loop - 2,
