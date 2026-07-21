@@ -3066,22 +3066,26 @@ fn explore_avif_meme_quality(
     input_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
     binary_probe_count: usize,
+    extreme_precision: bool,
 ) -> anyhow::Result<AvifQualityExploreResult> {
     const COARSE_STEP: u8 = 10;
     const MIN_QUALITY: u8 = 20;
+
+    let avif_speed = if extreme_precision { 0 } else { 1 };
 
     // ── Phase 1: Coarse scan ──────────────────────────────────────────────
     let mut q_ok: Option<u8> = None;
     let mut q = 100u8;
     loop {
         foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality probe [coarse]: q={q} for {}",
+            "AVIF Meme Mode quality probe [coarse]: q={q} (speed={avif_speed}) for {}",
             source.display()
         ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
             source,
             encoder_input,
             q,
+            Some(avif_speed),
             convert_options,
         ) {
             Ok((temp_path, output_size)) => {
@@ -3138,10 +3142,11 @@ fn explore_avif_meme_quality(
             "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
             source.display()
         ));
-        let (temp, _size) = match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+        let (temp, _size) = match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
             source,
             encoder_input,
             100,
+            Some(avif_speed),
             convert_options,
         ) {
             Ok(result) => result,
@@ -3178,10 +3183,11 @@ fn explore_avif_meme_quality(
         foundation::log_detail!(&format!(
             "AVIF Meme Mode quality probe [binary]: testing q={mid}"
         ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
             source,
             encoder_input,
             mid,
+            Some(avif_speed),
             convert_options,
         ) {
             Ok((temp_path, output_size)) => {
@@ -3234,10 +3240,11 @@ fn explore_avif_meme_quality(
         source.display()
     ));
     let (temp_path, _output_size) =
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
             source,
             encoder_input,
             best_q,
+            Some(avif_speed),
             convert_options,
         ) {
             Ok(result) => result,
@@ -3298,6 +3305,7 @@ fn fast_img_run_encode_job_inner(
             input_size,
             &convert_options,
             avif_meme_binary_probe_count(extreme_precision),
+            extreme_precision,
         )? {
             AvifQualityExploreResult::Found { quality, .. } => {
                 foundation::log_detail!(&format!(

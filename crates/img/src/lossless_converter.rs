@@ -2719,9 +2719,11 @@ fn build_avifenc_command(
     quality: Option<u8>,
     lossless: bool,
     ignore_xmp: bool,
+    speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    builder.speed(0).jobs("all");
+    let effective_speed = speed.unwrap_or(0);
+    builder.speed(effective_speed).jobs("all");
 
     if lossless {
         builder.lossless(true);
@@ -2749,8 +2751,9 @@ fn run_avifenc_with_malformed_xmp_retry(
     temp_output: &Path,
     quality: Option<u8>,
     lossless: bool,
+    speed: Option<u8>,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut command = build_avifenc_command(input, temp_output, quality, lossless, false);
+    let mut command = build_avifenc_command(input, temp_output, quality, lossless, false, speed);
     let output = run_avifenc_command(&mut command)?;
     if output.status.success() || !avifenc_rejects_malformed_xmp(output.stderr.as_bytes()) {
         return Ok(output);
@@ -2765,7 +2768,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         source = %input.display(),
         "avifenc rejected malformed embedded XMP; retrying with --ignore-xmp"
     );
-    let mut retry = build_avifenc_command(input, temp_output, quality, lossless, true);
+    let mut retry = build_avifenc_command(input, temp_output, quality, lossless, true, speed);
     run_avifenc_command(&mut retry)
 }
 
@@ -2843,7 +2846,8 @@ pub fn convert_to_avif_from_encoder_input(
         })?;
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
 
-    let result = run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false);
+    let result =
+        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false, None);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -2935,6 +2939,22 @@ pub fn convert_to_avif_probe_from_encoder_input(
     quality: u8,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64)> {
+    convert_to_avif_probe_from_encoder_input_with_speed(
+        source,
+        encoder_input,
+        quality,
+        None,
+        options,
+    )
+}
+
+pub fn convert_to_avif_probe_from_encoder_input_with_speed(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64)> {
     let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
@@ -2956,8 +2976,13 @@ pub fn convert_to_avif_probe_from_encoder_input(
             ))
         })?;
 
-    let result =
-        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(quality), false);
+    let result = run_avifenc_with_malformed_xmp_retry(
+        encoder_input,
+        &temp_output,
+        Some(quality),
+        false,
+        speed,
+    );
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -3059,7 +3084,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             ImgQualityError::ConversionError(err_msg)
         })?;
 
-    let result = run_avifenc_with_malformed_xmp_retry(input, &temp_output, None, true);
+    let result = run_avifenc_with_malformed_xmp_retry(input, &temp_output, None, true, None);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -4734,6 +4759,7 @@ mod tests {
             Some(95),
             false,
             true,
+            None,
         );
         let args: Vec<_> = command
             .get_args()
@@ -4758,6 +4784,7 @@ mod tests {
                 quality,
                 lossless,
                 false,
+                Some(0),
             );
             let args: Vec<_> = command
                 .get_args()
