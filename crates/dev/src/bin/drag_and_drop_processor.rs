@@ -446,6 +446,8 @@ impl LaunchCommand {
             let session_log = sess.session_log.clone();
             let heartbeat = sess.session_audit.clone();
             let mut last_heartbeat = Instant::now();
+            let pipeline_label = self.pipeline_label().to_string();
+            let pipeline_started_at = Instant::now();
             let argv = self.argv();
             set_child_active(true);
             let result = stream_process_with_pty(
@@ -465,13 +467,43 @@ impl LaunchCommand {
                 },
                 || {
                     if last_heartbeat.elapsed() >= std::time::Duration::from_mins(1) {
-                        let _ = append_jsonl_audit_record(&heartbeat, "SESSION_HEARTBEAT");
+                        let event = format!(
+                            "SESSION_HEARTBEAT pipeline={pipeline_label} elapsed_secs={}",
+                            pipeline_started_at.elapsed().as_secs()
+                        );
+                        let _ = append_jsonl_audit_record(&heartbeat, &event);
                         last_heartbeat = Instant::now();
                     }
                 },
             );
             set_child_active(false);
-            result?
+            match result {
+                Ok(stats) => stats,
+                Err(error) => {
+                    let event = format!(
+                        "{pipeline_label}_PIPELINE_STREAM_ERROR elapsed_secs={} error={error}",
+                        pipeline_started_at.elapsed().as_secs()
+                    );
+                    let _ = append_jsonl_audit_record(&heartbeat, &event);
+                    if let Err(log_error) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&session_log)
+                        .and_then(|mut file| writeln!(file, "[LOG] {event}"))
+                    {
+                        eprintln!("[LOG] session stream error write failed: {log_error}");
+                    }
+                    if let Err(log_error) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&verbose)
+                        .and_then(|mut file| writeln!(file, "[LOG] {event}"))
+                    {
+                        eprintln!("[LOG] verbose stream error write failed: {log_error}");
+                    }
+                    return Err(error);
+                }
+            }
         } else {
             let mut child = cmd
                 .spawn()
