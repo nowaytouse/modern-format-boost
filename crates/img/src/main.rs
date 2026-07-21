@@ -3041,8 +3041,8 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
             && message.contains("Unrecognized file format"))
 }
 
-const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 7;
-const AVIF_MEME_EXTREME_BINARY_PROBES: usize = 4;
+const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 3;
+const AVIF_MEME_EXTREME_BINARY_PROBES: usize = 7;
 
 const fn avif_meme_binary_probe_count(extreme_precision: bool) -> usize {
     if extreme_precision {
@@ -9206,6 +9206,8 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn fast_img_avif_meme_quality_probe_count_respects_precision_mode() {
+        assert_eq!(super::avif_meme_binary_probe_count(false), 3);
+        assert_eq!(super::avif_meme_binary_probe_count(true), 7);
         assert_eq!(
             super::avif_meme_binary_probe_count(false),
             super::AVIF_MEME_NORMAL_BINARY_PROBES
