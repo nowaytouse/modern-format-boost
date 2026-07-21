@@ -434,11 +434,20 @@ async fn process_media(
     }
 }
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             process_media,
             check_version_alignment,
@@ -529,5 +538,45 @@ mod tests {
         let entitlements = std::fs::read_to_string(manifest_dir.join("entitlements.plist"))
             .expect("entitlements.plist should be readable");
         assert!(entitlements.contains("com.apple.security.automation.apple-events"));
+    }
+
+    #[test]
+    fn tauri_window_and_vite_base_config_prevent_hidden_or_white_screen() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config = std::fs::read_to_string(manifest_dir.join("tauri.conf.json"))
+            .expect("tauri.conf.json should be readable");
+        assert!(
+            config.contains("\"visible\": true"),
+            "tauri.conf.json must specify visible: true to prevent window staying hidden on startup"
+        );
+
+        let vite_config = std::fs::read_to_string(manifest_dir.join("../vite.config.ts"))
+            .expect("vite.config.ts should be readable");
+        assert!(
+            vite_config.contains("base: \"./\""),
+            "vite.config.ts must set base: './' to allow webview to load bundled asset scripts relatively"
+        );
+
+        let app_vue = std::fs::read_to_string(manifest_dir.join("../src/App.vue"))
+            .expect("App.vue should be readable");
+        assert!(
+            app_vue.contains("from \"./composables/useI18n\""),
+            "App.vue must import useI18n from ./composables/useI18n to prevent runtime plugin missing crash"
+        );
+        assert!(
+            !app_vue.contains("from \"vue-i18n\""),
+            "App.vue must not import useI18n from vue-i18n directly without App.use(i18n) setup"
+        );
+
+        let use_i18n = std::fs::read_to_string(manifest_dir.join("../src/composables/useI18n.js"))
+            .expect("useI18n.js should be readable");
+        assert!(
+            use_i18n.contains("../locales/zh.json"),
+            "useI18n.js must import zh.json from ../locales"
+        );
+        assert!(
+            use_i18n.contains("zh_CN: zh"),
+            "useI18n.js must alias zh_CN to zh"
+        );
     }
 }

@@ -3,19 +3,22 @@
  */
 
 import { ref, computed } from "vue";
-import zhCN from "../i18n/zh_CN.json";
-import en from "../i18n/en.json";
+import zh from "../locales/zh.json";
+import en from "../locales/en.json";
+import ja from "../locales/ja.json";
 
 const messages = {
-  zh_CN: zhCN,
+  zh: zh,
+  zh_CN: zh,
   en: en,
+  ja: ja,
 };
 
-// 从localStorage读取保存的语言设置，默认中文
+// 从localStorage读取保存的语言设置，默认中文 zh
 const savedLocale =
   typeof localStorage !== "undefined"
-    ? localStorage.getItem("pixly_locale") || "zh_CN"
-    : "zh_CN";
+    ? localStorage.getItem("pixly_locale") || "zh"
+    : "zh";
 
 const currentLocale = ref(savedLocale);
 

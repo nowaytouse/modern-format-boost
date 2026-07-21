@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "./composables/useI18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-const { t, locale } = useI18n({ useScope: "global" });
+const { t, setLocale, locale } = useI18n();
 
-const locales = ["en", "zh", "ja"];
+const locales = ["zh", "en", "ja"];
 const currentLocaleIndex = ref(0);
 
 const isDark = ref(true);
@@ -76,7 +76,7 @@ const closeWindow = () => getCurrentWindow().close();
 
 const toggleLanguage = () => {
   currentLocaleIndex.value = (currentLocaleIndex.value + 1) % locales.length;
-  locale.value = locales[currentLocaleIndex.value];
+  setLocale(locales[currentLocaleIndex.value]);
 };
 const toggleTheme = () => {
   isDark.value = !isDark.value;
