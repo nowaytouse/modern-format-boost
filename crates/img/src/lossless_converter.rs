@@ -2723,7 +2723,11 @@ fn build_avifenc_command(
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
     let effective_speed = speed.unwrap_or(0);
-    builder.speed(effective_speed).jobs("all");
+    builder
+        .speed(effective_speed)
+        .jobs("all")
+        .yuv("444")
+        .cicp("1/13/0");
 
     if lossless {
         builder.lossless(true);
@@ -4804,6 +4808,20 @@ mod tests {
                     .map(|pair| pair[1].as_str()),
                 Some("all"),
                 "avifenc must use all CPU threads"
+            );
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "--yuv")
+                    .map(|pair| pair[1].as_str()),
+                Some("444"),
+                "avifenc must use yuv 444 to eliminate color subsampling loss"
+            );
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "--cicp")
+                    .map(|pair| pair[1].as_str()),
+                Some("1/13/0"),
+                "avifenc must use Identity CICP matrixCoefficients (M=0) to eliminate RGB-to-YUV color space matrix distortion"
             );
         }
     }

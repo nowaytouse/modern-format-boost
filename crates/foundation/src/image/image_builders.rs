@@ -492,6 +492,7 @@ pub struct AvifencBuilder {
     threads: Option<String>,
     depth: Option<u8>,
     yuv: Option<String>,
+    cicp: Option<String>,
     ignore_xmp: bool,
 }
 
@@ -543,6 +544,11 @@ impl AvifencBuilder {
         self
     }
 
+    pub fn cicp<S: AsRef<str>>(&mut self, cicp: S) -> &mut Self {
+        self.cicp = Some(cicp.as_ref().to_string());
+        self
+    }
+
     /// Ignore embedded XMP metadata from the input image.
     pub const fn ignore_xmp(&mut self, enabled: bool) -> &mut Self {
         self.ignore_xmp = enabled;
@@ -588,6 +594,10 @@ impl ToolBuilder for AvifencBuilder {
 
         if let Some(yuv) = &self.yuv {
             cmd.arg(constants::AVIFENC_ARG_YUV).arg(yuv);
+        }
+
+        if let Some(cicp) = &self.cicp {
+            cmd.arg(constants::AVIFENC_ARG_CICP).arg(cicp);
         }
 
         if self.ignore_xmp {
