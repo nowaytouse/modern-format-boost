@@ -1263,6 +1263,7 @@ fn run_fast_img_with_retry(
         true,
         retry,
         args.strategy.as_deref(),
+        args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
     ))?;
     let stats = command.run_collecting(args.dry_run, Some(session), false)?;
     if stats.exit_code != 0 && !args.retry && fast_img_marker_requires_retry(&verify_bin, &output)?
@@ -1278,6 +1279,7 @@ fn run_fast_img_with_retry(
             true,
             true,
             args.strategy.as_deref(),
+            args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
         ))?;
         let retry_stats = retry_cmd.run_collecting(args.dry_run, Some(session), false)?;
         return Ok((retry_stats, output));
@@ -1387,6 +1389,7 @@ fn plan_cli_invocations(
                     args.archive,
                     args.retry,
                     args.strategy.as_deref(),
+                    args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
                 ))?);
             }
             LaunchMode::RestoreJpeg => {

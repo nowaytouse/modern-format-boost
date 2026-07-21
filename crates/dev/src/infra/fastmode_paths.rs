@@ -67,6 +67,7 @@ pub fn build_fast_img_command(
     archive: bool,
     retry: bool,
     strategy: Option<&str>,
+    extreme_precision: bool,
 ) -> Vec<String> {
     let mut command = vec![
         img_binary.to_string_lossy().to_string(),
@@ -83,6 +84,9 @@ pub fn build_fast_img_command(
     if shortest_path {
         command.push("--shortest-path".to_string());
         command.push("--auto-import".to_string());
+    }
+    if extreme_precision {
+        command.push("--extreme-precision".to_string());
     }
     if let Some(strat) = strategy {
         command.push("--strategy".to_string());
@@ -211,6 +215,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(
             command,
@@ -232,6 +237,7 @@ mod tests {
             true,
             false,
             None,
+            false,
         );
         assert_eq!(
             command,
@@ -254,6 +260,7 @@ mod tests {
             true,
             false,
             None,
+            false,
         );
         assert_eq!(
             command,
@@ -278,8 +285,25 @@ mod tests {
             false,
             true,
             None,
+            false,
         );
         assert!(command.contains(&"--retry".to_string()));
+    }
+
+    #[test]
+    fn test_fastmode_extreme_precision_flag_is_passed() {
+        let command = build_fast_img_command(
+            Path::new("/opt/mfb/img"),
+            Path::new("/Users/example/Pictures/Album"),
+            false,
+            false,
+            false,
+            Some("avif"),
+            true,
+        );
+        assert!(command.contains(&"--extreme-precision".to_string()));
+        assert!(command.contains(&"--strategy".to_string()));
+        assert!(command.contains(&"avif".to_string()));
     }
 
     #[test]
