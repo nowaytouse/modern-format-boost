@@ -41,7 +41,8 @@ const processingMode = ref("both");
 // Output Mode / Tools
 const outputModeOpts = computed(() => [
   { id: "adjacent", label: t("format.avif_hevc") + " (Adj)", icon: "📂" },
-  { id: "fast_img", label: t("tier.fast") + " (IMG)", icon: "⚡" },
+  { id: "fast_img", label: t("tier.fast") + " (IMG JXL)", icon: "⚡" },
+  { id: "fast_img_avif", label: t("tier.fast") + " (IMG AVIF Meme)", icon: "🤡" },
   { id: "fast_vid", label: t("tier.fast") + " (VID)", icon: "🚀" },
   { id: "restore_jpeg", label: "Restore to JPEG", icon: "⏪" },
   { id: "collect", label: "Collect Optimized", icon: "📥" },
@@ -223,10 +224,20 @@ const startCliProcessing = async () => {
   appendLog(`[INFO] Starting processing: ${folderPath.value}`);
 
   try {
+    const targetOutputMode =
+      outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
+    const strategyArg =
+      outputMode.value === "fast_img_avif"
+        ? "avif"
+        : outputMode.value === "fast_img"
+          ? "jxl"
+          : null;
+
     const result = await invoke("process_media", {
       targetPath: folderPath.value,
       processingMode: processingMode.value,
-      outputMode: outputMode.value,
+      outputMode: targetOutputMode,
+      strategy: strategyArg,
       ultimate: mfbToggles.ultimateMode,
       verbose: mfbToggles.verboseMode,
       resume: mfbToggles.resumeMode,
@@ -266,7 +277,11 @@ const generateCliCommand = () => {
 
   switch (outputMode.value) {
     case "fast_img": {
-      command += " --mode fast-img";
+      command += " --mode fast-img --strategy jxl";
+      break;
+    }
+    case "fast_img_avif": {
+      command += " --mode fast-img --strategy avif";
       break;
     }
     case "fast_vid": {

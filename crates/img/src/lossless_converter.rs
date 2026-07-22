@@ -2816,6 +2816,16 @@ pub fn convert_to_avif_from_encoder_input(
     quality: Option<u8>,
     options: &ConvertOptions,
 ) -> Result<TaskResult> {
+    convert_to_avif_from_encoder_input_with_speed(source, encoder_input, quality, None, options)
+}
+
+pub fn convert_to_avif_from_encoder_input_with_speed(
+    source: &Path,
+    encoder_input: &Path,
+    quality: Option<u8>,
+    speed: Option<u8>,
+    options: &ConvertOptions,
+) -> Result<TaskResult> {
     let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
@@ -2851,7 +2861,7 @@ pub fn convert_to_avif_from_encoder_input(
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
 
     let result =
-        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false, None);
+        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false, speed);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {

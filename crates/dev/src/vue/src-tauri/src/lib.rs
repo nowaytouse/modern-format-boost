@@ -337,6 +337,7 @@ async fn process_media(
     target_path: String,
     processing_mode: String,
     output_mode: String,
+    strategy: Option<String>,
     ultimate: bool,
     verbose: bool,
     resume: bool,
@@ -381,6 +382,12 @@ async fn process_media(
         cmd.arg("--mode").arg("cache-clean");
     } else if output_mode == "database_manager" {
         cmd.arg("--mode").arg("database-manager");
+    }
+
+    if let Some(strat) = strategy {
+        if !strat.is_empty() {
+            cmd.arg("--strategy").arg(strat);
+        }
     }
 
     if ultimate {
@@ -577,6 +584,17 @@ mod tests {
         assert!(
             use_i18n.contains("zh_CN: zh"),
             "useI18n.js must alias zh_CN to zh"
+        );
+
+        let lib_rs = std::fs::read_to_string(manifest_dir.join("src/lib.rs"))
+            .expect("lib.rs should be readable");
+        assert!(
+            lib_rs.contains("strategy: Option<String>"),
+            "process_media in lib.rs must accept strategy parameter"
+        );
+        assert!(
+            lib_rs.contains("cmd.arg(\"--strategy\").arg(strat)"),
+            "process_media in lib.rs must forward --strategy to backend processor"
         );
     }
 }

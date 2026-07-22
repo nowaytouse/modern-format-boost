@@ -3170,7 +3170,7 @@ fn explore_avif_meme_quality(
     let mut best_q = q_found;
 
     foundation::log_detail!(&format!(
-        "AVIF Meme Mode quality probe [binary search]: range=[{lo}, {hi}] for {}",
+        "AVIF Meme Mode quality probe [binary search]: range=[{lo}, {hi}] (speed={avif_speed}) for {}",
         source.display()
     ));
 
@@ -3181,7 +3181,7 @@ fn explore_avif_meme_quality(
         }
         let mid = lo + (hi - lo) / 2;
         foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality probe [binary]: testing q={mid}"
+            "AVIF Meme Mode quality probe [binary]: testing q={mid} (speed={avif_speed})"
         ));
         match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
             source,
@@ -3308,16 +3308,19 @@ fn fast_img_run_encode_job_inner(
             extreme_precision,
         )? {
             AvifQualityExploreResult::Found { quality, .. } => {
+                let avif_speed = if extreme_precision { 0 } else { 1 };
                 foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?})",
+                    "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?}, speed={})",
                     quality,
                     job.source.display(),
-                    format
+                    format,
+                    avif_speed
                 ));
-                img::lossless_converter::convert_to_avif_from_encoder_input(
+                img::lossless_converter::convert_to_avif_from_encoder_input_with_speed(
                     &job.source,
                     &encoder_input.path,
                     Some(quality),
+                    Some(avif_speed),
                     &convert_options,
                 )?
             }
