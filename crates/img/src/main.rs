@@ -3524,6 +3524,7 @@ fn fast_img_run_encode_job_inner(
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: LosslessConvertFlags::FORCE
+                | LosslessConvertFlags::APPLE_COMPAT
                 | LosslessConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
                 | LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY
                 | LosslessConvertFlags::ULTIMATE
@@ -8017,6 +8018,10 @@ mod fast_img_hardening_tests {
             .find("let options = LosslessConvertOptions")
             .ok_or_else(|| anyhow::anyhow!("fast-img encode options must exist"))?;
         let options_block = &source[options_pos..];
+        let convert_pos = options_block
+            .find("convert_jpeg_to_jxl")
+            .ok_or_else(|| anyhow::anyhow!("fast-img JXL conversion call must exist"))?;
+        let options_block = &options_block[..convert_pos];
         let force_pos = options_block
             .find("LosslessConvertFlags::FORCE")
             .ok_or_else(|| {
@@ -8025,10 +8030,19 @@ mod fast_img_hardening_tests {
         let require_output_delivery_pos = options_block
             .find("LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY")
             .ok_or_else(|| anyhow::anyhow!("fast-img encode must require output delivery"))?;
+        let apple_compat_pos = options_block
+            .find("LosslessConvertFlags::APPLE_COMPAT")
+            .ok_or_else(|| {
+                anyhow::anyhow!("fast-img JXL encode must enable Apple-compatible box layout")
+            })?;
 
         assert!(
             force_pos < require_output_delivery_pos,
             "fast-img queued encodes must overwrite stale/corrupt JXL siblings before delivery checks"
+        );
+        assert!(
+            apple_compat_pos < require_output_delivery_pos,
+            "fast-img JXL encodes must enable Apple compatibility before delivery validation"
         );
         Ok(())
     }

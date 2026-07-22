@@ -3,6 +3,7 @@ members = [
   "crates/vid",
   "crates/img",
   "crates/foundation",
+  "crates/jxl_import_doctor",
   "crates/dev",
   "crates/dev/src/fuzz",
 ]

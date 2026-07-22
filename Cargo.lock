@@ -1539,6 +1539,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl_import_doctor"
+version = "0.11.3"
+dependencies = [
+ "blake3",
+ "clap",
+ "jxl-oxide",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
