@@ -3062,6 +3062,8 @@ pub const AVIFENC_ARG_QUALITY_ALPHA: &str = "--qalpha";
 pub const AVIFENC_ARG_DEPTH: &str = "--depth";
 pub const AVIFENC_ARG_YUV: &str = "--yuv";
 pub const AVIFENC_ARG_CICP: &str = "--cicp";
+/// Ignore malformed embedded Exif metadata while retaining other AVIF encoder inputs.
+pub const AVIFENC_ARG_IGNORE_EXIF: &str = "--ignore-exif";
 /// Ignore malformed embedded XMP while retaining other AVIF encoder inputs.
 pub const AVIFENC_ARG_IGNORE_XMP: &str = "--ignore-xmp";
 /// Ignore incompatible or malformed embedded ICC profiles while retaining other AVIF encoder inputs.

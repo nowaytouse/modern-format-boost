@@ -2685,9 +2685,16 @@ pub fn convert_jpeg_to_jxl(
     }
 }
 
+fn avifenc_rejects_malformed_exif(stderr: &[u8]) -> bool {
+    let lossy = String::from_utf8_lossy(stderr);
+    lossy.contains("Exif extraction failed")
+        || lossy.contains("invalid Exif")
+        || lossy.contains("Pass --ignore-exif")
+}
+
 fn avifenc_rejects_malformed_xmp(stderr: &[u8]) -> bool {
-    String::from_utf8_lossy(stderr)
-        .contains("XMP extraction failed: invalid multiple standard XMP segments")
+    let lossy = String::from_utf8_lossy(stderr);
+    lossy.contains("invalid multiple standard XMP segments") || lossy.contains("Pass --ignore-xmp")
 }
 
 fn avifenc_rejects_incompatible_icc(stderr: &[u8]) -> bool {
@@ -2696,6 +2703,7 @@ fn avifenc_rejects_incompatible_icc(stderr: &[u8]) -> bool {
         || lossy.contains("Pass --ignore-icc")
         || lossy.contains("Pass --ignore-profile")
         || lossy.contains("incompatible with the requested output format YUV")
+        || lossy.contains("ICC profile extraction failed")
 }
 
 const AVIFENC_TIMEOUT_SECS_ENV: &str = "MFB_AVIFENC_TIMEOUT_SECS";
@@ -2726,6 +2734,7 @@ fn build_avifenc_command(
     output: &Path,
     quality: Option<u8>,
     lossless: bool,
+    ignore_exif: bool,
     ignore_xmp: bool,
     ignore_icc: bool,
     speed: Option<u8>,
@@ -2743,6 +2752,9 @@ fn build_avifenc_command(
     }
     if let Some(quality) = quality {
         builder.quality(quality);
+    }
+    if ignore_exif {
+        builder.ignore_exif(true);
     }
     if ignore_xmp {
         builder.ignore_xmp(true);
@@ -2762,6 +2774,64 @@ fn run_avifenc_command(
         .wait_timeout(avifenc_timeout()?, "official avifenc --speed 0")
 }
 
+fn try_normalize_icc_to_srgb_png(
+    input: &Path,
+) -> anyhow::Result<(tempfile::NamedTempFile, PathBuf)> {
+    let temp = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "avif_srgb_icc_normalization",
+        None,
+        Some(".png"),
+    )?;
+    let temp_path = temp.path().to_path_buf();
+
+    // 1. Try ImageMagick: convert input -colorspace sRGB temp_path
+    if foundation::image_builders::MagickBuilder::check_available() {
+        let mut builder = foundation::image_builders::MagickBuilder::new();
+        builder.input(input);
+        let mut cmd = builder.build();
+        cmd.arg("-colorspace").arg("sRGB").arg(&temp_path);
+        if let Ok(output) =
+            foundation::process_runner::ManagedProcess::spawn(&mut cmd).and_then(|mut proc| {
+                proc.wait_timeout(Duration::from_secs(30), "magick sRGB normalization")
+            })
+        {
+            if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0
+            {
+                log_detail!(&format!(
+                    "Normalized gray/incompatible ICC profile to sRGB PNG via ImageMagick for {}",
+                    input.display()
+                ));
+                return Ok((temp, temp_path));
+            }
+        }
+    }
+
+    // 2. Try sips on macOS: sips -s format png input --out temp_path
+    let sips_cmd = std::process::Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("png")
+        .arg(input)
+        .arg("--out")
+        .arg(&temp_path)
+        .output();
+
+    if let Ok(output) = sips_cmd {
+        if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0 {
+            log_detail!(&format!(
+                "Normalized gray/incompatible ICC profile to PNG via sips for {}",
+                input.display()
+            ));
+            return Ok((temp, temp_path));
+        }
+    }
+
+    anyhow::bail!(
+        "ICC profile sRGB normalization unavailable or failed for {}",
+        input.display()
+    )
+}
+
 fn run_avifenc_with_malformed_xmp_retry(
     input: &Path,
     temp_output: &Path,
@@ -2769,30 +2839,66 @@ fn run_avifenc_with_malformed_xmp_retry(
     lossless: bool,
     speed: Option<u8>,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut command =
-        build_avifenc_command(input, temp_output, quality, lossless, false, false, speed);
+    let mut command = build_avifenc_command(
+        input,
+        temp_output,
+        quality,
+        lossless,
+        false,
+        false,
+        false,
+        speed,
+    );
     let output = run_avifenc_command(&mut command)?;
     if output.status.success() {
         return Ok(output);
     }
 
     let stderr_bytes = output.stderr.as_bytes();
+    let needs_ignore_exif = avifenc_rejects_malformed_exif(stderr_bytes);
     let needs_ignore_xmp = avifenc_rejects_malformed_xmp(stderr_bytes);
     let needs_ignore_icc = avifenc_rejects_incompatible_icc(stderr_bytes);
 
-    if !needs_ignore_xmp && !needs_ignore_icc {
+    if !needs_ignore_exif && !needs_ignore_xmp && !needs_ignore_icc {
         return Ok(output);
+    }
+
+    // If an incompatible/gray ICC profile is detected, attempt sRGB normalization FIRST to PRESERVE all visual colors & gamma curves!
+    if needs_ignore_icc {
+        if let Ok((_temp_guard, srgb_png_path)) = try_normalize_icc_to_srgb_png(input) {
+            let mut srgb_retry = build_avifenc_command(
+                &srgb_png_path,
+                temp_output,
+                quality,
+                lossless,
+                needs_ignore_exif,
+                needs_ignore_xmp,
+                false, // ignore_icc=false because srgb_png_path is now normalized to sRGB!
+                speed,
+            );
+            if let Ok(srgb_out) = run_avifenc_command(&mut srgb_retry) {
+                if srgb_out.status.success() {
+                    log_detail!(&format!(
+                        "Successfully encoded sRGB-normalized image to AVIF for {} (color profile & visual gamma preserved in sRGB space)",
+                        input.display()
+                    ));
+                    return Ok(srgb_out);
+                }
+            }
+        }
     }
 
     cleanup_temp_output(temp_output, input);
     log_detail!(&format!(
-        "avifenc rejected metadata/profile for {}; retrying with --ignore-xmp={} --ignore-icc={}",
+        "avifenc rejected metadata/profile for {}; retrying with --ignore-exif={} --ignore-xmp={} --ignore-icc={}",
         input.display(),
+        needs_ignore_exif,
         needs_ignore_xmp,
         needs_ignore_icc
     ));
     tracing::warn!(
         source = %input.display(),
+        needs_ignore_exif = needs_ignore_exif,
         needs_ignore_xmp = needs_ignore_xmp,
         needs_ignore_icc = needs_ignore_icc,
         "avifenc rejected metadata/profile; retrying with flags"
@@ -2802,6 +2908,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         temp_output,
         quality,
         lossless,
+        needs_ignore_exif,
         needs_ignore_xmp,
         needs_ignore_icc,
         speed,
@@ -4805,6 +4912,7 @@ mod tests {
             Path::new("output.avif"),
             Some(95),
             false,
+            false,
             true,
             false,
             None,
@@ -4844,6 +4952,7 @@ mod tests {
                 Path::new("test_out.avif"),
                 quality,
                 lossless,
+                false,
                 false,
                 false,
                 Some(0),

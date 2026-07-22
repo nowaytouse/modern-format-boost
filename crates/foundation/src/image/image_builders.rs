@@ -493,6 +493,7 @@ pub struct AvifencBuilder {
     depth: Option<u8>,
     yuv: Option<String>,
     cicp: Option<String>,
+    ignore_exif: bool,
     ignore_xmp: bool,
     ignore_icc: bool,
 }
@@ -547,6 +548,12 @@ impl AvifencBuilder {
 
     pub fn cicp<S: AsRef<str>>(&mut self, cicp: S) -> &mut Self {
         self.cicp = Some(cicp.as_ref().to_string());
+        self
+    }
+
+    /// Ignore embedded Exif metadata from the input image.
+    pub const fn ignore_exif(&mut self, enabled: bool) -> &mut Self {
+        self.ignore_exif = enabled;
         self
     }
 
@@ -605,6 +612,10 @@ impl ToolBuilder for AvifencBuilder {
 
         if let Some(cicp) = &self.cicp {
             cmd.arg(constants::AVIFENC_ARG_CICP).arg(cicp);
+        }
+
+        if self.ignore_exif {
+            cmd.arg(constants::AVIFENC_ARG_IGNORE_EXIF);
         }
 
         if self.ignore_xmp {
