@@ -2690,6 +2690,14 @@ fn avifenc_rejects_malformed_xmp(stderr: &[u8]) -> bool {
         .contains("XMP extraction failed: invalid multiple standard XMP segments")
 }
 
+fn avifenc_rejects_incompatible_icc(stderr: &[u8]) -> bool {
+    let lossy = String::from_utf8_lossy(stderr);
+    lossy.contains("gray ICC profile")
+        || lossy.contains("Pass --ignore-icc")
+        || lossy.contains("Pass --ignore-profile")
+        || lossy.contains("incompatible with the requested output format YUV")
+}
+
 const AVIFENC_TIMEOUT_SECS_ENV: &str = "MFB_AVIFENC_TIMEOUT_SECS";
 
 fn avifenc_timeout() -> anyhow::Result<Duration> {
@@ -2719,6 +2727,7 @@ fn build_avifenc_command(
     quality: Option<u8>,
     lossless: bool,
     ignore_xmp: bool,
+    ignore_icc: bool,
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
@@ -2737,6 +2746,9 @@ fn build_avifenc_command(
     }
     if ignore_xmp {
         builder.ignore_xmp(true);
+    }
+    if ignore_icc {
+        builder.ignore_icc(true);
     }
 
     builder.input(input).output(output);
@@ -2757,22 +2769,43 @@ fn run_avifenc_with_malformed_xmp_retry(
     lossless: bool,
     speed: Option<u8>,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut command = build_avifenc_command(input, temp_output, quality, lossless, false, speed);
+    let mut command =
+        build_avifenc_command(input, temp_output, quality, lossless, false, false, speed);
     let output = run_avifenc_command(&mut command)?;
-    if output.status.success() || !avifenc_rejects_malformed_xmp(output.stderr.as_bytes()) {
+    if output.status.success() {
+        return Ok(output);
+    }
+
+    let stderr_bytes = output.stderr.as_bytes();
+    let needs_ignore_xmp = avifenc_rejects_malformed_xmp(stderr_bytes);
+    let needs_ignore_icc = avifenc_rejects_incompatible_icc(stderr_bytes);
+
+    if !needs_ignore_xmp && !needs_ignore_icc {
         return Ok(output);
     }
 
     cleanup_temp_output(temp_output, input);
     log_detail!(&format!(
-        "avifenc rejected malformed embedded XMP for {}; retrying with official --ignore-xmp",
-        input.display()
+        "avifenc rejected metadata/profile for {}; retrying with --ignore-xmp={} --ignore-icc={}",
+        input.display(),
+        needs_ignore_xmp,
+        needs_ignore_icc
     ));
     tracing::warn!(
         source = %input.display(),
-        "avifenc rejected malformed embedded XMP; retrying with --ignore-xmp"
+        needs_ignore_xmp = needs_ignore_xmp,
+        needs_ignore_icc = needs_ignore_icc,
+        "avifenc rejected metadata/profile; retrying with flags"
     );
-    let mut retry = build_avifenc_command(input, temp_output, quality, lossless, true, speed);
+    let mut retry = build_avifenc_command(
+        input,
+        temp_output,
+        quality,
+        lossless,
+        needs_ignore_xmp,
+        needs_ignore_icc,
+        speed,
+    );
     run_avifenc_command(&mut retry)
 }
 
@@ -4773,6 +4806,7 @@ mod tests {
             Some(95),
             false,
             true,
+            false,
             None,
         );
         let args: Vec<_> = command
@@ -4790,6 +4824,19 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_icc_retry_detects_gray_and_invalid_profiles() {
+        assert!(avifenc_rejects_incompatible_icc(
+            b"The image contains a gray ICC profile which is incompatible with the requested output format YUV (color). Pass --ignore-icc to discard the ICC profile."
+        ));
+        assert!(avifenc_rejects_incompatible_icc(
+            b"Pass --ignore-profile to ignore color profile"
+        ));
+        assert!(!avifenc_rejects_incompatible_icc(
+            b"Normal encoding success"
+        ));
+    }
+
+    #[test]
     fn avifenc_command_builder_always_uses_speed_zero_and_jobs_all() {
         for (quality, lossless) in [(Some(85), false), (Some(100), false), (None, true)] {
             let command = build_avifenc_command(
@@ -4797,6 +4844,7 @@ mod tests {
                 Path::new("test_out.avif"),
                 quality,
                 lossless,
+                false,
                 false,
                 Some(0),
             );

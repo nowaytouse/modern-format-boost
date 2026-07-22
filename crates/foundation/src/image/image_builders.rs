@@ -494,6 +494,7 @@ pub struct AvifencBuilder {
     yuv: Option<String>,
     cicp: Option<String>,
     ignore_xmp: bool,
+    ignore_icc: bool,
 }
 
 impl AvifencBuilder {
@@ -554,6 +555,12 @@ impl AvifencBuilder {
         self.ignore_xmp = enabled;
         self
     }
+
+    /// Ignore embedded color profile / ICC profile from the input image.
+    pub const fn ignore_icc(&mut self, enabled: bool) -> &mut Self {
+        self.ignore_icc = enabled;
+        self
+    }
 }
 
 crate::impl_base_builder_accessors_full!(AvifencBuilder);
@@ -602,6 +609,10 @@ impl ToolBuilder for AvifencBuilder {
 
         if self.ignore_xmp {
             cmd.arg(constants::AVIFENC_ARG_IGNORE_XMP);
+        }
+
+        if self.ignore_icc {
+            cmd.arg(constants::AVIFENC_ARG_IGNORE_ICC);
         }
 
         self.base.apply_to_command(&mut cmd);

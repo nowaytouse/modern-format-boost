@@ -3064,6 +3064,8 @@ pub const AVIFENC_ARG_YUV: &str = "--yuv";
 pub const AVIFENC_ARG_CICP: &str = "--cicp";
 /// Ignore malformed embedded XMP while retaining other AVIF encoder inputs.
 pub const AVIFENC_ARG_IGNORE_XMP: &str = "--ignore-xmp";
+/// Ignore incompatible or malformed embedded ICC profiles while retaining other AVIF encoder inputs.
+pub const AVIFENC_ARG_IGNORE_ICC: &str = "--ignore-icc";
 
 pub const SIPS_ARG_S: &str = "-s";
 pub const SIPS_ARG_FORMAT: &str = "format";
