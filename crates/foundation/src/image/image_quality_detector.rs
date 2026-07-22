@@ -1049,6 +1049,10 @@ pub fn analyze_image_quality_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Option<ImageQualityAnalysis> {
+    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
+        return None;
+    }
+
     let is_jpeg_hint = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())

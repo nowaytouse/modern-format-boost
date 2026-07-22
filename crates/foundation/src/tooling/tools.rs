@@ -30,11 +30,12 @@ fn tool_output_success(tool: &str, probe: &str, output: std::io::Result<Output>)
 #[must_use]
 pub fn check_tool(name: &str) -> bool {
     let path = crate::common_utils::resolve_tool_path_or_audit(name);
-    tool_output_success(
-        name,
-        "--version",
-        Command::new(&path).arg("--version").output(),
-    )
+    let probe_arg = if name == crate::constants::TOOL_JXLINFO {
+        "--help"
+    } else {
+        "--version"
+    };
+    tool_output_success(name, probe_arg, Command::new(&path).arg(probe_arg).output())
 }
 
 #[must_use]
@@ -119,6 +120,12 @@ pub fn check_image() -> Vec<ToolCheck> {
             name: "djxl",
             available: check_tool("djxl"),
             version: get_tool_version("djxl"),
+            install_hint: "brew install jpeg-xl",
+        },
+        ToolCheck {
+            name: "jxlinfo",
+            available: check_tool("jxlinfo"),
+            version: get_tool_version("cjxl"),
             install_hint: "brew install jpeg-xl",
         },
         ToolCheck {

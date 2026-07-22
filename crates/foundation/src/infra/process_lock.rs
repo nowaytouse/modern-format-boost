@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 
 static INIT_GHOST_ENV: Once = Once::new();
@@ -180,8 +181,17 @@ fn usable_mfb_root_or_fallback(root: PathBuf, context: &str, create_msg: &str) -
 }
 
 fn ensure_mfb_root_usable(root: &Path) -> Result<()> {
+    static WRITE_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     fs::create_dir_all(root)?;
-    let probe = root.join(".mfb_write_probe");
+    // This check is called from image workers. A shared probe name lets one
+    // worker remove another worker's probe and falsely marks a healthy root as
+    // unavailable. PID + sequence also keeps concurrent MFB processes apart.
+    let probe = root.join(format!(
+        ".mfb_write_probe.{}.{}",
+        std::process::id(),
+        WRITE_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::write(&probe, b"probe")?;
     fs::remove_file(&probe)?;
     Ok(())
@@ -293,6 +303,7 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
@@ -318,6 +329,36 @@ mod tests {
 
         let hash2 = hash_path_to_hex(path).unwrap();
         assert_eq!(hash, hash2);
+    }
+
+    #[test]
+    fn mfb_root_write_probe_is_concurrency_safe() {
+        let temp = TempDir::new().unwrap();
+        let root = Arc::new(temp.path().join("mfb_home"));
+        let workers: Vec<_> = (0..16)
+            .map(|_| {
+                let root = Arc::clone(&root);
+                std::thread::spawn(move || {
+                    for _ in 0..64 {
+                        ensure_mfb_root_usable(&root).unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert!(
+            fs::read_dir(root.as_ref()).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".mfb_write_probe")
+            }),
+            "successful write probes must clean up their temporary files"
+        );
     }
 
     #[test]

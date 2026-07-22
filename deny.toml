@@ -3,10 +3,6 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = [
-  # paste - no longer maintained (transitive dependency of image/rav1e in nightly)
-  "RUSTSEC-2024-0436",
-]
 
 [licenses]
 # MIT, Apache-2.0, and Zlib are standard and allowed for this project
@@ -43,19 +39,31 @@ license-files = [{ path = "LICENSE-LGPL.md", hash = 986959994 }]
 multiple-versions = "warn"
 wildcards = "allow"
 skip = [
+  { crate = "bitstream-io", reason = "libavif/rav1e and current codec dependencies require separate major lines" },
+  { crate = "built", reason = "libavif/rav1e and current codec dependencies require separate minor lines" },
+  { crate = "cfg-expr", reason = "system-deps 6 and 7 require separate cfg-expr lines" },
   { crate = "fallible-iterator", reason = "postgres and rusqlite currently require different major/minor lines" },
   { crate = "getrandom", reason = "registry 0.3 and git 0.4 are required by independent upstream dependency trees" },
   { crate = "hashbrown", reason = "rusqlite transitively pulls both registry and git lines" },
-  { crate = "libc", reason = "stable registry and git alpha lines are required by independent upstream dependency trees" },
+  { crate = "itertools", reason = "libavif and image/ravif require separate codec dependency lines" },
   { crate = "miniz_oxide", reason = "image and flate2 currently require separate upstream lines" },
   { crate = "quick-error", reason = "transitive dependencies currently require separate quick-error lines" },
   { crate = "r-efi", reason = "getrandom/WASI dependency trees currently require separate source lines" },
   { crate = "rand", reason = "codec and database/proptest dependency trees currently require separate lines" },
   { crate = "rand_chacha", reason = "rand and proptest dependency trees currently require separate lines" },
   { crate = "rand_core", reason = "rand 0.9 and 0.10 dependency trees currently require separate lines" },
+  { crate = "rav1e", reason = "libavif and image/ravif currently require separate rav1e lines" },
+  { crate = "serde_spanned", reason = "toml 0.8 and 1.x require separate serde_spanned lines" },
+  { crate = "syn", reason = "current proc-macro dependency trees require syn 2 and syn 3" },
+  { crate = "system-deps", reason = "native codec bindings currently require system-deps 6 and 7" },
+  { crate = "target-lexicon", reason = "system-deps 6 and 7 require separate target-lexicon lines" },
+  { crate = "thiserror", reason = "upstream dependencies still require thiserror 1 alongside project nightly thiserror 2" },
+  { crate = "thiserror-impl", reason = "upstream dependencies still require thiserror-impl 1 and 2" },
+  { crate = "toml", reason = "build dependencies currently require toml 0.8 and 1.x" },
+  { crate = "toml_datetime", reason = "toml 0.8 and 1.x require separate datetime lines" },
   { crate = "wasi", reason = "tokio and wasite dependency trees currently require separate WASI lines" },
-  { crate = "wasip2", reason = "registry and git WASI dependency trees are both present transitively" },
-  { crate = "weezl", reason = "gif and tiff dependency trees currently require separate lines" },
+  { crate = "windows-sys", reason = "notify and current platform dependencies require separate Windows API lines" },
+  { crate = "winnow", reason = "toml 0.8 and 1.x require separate parser lines" },
 ]
 
 [sources]
@@ -64,19 +72,13 @@ unknown-git = "deny"
 allow-git = [
   "https://github.com/image-rs/image",
   "https://github.com/BLAKE3-team/BLAKE3",
-  "https://github.com/rust-random/getrandom",
-  "https://github.com/rust-lang/hashbrown",
   "https://github.com/dtolnay/anyhow",
   "https://github.com/dtolnay/thiserror",
   "https://github.com/tokio-rs/tracing",
   "https://github.com/clap-rs/clap",
-  "https://github.com/serde-rs/serde",
-  "https://github.com/serde-rs/json",
-  "https://github.com/rayon-rs/rayon",
   "https://github.com/console-rs/indicatif",
   "https://github.com/BurntSushi/walkdir",
   "https://github.com/alexcrichton/filetime",
-  "https://github.com/rust-lang/libc",
   "https://github.com/Stebalien/xattr",
   "https://github.com/harryfei/which-rs",
   "https://github.com/rust-lang/log",
@@ -88,29 +90,17 @@ allow-git = [
   "https://github.com/mitsuhiko/insta",
   "https://github.com/rust-lang/flate2-rs",
   "https://github.com/Detegr/rust-ctrlc",
-  "https://github.com/rust-random/rand",
   "https://github.com/3Hren/msgpack-rust",
   "https://github.com/bojand/infer",
   "https://github.com/srijs/rust-crc32fast",
   "https://github.com/tafia/quick-xml",
   "https://github.com/johannesvollmer/exrs",
-  "https://github.com/Cykooz/libheif-sys",
-  "https://github.com/Frommi/miniz_oxide",
   "https://github.com/bitflags/bitflags",
   "https://github.com/inflation/jpegxl-rs",
   "https://github.com/dtolnay/paste",
-  "https://github.com/orlp/foldhash",
   "https://github.com/pgvector/pgvector-rust",
-  "https://github.com/sfackler/rust-postgres",
-  "https://github.com/tailhook/quick-error",
+  "https://github.com/aclysma/profiling",
   "https://gitlab.com/tspiteri/rug",
-  "https://github.com/bytecodealliance/wasi",
-  "https://github.com/image-rs/image-gif",
-  "https://github.com/jaredforth/webp",
-  "https://github.com/palfrey/serial_test",
-  "https://github.com/r-efi/r-efi",
-  "https://github.com/rust-fuzz/arbitrary",
-  "https://github.com/rust-fuzz/libfuzzer",
   "https://github.com/tirr-c/jxl-oxide",
-  "https://gitlab.com/tspiteri/gmp-mpfr-sys",
+  "https://github.com/google/zerocopy",
 ]

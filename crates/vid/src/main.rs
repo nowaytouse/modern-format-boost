@@ -102,6 +102,7 @@ enum Commands {
     DbHealth,
 
     /// Fast animated-image mode: output GIF by default or AVIF for meme mode.
+    /// Apple compatibility always delivers GIF, regardless of the requested strategy.
     #[command(name = "fast-gif")]
     FastGif {
         #[arg(value_name = "INPUT")]
@@ -371,6 +372,14 @@ fn fast_gif_required_tools(effective_strategy: &str) -> Vec<&'static str> {
     }
 }
 
+const fn fast_gif_effective_strategy(apple_compat: bool, requested_strategy: &str) -> &str {
+    if apple_compat {
+        "gif"
+    } else {
+        requested_strategy
+    }
+}
+
 fn fast_gif_delivery_label(effective_strategy: &str) -> &'static str {
     if effective_strategy == "avif" {
         "AVIF"
@@ -554,7 +563,7 @@ fn run_fast_gif(
     if auto_import && !shortest_path {
         anyhow::bail!("fast-gif --auto-import requires --shortest-path");
     }
-    let effective_strategy = if apple_compat { "gif" } else { strategy };
+    let effective_strategy = fast_gif_effective_strategy(apple_compat, strategy);
     let delivery_label = fast_gif_delivery_label(effective_strategy);
     let required_tools = fast_gif_required_tools(effective_strategy);
     if let Err(err) = foundation::tools::require(&required_tools) {
@@ -1302,9 +1311,9 @@ mod fast_gif_tests {
     use super::{
         Cli, Commands, FastGifDelivery, command_requires_database,
         fast_gif_avif_delivery_output_path, fast_gif_avif_output_path_for,
-        fast_gif_candidate_files, fast_gif_delivery_output_path, fast_gif_original_path_for,
-        fast_gif_output_path_for, fast_gif_photos_import_candidates, fast_gif_required_tools,
-        fast_gif_shortest_path_supported,
+        fast_gif_candidate_files, fast_gif_delivery_output_path, fast_gif_effective_strategy,
+        fast_gif_original_path_for, fast_gif_output_path_for, fast_gif_photos_import_candidates,
+        fast_gif_required_tools, fast_gif_shortest_path_supported,
     };
     use clap::Parser;
     use clap::error::ErrorKind;
@@ -1430,6 +1439,13 @@ mod fast_gif_tests {
         assert!(!avif_tools.contains(&"avifenc"));
         assert!(!avif_tools.contains(&"gifski"));
         assert!(fast_gif_required_tools("default").contains(&"gifski"));
+    }
+
+    #[test]
+    fn fast_gif_apple_compat_forces_gif_delivery() {
+        assert_eq!(fast_gif_effective_strategy(true, "avif"), "gif");
+        assert_eq!(fast_gif_effective_strategy(true, "default"), "gif");
+        assert_eq!(fast_gif_effective_strategy(false, "avif"), "avif");
     }
 
     #[test]

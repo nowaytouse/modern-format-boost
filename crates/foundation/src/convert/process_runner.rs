@@ -73,6 +73,7 @@ pub struct ManagedProcess {
     stdout_thread: Option<JoinHandle<Result<String>>>,
     stderr_thread: Option<JoinHandle<Result<String>>>,
     command_line: String,
+    audit_nonzero_exit: bool,
 }
 
 impl ManagedProcess {
@@ -81,6 +82,24 @@ impl ManagedProcess {
     /// # Errors
     /// Returns error if spawning fails.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
+        Self::spawn_with_policy(cmd, true, true)
+    }
+
+    /// Spawn a command whose non-zero exit is an expected, caller-inspected
+    /// outcome. Output remains captured, but is neither streamed nor escalated
+    /// before the caller has classified it.
+    ///
+    /// # Errors
+    /// Returns an error if spawning fails.
+    pub fn spawn_captured(cmd: &mut Command) -> Result<Self> {
+        Self::spawn_with_policy(cmd, false, false)
+    }
+
+    fn spawn_with_policy(
+        cmd: &mut Command,
+        stream_verbose_stderr: bool,
+        audit_nonzero_exit: bool,
+    ) -> Result<Self> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
             &crate::infra::static_logs::messages::MSG_PROCESS_SPAWN.replace("{}", &command_line)
@@ -118,7 +137,8 @@ impl ManagedProcess {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 let line = line.map_err(|e| anyhow::anyhow!("Failed to read child stderr: {e}"))?;
-                if crate::progress_mode::is_verbose_mode()
+                if stream_verbose_stderr
+                    && crate::progress_mode::is_verbose_mode()
                     && should_stream_verbose_stderr_line(&stderr_command_line, &line)
                 {
                     crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
@@ -134,6 +154,7 @@ impl ManagedProcess {
             stdout_thread: Some(stdout_thread),
             stderr_thread: Some(stderr_thread),
             command_line,
+            audit_nonzero_exit,
         })
     }
 
@@ -191,7 +212,7 @@ impl ManagedProcess {
             .join()
             .map_err(|e| anyhow::anyhow!("Stderr reader panicked: {e:?}"))??;
 
-        if !status.success() {
+        if !status.success() && self.audit_nonzero_exit {
             crate::media_conversion_gate::delivery_tool_process_failed_audit(
                 "process_runner",
                 &self.command_line,

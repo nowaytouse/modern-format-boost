@@ -1,12 +1,16 @@
 import io
 import json
 import sys
+import unittest
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+if not (SCRIPT_DIR / "verify.py").is_file():
+    raise unittest.SkipTest("legacy Python verifier was replaced by the Rust binary")
 
 import verify  # noqa: E402
 import media_scope  # noqa: E402

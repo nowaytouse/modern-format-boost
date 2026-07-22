@@ -89,8 +89,8 @@ pub fn strip_residual_orientation_tag(path: &Path) -> Result<()> {
         ));
     }
 
-    let status = strip_residual_orientation_command(path)
-        .status()
+    let output = strip_residual_orientation_command(path)
+        .output()
         .map_err(|e| {
             ImgQualityError::AnalysisError(format!(
                 "exiftool strip-Orientation failed for {}: {e}",
@@ -98,10 +98,11 @@ pub fn strip_residual_orientation_tag(path: &Path) -> Result<()> {
             ))
         })?;
 
-    if !status.success() {
+    if !output.status.success() {
         return Err(ImgQualityError::AnalysisError(format!(
-            "exiftool strip-Orientation exited non-zero for {}",
-            path.display()
+            "exiftool strip-Orientation exited non-zero for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
@@ -258,6 +259,179 @@ fn orientation_decode_tempfile(suffix: &str) -> Result<tempfile::NamedTempFile> 
     .map_err(|e| ImgQualityError::AnalysisError(format!("pixel-diff: temp alloc failed: {e}")))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OfficialSourceDecoder {
+    Avif,
+    Heif,
+    WebP,
+    Jxl,
+}
+
+impl OfficialSourceDecoder {
+    const fn tool(self) -> &'static str {
+        match self {
+            Self::Avif => "avifdec",
+            Self::Heif => "heif-convert",
+            Self::WebP => "dwebp",
+            Self::Jxl => "djxl",
+        }
+    }
+}
+
+const fn official_source_decoder(format: FormatKind) -> Option<OfficialSourceDecoder> {
+    match format {
+        FormatKind::Avif => Some(OfficialSourceDecoder::Avif),
+        FormatKind::Heic | FormatKind::Heif => Some(OfficialSourceDecoder::Heif),
+        FormatKind::WebP => Some(OfficialSourceDecoder::WebP),
+        FormatKind::Jxl => Some(OfficialSourceDecoder::Jxl),
+        _ => None,
+    }
+}
+
+fn official_source_decode_command(
+    decoder: OfficialSourceDecoder,
+    executable: &Path,
+    source: &Path,
+    output: &Path,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    match decoder {
+        OfficialSourceDecoder::Avif => {
+            command
+                .arg("--jobs")
+                .arg("all")
+                .arg("--depth")
+                .arg("16")
+                .arg("--")
+                .arg(source)
+                .arg(output);
+        }
+        OfficialSourceDecoder::Heif => {
+            command.arg("--quiet").arg(source).arg(output);
+        }
+        OfficialSourceDecoder::WebP => {
+            command.arg(source).arg("-o").arg(output);
+        }
+        OfficialSourceDecoder::Jxl => {
+            command.arg(source).arg(output);
+        }
+    }
+    command
+}
+
+fn decode_source_with_official_tool(
+    source_image: &Path,
+    open_error: &ImgQualityError,
+) -> Result<image::DynamicImage> {
+    let format = crate::image::format_detect::detect_true_format(source_image)?;
+    let Some(decoder) = official_source_decoder(format) else {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: cannot open source image: {open_error}"
+        )));
+    };
+    let tool = decoder.tool();
+    let executable = crate::common_utils::resolve_tool_path(tool).ok_or_else(|| {
+        ImgQualityError::AnalysisError(format!(
+            "pixel-diff: official {tool} was not found or failed its runtime health check"
+        ))
+    })?;
+
+    tracing::info!(
+        target: "orientation_pixel_diff",
+        source = %source_image.display(),
+        ?format,
+        tool,
+        "pixel-diff: decoding unsupported source with official format decoder"
+    );
+
+    let mut decoded = orientation_decode_tempfile(".png")?;
+    let mut command =
+        official_source_decode_command(decoder, &executable, source_image, decoded.path());
+    let mut output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
+        .and_then(|process| {
+            process.wait_timeout(
+                std::time::Duration::from_secs(120),
+                &format!("pixel-diff official {tool} source decode"),
+            )
+        })
+        .map_err(|e| {
+            ImgQualityError::AnalysisError(format!(
+                "pixel-diff: official {tool} source decode failed to run: {e}"
+            ))
+        })?;
+
+    if !output.status.success()
+        && decoder == OfficialSourceDecoder::Jxl
+        && should_retry_jxl_decode_as_jpeg(format, output.stderr.as_bytes())
+    {
+        decoded = orientation_decode_tempfile(".jpg")?;
+        let mut retry =
+            official_source_decode_command(decoder, &executable, source_image, decoded.path());
+        output = crate::process_runner::ManagedProcess::spawn_captured(&mut retry)
+            .and_then(|process| {
+                process.wait_timeout(
+                    std::time::Duration::from_secs(120),
+                    "pixel-diff official djxl JPEG source retry",
+                )
+            })
+            .map_err(|e| {
+                ImgQualityError::AnalysisError(format!(
+                    "pixel-diff: official djxl JPEG source retry failed to run: {e}"
+                ))
+            })?;
+    }
+
+    if !output.status.success() {
+        let stderr = output
+            .stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("<empty stderr>");
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: official {tool} exited non-zero decoding {}: {stderr}",
+            source_image.display()
+        )));
+    }
+    if !decoded.path().is_file() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: official {tool} produced no source image for {}",
+            source_image.display()
+        )));
+    }
+    let decoded_size = std::fs::metadata(decoded.path())
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "pixel-diff: cannot inspect official {tool} decoded source image for {}: {error}",
+                source_image.display()
+            ))
+        })?
+        .len();
+    if decoded_size == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: official {tool} produced an empty source image for {}",
+            source_image.display()
+        )));
+    }
+    if decoded
+        .path()
+        .extension()
+        .is_some_and(|extension| extension == "png")
+        && !crate::image::png_validation::is_true_png(decoded.path())?
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: official {tool} output failed strict PNG validation for {}",
+            source_image.display()
+        )));
+    }
+
+    crate::image_detection::open_image_with_limits(decoded.path()).map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "pixel-diff: cannot open official {tool} decoded source image: {e}"
+        ))
+    })
+}
+
 fn verify_pixel_diff_against_decoded_image(
     source_image: &Path,
     decoded_output: &Path,
@@ -268,75 +442,9 @@ fn verify_pixel_diff_against_decoded_image(
         ImgQualityError::AnalysisError(format!("pixel-diff: cannot open decoded output: {e}"))
     })?;
 
-    let src_img_result = crate::image_detection::open_image_with_limits(source_image);
-    let src_img_raw = match src_img_result {
+    let src_img_raw = match crate::image_detection::open_image_with_limits(source_image) {
         Ok(img) => img,
-        Err(e) => {
-            // If the image crate doesn't support the format (e.g., HEIC), decode it first
-            if e.to_string()
-                .contains("was not recognized as an image format")
-            {
-                // Check if source is HEIC/HEIF by magic bytes
-                let is_heic = crate::image_heic_analysis::is_heic_file(source_image)?;
-
-                if is_heic {
-                    tracing::info!(
-                        target: "orientation_pixel_diff",
-                        source = %source_image.display(),
-                        "pixel-diff: source is HEIC, decoding with heif-convert first"
-                    );
-
-                    // Decode HEIC to PNG using heif-convert
-                    let temp_png = orientation_decode_tempfile(".png")?;
-                    let heif_convert = crate::common_utils::resolve_tool_path("heif-convert")
-                        .ok_or_else(|| {
-                            ImgQualityError::AnalysisError(
-                                "pixel-diff: heif-convert was not found or failed its runtime health check"
-                                    .to_string(),
-                            )
-                        })?;
-                    let heif_decode_output = std::process::Command::new(heif_convert)
-                        .arg(source_image)
-                        .arg(temp_png.path())
-                        .output()
-                        .map_err(|e| {
-                            ImgQualityError::AnalysisError(format!(
-                                "pixel-diff: heif-convert spawn failed: {e}"
-                            ))
-                        })?;
-
-                    if !heif_decode_output.status.success() {
-                        let stderr = first_nonempty_tool_line(&heif_decode_output.stderr)
-                            .unwrap_or("<empty stderr>");
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "pixel-diff: heif-convert exited non-zero decoding {}: {stderr}",
-                            source_image.display()
-                        )));
-                    }
-
-                    // Now open the decoded PNG with image crate
-                    let decoded_png = crate::image_detection::open_image_with_limits(
-                        temp_png.path(),
-                    )
-                    .map_err(|e| {
-                        ImgQualityError::AnalysisError(format!(
-                            "pixel-diff: cannot open decoded PNG: {e}"
-                        ))
-                    })?;
-
-                    return diff_orientation_images(
-                        &decoded_png,
-                        src_orient,
-                        &out_img,
-                        tol,
-                        decoded_output,
-                    );
-                }
-            }
-            return Err(ImgQualityError::AnalysisError(format!(
-                "pixel-diff: cannot open source image: {e}"
-            )));
-        }
+        Err(open_error) => decode_source_with_official_tool(source_image, &open_error)?,
     };
 
     diff_orientation_images(&src_img_raw, src_orient, &out_img, tol, decoded_output)
@@ -678,7 +786,7 @@ fn apply_orientation_transform(img: image::DynamicImage, orient: u8) -> image::D
 mod tests {
     use super::{
         DiffTolerance, PixelDiffResult, decode_temp_extension_for_format, diff_dynamic_images,
-        diff_orientation_images, orientation_diff_tolerance_for_format,
+        diff_orientation_images, official_source_decoder, orientation_diff_tolerance_for_format,
         parse_exif_orientation_stdout, read_exif_orientation, should_retry_jxl_decode_as_jpeg,
         verify_pixel_diff_against_decoded_image,
     };
@@ -742,6 +850,27 @@ mod tests {
         let stderr = b"libpng error: Incorrect data in iCCP\n";
 
         assert!(!should_retry_jxl_decode_as_jpeg(FormatKind::Avif, stderr));
+    }
+
+    #[test]
+    fn unsupported_modern_sources_use_official_decoders() {
+        assert_eq!(
+            official_source_decoder(FormatKind::Avif).map(super::OfficialSourceDecoder::tool),
+            Some("avifdec")
+        );
+        assert_eq!(
+            official_source_decoder(FormatKind::Heic).map(super::OfficialSourceDecoder::tool),
+            Some("heif-convert")
+        );
+        assert_eq!(
+            official_source_decoder(FormatKind::WebP).map(super::OfficialSourceDecoder::tool),
+            Some("dwebp")
+        );
+        assert_eq!(
+            official_source_decoder(FormatKind::Jxl).map(super::OfficialSourceDecoder::tool),
+            Some("djxl")
+        );
+        assert_eq!(official_source_decoder(FormatKind::Png), None);
     }
 
     #[test]

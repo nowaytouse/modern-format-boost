@@ -110,7 +110,7 @@ pub fn assert_pipeline_tool_entry(expected_bin: &str) -> Result<()> {
     CliEntryGuard {
         expected_bin,
         allowed_invokers: PIPELINE_TOOL_INVOKERS,
-        production_hint: "invoke via training_pipeline.py / run_training.py (sets MFB_INVOKER)",
+        production_hint: "invoke via `cargo run --locked -p dev --bin training_pipeline -- ...`",
         require_invoker: true,
     }
     .assert()
@@ -190,9 +190,11 @@ fn assert_invoker(context: &str, allowed_invokers: &[&str], require_invoker: boo
 
 fn production_hint_for(context: &str) -> &'static str {
     match context {
-        "train_quality" | "train_knn" => "Production: python3 crates/dev/scripts/run_training.py",
+        "train_quality" | "train_knn" => {
+            "Production: cargo run --locked -p dev --bin run_training -- --execute"
+        }
         "refresh_stats" | "recompute_stats" | "repair_loop_probe" => {
-            "Production: training_pipeline.py or run_training.py"
+            "Production: cargo run --locked -p dev --bin training_pipeline -- <command>"
         }
         _ => "See docs/dev/config/ENTRY_GUARD_REGISTRY.md",
     }

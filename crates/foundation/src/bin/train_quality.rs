@@ -339,9 +339,8 @@ fn main() -> Result<()> {
         foundation::ui_stderr::line(
             symbols::BRAIN,
             symbols::plain::BRAIN,
-            "Next: run `python3 crates/dev/scripts/training_pipeline.py \
-             train-image-quality-model` once both high and low image_quality samples are \
-             populated.",
+            "Next: run `cargo run --locked -p dev --bin training_pipeline -- \
+             train-image-quality-model` once both high and low image_quality samples are populated.",
         );
     }
     Ok(())

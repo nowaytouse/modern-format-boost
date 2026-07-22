@@ -42,7 +42,11 @@ const processingMode = ref("both");
 const outputModeOpts = computed(() => [
   { id: "adjacent", label: t("format.avif_hevc") + " (Adj)", icon: "📂" },
   { id: "fast_img", label: t("tier.fast") + " (IMG JXL)", icon: "⚡" },
-  { id: "fast_img_avif", label: t("tier.fast") + " (IMG AVIF Meme)", icon: "🤡" },
+  {
+    id: "fast_img_avif",
+    label: t("tier.fast") + " (IMG AVIF Meme)",
+    icon: "🤡",
+  },
   { id: "fast_vid", label: t("tier.fast") + " (VID)", icon: "🚀" },
   { id: "restore_jpeg", label: "Restore to JPEG", icon: "⏪" },
   { id: "collect", label: "Collect Optimized", icon: "📥" },
@@ -226,12 +230,12 @@ const startCliProcessing = async () => {
   try {
     const targetOutputMode =
       outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
-    const strategyArg =
-      outputMode.value === "fast_img_avif"
-        ? "avif"
-        : outputMode.value === "fast_img"
-          ? "jxl"
-          : null;
+    let strategyArg: "avif" | "jxl" | null = null;
+    if (outputMode.value === "fast_img_avif") {
+      strategyArg = "avif";
+    } else if (outputMode.value === "fast_img") {
+      strategyArg = "jxl";
+    }
 
     const result = await invoke("process_media", {
       targetPath: folderPath.value,

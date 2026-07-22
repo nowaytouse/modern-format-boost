@@ -534,10 +534,11 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 
 **Static image quality training** (high/low tiers, ingest audit):
 
-- **Entry**: `python3 crates/dev/scripts/run_training.py` remains the active training-lane entry while current batch jobs finish; do not delete it until Rust parity is confirmed.
+- **Entry**: `cargo run --locked -p dev --bin run_training --` is the canonical source-tree entry; packaged/release automation uses `target/release/run_training`.
 - **Rules**: committed [`training_rules.json`](crates/dev/src/config/training_rules.json); machine `local_dirs` / ingest caps in gitignored `training_rules.local.json`.
 - **Tier engine**: Rust [`training_tier_audit.rs`](crates/foundation/src/train/training_tier_audit.rs) mirrors JSON thresholds (entropy dead zone, geometry guards).
-- **Background**: `python3 crates/dev/scripts/run_training.py --background` → logs under the unified log directory (see `docs/LOGGING_LAYOUT.md`).
+- **Background**: `cargo run --locked -p dev --bin run_training -- --background` → logs under the unified log directory (see `docs/LOGGING_LAYOUT.md`).
+- **Migration policy**: retained Python is limited to ML-ecosystem work, tests/fixtures, fuzzing, and compatibility bridges; see [`docs/PYTHON_RUST_MIGRATION.md`](docs/PYTHON_RUST_MIGRATION.md).
 
 See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) **0.11.3** for the full hardening notes.
 

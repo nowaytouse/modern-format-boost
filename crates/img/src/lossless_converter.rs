@@ -982,6 +982,14 @@ fn try_pipeline_recovery_fallbacks(
     }
 }
 
+fn resolved_jxl_distance(requested_distance: f32, ultimate: bool, is_genuine_png: bool) -> f32 {
+    if is_genuine_png || requested_distance <= 0.0 {
+        0.0
+    } else {
+        foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
+    }
+}
+
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1072,11 +1080,7 @@ pub fn convert_to_jxl(
         )
     );
 
-    let actual_dist = if is_genuine_png {
-        0.0
-    } else {
-        foundation::constants::jxl_distance_for_mode(distance, options.ultimate())
-    };
+    let actual_dist = resolved_jxl_distance(distance, options.ultimate(), is_genuine_png);
     let is_extreme_explore = !is_genuine_png
         && size_ge_1mib(input_size)
         && options.ultimate()
@@ -1205,8 +1209,8 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            let (final_output_size, extra_info) = if is_extreme_explore
-                && let Some(explore_result) = try_explore_ultimate_jxl_distance(
+            let explore_result = if is_extreme_explore {
+                try_explore_ultimate_jxl_distance(
                     input,
                     &actual_input,
                     &temp_output,
@@ -1216,19 +1220,34 @@ pub fn convert_to_jxl(
                     options,
                     icc_path,
                     color_info,
-                )? {
-                (
-                    explore_result.output_size,
-                    Some(format!(
-                        "(screened e7, finalized e10 d={})",
-                        foundation::jxl_explorer::format_distance_for_log(
-                            explore_result.accepted_distance
-                        )
-                    )),
-                )
+                )?
             } else {
-                (output_size, None)
+                None
             };
+
+            if is_extreme_explore
+                && distance > 0.0
+                && explore_result.is_none()
+                && let Some(result) =
+                    try_jxl_to_avif_extreme_handoff(input, &temp_output, input_size, options)?
+            {
+                return Ok(result);
+            }
+
+            let (final_output_size, extra_info) = explore_result.map_or_else(
+                || (output_size, None),
+                |result| {
+                    (
+                        result.output_size,
+                        Some(format!(
+                            "(screened e7, finalized e10 d={})",
+                            foundation::jxl_explorer::format_distance_for_log(
+                                result.accepted_distance
+                            )
+                        )),
+                    )
+                },
+            );
 
             finalize_with_size_check(
                 input,
@@ -2729,18 +2748,56 @@ fn avifenc_timeout() -> anyhow::Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+enum AvifencMetadataPolicy {
+    #[default]
+    Preserve,
+    Ignore {
+        exif: bool,
+        xmp: bool,
+        icc: bool,
+    },
+}
+
+/// Source-scoped metadata fallback selected by the official encoder.
+///
+/// AVIF quality exploration invokes `avifenc` repeatedly for the same source.
+/// Once the encoder proves a metadata block malformed, every later probe can
+/// use the same ignore flags without repeating the known-to-fail attempt.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AvifencMetadataRetryState {
+    ignore_exif: bool,
+    ignore_xmp: bool,
+    ignore_icc: bool,
+}
+
+impl AvifencMetadataRetryState {
+    const fn policy(self) -> AvifencMetadataPolicy {
+        if self.ignore_exif || self.ignore_xmp || self.ignore_icc {
+            AvifencMetadataPolicy::Ignore {
+                exif: self.ignore_exif,
+                xmp: self.ignore_xmp,
+                icc: self.ignore_icc,
+            }
+        } else {
+            AvifencMetadataPolicy::Preserve
+        }
+    }
+}
+
 fn build_avifenc_command(
     input: &Path,
     output: &Path,
     quality: Option<u8>,
     lossless: bool,
-    ignore_exif: bool,
-    ignore_xmp: bool,
-    ignore_icc: bool,
+    metadata_policy: AvifencMetadataPolicy,
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    let effective_speed = speed.unwrap_or(0);
+    let effective_speed = match speed {
+        Some(configured_speed) => configured_speed,
+        None => 0,
+    };
     builder
         .speed(effective_speed)
         .jobs("all")
@@ -2753,14 +2810,8 @@ fn build_avifenc_command(
     if let Some(quality) = quality {
         builder.quality(quality);
     }
-    if ignore_exif {
-        builder.ignore_exif(true);
-    }
-    if ignore_xmp {
-        builder.ignore_xmp(true);
-    }
-    if ignore_icc {
-        builder.ignore_icc(true);
+    if let AvifencMetadataPolicy::Ignore { exif, xmp, icc } = metadata_policy {
+        builder.ignore_exif(exif).ignore_xmp(xmp).ignore_icc(icc);
     }
 
     builder.input(input).output(output);
@@ -2770,8 +2821,8 @@ fn build_avifenc_command(
 fn run_avifenc_command(
     command: &mut std::process::Command,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    foundation::process_runner::ManagedProcess::spawn(command)?
-        .wait_timeout(avifenc_timeout()?, "official avifenc --speed 0")
+    foundation::process_runner::ManagedProcess::spawn_captured(command)?
+        .wait_timeout(avifenc_timeout()?, "official avifenc encode")
 }
 
 fn try_normalize_icc_to_srgb_png(
@@ -2784,26 +2835,38 @@ fn try_normalize_icc_to_srgb_png(
     )?;
     let temp_path = temp.path().to_path_buf();
 
+    let mut failures = Vec::new();
+
     // 1. Try ImageMagick: convert input -colorspace sRGB temp_path
     if foundation::image_builders::MagickBuilder::check_available() {
         let mut builder = foundation::image_builders::MagickBuilder::new();
         builder.input(input);
         let mut cmd = builder.build();
         cmd.arg("-colorspace").arg("sRGB").arg(&temp_path);
-        if let Ok(output) =
-            foundation::process_runner::ManagedProcess::spawn(&mut cmd).and_then(|mut proc| {
-                proc.wait_timeout(Duration::from_secs(30), "magick sRGB normalization")
-            })
-        {
-            if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0
-            {
-                log_detail!(&format!(
-                    "Normalized gray/incompatible ICC profile to sRGB PNG via ImageMagick for {}",
-                    input.display()
-                ));
-                return Ok((temp, temp_path));
+        match foundation::process_runner::ManagedProcess::spawn(&mut cmd).and_then(|proc| {
+            proc.wait_timeout(Duration::from_secs(30), "magick sRGB normalization")
+        }) {
+            Ok(output) if output.status.success() => {
+                match validate_normalized_png(&temp_path, "ImageMagick") {
+                    Ok(()) => {
+                        log_detail!(&format!(
+                            "Normalized gray/incompatible ICC profile to sRGB PNG via ImageMagick for {}",
+                            input.display()
+                        ));
+                        return Ok((temp, temp_path));
+                    }
+                    Err(error) => failures.push(error.to_string()),
+                }
             }
+            Ok(output) => failures.push(format!(
+                "ImageMagick exited {}: {}",
+                output.status,
+                output.stderr.trim()
+            )),
+            Err(error) => failures.push(format!("ImageMagick could not run: {error}")),
         }
+    } else {
+        failures.push("ImageMagick is unavailable".to_string());
     }
 
     // 2. Try sips on macOS: sips -s format png input --out temp_path
@@ -2816,20 +2879,50 @@ fn try_normalize_icc_to_srgb_png(
         .arg(&temp_path)
         .output();
 
-    if let Ok(output) = sips_cmd {
-        if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0 {
-            log_detail!(&format!(
-                "Normalized gray/incompatible ICC profile to PNG via sips for {}",
-                input.display()
-            ));
-            return Ok((temp, temp_path));
+    match sips_cmd {
+        Ok(output) if output.status.success() => {
+            match validate_normalized_png(&temp_path, "sips") {
+                Ok(()) => {
+                    log_detail!(&format!(
+                        "Normalized gray/incompatible ICC profile to PNG via sips for {}",
+                        input.display()
+                    ));
+                    return Ok((temp, temp_path));
+                }
+                Err(error) => failures.push(error.to_string()),
+            }
         }
+        Ok(output) => failures.push(format!(
+            "sips exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => failures.push(format!("sips could not run: {error}")),
     }
 
     anyhow::bail!(
-        "ICC profile sRGB normalization unavailable or failed for {}",
-        input.display()
+        "ICC profile sRGB normalization failed for {}: {}",
+        input.display(),
+        failures.join("; ")
     )
+}
+
+fn validate_normalized_png(path: &Path, tool: &str) -> anyhow::Result<()> {
+    if !path.is_file() {
+        anyhow::bail!("{tool} reported success without creating a normalized PNG");
+    }
+    let output_size = fs::metadata(path)
+        .map_err(|error| {
+            anyhow::anyhow!("inspect {tool} normalized PNG {}: {error}", path.display())
+        })?
+        .len();
+    if output_size == 0 {
+        anyhow::bail!("{tool} created an empty normalized PNG");
+    }
+    if !foundation::image::png_validation::is_true_png(path)? {
+        anyhow::bail!("{tool} output failed strict PNG validation");
+    }
+    Ok(())
 }
 
 fn run_avifenc_with_malformed_xmp_retry(
@@ -2838,15 +2931,14 @@ fn run_avifenc_with_malformed_xmp_retry(
     quality: Option<u8>,
     lossless: bool,
     speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let mut command = build_avifenc_command(
         input,
         temp_output,
         quality,
         lossless,
-        false,
-        false,
-        false,
+        metadata_retry.policy(),
         speed,
     );
     let output = run_avifenc_command(&mut command)?;
@@ -2863,30 +2955,61 @@ fn run_avifenc_with_malformed_xmp_retry(
         return Ok(output);
     }
 
+    metadata_retry.ignore_exif |= needs_ignore_exif;
+    metadata_retry.ignore_xmp |= needs_ignore_xmp;
+
     // If an incompatible/gray ICC profile is detected, attempt sRGB normalization FIRST to PRESERVE all visual colors & gamma curves!
     if needs_ignore_icc {
-        if let Ok((_temp_guard, srgb_png_path)) = try_normalize_icc_to_srgb_png(input) {
-            let mut srgb_retry = build_avifenc_command(
-                &srgb_png_path,
-                temp_output,
-                quality,
-                lossless,
-                needs_ignore_exif,
-                needs_ignore_xmp,
-                false, // ignore_icc=false because srgb_png_path is now normalized to sRGB!
-                speed,
-            );
-            if let Ok(srgb_out) = run_avifenc_command(&mut srgb_retry) {
-                if srgb_out.status.success() {
-                    log_detail!(&format!(
-                        "Successfully encoded sRGB-normalized image to AVIF for {} (color profile & visual gamma preserved in sRGB space)",
-                        input.display()
-                    ));
-                    return Ok(srgb_out);
+        match try_normalize_icc_to_srgb_png(input) {
+            Ok((_temp_guard, srgb_png_path)) => {
+                let mut srgb_retry = build_avifenc_command(
+                    &srgb_png_path,
+                    temp_output,
+                    quality,
+                    lossless,
+                    AvifencMetadataPolicy::Ignore {
+                        exif: needs_ignore_exif,
+                        xmp: needs_ignore_xmp,
+                        icc: false,
+                    },
+                    speed,
+                );
+                match run_avifenc_command(&mut srgb_retry) {
+                    Ok(srgb_out) if srgb_out.status.success() => {
+                        log_detail!(&format!(
+                            "Successfully encoded sRGB-normalized image to AVIF for {} (color profile & visual gamma preserved in sRGB space)",
+                            input.display()
+                        ));
+                        return Ok(srgb_out);
+                    }
+                    Ok(srgb_out) => {
+                        log_detail!(&format!(
+                            "avifenc rejected the sRGB-normalized retry for {}: {}",
+                            input.display(),
+                            srgb_out.stderr.trim()
+                        ));
+                    }
+                    Err(error) => {
+                        log_detail!(&format!(
+                            "avifenc could not run the sRGB-normalized retry for {}: {error}",
+                            input.display()
+                        ));
+                    }
                 }
+            }
+            Err(error) => {
+                log_detail!(&format!(
+                    "Could not preserve the incompatible ICC profile through sRGB normalization for {}: {error}",
+                    input.display()
+                ));
             }
         }
     }
+
+    // Cache ICC suppression only after preservation through sRGB
+    // normalization proved unavailable. Successful normalization must remain
+    // the preferred path for later probes.
+    metadata_retry.ignore_icc |= needs_ignore_icc;
 
     cleanup_temp_output(temp_output, input);
     log_detail!(&format!(
@@ -2908,9 +3031,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         temp_output,
         quality,
         lossless,
-        needs_ignore_exif,
-        needs_ignore_xmp,
-        needs_ignore_icc,
+        metadata_retry.policy(),
         speed,
     );
     run_avifenc_command(&mut retry)
@@ -2949,7 +3070,8 @@ pub fn convert_to_avif(
 ///
 /// This is used when an official decoder must normalize a source container
 /// before the official AVIF encoder can read it. The delivered filename,
-/// metadata, size gate, and pixel proof always remain tied to `source`.
+/// metadata, and size gate remain tied to `source`; pixel proof uses the
+/// official decoded reference frame when `encoder_input` differs.
 pub fn convert_to_avif_from_encoder_input(
     source: &Path,
     encoder_input: &Path,
@@ -2964,6 +3086,27 @@ pub fn convert_to_avif_from_encoder_input_with_speed(
     encoder_input: &Path,
     quality: Option<u8>,
     speed: Option<u8>,
+    options: &ConvertOptions,
+) -> Result<TaskResult> {
+    let mut metadata_retry = AvifencMetadataRetryState::default();
+    convert_to_avif_from_encoder_input_with_speed_and_state(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        &mut metadata_retry,
+        options,
+    )
+}
+
+/// Encode AVIF while reusing source-scoped metadata fallback decisions across
+/// quality probes and the final encode.
+pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    quality: Option<u8>,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
     options: &ConvertOptions,
 ) -> Result<TaskResult> {
     let input = source;
@@ -3000,8 +3143,14 @@ pub fn convert_to_avif_from_encoder_input_with_speed(
         })?;
     let q = foundation::media_conversion_gate::avif_quality_or_fallback(quality);
 
-    let result =
-        run_avifenc_with_malformed_xmp_retry(encoder_input, &temp_output, Some(q), false, speed);
+    let result = run_avifenc_with_malformed_xmp_retry(
+        encoder_input,
+        &temp_output,
+        Some(q),
+        false,
+        speed,
+        metadata_retry,
+    );
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -3019,7 +3168,7 @@ pub fn convert_to_avif_from_encoder_input_with_speed(
                 )));
             }
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
-                input,
+                encoder_input,
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
@@ -3109,6 +3258,26 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed(
     speed: Option<u8>,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64)> {
+    let mut metadata_retry = AvifencMetadataRetryState::default();
+    convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        &mut metadata_retry,
+        options,
+    )
+}
+
+/// Probe AVIF while reusing source-scoped metadata fallback decisions.
+pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64)> {
     let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
@@ -3136,6 +3305,7 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed(
         Some(quality),
         false,
         speed,
+        metadata_retry,
     );
 
     match result {
@@ -3156,7 +3326,7 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed(
                 )));
             }
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
-                input,
+                encoder_input,
                 &temp_output,
             ) {
                 cleanup_temp_output(&temp_output, input);
@@ -3195,6 +3365,170 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed(
             )))
         }
     }
+}
+
+const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
+const JXL_TO_AVIF_MIN_QUALITY: u8 = 20;
+const JXL_TO_AVIF_BINARY_PROBE_BUDGET: usize = 7;
+
+fn search_highest_fitting_avif_quality_with<Probe>(
+    input_size: u64,
+    mut probe: Probe,
+) -> (Option<u8>, usize)
+where
+    Probe: FnMut(u8) -> Option<u64>,
+{
+    let mut probe_count = 0;
+    let mut quality = 100;
+    let mut first_fitting = None;
+    let mut upper_failure = 101;
+
+    loop {
+        probe_count += 1;
+        match probe(quality) {
+            Some(size) if size <= input_size => {
+                first_fitting = Some(quality);
+                break;
+            }
+            _ => upper_failure = quality,
+        }
+
+        if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
+            break;
+        }
+        quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
+    }
+
+    let Some(mut best_quality) = first_fitting else {
+        return (None, probe_count);
+    };
+    if best_quality == 100 {
+        return (Some(best_quality), probe_count);
+    }
+
+    let mut low = best_quality + 1;
+    let mut high = upper_failure.saturating_sub(1).min(100);
+    for _ in 0..JXL_TO_AVIF_BINARY_PROBE_BUDGET {
+        if low > high {
+            break;
+        }
+        let candidate = low + (high - low) / 2;
+        probe_count += 1;
+        match probe(candidate) {
+            Some(size) if size <= input_size => {
+                best_quality = candidate;
+                low = candidate.saturating_add(1);
+            }
+            _ => high = candidate.saturating_sub(1),
+        }
+    }
+
+    (Some(best_quality), probe_count)
+}
+
+fn try_jxl_to_avif_extreme_handoff(
+    input: &Path,
+    jxl_temp_output: &Path,
+    input_size: u64,
+    options: &ConvertOptions,
+) -> Result<Option<TaskResult>> {
+    foundation::infra::static_logs::log_stage(
+        foundation::modern_ui::symbols::SEARCH,
+        "AVIF",
+        "Extreme handoff: JXL could not beat the source; finding the exact AVIF quality boundary",
+    );
+
+    let mut last_error = None;
+    let mut metadata_retry = AvifencMetadataRetryState::default();
+    let (quality, probe_count) = search_highest_fitting_avif_quality_with(input_size, |quality| {
+        log_detail!(&format!(
+            "JXL->AVIF exact quality probe: q={quality}, speed=0 for {}",
+            input.display()
+        ));
+        match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+            input,
+            input,
+            quality,
+            None,
+            &mut metadata_retry,
+            options,
+        ) {
+            Ok((temp_path, output_size)) => {
+                log_detail!(&format!(
+                    "JXL->AVIF exact quality probe: q={quality}, output={output_size}B, input={input_size}B"
+                ));
+                cleanup_temp_output(&temp_path, input);
+                Some(output_size)
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                log_detail!(&format!(
+                    "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
+                ));
+                last_error = Some(reason);
+                None
+            }
+        }
+    });
+
+    let Some(quality) = quality else {
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "jxl_to_avif_extreme_exhausted",
+            input,
+            format!(
+                "AVIF handoff exhausted after {probe_count} probes; preserving the JXL/original fallback path{}",
+                last_error
+                    .as_deref()
+                    .map_or_else(String::new, |reason| format!("; last error: {reason}"))
+            ),
+        );
+        return Ok(None);
+    };
+
+    let (avif_temp_output, avif_size) =
+        match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+            input,
+            input,
+            quality,
+            None,
+            &mut metadata_retry,
+            options,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                    "jxl_to_avif_extreme_final_encode_failed",
+                    input,
+                    format!("final AVIF q={quality} probe failed: {err}"),
+                );
+                return Ok(None);
+            }
+        };
+    if avif_size > input_size {
+        cleanup_temp_output(&avif_temp_output, input);
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "jxl_to_avif_extreme_final_size_drift",
+            input,
+            format!("final AVIF q={quality} grew to {avif_size}B above the {input_size}B source"),
+        );
+        return Ok(None);
+    }
+
+    let output = get_output_path(input, EXT_AVIF, options)?;
+    cleanup_temp_output(jxl_temp_output, input);
+    let extra_info =
+        format!("(JXL exhausted; AVIF exact handoff q={quality}, speed=0, probes={probe_count})");
+    finalize_with_size_check(
+        input,
+        &avif_temp_output,
+        &output,
+        input_size,
+        avif_size,
+        options,
+        LABEL_AVIF,
+        Some(&extra_info),
+    )
+    .map(Some)
 }
 
 /// Convert to AVIF losslessly.
@@ -3238,7 +3572,15 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             ImgQualityError::ConversionError(err_msg)
         })?;
 
-    let result = run_avifenc_with_malformed_xmp_retry(input, &temp_output, None, true, None);
+    let mut metadata_retry = AvifencMetadataRetryState::default();
+    let result = run_avifenc_with_malformed_xmp_retry(
+        input,
+        &temp_output,
+        None,
+        true,
+        None,
+        &mut metadata_retry,
+    );
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -4912,9 +5254,11 @@ mod tests {
             Path::new("output.avif"),
             Some(95),
             false,
-            false,
-            true,
-            false,
+            AvifencMetadataPolicy::Ignore {
+                exif: false,
+                xmp: true,
+                icc: false,
+            },
             None,
         );
         let args: Vec<_> = command
@@ -4952,9 +5296,7 @@ mod tests {
                 Path::new("test_out.avif"),
                 quality,
                 lossless,
-                false,
-                false,
-                false,
+                AvifencMetadataPolicy::Preserve,
                 Some(0),
             );
             let args: Vec<_> = command
@@ -5828,6 +6170,39 @@ mod tests {
             "N/A",
             "display must disclose unavailable ratio"
         );
+    }
+
+    #[test]
+    fn explicit_lossless_jxl_distance_survives_ultimate_mode() {
+        assert_eq!(resolved_jxl_distance(0.0, true, false), 0.0);
+        assert_eq!(resolved_jxl_distance(0.0, true, true), 0.0);
+        assert_eq!(
+            resolved_jxl_distance(0.4, true, false),
+            foundation::constants::JXL_ULTIMATE_DISTANCE
+        );
+    }
+
+    #[test]
+    fn jxl_to_avif_search_finds_exact_highest_quality_boundary() {
+        let mut probes = Vec::new();
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(1_000, |quality| {
+            probes.push(quality);
+            Some(if quality <= 89 { 900 } else { 1_100 })
+        });
+
+        assert_eq!(quality, Some(89));
+        assert_eq!(probe_count, 7);
+        assert_eq!(probes, vec![100, 90, 80, 85, 87, 88, 89]);
+        const { assert!(JXL_TO_AVIF_BINARY_PROBE_BUDGET >= 7) };
+    }
+
+    #[test]
+    fn jxl_to_avif_search_exhausts_before_preserving_source() {
+        let (quality, probe_count) =
+            search_highest_fitting_avif_quality_with(1_000, |_quality| Some(1_001));
+
+        assert_eq!(quality, None);
+        assert_eq!(probe_count, 9);
     }
 
     /// Build a minimal byte sequence that satisfies both `is_jpeg_complete` and

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 RUST_BIN_DIR = SCRIPT_DIR.parent / "src" / "bin"
+RUST_INFRA_DIR = SCRIPT_DIR.parent / "src" / "infra"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -205,14 +206,11 @@ class TestFastModePaths(unittest.TestCase):
         self.assertNotIn("--auto-import", command)
 
     def test_drag_processor_wires_shortest_path_fastmode_to_rust_flags(self):
-        source = (SCRIPT_DIR / "drag_and_drop_processor.py").read_text(encoding="utf-8")
-
-        self.assertIn("mode_sub_state = (mode_sub_state + 1) % fastmode_count", source)
-        self.assertIn("FAST_IMG_ACTION = choose_fast_img_action()", source)
-
         rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
             encoding="utf-8"
         )
+        self.assertIn("choose_fast_img_action(strategy)?", rust_source)
+        self.assertIn("FastImgAction::ShortestPath", rust_source)
         self.assertIn("build_fast_img_command(", rust_source)
         self.assertIn("args.shortest_path", rust_source)
         self.assertIn("args.archive", rust_source)
@@ -226,12 +224,13 @@ class TestFastModePaths(unittest.TestCase):
         self.assertIn("Vue prototype is scaffolding only", source)
         self.assertIn("plan_cli_invocations", source)
 
-    def test_drag_processor_python_ui_choice_defaults_to_shortest_path(self):
-        source = (SCRIPT_DIR / "drag_and_drop_processor.py").read_text(encoding="utf-8")
+    def test_drag_processor_rust_ui_choice_defaults_to_shortest_path(self):
+        source = (RUST_INFRA_DIR / "drag_drop.rs").read_text(encoding="utf-8")
 
-        self.assertIn("def choose_fast_img_action", source)
+        self.assertIn("pub fn choose_fast_img_action", source)
         self.assertIn("Enter = Shortest Path", source)
-        self.assertIn('return "restore_jpeg"', source)
+        self.assertIn('"3" => FastImgAction::RestoreJpeg', source)
+        self.assertIn("_ => FastImgAction::ShortestPath", source)
 
     def test_drag_processor_archives_session_logs(self):
         source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
@@ -242,23 +241,19 @@ class TestFastModePaths(unittest.TestCase):
         self.assertIn("archive_drag_drop_session_bundle", source)
         self.assertIn("SESSION_ARCHIVE_DONE", source)
 
-    def test_drag_processor_python_ui_runs_fastmode_verify_summary_after_success(self):
-        source = (SCRIPT_DIR / "drag_and_drop_processor.py").read_text(encoding="utf-8")
-
-        self.assertIn("def run_fast_img_post_success", source)
-        self.assertIn("run_fast_img_post_success()", source)
-        self.assertIn("fast_img_delivery=True", source)
-
-    def test_drag_processor_wires_videos_only_fastmode_to_full_vid_run(self):
-        source = (SCRIPT_DIR / "drag_and_drop_processor.py").read_text(encoding="utf-8")
-
-        self.assertIn('OUTPUT_MODE = "fast_vid"', source)
-        self.assertIn(
-            "FAST_VID_SHORTEST_PATH = choose_fast_vid_shortest_path()", source
+    def test_drag_processor_rust_ui_runs_fastmode_verify_summary_after_success(self):
+        source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
         )
 
+        self.assertIn("fn run_fast_img_post_success", source)
+        self.assertIn("run_fast_img_post_success(", source)
+        self.assertIn("VerifyFastImgMode::Delivery", source)
+
+    def test_drag_processor_wires_videos_only_fastmode_to_full_vid_run(self):
         rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
             encoding="utf-8"
         )
+        self.assertIn("choose_fast_vid_shortest_path(strategy)?", rust_source)
         self.assertIn("LaunchMode::FastVid", rust_source)
         self.assertIn("build_fast_vid_command(", rust_source)

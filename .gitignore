@@ -104,6 +104,7 @@ photos_import_large_batch.rs
 *.webm
 *.ogv
 *.ts
+!crates/dev/src/vue/src/composables/useI18n.d.ts
 
 # Audio
 *.mp3

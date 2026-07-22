@@ -419,10 +419,11 @@ Modern Format Boost 使用严苛的质量门控系统保证核心架构的零技
 
 **静图质量训练**（high/low 分层、入库审计）：
 
-- **唯一推荐入口**：`python3 crates/dev/scripts/run_training.py`（禁止 shell 包装，所有入口保护逻辑已统一至 SSOT.md）。
+- **唯一推荐入口**：源码树使用 `cargo run --locked -p dev --bin run_training --`，已编译/打包环境使用 `target/release/run_training`。
 - **规则**：提交版 [`training_rules.json`](../crates/dev/src/config/training_rules.json)；本机目录与 ingest 上限写在 gitignore 的 `training_rules.local.json`。
 - **Tier 引擎**：Rust [`training_tier_audit.rs`](../crates/foundation/src/training_tier_audit.rs) 与 JSON 阈值同步（熵死区、几何护栏）。
-- **后台**：`python3 crates/dev/scripts/run_training.py --background` → 日志在统一日志目录（见 `docs/LOGGING_LAYOUT.md`）。
+- **后台**：`cargo run --locked -p dev --bin run_training -- --background` → 日志在统一日志目录（见 `docs/LOGGING_LAYOUT.md`）。
+- **迁移策略**：仅保留 ML 生态、测试/夹具、模糊测试和兼容桥所需的 Python；详见 [`PYTHON_RUST_MIGRATION.md`](PYTHON_RUST_MIGRATION.md)。
 
 完整硬化说明见 [`CHANGELOG.md`](CHANGELOG.md) **0.11.3**。
 

@@ -126,6 +126,14 @@ fn open_image_reader_with_magic_bytes(
     Ok(reader)
 }
 
+fn image_dimensions_with_magic_bytes(path: &Path) -> std::result::Result<(u32, u32), String> {
+    let reader = image::ImageReaderOptions::open(path).map_err(|err| err.to_string())?;
+    let reader = reader
+        .with_guessed_format()
+        .map_err(|err| err.to_string())?;
+    reader.into_dimensions().map_err(|err| err.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JxlIndicator {
     pub should_convert: bool,
@@ -525,6 +533,11 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back
     // to ffprobe
     let detected_format = crate::image_detection::detect_format_from_bytes(path)?;
+
+    if detected_format == DetectedFormat::JPEG {
+        return Ok(analyze_jpeg_fast_path(path, file_size));
+    }
+
     let is_avif = detected_format == crate::image_detection::DetectedFormat::AVIF;
 
     if is_avif {
@@ -570,11 +583,6 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
-
-        // Fast-path: If it's a JPEG, skip decode() entirely.
-        if format == ImageFormat::Jpeg {
-            return Ok(analyze_jpeg_fast_path(path, file_size));
-        }
 
         let (is_valid, suggested) = match format {
             ImageFormat::Jpeg => (
@@ -1078,27 +1086,11 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
     };
 
     // Use fast metadata parsing to get dimensions without decoding pixels
-    let (width, height) = match open_image_reader_with_magic_bytes(path) {
-        Ok(mut reader) => {
-            use image::Limits;
-            let mut limits = Limits::default();
-            limits.max_alloc = Some(crate::constants::IMAGE_DECODE_MAX_ALLOC_BYTES);
-            let _ = reader.set_limits(limits);
-
-            match reader.decode() {
-                Ok((img, _)) => img.dimensions(),
-                Err(e) => {
-                    crate::log_detail!(format!(
-                        "Analyzer Audit: Failed to extract JPEG dimensions for {path_display}: {e}",
-                        path_display = path.display(),
-                    ));
-                    (0, 0)
-                }
-            }
-        }
+    let (width, height) = match image_dimensions_with_magic_bytes(path) {
+        Ok(dimensions) => dimensions,
         Err(e) => {
             crate::log_detail!(format!(
-                "Analyzer Audit: Failed to open JPEG for deep scan ({path_display}): {e}",
+                "Analyzer Audit: Failed to extract JPEG dimensions for {path_display}: {e}",
                 path_display = path.display(),
             ));
             (0, 0)
@@ -1133,8 +1125,8 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
         color_context,
         precise_bit_depth,
     } = extract_precise_color_metadata(path);
-    let (mut precision, detected_bit_depth) = match detect_image(path) {
-        Ok(d) => (d.precision, d.bit_depth),
+    let detected_bit_depth = match crate::conversion::jpeg_precision_from_header(path) {
+        Ok(bit_depth) => bit_depth,
         Err(e) => {
             probe_audit!(
                 "jpeg_precision_detection_failed",
@@ -1142,13 +1134,15 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
                 "JPEG precision detection failed: {e}; using color metadata only",
                 e = e,
             );
-            (PrecisionMetadata::default(), None)
+            None
         }
     };
-    if precision.bit_depth.is_none() {
-        precision.bit_depth = precise_bit_depth;
-    }
-    precision.is_lossless_deterministic = false;
+    let precision = PrecisionMetadata {
+        bit_depth: detected_bit_depth.or(precise_bit_depth),
+        is_lossless_deterministic: false,
+        quality_estimate: jpeg_analysis.as_ref().map(|jpeg| jpeg.estimated_quality),
+        ..PrecisionMetadata::default()
+    };
 
     let (perception, physics_225, recovered_entropy) =
         match extract_universal_physics_and_perception(path) {
@@ -3280,6 +3274,23 @@ mod tests {
     use crate::image_detection::{
         CompressionType, DetectedFormat, DetectionResult, ImageType, PrecisionMetadata,
     };
+
+    #[test]
+    fn extensionless_jpeg_uses_content_detected_fast_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("extensionless");
+        let image = image::RgbImage::from_pixel(3, 2, image::Rgb([24, 96, 192]));
+        image
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .expect("write JPEG fixture without an extension");
+
+        let analysis = analyze_image_internal(&path).expect("analyze extensionless JPEG");
+
+        assert_eq!(analysis.format, "JPEG");
+        assert_eq!((analysis.width, analysis.height), (3, 2));
+        assert!(analysis.jpeg_analysis.is_some());
+        assert!(analysis.precision.quality_estimate.is_some());
+    }
 
     #[test]
     fn jxl_canvas_ffprobe_errors_are_not_collapsed_to_none() {

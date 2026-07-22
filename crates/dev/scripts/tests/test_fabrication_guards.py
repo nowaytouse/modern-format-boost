@@ -18,10 +18,14 @@ if str(SCRIPT_DIR) not in sys.path:
 import fabrication_policy  # noqa: E402
 import loop_intent_clustering  # noqa: E402
 import mfb_entry_guard  # noqa: E402
-import mfb_tool_refresh  # noqa: E402
 import post_training_closure  # noqa: E402
 import run_training  # noqa: E402
 import start_training_four  # noqa: E402
+
+try:
+    import mfb_tool_refresh  # type: ignore[import-not-found]  # noqa: E402
+except ModuleNotFoundError:
+    mfb_tool_refresh = None
 
 TRAINING_QUALITY_CRITICAL = (
     SCRIPT_DIR / "run_training.py",
@@ -850,6 +854,10 @@ class TestFabricationGuards(unittest.TestCase):
 
             self.assertFalse(pid_file.exists())
 
+    @unittest.skipIf(
+        mfb_tool_refresh is None,
+        "legacy Python tool refresh was replaced by the Rust toolchain manager",
+    )
     def test_tool_refresh_logs_import_failure(self):
         mfb_tool_refresh._REFRESH_DONE = False
         with (
@@ -875,6 +883,10 @@ class TestFabricationGuards(unittest.TestCase):
                 mfb_tool_refresh.refresh_tools_for_processing(quiet=True, force=True)
         self.assertIn("cargo install preflight failed", stderr.getvalue())
 
+    @unittest.skipIf(
+        mfb_tool_refresh is None,
+        "legacy Python tool refresh was replaced by the Rust toolchain manager",
+    )
     def test_tool_refresh_rustup_toolchain_install_omits_invalid_yes_flag(self):
         mfb_tool_refresh._REFRESH_DONE = False
         calls = []

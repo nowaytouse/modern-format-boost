@@ -11,6 +11,6 @@
 -- indexes and contradict the strict multi-scenario training path.
 --
 -- Supported ingestion paths:
---   python3 crates/dev/scripts/run_training.py --execute --use-api
+--   cargo run --locked -p dev --bin run_training -- --use-api
 --   cargo run -p foundation --bin train_knn -- <path> --label <loop|non-loop>
 --   cargo run -p foundation --bin train_quality -- <path> --label <...> --scenario <...>

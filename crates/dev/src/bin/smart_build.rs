@@ -486,7 +486,7 @@ fn newest_source_mtime_in_dir(dir: &Path, extensions: &[&str]) -> f64 {
 
 fn direct_workspace_dependencies(project_dir: &str) -> &'static [&'static str] {
     match project_dir {
-        "crates/img" => &["crates/vid", "crates/foundation"],
+        "crates/img" => &["crates/foundation"],
         "crates/vid" => &["crates/foundation"],
         "crates/dev" => &["crates/img", "crates/vid", "crates/foundation"],
         _ => &[],
@@ -1806,7 +1806,7 @@ mod tests {
     }
 
     #[test]
-    fn test_img_source_inputs_include_direct_workspace_dependencies() -> Result<()> {
+    fn test_img_source_inputs_include_foundation_dependency() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let root = tempdir.path();
         let binary = root.join("target/release/img");
@@ -1814,12 +1814,30 @@ mod tests {
         fs::write(&binary, b"img")?;
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let dependency = root.join("crates/vid/src/lib.rs");
+        let dependency = root.join("crates/foundation/src/lib.rs");
         fs::create_dir_all(dependency.parent().unwrap())?;
         fs::write(dependency, "pub fn changed() {}")?;
 
         let (action, reason) = decide_build_action(root, "crates/img", "img", false);
         assert_eq!((action, reason), ("rebuild", "source-newer"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_img_source_inputs_exclude_dev_only_vid_dependency() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let binary = root.join("target/release/img");
+        fs::create_dir_all(binary.parent().unwrap())?;
+        fs::write(&binary, b"img")?;
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let dev_dependency = root.join("crates/vid/src/lib.rs");
+        fs::create_dir_all(dev_dependency.parent().unwrap())?;
+        fs::write(dev_dependency, "pub fn changed() {}")?;
+
+        let (action, reason) = decide_build_action(root, "crates/img", "img", false);
+        assert_eq!((action, reason), ("skip", ""));
         Ok(())
     }
 

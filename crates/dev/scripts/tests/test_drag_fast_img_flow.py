@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import unittest
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,6 +12,11 @@ import pytest
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+if not (SCRIPT_DIR / "drag_and_drop_processor.py").is_file():
+    raise unittest.SkipTest(
+        "legacy Python drag processor was replaced by the Rust binary"
+    )
 
 
 def load_drag_processor(tmp_path, monkeypatch):

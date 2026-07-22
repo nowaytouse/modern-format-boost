@@ -480,6 +480,11 @@ impl ToolBuilder for GifskiBuilder {
 /// Uses the unified quality API (`-q`/`--qcolor`, 0-100 where 100=lossless)
 /// introduced in avifenc ≥1.2.0. The legacy `--min`/`--max` (0-63) flags are
 /// no longer emitted.
+const AVIFENC_FLAG_LOSSLESS: u8 = 1 << 0;
+const AVIFENC_FLAG_IGNORE_EXIF: u8 = 1 << 1;
+const AVIFENC_FLAG_IGNORE_XMP: u8 = 1 << 2;
+const AVIFENC_FLAG_IGNORE_ICC: u8 = 1 << 3;
+
 #[derive(Debug, Default)]
 pub struct AvifencBuilder {
     base: crate::builder_base::BaseBuilder,
@@ -487,15 +492,12 @@ pub struct AvifencBuilder {
     quality: Option<u8>,
     /// Alpha quality: 0-100, 100 = lossless. Maps to `--qalpha`.
     quality_alpha: Option<u8>,
-    lossless: bool,
+    flags: u8,
     speed: Option<u8>,
     threads: Option<String>,
     depth: Option<u8>,
     yuv: Option<String>,
     cicp: Option<String>,
-    ignore_exif: bool,
-    ignore_xmp: bool,
-    ignore_icc: bool,
 }
 
 impl AvifencBuilder {
@@ -527,7 +529,7 @@ impl AvifencBuilder {
     }
 
     pub const fn lossless(&mut self, enabled: bool) -> &mut Self {
-        self.lossless = enabled;
+        self.set_flag(AVIFENC_FLAG_LOSSLESS, enabled);
         self
     }
 
@@ -553,20 +555,32 @@ impl AvifencBuilder {
 
     /// Ignore embedded Exif metadata from the input image.
     pub const fn ignore_exif(&mut self, enabled: bool) -> &mut Self {
-        self.ignore_exif = enabled;
+        self.set_flag(AVIFENC_FLAG_IGNORE_EXIF, enabled);
         self
     }
 
     /// Ignore embedded XMP metadata from the input image.
     pub const fn ignore_xmp(&mut self, enabled: bool) -> &mut Self {
-        self.ignore_xmp = enabled;
+        self.set_flag(AVIFENC_FLAG_IGNORE_XMP, enabled);
         self
     }
 
     /// Ignore embedded color profile / ICC profile from the input image.
     pub const fn ignore_icc(&mut self, enabled: bool) -> &mut Self {
-        self.ignore_icc = enabled;
+        self.set_flag(AVIFENC_FLAG_IGNORE_ICC, enabled);
         self
+    }
+
+    const fn set_flag(&mut self, flag: u8, enabled: bool) {
+        if enabled {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+    }
+
+    const fn has_flag(&self, flag: u8) -> bool {
+        self.flags & flag != 0
     }
 }
 
@@ -580,7 +594,7 @@ impl ToolBuilder for AvifencBuilder {
     fn build(&self) -> Command {
         let mut cmd = self.get_resolved_command();
 
-        if self.lossless {
+        if self.has_flag(AVIFENC_FLAG_LOSSLESS) {
             cmd.arg(constants::AVIFENC_ARG_LOSSLESS);
         }
 
@@ -614,15 +628,15 @@ impl ToolBuilder for AvifencBuilder {
             cmd.arg(constants::AVIFENC_ARG_CICP).arg(cicp);
         }
 
-        if self.ignore_exif {
+        if self.has_flag(AVIFENC_FLAG_IGNORE_EXIF) {
             cmd.arg(constants::AVIFENC_ARG_IGNORE_EXIF);
         }
 
-        if self.ignore_xmp {
+        if self.has_flag(AVIFENC_FLAG_IGNORE_XMP) {
             cmd.arg(constants::AVIFENC_ARG_IGNORE_XMP);
         }
 
-        if self.ignore_icc {
+        if self.has_flag(AVIFENC_FLAG_IGNORE_ICC) {
             cmd.arg(constants::AVIFENC_ARG_IGNORE_ICC);
         }
 
@@ -971,7 +985,9 @@ mod tests {
             .jobs("all")
             .quality(70)
             .depth(10)
-            .ignore_xmp(true);
+            .ignore_exif(true)
+            .ignore_xmp(true)
+            .ignore_icc(true);
 
         let cmd = builder.build();
         let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
@@ -987,7 +1003,9 @@ mod tests {
         assert!(!args.contains(&"--max"));
         assert!(args.contains(&"--depth"));
         assert!(args.contains(&"10"));
+        assert!(args.contains(&"--ignore-exif"));
         assert!(args.contains(&"--ignore-xmp"));
+        assert!(args.contains(&"--ignore-icc"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use dev::media::scope::{
     SKIP_EXTS, classify_missing_entry, detect_true_format, integrity_stem_key,
     load_rust_outcomes_from_logs, load_session_routing, true_format_matches_processing_mode,
 };
+use foundation::common_utils::calculate_blake3_hash;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
@@ -419,6 +420,9 @@ fn print_fast_img_marker_json(optimized_dir: &Path) -> Result<()> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        anyhow::bail!("invalid odd-length hex");
+    }
     let mut bytes = Vec::new();
     let mut chars = s.chars();
     while let (Some(c1), Some(c2)) = (chars.next(), chars.next()) {
@@ -433,7 +437,27 @@ fn hex_decode(s: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn load_restore_jpeg_manifest(restored_dir: &Path) -> (Vec<HashMap<String, String>>, Vec<String>) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestoreJpegManifestRecord {
+    source_rel: String,
+    output_rel: String,
+    source_blake3: String,
+    output_blake3: String,
+    source_deleted: bool,
+}
+
+fn is_safe_manifest_relative_path(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn load_restore_jpeg_manifest(
+    restored_dir: &Path,
+) -> (Vec<RestoreJpegManifestRecord>, Vec<String>) {
     let manifest = restored_dir.join(".mfb_restore_jpeg_manifest.tsv");
     if !manifest.is_file() {
         return (Vec::new(), Vec::new());
@@ -496,20 +520,35 @@ fn load_restore_jpeg_manifest(restored_dir: &Path) -> (Vec<HashMap<String, Strin
                 continue;
             }
         };
-        if source_deleted != "true" {
-            errors.push(format!("line {line_idx}: source_deleted must be true"));
+        let source_deleted = match source_deleted {
+            "true" => true,
+            "false" => false,
+            _ => {
+                errors.push(format!(
+                    "line {line_idx}: source_deleted must be true or false"
+                ));
+                continue;
+            }
+        };
+        if !is_safe_manifest_relative_path(&source_rel)
+            || !is_safe_manifest_relative_path(&output_rel)
+        {
+            errors.push(format!(
+                "line {line_idx}: manifest paths must be safe relative paths"
+            ));
             continue;
         }
         if source_hash.trim().is_empty() || output_hash.trim().is_empty() {
             errors.push(format!("line {line_idx}: missing manifest hash field"));
             continue;
         }
-        let mut rec = HashMap::new();
-        rec.insert("source_rel".to_string(), source_rel);
-        rec.insert("output_rel".to_string(), output_rel);
-        rec.insert("source_sha256".to_string(), source_hash.to_string());
-        rec.insert("output_sha256".to_string(), output_hash.to_string());
-        records.push(rec);
+        records.push(RestoreJpegManifestRecord {
+            source_rel,
+            output_rel,
+            source_blake3: source_hash.to_string(),
+            output_blake3: output_hash.to_string(),
+            source_deleted,
+        });
     }
     (records, errors)
 }
@@ -1062,10 +1101,12 @@ fn run_fast_img_restore_check(
     }
 
     let (manifest_records, mut restore_manifest_errors) = load_restore_jpeg_manifest(&restored_dir);
-    let mut manifest_deleted_sources = HashMap::new();
-    for record in &manifest_records {
-        let source_rel = &record["source_rel"];
-        let output_rel = &record["output_rel"];
+    let mut manifest_sources = HashMap::new();
+    let mut manifest_deleted_sources = HashSet::new();
+    let mut seen_manifest_keys = HashSet::new();
+    for record in manifest_records {
+        let source_rel = &record.source_rel;
+        let output_rel = &record.output_rel;
         let source_key = integrity_stem_key(Path::new(source_rel));
         let output_key = integrity_stem_key(Path::new(output_rel));
         if source_key != output_key {
@@ -1074,32 +1115,58 @@ fn run_fast_img_restore_check(
             ));
             continue;
         }
-        let source_path = source_dir.join(source_rel);
-        if source_path.exists() {
-            restore_manifest_errors.push(format!(
-                "manifest claims deleted source still exists: {source_rel}"
-            ));
-            continue;
-        }
-        let xmp_sidecar = source_dir.join(format!("{source_rel}.xmp"));
-        if xmp_sidecar.exists() {
-            restore_manifest_errors.push(format!(
-                "manifest deleted source left XMP sidecar: {source_rel}"
-            ));
-            continue;
-        }
-        if manifest_deleted_sources.contains_key(&source_key) {
+        if !seen_manifest_keys.insert(source_key.clone()) {
             restore_manifest_errors.push(format!("duplicate manifest source key: {source_rel}"));
             continue;
         }
-        manifest_deleted_sources.insert(source_key, record.clone());
+        let source_path = source_dir.join(source_rel);
+        if record.source_deleted {
+            if source_path.exists() {
+                restore_manifest_errors.push(format!(
+                    "manifest claims deleted source still exists: {source_rel}"
+                ));
+                continue;
+            }
+            let extension_sidecar = source_path.with_extension("xmp");
+            let appended_sidecar = source_dir.join(format!("{source_rel}.xmp"));
+            if extension_sidecar.exists() || appended_sidecar.exists() {
+                restore_manifest_errors.push(format!(
+                    "manifest deleted source left XMP sidecar: {source_rel}"
+                ));
+                continue;
+            }
+            manifest_deleted_sources.insert(source_key.clone());
+        } else {
+            if !source_path.is_file() {
+                restore_manifest_errors
+                    .push(format!("manifest retained source is missing: {source_rel}"));
+                continue;
+            }
+            match calculate_blake3_hash(&source_path) {
+                Ok(actual) if actual == record.source_blake3 => {}
+                Ok(actual) => {
+                    restore_manifest_errors.push(format!(
+                        "retained source BLAKE3 mismatch: {source_rel}; expected={} actual={actual}",
+                        record.source_blake3
+                    ));
+                    continue;
+                }
+                Err(err) => {
+                    restore_manifest_errors.push(format!(
+                        "failed to hash retained source {source_rel}: {err}"
+                    ));
+                    continue;
+                }
+            }
+        }
+        manifest_sources.insert(source_key, record);
     }
 
     let mut expected_keys = HashSet::new();
     for k in source_outputs.keys() {
         expected_keys.insert(k.clone());
     }
-    for k in manifest_deleted_sources.keys() {
+    for k in manifest_sources.keys() {
         expected_keys.insert(k.clone());
     }
 
@@ -1120,21 +1187,21 @@ fn run_fast_img_restore_check(
     extra_keys.sort();
 
     let mut hash_mismatched_restored_jpegs = Vec::new();
-    for (key, record) in &manifest_deleted_sources {
-        let output_rel = &record["output_rel"];
+    for (key, record) in &manifest_sources {
+        let output_rel = &record.output_rel;
         let expected_output = restored_dir.join(output_rel);
         if expected_output.is_file() {
-            let output_hash = if let Some(h) = file_content_hash(&expected_output, 65536).0 {
-                h
-            } else {
-                restore_manifest_errors.push(format!(
-                    "failed to hash restored JPEG: {}",
-                    expected_output.display()
-                ));
-                continue;
+            let output_hash = match calculate_blake3_hash(&expected_output) {
+                Ok(hash) => hash,
+                Err(err) => {
+                    restore_manifest_errors.push(format!(
+                        "failed to hash restored JPEG {}: {err}",
+                        expected_output.display()
+                    ));
+                    continue;
+                }
             };
-            let expected_hash = &record["output_sha256"];
-            if output_hash != *expected_hash {
+            if output_hash != record.output_blake3 {
                 hash_mismatched_restored_jpegs.push((key.clone(), record.clone(), output_hash));
             }
         }
@@ -1187,6 +1254,10 @@ fn run_fast_img_restore_check(
         manifest_deleted_sources.len()
     ));
     report.push_str(&format!(
+        "Manifest verified retained source JXLs: {}\n",
+        manifest_sources.len() - manifest_deleted_sources.len()
+    ));
+    report.push_str(&format!(
         "Restored JPEG files:        {}\n",
         restored_jpeg.len()
     ));
@@ -1235,8 +1306,8 @@ fn run_fast_img_restore_check(
                         "  ! {}\n",
                         path.strip_prefix(&source_dir)?.display()
                     ));
-                } else if let Some(record) = manifest_deleted_sources.get(key) {
-                    report.push_str(&format!("  ! {}\n", record["source_rel"]));
+                } else if let Some(record) = manifest_sources.get(key) {
+                    report.push_str(&format!("  ! {}\n", record.source_rel));
                 }
             }
             report.push('\n');
@@ -1276,7 +1347,7 @@ fn run_fast_img_restore_check(
                 report.push_str(&format!(
                     "  - Content hash mismatch for restored JPEG: {}\n      Expected (manifest): \
                      {}\n      Actual (file):     {}\n",
-                    record["output_rel"], record["output_sha256"], actual
+                    record.output_rel, record.output_blake3, actual
                 ));
             }
             report.push('\n');
@@ -1315,7 +1386,7 @@ fn run_fast_img_restore_check(
             pick_symbol("✓", "[OK]")
         ));
         report.push_str("  - All manifested source files were restored\n");
-        report.push_str("  - Restored JPEG hashes match original manifest entries\n");
+        report.push_str("  - Retained source and restored JPEG BLAKE3 hashes match the manifest\n");
     }
 
     Ok(stats)
@@ -2329,7 +2400,7 @@ mod tests {
 
         let tsv_content = "\
 # mock comment
-source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 7372632f66696c65312e6a7067\t6f75742f66696c65312e6a7067\thash1\thash2\ttrue
 ";
         fs::write(&manifest_path, tsv_content).unwrap();
@@ -2337,10 +2408,29 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
         assert!(errors.is_empty(), "Expected no errors, got: {errors:?}");
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["source_rel"], "src/file1.jpg");
-        assert_eq!(records[0]["output_rel"], "out/file1.jpg");
-        assert_eq!(records[0]["source_sha256"], "hash1");
-        assert_eq!(records[0]["output_sha256"], "hash2");
+        assert_eq!(records[0].source_rel, "src/file1.jpg");
+        assert_eq!(records[0].output_rel, "out/file1.jpg");
+        assert_eq!(records[0].source_blake3, "hash1");
+        assert_eq!(records[0].output_blake3, "hash2");
+        assert!(records[0].source_deleted);
+    }
+
+    #[test]
+    fn test_load_restore_jpeg_manifest_rejects_unsafe_and_odd_hex_paths() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manifest_path = tempdir.path().join(".mfb_restore_jpeg_manifest.tsv");
+        let tsv_content = "\
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
+2e2e2f6573636170652e4a584c\t6f75742e6a7067\thash1\thash2\tfalse
+6f6464f\t6f75742e6a7067\thash1\thash2\tfalse
+";
+        fs::write(&manifest_path, tsv_content).unwrap();
+
+        let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
+        assert!(records.is_empty());
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("safe relative paths"));
+        assert!(errors[1].contains("invalid source_rel hex"));
     }
 
     #[test]
@@ -2678,11 +2768,10 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
 
         let camera_path = restored.join("nested").join("camera.jpg");
         fs::write(&camera_path, b"\xff\xd8\xff\xe0true-jpeg").unwrap();
-        let (actual_hash, _) = file_content_hash(&camera_path, 65536);
-        let output_hash = actual_hash.unwrap();
+        let output_hash = calculate_blake3_hash(&camera_path).unwrap();
 
         let manifest_content = format!(
-            "source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted\n\
+            "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
              6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\t\
              source-blake3\t{output_hash}\ttrue\n"
         );
@@ -2702,6 +2791,46 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         assert_eq!(stats.matched, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+    }
+
+    #[test]
+    #[serial]
+    #[rustfmt::skip]
+    fn test_fast_img_restore_check_accepts_manifest_verified_retained_sources() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album_optimized");
+        let restored = tempdir.path().join("Album_restored_jpeg");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::create_dir_all(restored.join("nested")).unwrap();
+
+        let source_path = source.join("nested").join("camera.JXL");
+        let output_path = restored.join("nested").join("camera.jpg");
+        fs::write(&source_path, b"\xff\x0atrue-jxl").unwrap();
+        fs::write(&output_path, b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+        let source_hash = calculate_blake3_hash(&source_path).unwrap();
+        let output_hash = calculate_blake3_hash(&output_path).unwrap();
+
+        let manifest_content = format!(
+            "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+             6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\t\
+             {source_hash}\t{output_hash}\tfalse\n"
+        );
+        fs::write(
+            restored.join(".mfb_restore_jpeg_manifest.tsv"),
+            manifest_content,
+        )
+        .unwrap();
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+
+        assert_eq!(stats.source_files, 1);
+        assert_eq!(stats.source_remaining_files, 1);
+        assert_eq!(stats.verified_deleted_sources, 0);
+        assert_eq!(stats.optimized_files, 1);
+        assert_eq!(stats.integrity_failures, 0, "{report}");
+        assert!(!stats.has_warnings);
+        assert!(report.contains("Manifest verified retained source JXLs: 1"));
     }
 
     #[test]
@@ -2727,7 +2856,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let manifest_content = "\
-source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";
         fs::write(
@@ -2767,7 +2896,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let manifest_content = "\
-source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";
         fs::write(
@@ -2800,7 +2929,7 @@ source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
         .unwrap();
 
         let manifest_content = "\
-source_rel_hex\toutput_rel_hex\tsource_sha256\toutput_sha256\tsource_deleted
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\tsource-blake3\toutput-blake3\ttrue
 ";

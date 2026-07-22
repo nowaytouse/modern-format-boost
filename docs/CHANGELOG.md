@@ -2,7 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+
+## [0.11.3] - 2026-07-22
 
 ### Reliability, Delivery & CI Repairs
 
@@ -25,6 +26,22 @@ All notable changes to this project will be documented in this file.
 - **Smarter Packaging**: Smart Build no longer rebuilds Tauri for unrelated
   dev-binary edits; `--all` incrementally refreshes every app-bundled Rust
   resource and rebuilds the GUI only when Vue or Tauri inputs changed.
+- **Official Static Decode Ladder**: FastImg normalization now prefers the
+  format-owner tools (`dwebp`, `avifdec`, `heif-convert`, `djxl`, and
+  `opj_decompress`) before ImageMagick, and validates every generated PNG before
+  it can enter an encoder.
+- **Reversible JXL Restore**: `restore-jpeg` now preflights JXL files with
+  `jxlinfo`, supports `--keep-source`, records source/output hashes in its
+  manifest, and verifies existing outputs rather than silently replacing them.
+  The recovery run for the reported archive retained all 6,663 JXL sources and
+  produced or verified 6,663 JPEG reconstructions.
+- **Python-to-Rust Production Paths**: Remaining production launcher, build,
+  verification, collection, and import entry points are Rust binaries; Python
+  is retained only where it remains an intentional training/model dependency.
+  A contract inventory prevents retired production scripts from returning.
+- **Clean CI Shell Gate**: The authoritative media dependency bootstrap is now
+  normalized by the repository's `shfmt` policy, removing the final local/CI
+  layout-gate failure after the full warning and error audit.
 
 ### Core Features & Capabilities
 
@@ -132,10 +149,6 @@ All notable changes to this project will be documented in this file.
 
 - **UltraHDR Unit Test**: Added `ultrahdr_jpeg_in_fast_img_mode_yields_skip_not_jxl` test to verify UltraHDR JPEGs are skipped (not converted) in fast-img mode with proper skip reason and no JXL output.
 - **Retranscode Unit Tests**: Added `resume_reused_fast_img_output_keeps_recorded_collision_path` and `stale_proof_retranscode_keeps_marker_out_rel_path` tests to verify marker output path preservation during retranscode scenarios.
-
-## [0.11.3] - 2026-06-16
-
-This release consolidates 5 weeks of extensive architectural refactoring, systemic hardening, media pipeline maturity, and performance optimizations.
 
 ### Consolidated Summary
 

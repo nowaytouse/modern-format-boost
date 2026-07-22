@@ -20,27 +20,23 @@ serde = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
 foundation = { path = "../foundation", default-features = false }
-vid = { path = "../vid", default-features = false }
 tempfile = { workspace = true }
 console = { workspace = true }
 tracing = { workspace = true }
 bitflags = { workspace = true }
 
 [features]
-default = ["v1_21", "foundation/default", "vid/default", "high-precision"]
+default = ["v1_21", "foundation/default", "high-precision"]
 v1_21 = ["foundation/v1_21"]
-high-precision = [
-  "dep:rug",
-  "dep:gmp-mpfr-sys",
-  "foundation/high-precision",
-  "vid/high-precision",
-]
+high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "foundation/high-precision"]
 system-gmp = [
   "dep:gmp-mpfr-sys",
   "gmp-mpfr-sys/use-system-libs",
   "foundation/system-gmp",
-  "vid/system-gmp",
 ]
+
+[dev-dependencies]
+vid = { path = "../vid", default-features = false }
 
 [lints]
 workspace = true

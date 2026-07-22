@@ -24,7 +24,7 @@ fn assert_tier_probe_invoker(api_name: &'static str) -> Result<()> {
     if invoker.is_empty() {
         anyhow::bail!(
             "refusing {api_name} without MFB_INVOKER or MFB_TRAINING_INVOKER (allowed: {}). Use: \
-             python3 crates/dev/scripts/run_training.py",
+             cargo run --locked -p dev --bin run_training -- --execute",
             INGEST_INVOKERS.join(", ")
         );
     }
@@ -44,7 +44,7 @@ pub fn assert_train_quality_entry() -> Result<()> {
     CliEntryGuard {
         expected_bin: "train_quality",
         allowed_invokers: INGEST_INVOKERS,
-        production_hint: "Use: python3 crates/dev/scripts/run_training.py",
+        production_hint: "Use: cargo run --locked -p dev --bin run_training -- --execute",
         require_invoker: true,
     }
     .assert()
@@ -60,7 +60,7 @@ pub fn assert_train_knn_entry() -> Result<()> {
     CliEntryGuard {
         expected_bin: "train_knn",
         allowed_invokers: INGEST_INVOKERS,
-        production_hint: "Use: python3 crates/dev/scripts/run_training.py",
+        production_hint: "Use: cargo run --locked -p dev --bin run_training -- --execute",
         require_invoker: true,
     }
     .assert()
@@ -70,14 +70,14 @@ pub fn assert_train_knn_entry() -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error when a shell wrapper is detected or the Python-side invoker
-/// is missing / invalid. This C-API runs in the Python process, so `argv[0]`
-/// is the Python launcher rather than the exported symbol name.
+/// Returns an error when a shell wrapper is detected or the delegated invoker
+/// is missing / invalid. Compatibility callers may host this C-API in Python,
+/// so `argv[0]` is not required to match the exported symbol name.
 pub fn assert_tier_probe_c_api_entry(api_name: &'static str) -> Result<()> {
     if entry_guard::shell_wrapper_in_ancestry(6).is_some() {
         anyhow::bail!(
-            "refusing {api_name} via shell-wrapped process; invoke only from python3 \
-             crates/dev/scripts/run_training.py"
+            "refusing {api_name} via shell-wrapped process; invoke via cargo run --locked -p dev \
+             --bin run_training -- --execute"
         );
     }
     assert_tier_probe_invoker(api_name)

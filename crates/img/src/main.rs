@@ -235,7 +235,7 @@ enum Commands {
         #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
         strategy: String,
 
-        /// Use four AVIF binary quality probes. Normal Meme Mode uses three.
+        /// Accepted for CLI compatibility. `FastImg` Meme Mode keeps its normal three-probe search.
         #[arg(long = "extreme-precision", default_value_t = false)]
         extreme_precision: bool,
     },
@@ -258,6 +258,10 @@ enum Commands {
         /// Overwrite existing restored JPEGs.
         #[arg(short, long, default_value_t = false)]
         force: bool,
+
+        /// Preserve source JXL files after verified JPEG reconstruction.
+        #[arg(long, default_value_t = false)]
+        keep_source: bool,
     },
 }
 
@@ -884,8 +888,9 @@ fn main_inner() -> anyhow::Result<()> {
             output,
             recursive,
             force,
+            keep_source,
         } => {
-            run_restore_jpeg(&input, output.as_deref(), recursive, force)?;
+            run_restore_jpeg(&input, output.as_deref(), recursive, force, keep_source)?;
         }
     }
 
@@ -1393,9 +1398,8 @@ fn dispatch_static_conversion(
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
 
-    // 🔬 Level 4 Feedback: KNN Static Quality Score
-    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
-    // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
+    // Optional forensic scoring. This is disabled by default because neither
+    // KNN nor BPP estimates are authoritative conversion evidence.
     let quality = if format == "JPEG" {
         None
     } else if foundation::static_quality_db_lookup_enabled() {
@@ -2111,6 +2115,12 @@ struct ShortestPathFlag(bool);
 struct RetryFlag(bool);
 
 #[derive(Clone, Copy)]
+struct ArchiveFlag(bool);
+
+#[derive(Clone, Copy)]
+struct ExpertOptionsFlag(bool);
+
+#[derive(Clone, Copy)]
 struct FastImgRunOptions<'a> {
     input: &'a Path,
     output_dir: Option<&'a Path>,
@@ -2139,16 +2149,21 @@ fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Resu
         FormatKind::Jpeg => return Ok(true),
         FormatKind::Png => foundation::image_detection::DetectedFormat::PNG,
         FormatKind::WebP => foundation::image_detection::DetectedFormat::WebP,
-        FormatKind::Heic | FormatKind::Heif | FormatKind::Avif => {
-            return foundation::image_detection::is_isobmff_animated_sequence(path)
-                .map(|is_animated| !is_animated)
-                .with_context(|| {
-                    format!(
-                        "FastImg could not read ISOBMFF sequence metadata for {}",
-                        path.display()
-                    )
-                });
-        }
+        FormatKind::Heic => foundation::image_detection::DetectedFormat::HEIC,
+        FormatKind::Heif => foundation::image_detection::DetectedFormat::HEIF,
+        FormatKind::Avif => foundation::image_detection::DetectedFormat::AVIF,
+        FormatKind::Gif => foundation::image_detection::DetectedFormat::GIF,
+        FormatKind::Bmp => foundation::image_detection::DetectedFormat::BMP,
+        FormatKind::Jxl => foundation::image_detection::DetectedFormat::JXL,
+        FormatKind::Tiff => foundation::image_detection::DetectedFormat::TIFF,
+        FormatKind::Qoi => foundation::image_detection::DetectedFormat::QOI,
+        FormatKind::Jp2 => foundation::image_detection::DetectedFormat::JP2,
+        FormatKind::Ico => foundation::image_detection::DetectedFormat::ICO,
+        FormatKind::Exr => foundation::image_detection::DetectedFormat::EXR,
+        FormatKind::Flif => foundation::image_detection::DetectedFormat::FLIF,
+        FormatKind::Psd => foundation::image_detection::DetectedFormat::PSD,
+        FormatKind::Pnm => foundation::image_detection::DetectedFormat::PNM,
+        FormatKind::Dds => foundation::image_detection::DetectedFormat::DDS,
         _ => return Ok(false),
     };
 
@@ -2178,6 +2193,12 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         extreme_precision,
     } = options;
     let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
+
+    if extreme_precision {
+        println!(
+            "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its normal three-probe search"
+        );
+    }
 
     if let Some(output_dir) = output_dir {
         anyhow::bail!(
@@ -2232,14 +2253,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     for path in input_plan.candidates {
         if strategy == "avif" {
             let format = foundation::image::format_detect::detect_true_format(&path)?;
-            if matches!(
+            if !matches!(
                 format,
-                foundation::image::format_detect::FormatKind::Jpeg
-                    | foundation::image::format_detect::FormatKind::Png
-                    | foundation::image::format_detect::FormatKind::WebP
-                    | foundation::image::format_detect::FormatKind::Heic
-                    | foundation::image::format_detect::FormatKind::Heif
-                    | foundation::image::format_detect::FormatKind::Avif
+                foundation::image::format_detect::FormatKind::Mp4
+                    | foundation::image::format_detect::FormatKind::Mov
+                    | foundation::image::format_detect::FormatKind::Mkv
+                    | foundation::image::format_detect::FormatKind::Webm
+                    | foundation::image::format_detect::FormatKind::Unknown
             ) {
                 match fast_img_container_is_static(&path, format) {
                     Ok(true) => source_jpegs.push(path),
@@ -2265,8 +2285,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         );
         println!(
-            "[MEME    ] AVIF quality search: coarse q=100..20, then {} binary probes",
-            avif_meme_binary_probe_count(extreme_precision)
+            "[MEME    ] AVIF quality search: coarse q=100..20, then {AVIF_MEME_BINARY_PROBES} binary probes"
         );
     } else {
         println!(
@@ -2606,11 +2625,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             &current_source_hashes,
             &src_dir,
             &working_copy,
-            retry_failed_sources_from_cleanup,
-            archive,
-            allow_expert_options,
+            RetryFlag(retry_failed_sources_from_cleanup),
+            ArchiveFlag(archive),
+            ExpertOptionsFlag(allow_expert_options),
             strategy,
-            extreme_precision,
         )?;
     }
 
@@ -2986,71 +3004,212 @@ struct FastImgAvifEncoderInput {
     _temp: Option<tempfile::NamedTempFile>,
 }
 
-/// `avifenc` deliberately accepts only JPEG, PNG, and Y4M. Decode static WebP
-/// once through its official decoder, then keep the original file as the
-/// delivery and verification source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AvifInputDecoder {
+    WebP,
+    Avif,
+    Heif,
+    Jxl,
+    Jp2,
+    ImageMagick,
+}
+
+const fn avif_input_decoder(format: FormatKind) -> Option<AvifInputDecoder> {
+    match format {
+        FormatKind::Jpeg | FormatKind::Png => None,
+        FormatKind::WebP => Some(AvifInputDecoder::WebP),
+        FormatKind::Avif => Some(AvifInputDecoder::Avif),
+        FormatKind::Heic | FormatKind::Heif => Some(AvifInputDecoder::Heif),
+        FormatKind::Jxl => Some(AvifInputDecoder::Jxl),
+        FormatKind::Jp2 => Some(AvifInputDecoder::Jp2),
+        FormatKind::Gif
+        | FormatKind::Bmp
+        | FormatKind::Tiff
+        | FormatKind::Qoi
+        | FormatKind::Ico
+        | FormatKind::Exr
+        | FormatKind::Flif
+        | FormatKind::Psd
+        | FormatKind::Pnm
+        | FormatKind::Dds => Some(AvifInputDecoder::ImageMagick),
+        FormatKind::Mp4
+        | FormatKind::Mov
+        | FormatKind::Mkv
+        | FormatKind::Webm
+        | FormatKind::Unknown => None,
+    }
+}
+
+fn avif_input_decoder_command(
+    decoder: AvifInputDecoder,
+    source: &Path,
+    temp_path: &Path,
+) -> anyhow::Result<(std::process::Command, &'static str)> {
+    let command = match decoder {
+        AvifInputDecoder::WebP => {
+            let mut builder = foundation::image_builders::DwebpBuilder::new();
+            builder.input(source).output(temp_path);
+            (builder.build(), "dwebp")
+        }
+        AvifInputDecoder::Avif => {
+            let executable =
+                foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
+                    .context("official avifdec is required for AVIF source normalization")?;
+            let mut command = std::process::Command::new(executable);
+            command
+                .arg("--jobs")
+                .arg("all")
+                .arg("--depth")
+                .arg("16")
+                .arg("--")
+                .arg(source)
+                .arg(temp_path);
+            (command, foundation::constants::TOOL_AVIFDEC)
+        }
+        AvifInputDecoder::Heif => {
+            let executable = foundation::common_utils::resolve_tool_path("heif-convert")
+                .context("official libheif heif-convert is required for HEIC/HEIF normalization")?;
+            let mut command = std::process::Command::new(executable);
+            command.arg("--quiet").arg(source).arg(temp_path);
+            (command, "heif-convert")
+        }
+        AvifInputDecoder::Jxl => {
+            let mut builder = foundation::DjxlBuilder::new();
+            builder.input(source).output(temp_path);
+            (builder.build(), foundation::constants::TOOL_DJXL)
+        }
+        AvifInputDecoder::Jp2 => {
+            let executable = foundation::common_utils::resolve_tool_path("opj_decompress")
+                .context("official OpenJPEG opj_decompress is required for JP2 normalization")?;
+            let mut command = std::process::Command::new(executable);
+            command.arg("-i").arg(source).arg("-o").arg(temp_path);
+            (command, "opj_decompress")
+        }
+        AvifInputDecoder::ImageMagick => {
+            let mut builder = foundation::MagickBuilder::new();
+            builder
+                .input(source)
+                .arg("-flatten")
+                .depth(16)
+                .output(temp_path);
+            (builder.build(), "ImageMagick")
+        }
+    };
+    Ok(command)
+}
+
+fn run_avif_input_decoder(
+    decoder: AvifInputDecoder,
+    source: &Path,
+    temp_path: &Path,
+) -> anyhow::Result<&'static str> {
+    let (mut command, tool_name) = avif_input_decoder_command(decoder, source, temp_path)?;
+    let output = foundation::process_runner::ManagedProcess::spawn(&mut command)
+        .and_then(|process| {
+            process.wait_timeout(
+                std::time::Duration::from_secs(120),
+                &format!("{tool_name} static decode"),
+            )
+        })
+        .with_context(|| format!("FastImg could not run {tool_name} for {}", source.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{tool_name} could not decode {}: {}",
+            source.display(),
+            output.stderr.trim()
+        );
+    }
+    if !temp_path.is_file() {
+        anyhow::bail!(
+            "{tool_name} reported success without a decoded PNG for {}",
+            source.display()
+        );
+    }
+    let decoded_size = std::fs::metadata(temp_path)
+        .with_context(|| format!("inspect {tool_name} decoded PNG {}", temp_path.display()))?
+        .len();
+    if decoded_size == 0 {
+        anyhow::bail!(
+            "{tool_name} reported success with an empty decoded PNG for {}",
+            source.display()
+        );
+    }
+    if !foundation::image::png_validation::is_true_png(temp_path)? {
+        anyhow::bail!(
+            "{tool_name} output failed strict PNG validation for {}",
+            source.display()
+        );
+    }
+    Ok(tool_name)
+}
+
+/// `avifenc` deliberately accepts only JPEG, PNG, Y4M, and compatible frame
+/// sequences. Decode other supported static containers once through their
+/// official first-party decoder, then keep the original file as the delivery
+/// and verification source.
 fn prepare_fast_img_avif_encoder_input(
     source: &Path,
     format: FormatKind,
 ) -> anyhow::Result<FastImgAvifEncoderInput> {
-    if format != FormatKind::WebP {
-        return Ok(FastImgAvifEncoderInput {
-            path: source.to_path_buf(),
-            _temp: None,
-        });
-    }
+    let Some(decoder) = avif_input_decoder(format) else {
+        if matches!(format, FormatKind::Jpeg | FormatKind::Png) {
+            return Ok(FastImgAvifEncoderInput {
+                path: source.to_path_buf(),
+                _temp: None,
+            });
+        }
+        anyhow::bail!("FastImg has no static decoder from {format:?} to an avifenc input");
+    };
 
     let temp = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-        "fast_img_webp_avif_input",
+        "fast_img_official_avif_input",
         None,
         Some(".png"),
     )
-    .context("FastImg could not allocate a temporary PNG for official WebP decode")?;
+    .context("FastImg could not allocate a temporary PNG for official static decode")?;
     let temp_path = temp.path().to_path_buf();
-    let mut builder = foundation::image_builders::DwebpBuilder::new();
-    builder.input(source).output(&temp_path);
-    let output = builder.build().output().with_context(|| {
-        format!(
-            "FastImg could not launch official dwebp for static WebP {}",
-            source.display()
-        )
-    })?;
+    let tool_name = match run_avif_input_decoder(decoder, source, &temp_path) {
+        Ok(tool_name) => tool_name,
+        Err(primary_error) if decoder != AvifInputDecoder::ImageMagick => {
+            std::fs::write(&temp_path, []).with_context(|| {
+                format!(
+                    "FastImg could not reset temporary decoder output {}",
+                    temp_path.display()
+                )
+            })?;
+            foundation::log_detail!(&format!(
+                "FastImg AVIF: authoritative decoder failed for {format:?}; trying ImageMagick fallback: {primary_error}"
+            ));
+            run_avif_input_decoder(AvifInputDecoder::ImageMagick, source, &temp_path).with_context(
+                || {
+                    format!(
+                        "authoritative decoder failed before ImageMagick fallback: {primary_error}"
+                    )
+                },
+            )?
+        }
+        Err(error) => return Err(error),
+    };
 
-    if output.status.success() && temp_path.is_file() {
-        foundation::log_detail!(&format!(
-            "FastImg AVIF: decoded static WebP once with official dwebp: {}",
-            source.display()
-        ));
-        return Ok(FastImgAvifEncoderInput {
-            path: temp_path,
-            _temp: Some(temp),
-        });
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!(
-        "official dwebp could not decode static WebP {}: {}",
-        source.display(),
-        stderr.trim()
-    );
+    foundation::log_detail!(&format!(
+        "FastImg AVIF: decoded {format:?} once with {tool_name}: {}",
+        source.display()
+    ));
+    Ok(FastImgAvifEncoderInput {
+        path: temp_path,
+        _temp: Some(temp),
+    })
 }
 
 fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
     message.contains("pixel-diff: cannot open source image")
         || (message.contains("avifenc failed at q=")
-            && message.contains("Unrecognized file format"))
+            && (message.contains("Unrecognized file format")
+                || message.contains("Unsupported file format")))
 }
 
-const AVIF_MEME_NORMAL_BINARY_PROBES: usize = 3;
-const AVIF_MEME_EXTREME_BINARY_PROBES: usize = 7;
-
-const fn avif_meme_binary_probe_count(extreme_precision: bool) -> usize {
-    if extreme_precision {
-        AVIF_MEME_EXTREME_BINARY_PROBES
-    } else {
-        AVIF_MEME_NORMAL_BINARY_PROBES
-    }
-}
+const AVIF_MEME_BINARY_PROBES: usize = 3;
+const AVIF_MEME_SPEED: u8 = 0;
 
 /// Meme Mode AVIF quality exploration: coarse scan + binary search.
 ///
@@ -3065,13 +3224,13 @@ fn explore_avif_meme_quality(
     encoder_input: &Path,
     input_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
+    metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
     binary_probe_count: usize,
-    extreme_precision: bool,
 ) -> anyhow::Result<AvifQualityExploreResult> {
     const COARSE_STEP: u8 = 10;
     const MIN_QUALITY: u8 = 20;
 
-    let avif_speed = if extreme_precision { 0 } else { 1 };
+    let avif_speed = AVIF_MEME_SPEED;
 
     // ── Phase 1: Coarse scan ──────────────────────────────────────────────
     let mut q_ok: Option<u8> = None;
@@ -3081,11 +3240,12 @@ fn explore_avif_meme_quality(
             "AVIF Meme Mode quality probe [coarse]: q={q} (speed={avif_speed}) for {}",
             source.display()
         ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
             q,
             Some(avif_speed),
+            metadata_retry,
             convert_options,
         ) {
             Ok((temp_path, output_size)) => {
@@ -3143,11 +3303,12 @@ fn explore_avif_meme_quality(
             source.display()
         ));
         let (temp, _size) =
-            match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
+            match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
                 source,
                 encoder_input,
                 100,
                 Some(avif_speed),
+                metadata_retry,
                 convert_options,
             ) {
                 Ok(result) => result,
@@ -3175,7 +3336,7 @@ fn explore_avif_meme_quality(
         source.display()
     ));
 
-    // Normal Meme Mode uses three probes; explicit extreme precision uses four.
+    // Meme Mode deliberately keeps the established three-probe refinement.
     for _ in 0..binary_probe_count {
         if lo > hi {
             break;
@@ -3184,11 +3345,12 @@ fn explore_avif_meme_quality(
         foundation::log_detail!(&format!(
             "AVIF Meme Mode quality probe [binary]: testing q={mid} (speed={avif_speed})"
         ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
             mid,
             Some(avif_speed),
+            metadata_retry,
             convert_options,
         ) {
             Ok((temp_path, output_size)) => {
@@ -3241,11 +3403,12 @@ fn explore_avif_meme_quality(
         source.display()
     ));
     let (temp_path, _output_size) =
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
+        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
             best_q,
             Some(avif_speed),
+            metadata_retry,
             convert_options,
         ) {
             Ok(result) => result,
@@ -3271,7 +3434,6 @@ fn fast_img_run_encode_job_inner(
     archive: bool,
     allow_expert_options: bool,
     strategy: &str,
-    extreme_precision: bool,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
@@ -3300,16 +3462,17 @@ fn fast_img_run_encode_job_inner(
                 ));
             }
         };
+        let mut metadata_retry = img::lossless_converter::AvifencMetadataRetryState::default();
         match explore_avif_meme_quality(
             &job.source,
             &encoder_input.path,
             input_size,
             &convert_options,
-            avif_meme_binary_probe_count(extreme_precision),
-            extreme_precision,
+            &mut metadata_retry,
+            AVIF_MEME_BINARY_PROBES,
         )? {
             AvifQualityExploreResult::Found { quality, .. } => {
-                let avif_speed = if extreme_precision { 0 } else { 1 };
+                let avif_speed = AVIF_MEME_SPEED;
                 foundation::log_detail!(&format!(
                     "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?}, speed={})",
                     quality,
@@ -3317,11 +3480,12 @@ fn fast_img_run_encode_job_inner(
                     format,
                     avif_speed
                 ));
-                img::lossless_converter::convert_to_avif_from_encoder_input_with_speed(
+                img::lossless_converter::convert_to_avif_from_encoder_input_with_speed_and_state(
                     &job.source,
                     &encoder_input.path,
                     Some(quality),
                     Some(avif_speed),
+                    &mut metadata_retry,
                     &convert_options,
                 )?
             }
@@ -3470,7 +3634,6 @@ fn fast_img_run_encode_job(
     archive: bool,
     allow_expert_options: bool,
     strategy: &str,
-    extreme_precision: bool,
 ) -> FastImgJobResult {
     fast_img_run_encode_job_inner(
         job,
@@ -3480,7 +3643,6 @@ fn fast_img_run_encode_job(
         archive,
         allow_expert_options,
         strategy,
-        extreme_precision,
     )
     .map_err(|err| FastImgTranscodeError {
         rel_key: job.rel_key.clone(),
@@ -4469,6 +4631,12 @@ struct RestoreJpegResult {
     proof: RestoreJpegCommitProof,
 }
 
+#[derive(Debug, Clone)]
+struct RestoreJpegManifestRecord {
+    proof: RestoreJpegCommitProof,
+    source_deleted: bool,
+}
+
 fn restore_jpeg_relative_string(path: &Path, root: &Path) -> anyhow::Result<String> {
     let relative = path.strip_prefix(root).with_context(|| {
         format!(
@@ -4492,7 +4660,7 @@ fn restore_jpeg_hex_encode(text: &str) -> String {
 
 fn write_restore_jpeg_manifest(
     output_root: &Path,
-    records: &[RestoreJpegCommitProof],
+    records: &[RestoreJpegManifestRecord],
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(output_root).with_context(|| {
         format!(
@@ -4506,14 +4674,19 @@ fn write_restore_jpeg_manifest(
         "# MFB_RESTORE_JPEG_MANIFEST_V1\nsource_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n",
     );
     for record in records {
-        content.push_str(&restore_jpeg_hex_encode(&record.source_rel));
+        content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
         content.push('\t');
-        content.push_str(&restore_jpeg_hex_encode(&record.output_rel));
+        content.push_str(&restore_jpeg_hex_encode(&record.proof.output_rel));
         content.push('\t');
-        content.push_str(&record.source_hash);
+        content.push_str(&record.proof.source_hash);
         content.push('\t');
-        content.push_str(&record.output_hash);
-        content.push_str("\ttrue\n");
+        content.push_str(&record.proof.output_hash);
+        content.push('\t');
+        content.push_str(if record.source_deleted {
+            "true\n"
+        } else {
+            "false\n"
+        });
     }
     std::fs::write(&temp_manifest, content).with_context(|| {
         format!(
@@ -4532,17 +4705,43 @@ fn write_restore_jpeg_manifest(
 
 fn record_and_delete_restored_jpeg_source(
     output_root: &Path,
-    restore_records: &mut Vec<RestoreJpegCommitProof>,
+    restore_records: &mut Vec<RestoreJpegManifestRecord>,
     proof: &RestoreJpegCommitProof,
 ) -> anyhow::Result<bool> {
-    restore_records.push(proof.clone());
+    restore_records.push(RestoreJpegManifestRecord {
+        proof: proof.clone(),
+        source_deleted: false,
+    });
     write_restore_jpeg_manifest(output_root, restore_records).with_context(|| {
         format!(
-            "restore-jpeg failed to persist deletion manifest before removing {}",
+            "restore-jpeg failed to persist recovery manifest before removing {}",
             proof.source.display()
         )
     })?;
-    restore_jpeg_delete_verified_source(proof)
+    let deleted = restore_jpeg_delete_verified_source(proof)?;
+    if deleted {
+        let record = restore_records
+            .last_mut()
+            .context("restore-jpeg recovery manifest record disappeared")?;
+        record.source_deleted = true;
+        write_restore_jpeg_manifest(output_root, restore_records).with_context(|| {
+            format!(
+                "restore-jpeg failed to persist completed deletion for {}",
+                proof.source.display()
+            )
+        })?;
+    }
+    Ok(deleted)
+}
+
+fn record_retained_restored_jpeg_source(
+    restore_records: &mut Vec<RestoreJpegManifestRecord>,
+    proof: &RestoreJpegCommitProof,
+) {
+    restore_records.push(RestoreJpegManifestRecord {
+        proof: proof.clone(),
+        source_deleted: false,
+    });
 }
 
 fn restore_jpeg_remove_temp(temp: &Path, context: &str) -> anyhow::Result<()> {
@@ -4751,6 +4950,21 @@ fn restore_single_jpeg(
             .with_context(|| format!("restore-jpeg failed to create {}", parent.display()))?;
     }
 
+    if !force && output.exists() {
+        let proof = restore_jpeg_build_current_proof(input, input_root, &output, output_root)
+            .with_context(|| {
+                format!(
+                    "restore-jpeg failed to re-verify existing output {} -> {}",
+                    input.display(),
+                    output.display()
+                )
+            })?;
+        return Ok(RestoreJpegResult {
+            committed: false,
+            proof,
+        });
+    }
+
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
     let decode = foundation::DjxlBuilder::new()
@@ -4775,27 +4989,71 @@ fn restore_single_jpeg(
         );
     }
 
-    let committed = foundation::conversion::commit_temp_to_output_with_metadata(
-        &temp_output,
-        &output,
-        force,
-        Some(input),
-    )
-    .with_context(|| {
+    // Keep the exact official djxl reconstruction for the post-metadata pixel
+    // proof. This avoids launching djxl a second time for every committed file.
+    let proof_snapshot = temp_output.with_extension("mfb-restore-proof.jpg");
+    std::fs::copy(&temp_output, &proof_snapshot).with_context(|| {
         format!(
-            "restore-jpeg failed to commit metadata-preserving output {}",
-            output.display()
+            "restore-jpeg failed to snapshot official djxl output {}",
+            temp_output.display()
         )
     })?;
 
-    let proof = restore_jpeg_build_current_proof(input, input_root, &output, output_root)
+    let commit_result =
+        foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+            &temp_output,
+            &output,
+            force,
+            Some(input),
+        )
         .with_context(|| {
             format!(
-                "restore-jpeg failed to build deletion proof for {} -> {}",
-                input.display(),
+                "restore-jpeg failed to commit metadata-preserving output {}",
                 output.display()
             )
-        })?;
+        });
+    let committed = match commit_result {
+        Ok(committed) => committed,
+        Err(err) => {
+            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed metadata commit");
+            return Err(err);
+        }
+    };
+
+    let proof_result = restore_jpeg_build_current_proof_with_decoder(
+        input,
+        input_root,
+        &output,
+        output_root,
+        |_input, fresh_decode| {
+            std::fs::copy(&proof_snapshot, fresh_decode)
+                .map(|_| ())
+                .with_context(|| {
+                    format!(
+                        "restore-jpeg failed to stage djxl proof snapshot {}",
+                        proof_snapshot.display()
+                    )
+                })
+        },
+    )
+    .with_context(|| {
+        format!(
+            "restore-jpeg failed to build deletion proof for {} -> {}",
+            input.display(),
+            output.display()
+        )
+    });
+    let cleanup_result = restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof");
+    let proof = match (proof_result, cleanup_result) {
+        (Ok(proof), Ok(())) => proof,
+        (Ok(_), Err(cleanup_err)) => return Err(cleanup_err),
+        (Err(err), Ok(())) => return Err(err),
+        (Err(err), Err(cleanup_err)) => {
+            return Err(err.context(format!(
+                "restore-jpeg proof snapshot cleanup also failed: {cleanup_err}"
+            )));
+        }
+    };
 
     Ok(RestoreJpegResult { committed, proof })
 }
@@ -5012,13 +5270,230 @@ fn restore_jpeg_prune_empty_source_dirs(input_root: &Path, candidate_dirs: &[Pat
     removed
 }
 
+fn restore_jpeg_canonical_output_root(output_root: &Path) -> anyhow::Result<PathBuf> {
+    if output_root.exists() {
+        return std::fs::canonicalize(output_root).with_context(|| {
+            format!(
+                "restore-jpeg failed to canonicalize output root {}",
+                output_root.display()
+            )
+        });
+    }
+
+    let mut missing = Vec::new();
+    let mut existing = output_root;
+    while !existing.exists() {
+        let name = existing.file_name().ok_or_else(|| {
+            anyhow::anyhow!(
+                "restore-jpeg output root has no existing ancestor: {}",
+                output_root.display()
+            )
+        })?;
+        missing.push(name.to_os_string());
+        existing = existing.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "restore-jpeg output root has no existing ancestor: {}",
+                output_root.display()
+            )
+        })?;
+    }
+    let mut canonical = std::fs::canonicalize(existing).with_context(|| {
+        format!(
+            "restore-jpeg failed to canonicalize output ancestor {}",
+            existing.display()
+        )
+    })?;
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
+}
+
+fn restore_jpeg_validate_disjoint_roots(
+    input_root: &Path,
+    output_root: &Path,
+) -> anyhow::Result<()> {
+    let canonical_input = std::fs::canonicalize(input_root).with_context(|| {
+        format!(
+            "restore-jpeg failed to canonicalize input root {}",
+            input_root.display()
+        )
+    })?;
+    let canonical_output = restore_jpeg_canonical_output_root(output_root)?;
+    if canonical_input == canonical_output || canonical_output.starts_with(&canonical_input) {
+        anyhow::bail!(
+            "restore-jpeg requires disjoint input and output roots: input={} output={}",
+            canonical_input.display(),
+            canonical_output.display()
+        );
+    }
+    Ok(())
+}
+
+fn restore_jpeg_jxlinfo_has_jpeg_reconstruction(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output)
+        .to_ascii_lowercase()
+        .contains("jpeg bitstream reconstruction data available")
+}
+
+fn restore_jpeg_preflight(
+    input_root: &Path,
+    output_root: &Path,
+    files: &[PathBuf],
+) -> anyhow::Result<()> {
+    restore_jpeg_validate_disjoint_roots(input_root, output_root)?;
+    if files.is_empty() {
+        anyhow::bail!(
+            "restore-jpeg found no true JXL files in {}",
+            input_root.display()
+        );
+    }
+
+    let mut output_owners = BTreeMap::new();
+    for source in files {
+        let output = restore_jpeg_output_path_for(source, input_root, output_root)?;
+        if let Some(previous) = output_owners.insert(output.clone(), source.clone()) {
+            anyhow::bail!(
+                "restore-jpeg output collision: {} and {} both map to {}",
+                previous.display(),
+                source.display(),
+                output.display()
+            );
+        }
+    }
+
+    let jxlinfo = foundation::common_utils::resolve_tool_path("jxlinfo")
+        .context("restore-jpeg requires official jxlinfo")?;
+    let available_workers = match std::thread::available_parallelism() {
+        Ok(worker_count) => worker_count.get(),
+        Err(error) => {
+            eprintln!(
+                "[PREFLIGHT] available parallelism could not be detected ({error}); using one worker"
+            );
+            1
+        }
+    };
+    let worker_count = available_workers.clamp(1, 8);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .thread_name(|index| format!("mfb-jxlinfo-{index}"))
+        .build()
+        .context("restore-jpeg failed to create jxlinfo preflight worker pool")?;
+    let verified = std::sync::atomic::AtomicUsize::new(0);
+    pool.install(|| {
+        files.par_iter().try_for_each(|source| {
+            let probe = std::process::Command::new(&jxlinfo)
+                .arg("-v")
+                .arg(source)
+                .output()
+                .with_context(|| {
+                    format!(
+                        "restore-jpeg preflight failed to launch jxlinfo for {}",
+                        source.display()
+                    )
+                })?;
+            let mut diagnostic = probe.stdout;
+            diagnostic.extend_from_slice(&probe.stderr);
+            if !probe.status.success() {
+                anyhow::bail!(
+                    "restore-jpeg preflight jxlinfo failed for {}: {}",
+                    source.display(),
+                    String::from_utf8_lossy(&diagnostic).trim()
+                );
+            }
+            if !restore_jpeg_jxlinfo_has_jpeg_reconstruction(&diagnostic) {
+                anyhow::bail!(
+                    "restore-jpeg preflight refused {}: JPEG bitstream reconstruction data is unavailable",
+                    source.display()
+                );
+            }
+            let completed =
+                verified.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if completed.is_multiple_of(250) || completed == files.len() {
+                println!(
+                    "[PREFLIGHT] verified {completed}/{} reversible JXL source files",
+                    files.len()
+                );
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+    })?;
+    Ok(())
+}
+
+fn restore_jpeg_keep_source_parallel(
+    files: &[PathBuf],
+    input_root: &Path,
+    output_root: &Path,
+    force: bool,
+) -> anyhow::Result<(usize, usize, Vec<RestoreJpegManifestRecord>)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let available_workers = match std::thread::available_parallelism() {
+        Ok(worker_count) => worker_count.get(),
+        Err(error) => {
+            eprintln!(
+                "[RESTORE ] available parallelism could not be detected ({error}); using one worker"
+            );
+            1
+        }
+    };
+    let worker_count = available_workers.clamp(1, 4);
+    println!("[RESTORE ] using {worker_count} bounded workers; source JXL deletion is disabled");
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .thread_name(|index| format!("mfb-restore-jpeg-{index}"))
+        .build()
+        .context("restore-jpeg failed to create bounded worker pool")?;
+    let processed = AtomicUsize::new(0);
+    let restored = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
+    let file_count = files.len();
+
+    let pending = pool.install(|| {
+        files
+            .par_iter()
+            .map(|file| {
+                let result = restore_single_jpeg(file, input_root, output_root, force)?;
+                if result.committed {
+                    restored.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                }
+                let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                if completed.is_multiple_of(250) || completed == file_count {
+                    println!(
+                        "[RESTORE ] verified {completed}/{file_count} JPEG outputs (new={} existing={})",
+                        restored.load(Ordering::Relaxed),
+                        skipped.load(Ordering::Relaxed)
+                    );
+                }
+                Ok(result)
+            })
+            .collect::<Vec<anyhow::Result<RestoreJpegResult>>>()
+    });
+
+    let mut records = Vec::with_capacity(file_count);
+    for result in pending {
+        let result = result?;
+        record_retained_restored_jpeg_source(&mut records, &result.proof);
+    }
+    Ok((
+        restored.load(Ordering::Relaxed),
+        skipped.load(Ordering::Relaxed),
+        records,
+    ))
+}
+
 fn run_restore_jpeg(
     input: &Path,
     output_dir: Option<&Path>,
     recursive: bool,
     force: bool,
+    keep_source: bool,
 ) -> anyhow::Result<()> {
-    if let Err(err) = foundation::tools::require(&["djxl", "exiftool"]) {
+    if let Err(err) = foundation::tools::require(&["jxlinfo", "djxl", "exiftool"]) {
         log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
         std::process::exit(foundation::constants::EXIT_CODE_ERROR);
     }
@@ -5029,8 +5504,10 @@ fn run_restore_jpeg(
         None => restore_jpeg_default_output_dir(input)?,
     };
     let files = restore_jpeg_candidate_files(input, recursive)?;
+    let file_count = files.len();
+    restore_jpeg_preflight(&input_root, &output_root, &files)?;
     println!(
-        "[SCAN    ] Found {} true JXL files in {}",
+        "[SCAN    ] Found {} reversible JXL files in {}",
         files.len(),
         input_root.display()
     );
@@ -5041,6 +5518,29 @@ fn run_restore_jpeg(
     let mut deleted_source_dirs = Vec::new();
     let mut restore_records = Vec::new();
     write_restore_jpeg_manifest(&output_root, &restore_records)?;
+
+    if keep_source {
+        (restored, skipped, restore_records) =
+            restore_jpeg_keep_source_parallel(&files, &input_root, &output_root, force)?;
+        write_restore_jpeg_manifest(&output_root, &restore_records).with_context(|| {
+            format!(
+                "restore-jpeg failed to commit retained-source manifest after {file_count} files"
+            )
+        })?;
+        foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
+            format!(
+                "restore-jpeg failed to preserve directory metadata {} -> {}",
+                input_root.display(),
+                output_root.display()
+            )
+        })?;
+        println!(
+            "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted=0 retained={file_count}",
+            output_root.display()
+        );
+        return Ok(());
+    }
+
     for file in files {
         let result = restore_single_jpeg(&file, &input_root, &output_root, force)?;
         if result.committed {
@@ -5058,6 +5558,13 @@ fn run_restore_jpeg(
                 deleted_source_dirs.push(parent.to_path_buf());
             }
         }
+
+        let processed = restored + skipped;
+        if processed.is_multiple_of(250) || processed == file_count {
+            println!(
+                "[RESTORE ] verified {processed}/{file_count} JPEG outputs (new={restored} existing={skipped})"
+            );
+        }
     }
     restore_jpeg_prune_empty_source_dirs(&input_root, &deleted_source_dirs);
     foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
@@ -5068,8 +5575,9 @@ fn run_restore_jpeg(
         )
     })?;
     println!(
-        "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted={deleted_sources}",
-        output_root.display()
+        "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted={deleted_sources} retained={}",
+        output_root.display(),
+        0
     );
     Ok(())
 }
@@ -5511,11 +6019,10 @@ fn fast_img_run_encode_phase(
     current_source_hashes: &std::collections::BTreeMap<String, String>,
     src_dir: &std::path::Path,
     working_copy: &std::path::Path,
-    retry_failed_sources_from_cleanup: bool,
-    archive: bool,
-    allow_expert_options: bool,
+    retry_failed_sources_from_cleanup: RetryFlag,
+    archive: ArchiveFlag,
+    allow_expert_options: ExpertOptionsFlag,
     strategy: &str,
-    extreme_precision: bool,
 ) -> anyhow::Result<()> {
     let encode_label = if strategy == "avif" {
         "MEME MODE"
@@ -5545,7 +6052,7 @@ fn fast_img_run_encode_phase(
             fast_img_emit_explicit_skip(&rel_key, &entry.reason);
             continue;
         }
-        if marker.failed_sources.contains_key(&rel_key) && !retry_failed_sources_from_cleanup {
+        if marker.failed_sources.contains_key(&rel_key) && !retry_failed_sources_from_cleanup.0 {
             if let Some(entry) = marker.failed_sources.get(&rel_key) {
                 fast_img_emit_explicit_skip(
                     &rel_key,
@@ -5674,10 +6181,9 @@ fn fast_img_run_encode_phase(
                         src_dir,
                         working_copy,
                         child_threads,
-                        archive,
-                        allow_expert_options,
+                        archive.0,
+                        allow_expert_options.0,
                         strategy,
-                        extreme_precision,
                     );
                     if result.is_ok() {
                         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -6438,10 +6944,10 @@ fn build_auto_convert_config(
 #[cfg(test)]
 mod fast_img_hardening_tests {
     use super::{
-        AutoImportFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
-        FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
-        FastImgRunOptions, FastImgTranscodeError, RecursiveFlag, RetryFlag, ShortestPathFlag,
-        command_requires_database, fast_img_archive_stale_working_copy,
+        ArchiveFlag, AutoImportFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
+        ExpertOptionsFlag, FastImgCleanupCompleteSourceState, FastImgInputPlan,
+        FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, RecursiveFlag, RetryFlag,
+        ShortestPathFlag, command_requires_database, fast_img_archive_stale_working_copy,
         fast_img_auto_retry_failed_marker, fast_img_auto_retry_failed_stage,
         fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
@@ -6459,7 +6965,8 @@ mod fast_img_hardening_tests {
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
-        restore_jpeg_output_path_for, restore_jpeg_prune_empty_source_dirs, run_fast_img,
+        restore_jpeg_jxlinfo_has_jpeg_reconstruction, restore_jpeg_output_path_for,
+        restore_jpeg_prune_empty_source_dirs, restore_jpeg_validate_disjoint_roots, run_fast_img,
         validate_cleanup_complete_marker, validate_fast_img_marker_source_state,
     };
     use anyhow::Context;
@@ -6469,6 +6976,7 @@ mod fast_img_hardening_tests {
         FastImgLibraryAssetProbe, IntegrityResult, apply_library_assets_to_marker, is_true_jpeg,
         library_handle_from_probes,
     };
+    use foundation::image::format_detect::FormatKind;
     use foundation::pipeline::verification::{
         Blake3Entry, FastImgStageName, Gate2Import, Gate3Deep, PipelineCtx, SkippedSourceEntry,
         VerificationGate, WorkingCopyMarker,
@@ -6486,8 +6994,10 @@ mod fast_img_hardening_tests {
     }
 
     struct TestEnvPolicyGuard {
-        _lock: MutexGuard<'static, ()>,
         _guards: Vec<TestEnvGuard>,
+        // Fields drop in declaration order. Keep the lock alive until every
+        // environment variable above has been restored.
+        _lock: MutexGuard<'static, ()>,
     }
 
     impl TestEnvGuard {
@@ -6528,8 +7038,8 @@ mod fast_img_hardening_tests {
             ),
         ];
         TestEnvPolicyGuard {
-            _lock: lock,
             _guards: guards,
+            _lock: lock,
         }
     }
 
@@ -6551,8 +7061,8 @@ mod fast_img_hardening_tests {
             root.as_os_str(),
         )];
         TestEnvPolicyGuard {
-            _lock: lock,
             _guards: guards,
+            _lock: lock,
         }
     }
 
@@ -6627,6 +7137,7 @@ mod fast_img_hardening_tests {
             "--output",
             "/photos/Album_restored_jpeg",
             "--recursive",
+            "--keep-source",
         ])?;
 
         let Commands::RestoreJpeg {
@@ -6634,6 +7145,7 @@ mod fast_img_hardening_tests {
             output,
             recursive,
             force,
+            keep_source,
         } = parsed.command
         else {
             anyhow::bail!("expected restore-jpeg command");
@@ -6645,6 +7157,7 @@ mod fast_img_hardening_tests {
         );
         assert!(recursive);
         assert!(!force);
+        assert!(keep_source);
         Ok(())
     }
 
@@ -6655,9 +7168,40 @@ mod fast_img_hardening_tests {
             output: Some(std::path::PathBuf::from("/photos/Album_restored_jpeg")),
             recursive: true,
             force: false,
+            keep_source: false,
         };
 
         assert!(!command_requires_database(&command));
+    }
+
+    #[test]
+    fn restore_jpeg_jxlinfo_parser_requires_reconstruction_proof() {
+        assert!(restore_jpeg_jxlinfo_has_jpeg_reconstruction(
+            b"JPEG bitstream reconstruction data available\n"
+        ));
+        assert!(!restore_jpeg_jxlinfo_has_jpeg_reconstruction(
+            b"JPEG bitstream reconstruction data not available\n"
+        ));
+    }
+
+    #[test]
+    fn restore_jpeg_output_cannot_be_inside_input_root() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let input_root = root.path().join("Album_optimized");
+        std::fs::create_dir_all(&input_root)?;
+
+        let Err(err) =
+            restore_jpeg_validate_disjoint_roots(&input_root, &input_root.join("restored_jpeg"))
+        else {
+            anyhow::bail!("nested output root was accepted");
+        };
+        assert!(err.to_string().contains("disjoint input and output roots"));
+
+        restore_jpeg_validate_disjoint_roots(
+            &input_root,
+            &root.path().join("Album_restored_jpeg"),
+        )?;
+        Ok(())
     }
 
     #[test]
@@ -7356,11 +7900,10 @@ mod fast_img_hardening_tests {
             &current_source_hashes,
             &src_root,
             &wc,
-            false,
-            false,
-            false,
+            RetryFlag(false),
+            ArchiveFlag(false),
+            ExpertOptionsFlag(false),
             "jxl",
-            false,
         )?;
 
         let entry = marker
@@ -7442,11 +7985,10 @@ mod fast_img_hardening_tests {
             &current_source_hashes,
             &src_root,
             &wc,
-            false,
-            false,
-            false,
+            RetryFlag(false),
+            ArchiveFlag(false),
+            ExpertOptionsFlag(false),
             "jxl",
-            false,
         )?;
 
         let entry = marker
@@ -9209,17 +9751,46 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn fast_img_avif_meme_quality_probe_count_respects_precision_mode() {
-        assert_eq!(super::avif_meme_binary_probe_count(false), 3);
-        assert_eq!(super::avif_meme_binary_probe_count(true), 7);
+    fn fast_img_avif_meme_quality_uses_normal_precision_and_speed_zero() {
+        assert_eq!(super::AVIF_MEME_BINARY_PROBES, 3);
+        assert_eq!(super::AVIF_MEME_SPEED, 0);
+    }
+
+    #[test]
+    fn fast_img_avif_uses_authoritative_decoders_for_unsupported_inputs() {
+        use super::AvifInputDecoder;
+
         assert_eq!(
-            super::avif_meme_binary_probe_count(false),
-            super::AVIF_MEME_NORMAL_BINARY_PROBES
+            super::avif_input_decoder(FormatKind::WebP),
+            Some(AvifInputDecoder::WebP)
         );
         assert_eq!(
-            super::avif_meme_binary_probe_count(true),
-            super::AVIF_MEME_EXTREME_BINARY_PROBES
+            super::avif_input_decoder(FormatKind::Avif),
+            Some(AvifInputDecoder::Avif)
         );
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Heic),
+            Some(AvifInputDecoder::Heif)
+        );
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Heif),
+            Some(AvifInputDecoder::Heif)
+        );
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Jxl),
+            Some(AvifInputDecoder::Jxl)
+        );
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Jp2),
+            Some(AvifInputDecoder::Jp2)
+        );
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Gif),
+            Some(AvifInputDecoder::ImageMagick)
+        );
+        assert_eq!(super::avif_input_decoder(FormatKind::Jpeg), None);
+        assert_eq!(super::avif_input_decoder(FormatKind::Png), None);
+        assert_eq!(super::avif_input_decoder(FormatKind::Mp4), None);
     }
 
     #[test]
@@ -9229,6 +9800,9 @@ mod fast_img_hardening_tests {
         ));
         assert!(super::avif_quality_probe_error_is_source_invariant(
             "avifenc failed at q=90: Unrecognized file format"
+        ));
+        assert!(super::avif_quality_probe_error_is_source_invariant(
+            "avifenc failed at q=90: Unsupported file format AVIF"
         ));
         assert!(!super::avif_quality_probe_error_is_source_invariant(
             "AVIF health check failed at q=90: temporary I/O error"
