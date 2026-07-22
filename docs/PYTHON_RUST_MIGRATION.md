@@ -4,15 +4,30 @@ Production and CI orchestration are Rust-first. Python remains only where its
 ecosystem is part of the implementation or where a compatibility bridge is
 still covered by tests.
 
+## Completion status (2026-07-22)
+
+Operational migration is complete for production and CI entry points:
+
+- Repository documentation, workflows, production hints, and release automation
+  select the Rust binaries.
+- The canonical Rust `run_training` binary owns orchestration and loads the
+  shared `training_rules.json` directly.
+- A repository-wide caller audit found no production or CI invocation of a
+  migrated Python entry point.
+
+Physical removal is intentionally separate from operational completion. Python
+files in the retained categories below remain only while their ecosystem,
+compatibility, or test role is still required.
+
 ## Canonical commands
 
-| Task | Source-tree command | Release command |
-| --- | --- | --- |
-| Training orchestration | `cargo run --locked -p dev --bin run_training -- <options>` | `target/release/run_training <options>` |
-| Full repository checks | `cargo run --locked -p dev --bin check_all -- <options>` | `target/release/check_all <options>` |
-| Dependency installation | `cargo run --locked -p dev --bin install_deps -- <options>` | `target/release/install_deps <options>` |
-| iCloud Photos import | `cargo run --locked -p dev --bin icloud_import -- <options>` | `target/release/icloud_import <options>` |
-| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>` | `target/release/smart_build <options>` |
+| Task                          | Source-tree command                                          | Release command                          |
+| ----------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| Training orchestration        | `cargo run --locked -p dev --bin run_training -- <options>`  | `target/release/run_training <options>`  |
+| Full repository checks        | `cargo run --locked -p dev --bin check_all -- <options>`     | `target/release/check_all <options>`     |
+| Dependency installation       | `cargo run --locked -p dev --bin install_deps -- <options>`  | `target/release/install_deps <options>`  |
+| iCloud Photos import          | `cargo run --locked -p dev --bin icloud_import -- <options>` | `target/release/icloud_import <options>` |
+| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>`   | `target/release/smart_build <options>`   |
 
 The Rust training orchestrator may invoke Python ML workers when a model step
 depends on Python-native libraries. That delegation does not make the legacy
@@ -23,26 +38,26 @@ Python orchestrator the public entry point.
 The following Python script names have same-purpose Rust binaries under
 `crates/dev/src/bin/`. Callers must use the Rust binary for production and CI.
 
-| Rust binary | Legacy compatibility script |
-| --- | --- |
-| `backfill_directory_scores` | `backfill_directory_scores.py` |
-| `cache_cleaner` | `cache_cleaner.py` |
-| `check_all` | `check_all.py` |
-| `collect_optimized` | `collect_optimized.py` |
-| `create_live_photo` | `create_live_photo.py` |
-| `database_manager` | `database_manager.py` |
-| `generate_test_media` | `generate_test_media.py` |
-| `icloud_import` | `icloud_import.py` |
-| `install_deps` | `install_deps.py` |
-| `mfb_rust_toolchain` | `mfb_rust_toolchain.py` |
+| Rust binary                               | Non-canonical Python reference               |
+| ----------------------------------------- | -------------------------------------------- |
+| `backfill_directory_scores`               | `backfill_directory_scores.py`               |
+| `cache_cleaner`                           | `cache_cleaner.py`                           |
+| `check_all`                               | `check_all.py`                               |
+| `collect_optimized`                       | `collect_optimized.py`                       |
+| `create_live_photo`                       | `create_live_photo.py`                       |
+| `database_manager`                        | `database_manager.py`                        |
+| `generate_test_media`                     | `generate_test_media.py`                     |
+| `icloud_import`                           | `icloud_import.py`                           |
+| `install_deps`                            | `install_deps.py`                            |
+| `mfb_rust_toolchain`                      | `mfb_rust_toolchain.py`                      |
 | `normalize_stale_embed_measurement_slots` | `normalize_stale_embed_measurement_slots.py` |
-| `post_training_closure` | `post_training_closure.py` |
-| `run_training` | `run_training.py` |
-| `sandbox_validate` | `sandbox_validate.py` |
-| `session_audit` | `session_audit.py` |
-| `setup_private_db` | `setup_private_db.py` |
-| `start_training_four` | `start_training_four.py` |
-| `training_pipeline` | `training_pipeline.py` |
+| `post_training_closure`                   | `post_training_closure.py`                   |
+| `run_training`                            | `run_training.py`                            |
+| `sandbox_validate`                        | `sandbox_validate.py`                        |
+| `session_audit`                           | `session_audit.py`                           |
+| `setup_private_db`                        | `setup_private_db.py`                        |
+| `start_training_four`                     | `start_training_four.py`                     |
+| `training_pipeline`                       | `training_pipeline.py`                       |
 
 Additional Rust-native replacements use clearer names: `delivery_heatmap`
 replaces the operational role of `media_conversion_delivery_heatmap.py`, and

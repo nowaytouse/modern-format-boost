@@ -240,9 +240,6 @@ pub fn finalize_runtime_assets(connstr: &str, install_missing_python_deps: bool)
 pub fn print_ingest_guidance(dataset_path: &str) {
     println!("Batch ingestion entrypoint:");
     println!("  cargo run --locked -p dev --bin run_training -- --use-api --fill-runtime-assets");
-    println!(
-        "  python3 crates/dev/scripts/run_training.py --execute --use-api  # compat reference"
-    );
     println!("Dataset hint: {dataset_path}");
     println!(
         "Thresholds: loop total>={} per_class>={}; quality total>={} per_class>={}",

@@ -6,13 +6,13 @@ one encoder setting wins on every image.
 
 ## Authority And Installed Versions
 
-| Format | Preferred tool | Installed build | Policy |
-| --- | --- | --- | --- |
-| AVIF | `avifenc` / `avifdec` from libavif | 1.4.2, AOM 3.14.1, dav1d 1.5.4 | Use before FFmpeg for supported static inputs and frame sequences. Meme Mode explicitly uses speed 0. |
-| JPEG XL | `cjxl` / `djxl` / `jxlinfo` from libjxl | 0.13.0 HEAD-196a43d | Use first for JXL encode, decode, and structural inspection. Expert effort 11 requires an explicit expert flag. |
-| HEIC/HEIF | `heif-convert` from libheif | 1.23.0 runtime tool | Use to normalize HEIC/HEIF sources when the target encoder cannot read the container directly. |
-| WebP | `cwebp` / `dwebp` from libwebp | 1.6.0 | Use before generic conversion tools. |
-| Video/fallback | FFmpeg | 8.1.2, custom `homebrew-ffmpeg/ffmpeg` build | Preserve the custom feature-complete installation; use it for video and when no authoritative format tool covers the operation. |
+| Format         | Preferred tool                          | Installed build                              | Policy                                                                                                                          |
+| -------------- | --------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| AVIF           | `avifenc` / `avifdec` from libavif      | 1.4.2, AOM 3.14.1, dav1d 1.5.4               | Use before FFmpeg for supported static inputs and frame sequences. Meme Mode explicitly uses speed 0.                           |
+| JPEG XL        | `cjxl` / `djxl` / `jxlinfo` from libjxl | 0.13.0 HEAD-196a43d                          | Use first for JXL encode, decode, and structural inspection. Expert effort 11 requires an explicit expert flag.                 |
+| HEIC/HEIF      | `heif-convert` from libheif             | 1.23.0 runtime tool                          | Use to normalize HEIC/HEIF sources when the target encoder cannot read the container directly.                                  |
+| WebP           | `cwebp` / `dwebp` from libwebp          | 1.6.0                                        | Use before generic conversion tools.                                                                                            |
+| Video/fallback | FFmpeg                                  | 8.1.2, custom `homebrew-ffmpeg/ffmpeg` build | Preserve the custom feature-complete installation; use it for video and when no authoritative format tool covers the operation. |
 
 Authoritative references:
 
@@ -41,9 +41,9 @@ with SHA-256:
 
 The completed comparison used a 256 x 256 true PNG source of 374,587 bytes.
 
-| Setting | Time | Output | Pixel proof |
-| --- | ---: | ---: | --- |
-| lossless effort 10 | 6.30 s | 292,013 B | exact, ImageMagick AE = 0 |
+| Setting                   |     Time |    Output | Pixel proof               |
+| ------------------------- | -------: | --------: | ------------------------- |
+| lossless effort 10        |   6.30 s | 292,013 B | exact, ImageMagick AE = 0 |
 | lossless expert effort 11 | 229.06 s | 280,514 B | exact, ImageMagick AE = 0 |
 
 On this source, effort 11 was about 36.4 times slower for about 3.94 percent less
@@ -56,10 +56,10 @@ effort 10; effort 11 remains an explicit expert-only choice.
 Both runs used quality 95, alpha quality 95, YUV444, and CICP 1/13/0 on the same
 768 x 768 true PNG.
 
-| Setting | Time | Output |
-| --- | ---: | ---: |
+| Setting |    Time |      Output |
+| ------- | ------: | ----------: |
 | speed 0 | 14.93 s | 1,029,777 B |
-| speed 6 | 0.44 s | 1,029,474 B |
+| speed 6 |  0.44 s | 1,029,474 B |
 
 Speed 0 was about 34 times slower and was slightly larger on this sample. This
 does not justify silently relaxing Meme Mode: its contract prioritizes maximum

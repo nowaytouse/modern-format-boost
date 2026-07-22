@@ -1,6 +1,6 @@
 {
   "_consumer": "run_training.py",
-  "_comment": "Runtime JSON loader: run_training.py load_rules() ONLY (invoke: python3 crates/dev/scripts/run_training.py — no shell wrappers). Rust training_tier_audit.rs mirrors static_image.*.rules via constants. Local overlay: training_rules.local.json.",
+  "_comment": "Shared training rules loaded by the canonical Rust run_training binary and the retained Python compatibility implementation. The _consumer value remains run_training.py for cross-language schema compatibility. Rust training_tier_audit.rs mirrors static_image.*.rules via constants. Local overlay: training_rules.local.json.",
   "rule_engine": {
     "schema_version": 1,
     "strict_no_silent_fallbacks": true,

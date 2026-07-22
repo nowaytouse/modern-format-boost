@@ -14,16 +14,24 @@ def test_readmes_use_rust_training_entry_point() -> None:
     assert rust_command in english
     assert rust_command in chinese
     assert "**Entry**: `python3 crates/dev/scripts/run_training.py`" not in english
-    assert "**唯一推荐入口**：`python3 crates/dev/scripts/run_training.py`" not in chinese
+    assert (
+        "**唯一推荐入口**：`python3 crates/dev/scripts/run_training.py`" not in chinese
+    )
 
 
 def test_migration_contract_documents_retained_python_categories() -> None:
-    migration = (
-        REPO_ROOT / "docs" / "PYTHON_RUST_MIGRATION.md"
-    ).read_text(encoding="utf-8")
+    migration = (REPO_ROOT / "docs" / "PYTHON_RUST_MIGRATION.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "Production and CI orchestration are Rust-first" in migration
-    for category in ("ML implementation", "Tests and fixtures", "Fuzzing", "Compatibility bridges"):
+    assert "Operational migration is complete for production and CI" in migration
+    for category in (
+        "ML implementation",
+        "Tests and fixtures",
+        "Fuzzing",
+        "Compatibility bridges",
+    ):
         assert category in migration
     for binary in ("run_training", "check_all", "install_deps", "icloud_import"):
         assert f"`{binary}`" in migration
@@ -44,14 +52,25 @@ def test_production_hints_use_rust_entry_points() -> None:
     train_quality = (
         REPO_ROOT / "crates" / "foundation" / "src" / "bin" / "train_quality.rs"
     ).read_text(encoding="utf-8")
+    orchestrate = (
+        REPO_ROOT / "crates" / "dev" / "src" / "training_pipeline" / "orchestrate.rs"
+    ).read_text(encoding="utf-8")
+    training_rules = (
+        REPO_ROOT / "crates" / "dev" / "src" / "config" / "training_rules.json"
+    ).read_text(encoding="utf-8")
 
-    production_text = "\n".join((entry_guard, training_guard, train_quality))
-    assert "cargo run --locked -p dev --bin run_training -- --execute" in production_text
+    production_text = "\n".join((entry_guard, training_guard, train_quality, orchestrate))
+    assert (
+        "cargo run --locked -p dev --bin run_training -- --execute" in production_text
+    )
     assert "cargo run --locked -p dev --bin training_pipeline --" in production_text
 
+    assert "Runtime JSON loader: run_training.py load_rules() ONLY" not in training_rules
+    assert "canonical Rust run_training binary" in training_rules
     for legacy_hint in (
         "Use: python3 crates/dev/scripts/run_training.py",
         "Production: python3 crates/dev/scripts/run_training.py",
+        "python3 crates/dev/scripts/run_training.py --execute --use-api",
         "Next: run `python3 crates/dev/scripts/training_pipeline.py",
         "invoke via training_pipeline.py / run_training.py",
     ):

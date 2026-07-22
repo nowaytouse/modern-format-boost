@@ -2942,8 +2942,29 @@ fn fast_img_strip_optimized_import_suffixes(folder_name: &str) -> String {
 pub fn library_handle_from_media_output_probes(
     candidates: &[PhotosImportCandidate],
     report_pairs: &[(String, String)],
+    query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    is_quarantined: impl FnMut(&Path) -> Result<bool>,
+) -> Result<LibraryHandle> {
+    library_handle_from_media_output_probes_with_pixel_verifier(
+        candidates,
+        report_pairs,
+        query_assets,
+        is_quarantined,
+        crate::image::orientation::verify_orientation_pixel_diff,
+    )
+}
+
+fn library_handle_from_media_output_probes_with_pixel_verifier(
+    candidates: &[PhotosImportCandidate],
+    report_pairs: &[(String, String)],
     mut query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
+    mut verify_pixel_diff: impl FnMut(
+        &Path,
+        &Path,
+        crate::image::format_detect::FormatKind,
+        crate::image::orientation::DiffTolerance,
+    ) -> Result<crate::image::orientation::PixelDiffResult>,
 ) -> Result<LibraryHandle> {
     if report_pairs.len() != candidates.len() {
         return Err(ImgQualityError::AnalysisError(format!(
@@ -3010,12 +3031,7 @@ pub fn library_handle_from_media_output_probes(
             if let Some(tolerance) =
                 crate::image::orientation::orientation_diff_tolerance_for_format(fmt)
             {
-                match crate::image::orientation::verify_orientation_pixel_diff(
-                    &candidate.path,
-                    &probe.path,
-                    fmt,
-                    tolerance,
-                ) {
+                match verify_pixel_diff(&candidate.path, &probe.path, fmt, tolerance) {
                     Ok(crate::image::orientation::PixelDiffResult::Match) => {
                         tracing::info!(
                             target: "photos_import",
@@ -4529,6 +4545,68 @@ mod tests {
         );
         assert_eq!(handle.imported_assets[0].sync_status, "photos_local");
         assert!(!handle.imported_assets[0].quarantined);
+        Ok(())
+    }
+
+    #[test]
+    fn generic_media_import_handle_records_library_blake3_after_pixel_proof() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let out = temp_dir.path().join("tier2/a.webp");
+        let photos_asset = temp_dir.path().join("Photos Library.photoslibrary/a.webp");
+        std::fs::create_dir_all(out.parent().expect("test output has parent")).unwrap();
+        std::fs::create_dir_all(
+            photos_asset
+                .parent()
+                .expect("test Photos asset path has parent"),
+        )
+        .unwrap();
+        std::fs::write(&out, b"RIFF\x08\x00\x00\x00WEBPsource")?;
+        std::fs::write(&photos_asset, b"RIFF\x08\x00\x00\x00WEBPlibrary")?;
+        let out_hash = crate::common_utils::calculate_blake3_hash(&out)?;
+        let library_hash = crate::common_utils::calculate_blake3_hash(&photos_asset)?;
+        let candidates = vec![PhotosImportCandidate {
+            rel_path: "a.webp".to_string(),
+            path: out.clone(),
+            blake3: out_hash.clone(),
+            album_name: "tier2".to_string(),
+        }];
+
+        let mut verifier_called = false;
+        let handle = library_handle_from_media_output_probes_with_pixel_verifier(
+            &candidates,
+            &[("a.webp".to_string(), "UUID-A".to_string())],
+            |uuids| {
+                assert_eq!(uuids, ["UUID-A".to_string()]);
+                Ok(vec![FastImgLibraryAssetProbe {
+                    uuid: "UUID-A".to_string(),
+                    path: photos_asset.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                }])
+            },
+            |path| Ok(path != out),
+            |source, library, fmt, tolerance| {
+                verifier_called = true;
+                assert_eq!(source, out.as_path());
+                assert_eq!(library, photos_asset.as_path());
+                assert_eq!(fmt, crate::image::format_detect::FormatKind::WebP);
+                assert_eq!(tolerance, crate::image::orientation::DiffTolerance::LsbAvif);
+                Ok(crate::image::orientation::PixelDiffResult::Match)
+            },
+        )?;
+
+        assert!(verifier_called);
+        assert_eq!(handle.imported_assets.len(), 1);
+        assert_eq!(handle.imported_assets[0].blake3, out_hash);
+        assert_eq!(
+            handle.imported_assets[0].library_blake3.as_deref(),
+            Some(library_hash.as_str())
+        );
+        assert_eq!(
+            handle.imported_assets[0].photos_uuid.as_deref(),
+            Some("UUID-A")
+        );
         Ok(())
     }
 

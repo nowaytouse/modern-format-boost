@@ -2,7 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-
 ## [0.11.3] - 2026-07-22
 
 ### Reliability, Delivery & CI Repairs
@@ -23,6 +22,9 @@ All notable changes to this project will be documented in this file.
   and the deep-audit job installs the locked Vue lint dependencies before
   invoking its quality check. The libheif build now uses its supported CMake
   options to suppress local configuration warnings.
+- **Strict Vue Type Safety**: The AI transparency panel now obtains its
+  translator from `useI18n()` instead of relying on an undeclared template
+  global, so `vue-tsc --strict` succeeds in the authoritative CI environment.
 - **Smarter Packaging**: Smart Build no longer rebuilds Tauri for unrelated
   dev-binary edits; `--all` incrementally refreshes every app-bundled Rust
   resource and rebuilds the GUI only when Vue or Tauri inputs changed.
@@ -56,7 +58,8 @@ All notable changes to this project will be documented in this file.
 
 ### Refactoring & Project Hygiene
 
-- Bumped Rust toolchain to `nightly-2026-07-13`.
+- Bumped Rust toolchain to `nightly-2026-07-16`; CI and nightly delivery use the
+  same pinned toolchain and components as local builds.
 - Replaced multiple silent `unwrap_or(default)` and `is_ok_and` instances across the codebase with explicit error propagation.
 - Improved multithreading safety by using `mutex_guard_or_recover` instead of silently discarding `.lock()` errors in `img/src/main.rs`.
 - Standardized JXL arguments to use `--num_threads`.
