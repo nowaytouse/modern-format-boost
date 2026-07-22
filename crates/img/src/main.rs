@@ -3142,21 +3142,22 @@ fn explore_avif_meme_quality(
             "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
             source.display()
         ));
-        let (temp, _size) = match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
-            source,
-            encoder_input,
-            100,
-            Some(avif_speed),
-            convert_options,
-        ) {
-            Ok(result) => result,
-            Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
-                return Ok(AvifQualityExploreResult::SourceUnavailable {
-                    reason: e.to_string(),
-                });
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let (temp, _size) =
+            match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed(
+                source,
+                encoder_input,
+                100,
+                Some(avif_speed),
+                convert_options,
+            ) {
+                Ok(result) => result,
+                Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
+                    return Ok(AvifQualityExploreResult::SourceUnavailable {
+                        reason: e.to_string(),
+                    });
+                }
+                Err(e) => return Err(e.into()),
+            };
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "fast_img_probe_cleanup",
             &temp,
