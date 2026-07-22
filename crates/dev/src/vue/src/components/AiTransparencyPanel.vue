@@ -3,12 +3,12 @@
     <div class="panel-header" @click="toggleExpanded">
       <div class="header-left">
         <span class="icon">🔍</span>
-        <h3>{{ $t("aiTransparency.title") }}</h3>
+        <h3>{{ t("aiTransparency.title") }}</h3>
         <span class="badge" :class="{ active: hasDecisionData }">
           {{
             hasDecisionData
-              ? $t("aiTransparency.analyzing")
-              : $t("aiTransparency.ready")
+              ? t("aiTransparency.analyzing")
+              : t("aiTransparency.ready")
           }}
         </span>
       </div>
@@ -21,25 +21,25 @@
         <div v-if="fileAnalysis" class="section">
           <div class="section-header">
             <span class="step-number">1</span>
-            <h4>{{ $t("aiTransparency.fileAnalysis") }}</h4>
+            <h4>{{ t("aiTransparency.fileAnalysis") }}</h4>
           </div>
           <div class="info-grid">
             <div class="info-item">
-              <span class="label">{{ $t("aiTransparency.fileSize") }}</span>
+              <span class="label">{{ t("aiTransparency.fileSize") }}</span>
               <span class="value">{{ formatFileSize(fileAnalysis.size) }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t("aiTransparency.dimensions") }}</span>
+              <span class="label">{{ t("aiTransparency.dimensions") }}</span>
               <span class="value"
                 >{{ fileAnalysis.width }} × {{ fileAnalysis.height }}</span
               >
             </div>
             <div class="info-item">
-              <span class="label">{{ $t("aiTransparency.format") }}</span>
+              <span class="label">{{ t("aiTransparency.format") }}</span>
               <span class="value">{{ fileAnalysis.format }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t("aiTransparency.colorDepth") }}</span>
+              <span class="label">{{ t("aiTransparency.colorDepth") }}</span>
               <span class="value">{{ fileAnalysis.colorDepth }} bit</span>
             </div>
           </div>
@@ -49,7 +49,7 @@
         <div v-if="featureExtraction" class="section">
           <div class="section-header">
             <span class="step-number">2</span>
-            <h4>{{ $t("aiTransparency.featureExtraction") }}</h4>
+            <h4>{{ t("aiTransparency.featureExtraction") }}</h4>
           </div>
           <div class="feature-list">
             <div
@@ -58,7 +58,7 @@
               class="feature-item"
             >
               <span class="feature-name">{{
-                $t(`aiTransparency.features.${key}`)
+                t(`aiTransparency.features.${key}`)
               }}</span>
               <div class="feature-bar">
                 <div
@@ -75,12 +75,12 @@
         <div v-if="aiDecision" class="section">
           <div class="section-header">
             <span class="step-number">3</span>
-            <h4>{{ $t("aiTransparency.aiDecision") }}</h4>
+            <h4>{{ t("aiTransparency.aiDecision") }}</h4>
           </div>
           <div class="decision-card">
             <div class="decision-item">
               <span class="decision-label">{{
-                $t("aiTransparency.recommendedFormat")
+                t("aiTransparency.recommendedFormat")
               }}</span>
               <span class="decision-value highlight">{{
                 aiDecision.format
@@ -88,19 +88,19 @@
             </div>
             <div class="decision-item">
               <span class="decision-label">{{
-                $t("aiTransparency.quality")
+                t("aiTransparency.quality")
               }}</span>
               <span class="decision-value">{{ aiDecision.quality }}</span>
             </div>
             <div class="decision-item">
               <span class="decision-label">{{
-                $t("aiTransparency.speed")
+                t("aiTransparency.speed")
               }}</span>
               <span class="decision-value">{{ aiDecision.speed }}</span>
             </div>
             <div class="decision-item">
               <span class="decision-label">{{
-                $t("aiTransparency.confidence")
+                t("aiTransparency.confidence")
               }}</span>
               <span class="decision-value"
                 >{{ (aiDecision.confidence * 100).toFixed(1) }}%</span
@@ -110,7 +110,7 @@
 
           <!-- 决策理由 -->
           <div v-if="aiDecision.reasoning" class="reasoning">
-            <h5>{{ $t("aiTransparency.reasoning") }}</h5>
+            <h5>{{ t("aiTransparency.reasoning") }}</h5>
             <ul>
               <li v-for="(reason, index) in aiDecision.reasoning" :key="index">
                 {{ reason }}
@@ -123,7 +123,7 @@
         <div v-if="processingSteps.length > 0" class="section">
           <div class="section-header">
             <span class="step-number">4</span>
-            <h4>{{ $t("aiTransparency.processingSteps") }}</h4>
+            <h4>{{ t("aiTransparency.processingSteps") }}</h4>
           </div>
           <div class="timeline">
             <div
@@ -161,13 +161,13 @@
         <div v-if="performanceStats" class="section">
           <div class="section-header">
             <span class="step-number">5</span>
-            <h4>{{ $t("aiTransparency.performance") }}</h4>
+            <h4>{{ t("aiTransparency.performance") }}</h4>
           </div>
           <div class="stats-grid">
             <div class="stat-card">
               <div class="stat-value">{{ performanceStats.totalTime }}ms</div>
               <div class="stat-label">
-                {{ $t("aiTransparency.totalTime") }}
+                {{ t("aiTransparency.totalTime") }}
               </div>
             </div>
             <div class="stat-card">
@@ -175,7 +175,7 @@
                 {{ formatFileSize(performanceStats.originalSize) }}
               </div>
               <div class="stat-label">
-                {{ $t("aiTransparency.originalSize") }}
+                {{ t("aiTransparency.originalSize") }}
               </div>
             </div>
             <div class="stat-card">
@@ -183,7 +183,7 @@
                 {{ formatFileSize(performanceStats.compressedSize) }}
               </div>
               <div class="stat-label">
-                {{ $t("aiTransparency.compressedSize") }}
+                {{ t("aiTransparency.compressedSize") }}
               </div>
             </div>
             <div class="stat-card">
@@ -191,7 +191,7 @@
                 {{ performanceStats.compressionRatio }}%
               </div>
               <div class="stat-label">
-                {{ $t("aiTransparency.compressionRatio") }}
+                {{ t("aiTransparency.compressionRatio") }}
               </div>
             </div>
           </div>
@@ -203,9 +203,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
+import { useI18n } from "../composables/useI18n";
 
-// $t is available globally via main.js setup
-// No need to inject or setup - templates can use {{ $t('key') }} directly
+const { t } = useI18n();
 
 const properties = defineProps({
   decisionData: {
