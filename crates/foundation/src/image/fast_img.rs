@@ -1636,18 +1636,26 @@ where
             checkpoint_photos_import_window(marker, batch_entries, &batch_assets)?;
             imported_assets.append(&mut batch_assets);
             offset = end;
-            if batch_index + 1 < batch_count {
+            let completed_transactions = batch_index + 1;
+            if !cfg!(test)
+                && completed_transactions < batch_count
+                && completed_transactions % FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE == 0
+            {
                 std::thread::sleep(Duration::from_millis(FAST_IMG_PHOTOS_IMPORT_BATCH_DELAY_MS));
             }
-            if FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL > 0
-                && (batch_index + 1) % FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL == 0
+            if !cfg!(test)
+                && FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL > 0
+                && completed_transactions
+                    % (FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL
+                        * FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE)
+                    == 0
             {
                 std::thread::sleep(Duration::from_secs(
                     FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_SECS,
                 ));
             }
         }
-        if window.start + window.len < pending_entries.len() {
+        if !cfg!(test) && window.start + window.len < pending_entries.len() {
             std::thread::sleep(Duration::from_secs(
                 FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS,
             ));
@@ -2792,7 +2800,7 @@ fn photos_import_batch_sizes_for_strategy(
     if total == 0 {
         return Vec::new();
     }
-    vec![total]
+    vec![1; total]
 }
 
 const fn photos_import_strategy(total: usize) -> PhotosImportStrategy {
@@ -4864,9 +4872,24 @@ mod tests {
             );
         }
 
+        let mut import_calls = 0usize;
         let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| -> Result<String> {
-            assert_eq!(batch_entries.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
-            Ok("UUID-f00\n".to_string())
+            if batch_entries.len() != 1 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "expected one-file Photos import transaction, got {}",
+                    batch_entries.len()
+                )));
+            }
+            import_calls = import_calls.checked_add(1).ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "Photos import regression-test counter overflowed".to_string(),
+                )
+            })?;
+            if import_calls == 1 {
+                Ok("UUID-f00\n".to_string())
+            } else {
+                Ok(String::new())
+            }
         };
         let mut query_assets = |uuids: &[String]| {
             uuids
@@ -4899,10 +4922,18 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Photos AppleScript import returned 1 IDs for 100 JXL outputs"),
+                .contains("Photos AppleScript import returned 0 IDs for 1 JXL outputs"),
             "unexpected err: {err}"
         );
-        for idx in 0..FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP {
+        assert!(
+            checkpoint_marker
+                .blake3_log
+                .get("f00.jpg")
+                .and_then(|entry| entry.library_asset.as_ref())
+                .is_some(),
+            "the completed one-file transaction must be checkpointed"
+        );
+        for idx in 1..total {
             let key = format!("f{idx:02}.jpg");
             assert!(
                 checkpoint_marker
@@ -4910,7 +4941,7 @@ mod tests {
                     .get(&key)
                     .and_then(|entry| entry.library_asset.as_ref())
                     .is_none(),
-                "{key} should remain pending after failed window import"
+                "{key} should remain pending after the next one-file transaction failed"
             );
         }
         Ok(())
@@ -4989,7 +5020,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn photos_import_accepts_out_of_order_import_identifiers_when_hashes_match() -> Result<()> {
+    fn photos_import_one_file_transactions_bind_each_checkpoint_to_its_identifier() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -5031,23 +5062,23 @@ mod tests {
         );
 
         let mut query_assets = |uuids: &[String]| {
-            assert_eq!(uuids, ["UUID-B".to_string(), "UUID-A".to_string()]);
-            Ok(vec![
-                FastImgLibraryAssetProbe {
-                    uuid: "UUID-B".to_string(),
-                    path: library_b.clone(),
-                    iscloudasset: false,
-                    incloud: Some(false),
-                    ismissing: false,
-                },
-                FastImgLibraryAssetProbe {
-                    uuid: "UUID-A".to_string(),
-                    path: library_a.clone(),
-                    iscloudasset: false,
-                    incloud: Some(false),
-                    ismissing: false,
-                },
-            ])
+            assert_eq!(uuids.len(), 1);
+            let (uuid, path) = match uuids[0].as_str() {
+                "UUID-A" => ("UUID-A", library_a.clone()),
+                "UUID-B" => ("UUID-B", library_b.clone()),
+                other => {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "unexpected test UUID: {other}"
+                    )));
+                }
+            };
+            Ok(vec![FastImgLibraryAssetProbe {
+                uuid: uuid.to_string(),
+                path,
+                iscloudasset: false,
+                incloud: Some(false),
+                ismissing: false,
+            }])
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
@@ -5057,7 +5088,19 @@ mod tests {
             &mut query_assets,
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
-            &mut |_batch_entries: &[(PathBuf, String)]| Ok("UUID-B\nUUID-A\n".to_string()),
+            &mut |batch_entries: &[(PathBuf, String)]| {
+                assert_eq!(batch_entries.len(), 1);
+                let stem = batch_entries[0]
+                    .0
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "test import path is missing a UTF-8 stem".to_string(),
+                        )
+                    })?;
+                Ok(format!("UUID-{}\n", stem.to_ascii_uppercase()))
+            },
         )?;
 
         assert_eq!(records.len(), 2);
@@ -5162,10 +5205,8 @@ mod tests {
             prepare_calls.is_empty(),
             "small pending set must avoid relaunch warmup overhead"
         );
-        assert_eq!(
-            run_batch_sizes,
-            vec![FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP]
-        );
+        assert_eq!(run_batch_sizes.len(), total);
+        assert!(run_batch_sizes.iter().all(|batch_size| *batch_size == 1));
         assert_eq!(records.len(), total);
         Ok(())
     }
@@ -5186,10 +5227,9 @@ mod tests {
             windows.iter().map(|window| window.len).collect::<Vec<_>>(),
             vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP, 51]
         );
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(strategy, windows[0].len),
-            vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP]
-        );
+        let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, windows[0].len);
+        assert_eq!(batch_sizes.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
+        assert!(batch_sizes.iter().all(|batch_size| *batch_size == 1));
         Ok(())
     }
 
@@ -5254,32 +5294,32 @@ mod tests {
     }
 
     #[test]
-    fn photos_import_batch_sizes_use_one_process_per_window() {
+    fn photos_import_batch_sizes_use_one_file_transactions() {
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 1),
             vec![1]
         );
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 11),
-            vec![11]
+            vec![1; 11]
         );
         assert_eq!(
             photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 21),
-            vec![21]
+            vec![1; 21]
         );
     }
 
     #[test]
     fn photos_import_batch_sizes_use_fast_path_for_small_pending_sets() {
-        assert_eq!(photos_import_batch_sizes(2), vec![2]);
+        assert_eq!(photos_import_batch_sizes(2), vec![1; 2]);
         assert_eq!(
             photos_import_batch_sizes(FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP),
-            vec![FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP]
+            vec![1; FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP]
         );
         assert_eq!(
             photos_import_batch_sizes(150),
-            vec![150],
-            "FastSmallSet must process <=150 files in one batch"
+            vec![1; 150],
+            "FastSmallSet must checkpoint one file at a time"
         );
     }
 
@@ -5287,8 +5327,8 @@ mod tests {
     fn photos_import_batch_sizes_keep_stable_path_for_large_pending_sets() {
         assert_eq!(
             photos_import_batch_sizes(151),
-            vec![151],
-            "StableCheckpointed must use one AppleScript process per import window"
+            vec![1; 151],
+            "StableCheckpointed must checkpoint one file at a time"
         );
     }
 
@@ -5373,6 +5413,11 @@ mod tests {
                 "execution error: “Photos”遇到一个错误：AppleEvent已超时。 (-1712)"
             ),
             Some("appleevent_timeout")
+        );
+        assert_eq!(
+            photos_import_poison_reason("Photos returned 4 imported items for 10 files"),
+            None,
+            "a partial import must not retry already imported files"
         );
     }
 

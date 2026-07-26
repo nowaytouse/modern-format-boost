@@ -344,9 +344,9 @@ fn decode_source_with_official_tool(
         "pixel-diff: decoding unsupported source with official format decoder"
     );
 
-    let mut decoded = orientation_decode_tempfile(".png")?;
+    let mut decoded_file = orientation_decode_tempfile(".png")?;
     let mut command =
-        official_source_decode_command(decoder, &executable, source_image, decoded.path());
+        official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
     let mut output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
         .and_then(|process| {
             process.wait_timeout(
@@ -364,9 +364,9 @@ fn decode_source_with_official_tool(
         && decoder == OfficialSourceDecoder::Jxl
         && should_retry_jxl_decode_as_jpeg(format, output.stderr.as_bytes())
     {
-        decoded = orientation_decode_tempfile(".jpg")?;
+        decoded_file = orientation_decode_tempfile(".jpg")?;
         let mut retry =
-            official_source_decode_command(decoder, &executable, source_image, decoded.path());
+            official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
         output = crate::process_runner::ManagedProcess::spawn_captured(&mut retry)
             .and_then(|process| {
                 process.wait_timeout(
@@ -393,13 +393,13 @@ fn decode_source_with_official_tool(
             source_image.display()
         )));
     }
-    if !decoded.path().is_file() {
+    if !decoded_file.path().is_file() {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel-diff: official {tool} produced no source image for {}",
             source_image.display()
         )));
     }
-    let decoded_size = std::fs::metadata(decoded.path())
+    let decoded_size = std::fs::metadata(decoded_file.path())
         .map_err(|error| {
             ImgQualityError::AnalysisError(format!(
                 "pixel-diff: cannot inspect official {tool} decoded source image for {}: {error}",
@@ -413,11 +413,11 @@ fn decode_source_with_official_tool(
             source_image.display()
         )));
     }
-    if decoded
+    if decoded_file
         .path()
         .extension()
         .is_some_and(|extension| extension == "png")
-        && !crate::image::png_validation::is_true_png(decoded.path())?
+        && !crate::image::png_validation::is_true_png(decoded_file.path())?
     {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel-diff: official {tool} output failed strict PNG validation for {}",
@@ -425,7 +425,7 @@ fn decode_source_with_official_tool(
         )));
     }
 
-    crate::image_detection::open_image_with_limits(decoded.path()).map_err(|e| {
+    crate::image_detection::open_image_with_limits(decoded_file.path()).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "pixel-diff: cannot open official {tool} decoded source image: {e}"
         ))

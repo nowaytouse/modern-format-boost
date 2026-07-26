@@ -14,7 +14,6 @@ const EXIT_BOUNDARY: i32 = 2;
 const EXIT_COUNT_GATE: i32 = 3;
 const DEFAULT_EXPECTED_MIN: usize = 1400;
 const DEFAULT_EXPECTED_MAX: usize = 1499;
-const TEMPORARY_APPROVED_COUNT: usize = 1569;
 const JXL_SIGNATURE_BOX: &[u8; 12] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const REPAIR_MANIFEST: &str = "MFB_JXL_REPAIR_MANIFEST.json";
 
@@ -42,11 +41,6 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_EXPECTED_MAX)]
     expected_max: usize,
 
-    /// One-time exact-count exception authorized for this recovery only.
-    /// No value other than 1569 is accepted.
-    #[arg(long, value_name = "1569")]
-    temporary_approved_count: Option<usize>,
-
     /// How deeply to validate each JPEG XL file.
     #[arg(long, value_enum, default_value_t = Probe::Status)]
     probe: Probe,
@@ -56,7 +50,7 @@ struct Args {
     djxl: Option<PathBuf>,
 
     /// Write repaired copies into this new direct child of `INPUT_DIR`.
-    /// Originals are never modified. Requires the exact 1569 exception and djxl probe.
+    /// Originals are never modified. Requires an accepted 14xx count and djxl probe.
     #[arg(long, value_name = "NEW_FOLDER")]
     repair_output: Option<PathBuf>,
 }
@@ -127,12 +121,8 @@ fn main() {
 }
 
 fn run(args: &Args) -> Result<(), (i32, String)> {
-    validate_count_gate(
-        args.expected_min,
-        args.expected_max,
-        args.temporary_approved_count,
-    )
-    .map_err(|message| (EXIT_BOUNDARY, message))?;
+    validate_count_gate(args.expected_min, args.expected_max)
+        .map_err(|message| (EXIT_BOUNDARY, message))?;
     let input_dir =
         canonical_safe_input_dir(&args.input_dir).map_err(|message| (EXIT_BOUNDARY, message))?;
     let repair_output = args
@@ -167,11 +157,7 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
     println!("input={}", input_dir.display());
     println!("probe={:?}", args.probe);
     println!("affected={}", findings.len());
-    if args.temporary_approved_count.is_some() {
-        println!("count_policy=temporary_exact_1569");
-    } else {
-        println!("count_policy=default_14xx");
-    }
+    println!("count_policy=required_14xx");
     for (reason, count) in reasons {
         println!("reason.{reason}={count}");
     }
@@ -179,20 +165,12 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
         println!("sample={}\t{}", finding.reason, finding.path.display());
     }
 
-    if !count_is_accepted(
-        findings.len(),
-        args.expected_min,
-        args.expected_max,
-        args.temporary_approved_count,
-    ) {
-        let boundary = args.temporary_approved_count.map_or_else(
-            || format!("{}..={}", args.expected_min, args.expected_max),
-            |count| count.to_string(),
-        );
+    if !count_is_accepted(findings.len(), args.expected_min, args.expected_max) {
         return Err((
             EXIT_COUNT_GATE,
             format!(
-                "count_gate=REJECTED: affected count does not match the required {boundary} boundary; no files were written"
+                "count_gate=REJECTED: affected count does not match the required {}..={} boundary; no files were written",
+                args.expected_min, args.expected_max
             ),
         ));
     }
@@ -215,26 +193,7 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
     Ok(())
 }
 
-fn validate_count_gate(
-    expected_min: usize,
-    expected_max: usize,
-    temporary_approved_count: Option<usize>,
-) -> Result<(), String> {
-    if let Some(count) = temporary_approved_count {
-        if count != TEMPORARY_APPROVED_COUNT {
-            return Err(format!(
-                "the only temporary affected-count exception is exactly {TEMPORARY_APPROVED_COUNT}"
-            ));
-        }
-        if expected_min != DEFAULT_EXPECTED_MIN || expected_max != DEFAULT_EXPECTED_MAX {
-            return Err(
-                "--temporary-approved-count cannot be combined with a custom count range"
-                    .to_owned(),
-            );
-        }
-        return Ok(());
-    }
-
+fn validate_count_gate(expected_min: usize, expected_max: usize) -> Result<(), String> {
     if expected_min < DEFAULT_EXPECTED_MIN
         || expected_max > DEFAULT_EXPECTED_MAX
         || expected_min > expected_max
@@ -244,16 +203,8 @@ fn validate_count_gate(
     Ok(())
 }
 
-fn count_is_accepted(
-    affected: usize,
-    expected_min: usize,
-    expected_max: usize,
-    temporary_approved_count: Option<usize>,
-) -> bool {
-    temporary_approved_count.map_or_else(
-        || (expected_min..=expected_max).contains(&affected),
-        |count| affected == count,
-    )
+fn count_is_accepted(affected: usize, expected_min: usize, expected_max: usize) -> bool {
+    (expected_min..=expected_max).contains(&affected)
 }
 
 fn canonical_safe_input_dir(path: &Path) -> Result<PathBuf, String> {
@@ -282,11 +233,6 @@ fn validate_repair_output(
 ) -> Result<PathBuf, String> {
     if !matches!(args.probe, Probe::Djxl) {
         return Err("repair requires --probe djxl".to_owned());
-    }
-    if args.temporary_approved_count != Some(TEMPORARY_APPROVED_COUNT) {
-        return Err(format!(
-            "repair requires --temporary-approved-count {TEMPORARY_APPROVED_COUNT}"
-        ));
     }
     if args.djxl.is_none() {
         return Err("repair requires an explicit local --djxl PATH".to_owned());
@@ -369,10 +315,11 @@ fn repair_findings(
     findings: &[Finding],
     djxl: &Path,
 ) -> Result<Vec<RepairRecord>, String> {
-    if findings.len() != TEMPORARY_APPROVED_COUNT {
-        return Err(format!(
-            "repair refused: preflight must identify exactly {TEMPORARY_APPROVED_COUNT} files"
-        ));
+    let approved_count = findings.len();
+    if !(DEFAULT_EXPECTED_MIN..=DEFAULT_EXPECTED_MAX).contains(&approved_count) {
+        return Err(
+            "repair refused: preflight affected count must stay within 1400..=1499".to_owned(),
+        );
     }
     if findings
         .iter()
@@ -390,7 +337,7 @@ fn repair_findings(
         .map(|finding| plan_jbrd_removal(input_dir, &finding.path))
         .collect::<Result<Vec<_>, _>>()?;
     plans.sort_by(|left, right| left.relative.cmp(&right.relative));
-    if plans.len() != TEMPORARY_APPROVED_COUNT {
+    if plans.len() != approved_count {
         return Err("repair refused: structural preflight count changed".to_owned());
     }
 
@@ -406,7 +353,7 @@ fn repair_findings(
         records.push(write_repaired_copy(output_dir, plan, djxl)?);
     }
 
-    if records.len() != TEMPORARY_APPROVED_COUNT {
+    if records.len() != approved_count {
         return Err("repair output count changed before manifest creation".to_owned());
     }
 
@@ -414,7 +361,7 @@ fn repair_findings(
         format_version: 1,
         source_root: input_dir.display().to_string(),
         output_root: output_dir.display().to_string(),
-        approved_affected_count: TEMPORARY_APPROVED_COUNT,
+        approved_affected_count: approved_count,
         repair: "removed exactly one invalid top-level jbrd box; all other bytes retained in order",
         guarantees: RepairGuarantees {
             originals_untouched: true,
@@ -537,8 +484,14 @@ fn write_repaired_copy(
         return Err(error);
     }
 
-    if let Ok(metadata) = fs::metadata(&plan.source) {
-        let _ = fs::set_permissions(&destination, metadata.permissions());
+    let permissions_result = fs::metadata(&plan.source)
+        .and_then(|metadata| fs::set_permissions(&destination, metadata.permissions()));
+    if let Err(error) = permissions_result {
+        let _ = fs::remove_file(&destination);
+        return Err(format!(
+            "cannot preserve permissions for repaired copy {}: {error}",
+            destination.display()
+        ));
     }
     if let Err(error) = verify_repaired_copy(&destination, djxl) {
         let _ = fs::remove_file(&destination);
@@ -848,54 +801,58 @@ mod tests {
             input_dir,
             expected_min: DEFAULT_EXPECTED_MIN,
             expected_max: DEFAULT_EXPECTED_MAX,
-            temporary_approved_count: Some(TEMPORARY_APPROVED_COUNT),
             probe: Probe::Djxl,
             djxl: Some(PathBuf::from("/local/djxl")),
             repair_output: None,
         }
     }
 
-    fn iso_box(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
-        let size = u32::try_from(8 + payload.len()).expect("small test box");
+    fn iso_box(kind: [u8; 4], payload: &[u8]) -> Result<Vec<u8>, std::num::TryFromIntError> {
+        let size = u32::try_from(8 + payload.len())?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&size.to_be_bytes());
         bytes.extend_from_slice(&kind);
         bytes.extend_from_slice(payload);
-        bytes
+        Ok(bytes)
     }
 
     #[test]
     fn count_gate_cannot_escape_required_14xx_boundary() {
-        assert!(validate_count_gate(1400, 1499, None).is_ok());
-        assert!(validate_count_gate(1399, 1499, None).is_err());
-        assert!(validate_count_gate(1400, 1500, None).is_err());
-        assert!(validate_count_gate(1499, 1400, None).is_err());
-        assert!(count_is_accepted(1400, 1400, 1499, None));
-        assert!(!count_is_accepted(1569, 1400, 1499, None));
+        assert!(validate_count_gate(1400, 1499).is_ok());
+        assert!(validate_count_gate(1399, 1499).is_err());
+        assert!(validate_count_gate(1400, 1500).is_err());
+        assert!(validate_count_gate(1499, 1400).is_err());
+        assert!(count_is_accepted(1400, 1400, 1499));
+        assert!(count_is_accepted(1499, 1400, 1499));
+        assert!(!count_is_accepted(1399, 1400, 1499));
+        assert!(!count_is_accepted(1500, 1400, 1499));
+        assert!(!count_is_accepted(1569, 1400, 1499));
     }
 
     #[test]
-    fn temporary_exception_accepts_only_exactly_1569() {
-        assert!(validate_count_gate(1400, 1499, Some(1569)).is_ok());
-        assert!(validate_count_gate(1400, 1499, Some(1568)).is_err());
-        assert!(validate_count_gate(1400, 1499, Some(1570)).is_err());
-        assert!(validate_count_gate(1401, 1499, Some(1569)).is_err());
-        assert!(count_is_accepted(1569, 1400, 1499, Some(1569)));
-        assert!(!count_is_accepted(1568, 1400, 1499, Some(1569)));
-        assert!(!count_is_accepted(1570, 1400, 1499, Some(1569)));
+    fn cli_rejects_all_temporary_count_exceptions() {
+        assert!(
+            Args::try_parse_from([
+                "jxl_import_doctor",
+                "local-folder",
+                "--temporary-approved-count",
+                "1569",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
-    fn jbrd_removal_preserves_every_other_byte() {
+    fn jbrd_removal_preserves_every_other_byte() -> Result<(), Box<dyn std::error::Error>> {
         let mut input = JXL_SIGNATURE_BOX.to_vec();
-        let before = iso_box(*b"jxlp", b"before");
-        let jbrd = iso_box(*b"jbrd", b"invalid reconstruction data");
-        let after = iso_box(*b"Exif", b"after");
+        let before = iso_box(*b"jxlp", b"before")?;
+        let jbrd = iso_box(*b"jbrd", b"invalid reconstruction data")?;
+        let after = iso_box(*b"Exif", b"after")?;
         input.extend_from_slice(&before);
         input.extend_from_slice(&jbrd);
         input.extend_from_slice(&after);
 
-        let (repaired, removed) = remove_exactly_one_jbrd(&input).expect("safe repair");
+        let (repaired, removed) = remove_exactly_one_jbrd(&input).map_err(std::io::Error::other)?;
         let mut expected = JXL_SIGNATURE_BOX.to_vec();
         expected.extend_from_slice(&before);
         expected.extend_from_slice(&after);
@@ -903,75 +860,81 @@ mod tests {
         assert_eq!(repaired, expected);
         assert_eq!(&input[removed.start..removed.end], jbrd);
         assert_eq!(removed.kind, *b"jbrd");
+        Ok(())
     }
 
     #[test]
-    fn jbrd_removal_rejects_missing_multiple_and_malformed_boxes() {
+    fn jbrd_removal_rejects_missing_multiple_and_malformed_boxes()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut missing = JXL_SIGNATURE_BOX.to_vec();
-        missing.extend_from_slice(&iso_box(*b"jxlp", b"pixels"));
+        missing.extend_from_slice(&iso_box(*b"jxlp", b"pixels")?);
         assert!(remove_exactly_one_jbrd(&missing).is_err());
 
         let mut multiple = JXL_SIGNATURE_BOX.to_vec();
-        multiple.extend_from_slice(&iso_box(*b"jbrd", b"one"));
-        multiple.extend_from_slice(&iso_box(*b"jbrd", b"two"));
+        multiple.extend_from_slice(&iso_box(*b"jbrd", b"one")?);
+        multiple.extend_from_slice(&iso_box(*b"jbrd", b"two")?);
         assert!(remove_exactly_one_jbrd(&multiple).is_err());
 
         let mut malformed = JXL_SIGNATURE_BOX.to_vec();
         malformed.extend_from_slice(&100u32.to_be_bytes());
         malformed.extend_from_slice(b"jbrd");
         assert!(remove_exactly_one_jbrd(&malformed).is_err());
+        Ok(())
     }
 
     #[test]
-    fn repair_output_must_be_a_new_direct_child_of_input() {
-        let input = tempfile::tempdir().expect("input folder");
-        let outside = tempfile::tempdir().expect("outside folder");
-        let input_path = input.path().canonicalize().expect("canonical input");
+    fn repair_output_must_be_a_new_direct_child_of_input() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let input = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let input_path = input.path().canonicalize()?;
         let args = test_args(input_path.clone());
 
-        let allowed = input_path.join("MFB_Repaired_1569");
+        let allowed = input_path.join("MFB_Repaired_14xx");
         assert_eq!(
-            validate_repair_output(&input_path, &allowed, &args).expect("allowed output"),
+            validate_repair_output(&input_path, &allowed, &args).map_err(std::io::Error::other)?,
             allowed
         );
         assert!(
             validate_repair_output(
                 &input_path,
-                &outside.path().join("MFB_Repaired_1569"),
+                &outside.path().join("MFB_Repaired_14xx"),
                 &args
             )
             .is_err()
         );
 
         let existing = input_path.join("already_exists");
-        fs::create_dir(&existing).expect("existing output fixture");
+        fs::create_dir(&existing)?;
         assert!(validate_repair_output(&input_path, &existing, &args).is_err());
+        Ok(())
     }
 
     #[test]
-    fn photos_library_input_is_rejected() {
-        let temp = tempfile::tempdir().expect("temp folder");
+    fn photos_library_input_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
         let photos_library = temp.path().join("Example.photoslibrary");
-        std::fs::create_dir(&photos_library).expect("photos library fixture");
-        assert_eq!(
-            canonical_safe_input_dir(&photos_library).unwrap_err(),
-            "Photos libraries are forbidden inputs"
-        );
+        std::fs::create_dir(&photos_library)?;
+        let Err(error) = canonical_safe_input_dir(&photos_library) else {
+            return Err("Photos library input must be rejected".into());
+        };
+        assert_eq!(error, "Photos libraries are forbidden inputs");
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn symlinks_are_rejected_without_following_them() {
+    fn symlinks_are_rejected_without_following_them() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::symlink;
 
-        let temp = tempfile::tempdir().expect("temp folder");
-        let outside = tempfile::tempdir().expect("outside folder");
-        symlink(outside.path(), temp.path().join("escape")).expect("symlink fixture");
+        let temp = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        symlink(outside.path(), temp.path().join("escape"))?;
 
-        assert!(
-            collect_jxl_files(temp.path())
-                .unwrap_err()
-                .contains("symbolic links are forbidden")
-        );
+        let Err(error) = collect_jxl_files(temp.path()) else {
+            return Err("symlink must be rejected".into());
+        };
+        assert!(error.contains("symbolic links are forbidden"));
+        Ok(())
     }
 }

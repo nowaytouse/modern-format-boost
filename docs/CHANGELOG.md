@@ -14,14 +14,20 @@ All notable changes to this project will be documented in this file.
   writes. `icloud_import` now performs a no-side-effect preflight that detects
   JXL by extension and container/codestream signature before it can rename a
   directory or invoke Photos; verified AVIF output uses the recorded output
-  paths for generic library-side verification.
+  paths for generic library-side verification. Import delivery now uses one-file
+  transactions and checkpoints only exact UUID matches, so a later failure cannot
+  replay already confirmed files.
+- **Strict 14xx Repair Gate**: The JXL import doctor accepts repair totals only
+  from 1400 through 1499; every other total is rejected without exceptions.
 - **Actionable Logs**: Successful per-file forensic validation is retained in
   trace session logs while terminal output focuses on progress, failures, and
   final decisions.
 - **CI Quality Gates**: Linux PTY `EIO` after slave closure is treated as EOF,
   and the deep-audit job installs the locked Vue lint dependencies before
-  invoking its quality check. The libheif build now uses its supported CMake
-  options to suppress local configuration warnings.
+  invoking its quality check. Strict-Clippy-safe doctor tests and the patched
+  `brace-expansion` lock entry restore the Rust and Vue security gates. The
+  libheif build now uses its supported CMake options to suppress local
+  configuration warnings.
 - **Strict Vue Type Safety**: The AI transparency panel now obtains its
   translator from `useI18n()` instead of relying on an undeclared template
   global, so `vue-tsc --strict` succeeds in the authoritative CI environment.
