@@ -168,8 +168,8 @@ jobs:
     needs: validation
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # check_all --ci (hack matrix + llvm-cov LCOV) often exceeds 60m on hosted runners.
-    timeout-minutes: 120
+    # A cold fuzz/libheif build can push the full check beyond two hours on hosted runners.
+    timeout-minutes: 180
     env:
       # Match ClusterFuzzLite / fuzz: embedded libheif avoids libheif-sys build.rs PermissionDenied on runners.
       LIBHEIF_STATIC: "1"
@@ -340,7 +340,7 @@ jobs:
     needs: security-audit
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2

@@ -27,7 +27,8 @@ All notable changes to this project will be documented in this file.
   invoking its quality check. Strict-Clippy-safe doctor tests and the patched
   `brace-expansion` lock entry restore the Rust and Vue security gates. The
   libheif build now uses its supported CMake options to suppress local
-  configuration warnings.
+  configuration warnings. Full health and deep audits now have a three-hour
+  budget so cold fuzz/libheif builds can complete on hosted runners.
 - **Strict Vue Type Safety**: The AI transparency panel now obtains its
   translator from `useI18n()` instead of relying on an undeclared template
   global, so `vue-tsc --strict` succeeds in the authoritative CI environment.
