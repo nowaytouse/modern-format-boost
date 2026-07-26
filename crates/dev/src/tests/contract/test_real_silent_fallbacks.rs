@@ -18246,8 +18246,20 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         workflow.contains("test -s lcov.info"),
         "ci-quality must verify lcov.info before upload-artifact"
     );
+    let health_timeout_minutes = workflow
+        .split_once("\n  health-check:")
+        .and_then(|(_, health_check)| {
+            health_check
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("timeout-minutes: "))
+        })
+        .map(|minutes| {
+            minutes
+                .parse::<u16>()
+                .expect("health-check timeout-minutes must be an integer")
+        });
     assert!(
-        workflow.contains("timeout-minutes: 120"),
+        health_timeout_minutes.is_some_and(|minutes| minutes > 60),
         "health-check must allow >60m for check_all --ci (llvm-cov + hack matrix)"
     );
     assert!(

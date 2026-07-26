@@ -28,7 +28,9 @@ All notable changes to this project will be documented in this file.
   `brace-expansion` lock entry restore the Rust and Vue security gates. The
   libheif build now uses its supported CMake options to suppress local
   configuration warnings. Full health and deep audits now have a three-hour
-  budget so cold fuzz/libheif builds can complete on hosted runners.
+  budget so cold fuzz/libheif builds can complete on hosted runners; the
+  timeout contract now validates the required greater-than-one-hour budget
+  semantically instead of pinning the obsolete 120-minute literal.
 - **Strict Vue Type Safety**: The AI transparency panel now obtains its
   translator from `useI18n()` instead of relying on an undeclared template
   global, so `vue-tsc --strict` succeeds in the authoritative CI environment.
