@@ -2263,7 +2263,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             ) {
                 match fast_img_container_is_static(&path, format) {
                     Ok(true) => source_jpegs.push(path),
-                    Ok(false) => {}
+                    Ok(false) => println!(
+                        "[SKIP    ] Meme Mode rejects animated image container {}",
+                        path.display()
+                    ),
                     Err(e) => {
                         println!(
                             "[ERROR   ] Failed to read static-container metadata for {}: {}",
@@ -2284,9 +2287,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             src_dir.display()
         );
-        println!(
-            "[MEME    ] AVIF quality search: coarse q=100..20, then {AVIF_MEME_BINARY_PROBES} binary probes"
-        );
+        println!("[MEME    ] AVIF quality search: q=100..20; keep the smallest verified candidate");
     } else {
         println!(
             "[FASTIMG ] selected {} true JPEGs in {}",
@@ -2991,11 +2992,13 @@ fn fast_img_effective_encode_parallelism(
 
 /// Quality exploration result for AVIF Meme Mode.
 enum AvifQualityExploreResult {
-    /// Best quality whose output fits the source size limit.
-    Found { quality: u8 },
-    /// No quality in the supported range produced a size-compliant output.
-    Exhausted,
-    /// The source cannot produce a verifiable AVIF at any quality.
+    /// Smallest complete AVIF candidate that passed the verification gate.
+    Found {
+        quality: u8,
+        temp_path: PathBuf,
+        output_size: u64,
+    },
+    /// The source cannot produce a verifiable AVIF at any permitted quality.
     SourceUnavailable { reason: String },
 }
 
@@ -3016,13 +3019,14 @@ enum AvifInputDecoder {
 
 const fn avif_input_decoder(format: FormatKind) -> Option<AvifInputDecoder> {
     match format {
-        FormatKind::Jpeg | FormatKind::Png => None,
         FormatKind::WebP => Some(AvifInputDecoder::WebP),
         FormatKind::Avif => Some(AvifInputDecoder::Avif),
         FormatKind::Heic | FormatKind::Heif => Some(AvifInputDecoder::Heif),
         FormatKind::Jxl => Some(AvifInputDecoder::Jxl),
         FormatKind::Jp2 => Some(AvifInputDecoder::Jp2),
-        FormatKind::Gif
+        FormatKind::Jpeg
+        | FormatKind::Png
+        | FormatKind::Gif
         | FormatKind::Bmp
         | FormatKind::Tiff
         | FormatKind::Qoi
@@ -3090,6 +3094,7 @@ fn avif_input_decoder_command(
             builder
                 .input(source)
                 .arg("-flatten")
+                .arg("-strip")
                 .depth(16)
                 .output(temp_path);
             (builder.build(), "ImageMagick")
@@ -3143,21 +3148,15 @@ fn run_avif_input_decoder(
     Ok(tool_name)
 }
 
-/// `avifenc` deliberately accepts only JPEG, PNG, Y4M, and compatible frame
-/// sequences. Decode other supported static containers once through their
-/// official first-party decoder, then keep the original file as the delivery
-/// and verification source.
+/// Normalize every supported static source to a single decoded PNG before
+/// encoding. This prevents source Exif/XMP/ICC and auxiliary gain-map items from
+/// bypassing Meme Mode's clean-output policy; the original remains the delivery
+/// and verification identity.
 fn prepare_fast_img_avif_encoder_input(
     source: &Path,
     format: FormatKind,
 ) -> anyhow::Result<FastImgAvifEncoderInput> {
     let Some(decoder) = avif_input_decoder(format) else {
-        if matches!(format, FormatKind::Jpeg | FormatKind::Png) {
-            return Ok(FastImgAvifEncoderInput {
-                path: source.to_path_buf(),
-                _temp: None,
-            });
-        }
         anyhow::bail!("FastImg has no static decoder from {format:?} to an avifenc input");
     };
 
@@ -3208,222 +3207,95 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
                 || message.contains("Unsupported file format")))
 }
 
-const AVIF_MEME_BINARY_PROBES: usize = 3;
 const AVIF_MEME_SPEED: u8 = 0;
+const AVIF_MEME_MIN_QUALITY: u8 = 20;
 
-/// Meme Mode AVIF quality exploration: coarse scan + binary search.
-///
-/// Algorithm:
-/// 1. Coarse scan from quality 100 down to 20 in ten-point steps.
-/// 2. Refine the best candidate with a bounded binary search.
-/// 3. Return the best quality or [`AvifQualityExploreResult::Exhausted`].
-///
-/// All temp files from failed probes are cleaned up immediately.
+type AvifMemeCandidate = (u8, PathBuf, u64);
+
+fn retain_smallest_avif_meme_candidate(
+    best: &mut Option<AvifMemeCandidate>,
+    candidate: AvifMemeCandidate,
+) -> Option<PathBuf> {
+    if best
+        .as_ref()
+        .is_some_and(|(_, _, best_size)| *best_size <= candidate.2)
+    {
+        return Some(candidate.1);
+    }
+    best.replace(candidate).map(|(_, path, _)| path)
+}
+
 fn explore_avif_meme_quality(
     source: &Path,
     encoder_input: &Path,
-    input_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
-    binary_probe_count: usize,
-) -> anyhow::Result<AvifQualityExploreResult> {
+) -> AvifQualityExploreResult {
     const COARSE_STEP: u8 = 10;
-    const MIN_QUALITY: u8 = 20;
+    let mut best: Option<AvifMemeCandidate> = None;
+    let mut quality = 100u8;
 
-    let avif_speed = AVIF_MEME_SPEED;
-
-    // ── Phase 1: Coarse scan ──────────────────────────────────────────────
-    let mut q_ok: Option<u8> = None;
-    let mut q = 100u8;
     loop {
         foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality probe [coarse]: q={q} (speed={avif_speed}) for {}",
+            "AVIF Meme Mode quality probe: q={quality} (speed={AVIF_MEME_SPEED}) for {}",
             source.display()
         ));
         match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
-            q,
-            Some(avif_speed),
+            quality,
+            Some(AVIF_MEME_SPEED),
             metadata_retry,
             convert_options,
         ) {
             Ok((temp_path, output_size)) => {
-                if output_size <= input_size {
-                    foundation::log_detail!(&format!(
-                        "AVIF Meme Mode quality probe [coarse]: q={q} OK — output={output_size}B ≤ input={input_size}B"
-                    ));
-                    q_ok = Some(q);
-                    // Clean up coarse probe temp; will re-encode at best_q below
+                foundation::log_detail!(&format!(
+                    "AVIF Meme Mode quality probe: q={quality} verified complete_file_size={output_size}B"
+                ));
+                if let Some(cleanup) = retain_smallest_avif_meme_candidate(
+                    &mut best,
+                    (quality, temp_path, output_size),
+                ) {
                     foundation::media_conversion_gate::delivery_remove_file_or_audit(
                         "fast_img_probe_cleanup",
-                        &temp_path,
+                        &cleanup,
                     );
-                    break;
                 }
-                foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe [coarse]: q={q} too large — output={output_size}B > input={input_size}B"
-                ));
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "fast_img_probe_cleanup",
-                    &temp_path,
-                );
             }
-            Err(e) => {
-                let reason = e.to_string();
+            Err(error) => {
+                let reason = error.to_string();
                 foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe [coarse]: q={q} encode error — {reason}"
+                    "AVIF Meme Mode quality probe: q={quality} error — {reason}"
                 ));
                 if avif_quality_probe_error_is_source_invariant(&reason) {
-                    return Ok(AvifQualityExploreResult::SourceUnavailable { reason });
-                }
-            }
-        }
-        if q < MIN_QUALITY + COARSE_STEP {
-            break;
-        }
-        q = q.saturating_sub(COARSE_STEP);
-    }
-
-    let Some(q_found) = q_ok else {
-        tracing::warn!(
-            "AVIF Meme Mode: quality exhausted (q=20 still > input={input_size}B) for {}; preserving source",
-            source.display()
-        );
-        return Ok(AvifQualityExploreResult::Exhausted);
-    };
-
-    // ── Phase 2: Binary search upward ────────────────────────────────────
-    // Range: [q_found, q_found + COARSE_STEP)  (max quality that still fits)
-    // We know q_found works, and q_found + COARSE_STEP doesn't (or is 100).
-    if q_found == 100 {
-        // q=100 already worked in coarse scan, no need to refine
-        foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality finalized at q=100 (coarse hit) for {}",
-            source.display()
-        ));
-        let (temp, _size) =
-            match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
-                source,
-                encoder_input,
-                100,
-                Some(avif_speed),
-                metadata_retry,
-                convert_options,
-            ) {
-                Ok(result) => result,
-                Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
-                    return Ok(AvifQualityExploreResult::SourceUnavailable {
-                        reason: e.to_string(),
-                    });
-                }
-                Err(e) => return Err(e.into()),
-            };
-        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-            "fast_img_probe_cleanup",
-            &temp,
-        );
-        return Ok(AvifQualityExploreResult::Found { quality: 100 });
-    }
-    let q_upper = q_found + COARSE_STEP - 1;
-
-    let mut lo = q_found;
-    let mut hi = q_upper.min(100);
-    let mut best_q = q_found;
-
-    foundation::log_detail!(&format!(
-        "AVIF Meme Mode quality probe [binary search]: range=[{lo}, {hi}] (speed={avif_speed}) for {}",
-        source.display()
-    ));
-
-    // Meme Mode deliberately keeps the established three-probe refinement.
-    for _ in 0..binary_probe_count {
-        if lo > hi {
-            break;
-        }
-        let mid = lo + (hi - lo) / 2;
-        foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality probe [binary]: testing q={mid} (speed={avif_speed})"
-        ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
-            source,
-            encoder_input,
-            mid,
-            Some(avif_speed),
-            metadata_retry,
-            convert_options,
-        ) {
-            Ok((temp_path, output_size)) => {
-                if output_size <= input_size {
-                    foundation::log_detail!(&format!(
-                        "AVIF Meme Mode quality probe [binary]: q={mid} OK — output={output_size}B"
-                    ));
-                    best_q = mid;
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "fast_img_probe_cleanup",
-                        &temp_path,
-                    );
-                    if mid == hi {
-                        break;
+                    if best.is_none() {
+                        return AvifQualityExploreResult::SourceUnavailable { reason };
                     }
-                    lo = mid + 1;
-                } else {
-                    foundation::log_detail!(&format!(
-                        "AVIF Meme Mode quality probe [binary]: q={mid} too large — output={output_size}B"
-                    ));
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "fast_img_probe_cleanup",
-                        &temp_path,
-                    );
-                    if mid == lo {
-                        break;
-                    }
-                    hi = mid - 1;
-                }
-            }
-            Err(e) => {
-                let reason = e.to_string();
-                foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe [binary]: q={mid} error — {reason}"
-                ));
-                if avif_quality_probe_error_is_source_invariant(&reason) {
-                    return Ok(AvifQualityExploreResult::SourceUnavailable { reason });
-                }
-                if mid == lo {
                     break;
                 }
-                hi = mid - 1;
             }
         }
+
+        if quality == AVIF_MEME_MIN_QUALITY {
+            break;
+        }
+        quality = quality
+            .saturating_sub(COARSE_STEP)
+            .max(AVIF_MEME_MIN_QUALITY);
     }
 
-    // Final encode at best_q to get the committed temp file
-    foundation::log_detail!(&format!(
-        "AVIF Meme Mode quality finalized: q={best_q} for {}",
-        source.display()
-    ));
-    let (temp_path, _output_size) =
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
-            source,
-            encoder_input,
-            best_q,
-            Some(avif_speed),
-            metadata_retry,
-            convert_options,
-        ) {
-            Ok(result) => result,
-            Err(e) if avif_quality_probe_error_is_source_invariant(&e.to_string()) => {
-                return Ok(AvifQualityExploreResult::SourceUnavailable {
-                    reason: e.to_string(),
-                });
-            }
-            Err(e) => return Err(e.into()),
-        };
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "fast_img_probe_cleanup",
-        &temp_path,
-    );
-    Ok(AvifQualityExploreResult::Found { quality: best_q })
+    match best {
+        Some((quality, temp_path, output_size)) => AvifQualityExploreResult::Found {
+            quality,
+            temp_path,
+            output_size,
+        },
+        None => AvifQualityExploreResult::SourceUnavailable {
+            reason: format!(
+                "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}"
+            ),
+        },
+    }
 }
 
 fn fast_img_run_encode_job_inner(
@@ -3443,12 +3315,12 @@ fn fast_img_run_encode_job_inner(
             flags: foundation::ConvertFlags::FORCE,
             ..Default::default()
         };
-        let input_size = std::fs::metadata(&job.source)?.len();
+
         let encoder_input = match prepare_fast_img_avif_encoder_input(&job.source, format) {
             Ok(input) => input,
             Err(err) => {
                 let reason =
-                    format!("AVIF target conversion unavailable after official WebP decode: {err}");
+                    format!("AVIF target conversion unavailable after official decode: {err}");
                 foundation::log_detail!(&format!(
                     "Meme Mode (AVIF): {reason}; preserving source {}",
                     job.source.display()
@@ -3462,46 +3334,27 @@ fn fast_img_run_encode_job_inner(
                 ));
             }
         };
-        let mut metadata_retry = img::lossless_converter::AvifencMetadataRetryState::default();
+        let mut metadata_retry = img::lossless_converter::AvifencMetadataRetryState::strip_all();
         match explore_avif_meme_quality(
             &job.source,
             &encoder_input.path,
-            input_size,
             &convert_options,
             &mut metadata_retry,
-            AVIF_MEME_BINARY_PROBES,
-        )? {
-            AvifQualityExploreResult::Found { quality, .. } => {
-                let avif_speed = AVIF_MEME_SPEED;
+        ) {
+            AvifQualityExploreResult::Found {
+                quality,
+                temp_path,
+                output_size,
+            } => {
                 foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): Best quality q={} chosen for {} (Source: {:?}, speed={})",
-                    quality,
-                    job.source.display(),
-                    format,
-                    avif_speed
+                    "Meme Mode (AVIF): smallest verified candidate q={quality} complete_file_size={output_size}B for {} ({format:?})",
+                    job.source.display()
                 ));
-                img::lossless_converter::convert_to_avif_from_encoder_input_with_speed_and_state(
+                img::lossless_converter::finalize_meme_avif_probe(
                     &job.source,
-                    &encoder_input.path,
-                    Some(quality),
-                    Some(avif_speed),
-                    &mut metadata_retry,
+                    &temp_path,
                     &convert_options,
                 )?
-            }
-            AvifQualityExploreResult::Exhausted => {
-                foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): Quality exploration exhausted for {} (Source: {:?}); preserving source",
-                    job.source.display(),
-                    format
-                ));
-                return Ok(FastImgTranscodeOutcome::Skipped(
-                    FastImgSkippedSourceProof {
-                        rel_key: job.rel_key.clone(),
-                        src_hash: calculate_blake3_hash(&job.source)?,
-                        reason: "AVIF quality exploration exhausted without a size-compliant target output".to_string(),
-                    },
-                ));
             }
             AvifQualityExploreResult::SourceUnavailable { reason } => {
                 foundation::log_detail!(&format!(
@@ -9766,45 +9619,141 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn fast_img_avif_meme_quality_uses_normal_precision_and_speed_zero() {
-        assert_eq!(super::AVIF_MEME_BINARY_PROBES, 3);
         assert_eq!(super::AVIF_MEME_SPEED, 0);
+        assert_eq!(super::AVIF_MEME_MIN_QUALITY, 20);
     }
 
     #[test]
-    fn fast_img_avif_uses_authoritative_decoders_for_unsupported_inputs() {
+    fn test_fast_img_meme_mode_forces_all_non_avif_static_formats_to_avif() {
+        for format in [
+            FormatKind::Jxl,
+            FormatKind::WebP,
+            FormatKind::Heic,
+            FormatKind::Heif,
+            FormatKind::Jpeg,
+            FormatKind::Png,
+            FormatKind::Gif,
+            FormatKind::Bmp,
+            FormatKind::Tiff,
+        ] {
+            assert!(
+                !matches!(
+                    format,
+                    FormatKind::Mp4
+                        | FormatKind::Mov
+                        | FormatKind::Mkv
+                        | FormatKind::Webm
+                        | FormatKind::Unknown
+                ),
+                "Format {format:?} must be candidate for forced AVIF conversion in Meme Mode"
+            );
+        }
+    }
+
+    #[test]
+    fn fast_img_avif_normalizes_supported_inputs_before_clean_encode() -> anyhow::Result<()> {
         use super::AvifInputDecoder;
 
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::WebP),
-            Some(AvifInputDecoder::WebP)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Avif),
-            Some(AvifInputDecoder::Avif)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Heic),
-            Some(AvifInputDecoder::Heif)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Heif),
-            Some(AvifInputDecoder::Heif)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Jxl),
-            Some(AvifInputDecoder::Jxl)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Jp2),
-            Some(AvifInputDecoder::Jp2)
-        );
-        assert_eq!(
-            super::avif_input_decoder(FormatKind::Gif),
-            Some(AvifInputDecoder::ImageMagick)
-        );
-        assert_eq!(super::avif_input_decoder(FormatKind::Jpeg), None);
-        assert_eq!(super::avif_input_decoder(FormatKind::Png), None);
+        for (format, decoder) in [
+            (FormatKind::WebP, AvifInputDecoder::WebP),
+            (FormatKind::Avif, AvifInputDecoder::Avif),
+            (FormatKind::Heic, AvifInputDecoder::Heif),
+            (FormatKind::Heif, AvifInputDecoder::Heif),
+            (FormatKind::Jxl, AvifInputDecoder::Jxl),
+            (FormatKind::Jp2, AvifInputDecoder::Jp2),
+            (FormatKind::Gif, AvifInputDecoder::ImageMagick),
+            (FormatKind::Jpeg, AvifInputDecoder::ImageMagick),
+            (FormatKind::Png, AvifInputDecoder::ImageMagick),
+        ] {
+            assert_eq!(super::avif_input_decoder(format), Some(decoder));
+        }
         assert_eq!(super::avif_input_decoder(FormatKind::Mp4), None);
+
+        let (command, tool) = super::avif_input_decoder_command(
+            AvifInputDecoder::ImageMagick,
+            Path::new("static.gif"),
+            Path::new("decoded.png"),
+        )?;
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(tool, "ImageMagick");
+        assert!(args.iter().any(|arg| arg == "-flatten"));
+        assert!(args.iter().any(|arg| arg == "-strip"));
+        Ok(())
+    }
+
+    #[test]
+    fn meme_avif_keeps_smallest_verified_candidate_even_when_all_are_larger() -> anyhow::Result<()>
+    {
+        let input_size = 1_000_u64;
+        let mut best = None;
+
+        assert!(
+            super::retain_smallest_avif_meme_candidate(
+                &mut best,
+                (100, std::path::PathBuf::from("q100.avif"), 1_300),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::retain_smallest_avif_meme_candidate(
+                &mut best,
+                (90, std::path::PathBuf::from("q90.avif"), 1_200),
+            ),
+            Some(std::path::PathBuf::from("q100.avif"))
+        );
+        assert_eq!(
+            super::retain_smallest_avif_meme_candidate(
+                &mut best,
+                (80, std::path::PathBuf::from("q80.avif"), 1_250),
+            ),
+            Some(std::path::PathBuf::from("q80.avif"))
+        );
+
+        let Some((quality, _, output_size)) = best else {
+            anyhow::bail!("verified candidate must be retained");
+        };
+        assert_eq!(quality, 90);
+        assert_eq!(output_size, 1_200);
+        assert!(output_size > input_size);
+        Ok(())
+    }
+
+    #[test]
+    fn gif_static_decodes_but_animation_and_corruption_fail_closed() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let static_gif = root.path().join("static.gif");
+        let animated_gif = root.path().join("animated.gif");
+        let corrupt_gif = root.path().join("corrupt.gif");
+
+        {
+            let mut encoder =
+                image::codecs::gif::GifEncoder::new(std::fs::File::create(&static_gif)?);
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+        }
+        {
+            let mut encoder =
+                image::codecs::gif::GifEncoder::new(std::fs::File::create(&animated_gif)?);
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+        }
+        std::fs::write(&corrupt_gif, b"GIF89a")?;
+
+        assert!(super::fast_img_container_is_static(
+            &static_gif,
+            FormatKind::Gif
+        )?);
+        assert!(!super::fast_img_container_is_static(
+            &animated_gif,
+            FormatKind::Gif
+        )?);
+        assert!(
+            super::fast_img_container_is_static(&corrupt_gif, FormatKind::Gif).is_err(),
+            "damaged GIF must not reach ImageMagick's first-frame path"
+        );
+        Ok(())
     }
 
     #[test]
@@ -9821,5 +9770,29 @@ mod fast_img_hardening_tests {
         assert!(!super::avif_quality_probe_error_is_source_invariant(
             "AVIF health check failed at q=90: temporary I/O error"
         ));
+    }
+
+    #[test]
+    fn fast_img_avif_source_is_reencoded_not_adopted() -> anyhow::Result<()> {
+        assert_eq!(
+            super::avif_input_decoder(FormatKind::Avif),
+            Some(super::AvifInputDecoder::Avif),
+            "source AVIF must be decoded before Meme Mode encoding"
+        );
+
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn fast_img_run_encode_job_inner(")
+            .ok_or_else(|| anyhow::anyhow!("fast_img_run_encode_job_inner source anchor"))?;
+        let end = source[start..]
+            .find("\nfn fast_img_run_encode_job(")
+            .map(|offset| start + offset)
+            .ok_or_else(|| anyhow::anyhow!("fast_img_run_encode_job source anchor"))?;
+        let body = &source[start..end];
+
+        assert!(body.contains("prepare_fast_img_avif_encoder_input"));
+        assert!(!body.contains("std::fs::copy(&job.source"));
+        assert!(!body.contains("adopting directly"));
+        Ok(())
     }
 }

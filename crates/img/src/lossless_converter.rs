@@ -2772,6 +2772,15 @@ pub struct AvifencMetadataRetryState {
 }
 
 impl AvifencMetadataRetryState {
+    /// Disable all source metadata for clean Meme Mode AVIF delivery.
+    #[must_use]
+    pub const fn strip_all() -> Self {
+        Self {
+            ignore_exif: true,
+            ignore_xmp: true,
+            ignore_icc: true,
+        }
+    }
     const fn policy(self) -> AvifencMetadataPolicy {
         if self.ignore_exif || self.ignore_xmp || self.ignore_icc {
             AvifencMetadataPolicy::Ignore {
@@ -2785,6 +2794,7 @@ impl AvifencMetadataRetryState {
     }
 }
 
+#[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn build_avifenc_command(
     input: &Path,
     output: &Path,
@@ -2798,11 +2808,7 @@ fn build_avifenc_command(
         Some(configured_speed) => configured_speed,
         None => 0,
     };
-    builder
-        .speed(effective_speed)
-        .jobs("all")
-        .yuv("444")
-        .cicp("1/13/0");
+    builder.speed(effective_speed).jobs("all").yuv("444");
 
     if lossless {
         builder.lossless(true);
@@ -3310,8 +3316,6 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            // Copy metadata into the temp file to get an exact size estimate containing EXIF/XMP
-            let _ = foundation::metadata::preserve_for_delivery(input, &temp_output);
             let output_size = fs::metadata(&temp_output)?.len();
             if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
             {
@@ -3365,6 +3369,36 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             )))
         }
     }
+}
+
+/// Commit a verified Meme Mode AVIF candidate without applying the standard
+/// "must be smaller than source" gate or copying source metadata.
+pub fn finalize_meme_avif_probe(
+    source: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+) -> Result<TaskResult> {
+    let input_size = fs::metadata(source)?.len();
+    let output = get_output_path(source, EXT_AVIF, options)?;
+
+    if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+        temp_output,
+        &output,
+        options.force(),
+        None,
+    )? {
+        return Ok(TaskResult::skipped_exists(source, &output)?);
+    }
+
+    finalize_task(
+        source,
+        &output,
+        input_size,
+        LABEL_AVIF,
+        Some("Meme Mode verified candidate"),
+        options,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
@@ -5308,31 +5342,76 @@ mod tests {
                 args.windows(2)
                     .find(|pair| pair[0] == "--speed")
                     .map(|pair| pair[1].as_str()),
-                Some("0"),
-                "avifenc must always run at speed 0"
+                Some("0")
             );
             assert_eq!(
                 args.windows(2)
                     .find(|pair| pair[0] == "-j" || pair[0] == "--jobs")
                     .map(|pair| pair[1].as_str()),
-                Some("all"),
-                "avifenc must use all CPU threads"
+                Some("all")
             );
             assert_eq!(
                 args.windows(2)
                     .find(|pair| pair[0] == "--yuv")
                     .map(|pair| pair[1].as_str()),
-                Some("444"),
-                "avifenc must use yuv 444 to eliminate color subsampling loss"
+                Some("444")
             );
-            assert_eq!(
-                args.windows(2)
-                    .find(|pair| pair[0] == "--cicp")
-                    .map(|pair| pair[1].as_str()),
-                Some("1/13/0"),
-                "avifenc must use Identity CICP matrixCoefficients (M=0) to eliminate RGB-to-YUV color space matrix distortion"
+            assert!(
+                !args.iter().any(|arg| arg == "--cicp"),
+                "avifenc must choose lossless and lossy color signalling"
             );
         }
+    }
+
+    #[test]
+    fn meme_avif_command_ignores_embedded_metadata() {
+        let command = build_avifenc_command(
+            Path::new("test_src.png"),
+            Path::new("test_out.avif"),
+            Some(80),
+            false,
+            AvifencMetadataRetryState::strip_all().policy(),
+            Some(0),
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        for flag in ["--ignore-exif", "--ignore-xmp", "--ignore-icc"] {
+            assert!(args.iter().any(|arg| arg == flag), "missing {flag}");
+        }
+    }
+
+    #[test]
+    fn finalize_meme_avif_probe_accepts_larger_verified_candidate() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let output_dir = root.path().join("out");
+        std::fs::create_dir(&output_dir)?;
+        let source = root.path().join("source.png");
+        let candidate = root.path().join("verified-candidate.avif");
+        std::fs::write(&source, [1_u8])?;
+        std::fs::write(&candidate, [2_u8; 32])?;
+        let options = ConvertOptions {
+            output_dir: Some(output_dir),
+            flags: ConvertFlags::FORCE,
+            ..Default::default()
+        };
+
+        let result = finalize_meme_avif_probe(&source, &candidate, &options)?;
+
+        assert!(result.success);
+        assert!(
+            result
+                .output_size
+                .is_some_and(|size| size > result.input_size)
+        );
+        assert!(
+            result
+                .output_path
+                .is_some_and(|path| Path::new(&path).is_file())
+        );
+        Ok(())
     }
 
     #[test]
@@ -6198,6 +6277,7 @@ mod tests {
 
     #[test]
     fn jxl_to_avif_search_exhausts_before_preserving_source() {
+        assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 20);
         let (quality, probe_count) =
             search_highest_fitting_avif_quality_with(1_000, |_quality| Some(1_001));
 

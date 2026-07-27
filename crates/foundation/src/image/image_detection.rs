@@ -523,26 +523,18 @@ pub fn detect_animation(
             return Ok((false, None, None));
         }
         DetectedFormat::AVIF => {
-            // libavif 0.14 doesn't provide animation detection, so use ffprobe
-            // to determine if the AVIF is animated and extract its frame rate.
             crate::common_utils::validate_file_size_limit(
                 path,
                 crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
-            if let Some(fps) = extract_fps_from_ffprobe(path) {
-                // AVIF is animated with detected FPS
-                return Ok((true, None, Some(fps)));
-            }
-
-            // Fallback to checking ISOBMFF ftyp brand (e.g. `avis` for animated AVIF)
             if is_isobmff_animated_sequence(path)? {
-                return Ok((true, None, None));
+                let fps = extract_fps_from_ffprobe(path);
+                return Ok((true, None, fps));
             }
 
-            // No FPS detected and not an animated sequence brand, treat as static
-            return Ok((false, None, None));
+            return Ok((false, Some(1), None));
         }
         DetectedFormat::HEIC | DetectedFormat::HEIF => {
             // libheif-rs is the authoritative HEIC/HEIF library — use it

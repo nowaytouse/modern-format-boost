@@ -12,8 +12,6 @@ use walkdir::WalkDir;
 
 const EXIT_BOUNDARY: i32 = 2;
 const EXIT_COUNT_GATE: i32 = 3;
-const DEFAULT_EXPECTED_MIN: usize = 1400;
-const DEFAULT_EXPECTED_MAX: usize = 1499;
 const JXL_SIGNATURE_BOX: &[u8; 12] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const REPAIR_MANIFEST: &str = "MFB_JXL_REPAIR_MANIFEST.json";
 
@@ -28,17 +26,17 @@ enum Probe {
 }
 
 #[derive(Debug, Parser)]
-#[command(about = "Read-only JPEG XL import diagnostics with a mandatory affected-count gate")]
+#[command(about = "Read-only JPEG XL import diagnostics with an explicit affected-count gate")]
 struct Args {
     /// Local folder containing the JPEG XL files to inspect.
     input_dir: PathBuf,
 
     /// Lowest accepted affected-file count (inclusive).
-    #[arg(long, default_value_t = DEFAULT_EXPECTED_MIN)]
+    #[arg(long)]
     expected_min: usize,
 
     /// Highest accepted affected-file count (inclusive).
-    #[arg(long, default_value_t = DEFAULT_EXPECTED_MAX)]
+    #[arg(long)]
     expected_max: usize,
 
     /// How deeply to validate each JPEG XL file.
@@ -50,7 +48,7 @@ struct Args {
     djxl: Option<PathBuf>,
 
     /// Write repaired copies into this new direct child of `INPUT_DIR`.
-    /// Originals are never modified. Requires an accepted 14xx count and djxl probe.
+    /// Originals are never modified. Requires the explicit count gate and djxl probe.
     #[arg(long, value_name = "NEW_FOLDER")]
     repair_output: Option<PathBuf>,
 }
@@ -157,7 +155,11 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
     println!("input={}", input_dir.display());
     println!("probe={:?}", args.probe);
     println!("affected={}", findings.len());
-    println!("count_policy=required_14xx");
+    println!(
+        "count_policy=caller_supplied_range:{expected_min}..={expected_max}",
+        expected_min = args.expected_min,
+        expected_max = args.expected_max
+    );
     for (reason, count) in reasons {
         println!("reason.{reason}={count}");
     }
@@ -184,8 +186,15 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
                 "repair requires an explicitly resolved local djxl binary".to_owned(),
             )
         })?;
-        let records = repair_findings(&input_dir, &output, &findings, djxl)
-            .map_err(|message| (EXIT_BOUNDARY, message))?;
+        let records = repair_findings(
+            &input_dir,
+            &output,
+            &findings,
+            djxl,
+            args.expected_min,
+            args.expected_max,
+        )
+        .map_err(|message| (EXIT_BOUNDARY, message))?;
         println!("repair_output={}", output.display());
         println!("repaired={}", records.len());
         println!("repair_manifest={}", output.join(REPAIR_MANIFEST).display());
@@ -194,11 +203,8 @@ fn run(args: &Args) -> Result<(), (i32, String)> {
 }
 
 fn validate_count_gate(expected_min: usize, expected_max: usize) -> Result<(), String> {
-    if expected_min < DEFAULT_EXPECTED_MIN
-        || expected_max > DEFAULT_EXPECTED_MAX
-        || expected_min > expected_max
-    {
-        return Err("the accepted affected-count gate must stay within 1400..=1499".to_owned());
+    if expected_min > expected_max {
+        return Err("the affected-count minimum must not exceed the maximum".to_owned());
     }
     Ok(())
 }
@@ -314,12 +320,14 @@ fn repair_findings(
     output_dir: &Path,
     findings: &[Finding],
     djxl: &Path,
+    expected_min: usize,
+    expected_max: usize,
 ) -> Result<Vec<RepairRecord>, String> {
     let approved_count = findings.len();
-    if !(DEFAULT_EXPECTED_MIN..=DEFAULT_EXPECTED_MAX).contains(&approved_count) {
-        return Err(
-            "repair refused: preflight affected count must stay within 1400..=1499".to_owned(),
-        );
+    if !count_is_accepted(approved_count, expected_min, expected_max) {
+        return Err(format!(
+            "repair refused: preflight affected count {approved_count} is outside the caller-supplied {expected_min}..={expected_max} range"
+        ));
     }
     if findings
         .iter()
@@ -799,8 +807,8 @@ mod tests {
     fn test_args(input_dir: PathBuf) -> Args {
         Args {
             input_dir,
-            expected_min: DEFAULT_EXPECTED_MIN,
-            expected_max: DEFAULT_EXPECTED_MAX,
+            expected_min: 1,
+            expected_max: 1,
             probe: Probe::Djxl,
             djxl: Some(PathBuf::from("/local/djxl")),
             repair_output: None,
@@ -817,28 +825,29 @@ mod tests {
     }
 
     #[test]
-    fn count_gate_cannot_escape_required_14xx_boundary() {
-        assert!(validate_count_gate(1400, 1499).is_ok());
-        assert!(validate_count_gate(1399, 1499).is_err());
-        assert!(validate_count_gate(1400, 1500).is_err());
-        assert!(validate_count_gate(1499, 1400).is_err());
-        assert!(count_is_accepted(1400, 1400, 1499));
-        assert!(count_is_accepted(1499, 1400, 1499));
-        assert!(!count_is_accepted(1399, 1400, 1499));
-        assert!(!count_is_accepted(1500, 1400, 1499));
-        assert!(!count_is_accepted(1569, 1400, 1499));
+    fn count_gate_accepts_any_ordered_caller_supplied_range() {
+        for (expected_min, expected_max) in [(1, 1), (1_000, 2_000), (1_400, 1_499), (1_569, 1_592)]
+        {
+            assert!(validate_count_gate(expected_min, expected_max).is_ok());
+        }
+        assert!(validate_count_gate(1_592, 1_569).is_err());
+        assert!(count_is_accepted(1_569, 1_569, 1_592));
+        assert!(!count_is_accepted(1_568, 1_569, 1_592));
     }
 
     #[test]
-    fn cli_rejects_all_temporary_count_exceptions() {
+    fn cli_requires_explicit_count_range_without_defaults() {
+        assert!(Args::try_parse_from(["jxl_import_doctor", "local-folder"]).is_err());
         assert!(
             Args::try_parse_from([
                 "jxl_import_doctor",
                 "local-folder",
-                "--temporary-approved-count",
+                "--expected-min",
                 "1569",
+                "--expected-max",
+                "1592",
             ])
-            .is_err()
+            .is_ok()
         );
     }
 

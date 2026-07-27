@@ -190,6 +190,22 @@ fn known_static_formats_short_circuit_animation_probe() {
 }
 
 #[test]
+fn static_avif_brand_is_not_misclassified_as_animation() {
+    let mut bytes = [0u8; 32];
+    bytes[..4].copy_from_slice(&16u32.to_be_bytes());
+    bytes[4..8].copy_from_slice(b"ftyp");
+    bytes[8..12].copy_from_slice(b"avif");
+
+    let mut temp = NamedTempFile::new().expect("temp avif");
+    temp.write_all(&bytes).expect("write avif header");
+
+    assert_eq!(
+        detect_animation(temp.path(), &DetectedFormat::AVIF).expect("detect static AVIF"),
+        (false, Some(1), None)
+    );
+}
+
+#[test]
 fn known_video_containers_short_circuit_as_animated() {
     assert!(is_definitely_animated_container(&DetectedFormat::MP4));
     assert!(is_definitely_animated_container(&DetectedFormat::WEBM));
