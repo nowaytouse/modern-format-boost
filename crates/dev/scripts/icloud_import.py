@@ -7,13 +7,14 @@ Two import modes:
   Mode 2 (Simple): Plain import without album organization
 """
 
-from mfb_ui_tokens import pick_symbol
 import fcntl
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from mfb_ui_tokens import pick_symbol
 
 # Add ANSI colors for terminal output
 if sys.stdout.isatty():

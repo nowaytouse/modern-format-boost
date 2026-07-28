@@ -189,8 +189,9 @@ jobs:
                  /opt/homebrew/Library/Taps/aws
 
           # Use native Intel Homebrew on the Intel runner image.
-          if [ ! -f /usr/local/bin/brew ]; then
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
+          if [ ! -x /usr/local/bin/brew ]; then
+            echo "Intel Homebrew is missing from the GitHub runner image." >&2
+            exit 1
           fi
           BREW_BIN="/usr/local/bin/brew"
           BREW_FORMULAS=(

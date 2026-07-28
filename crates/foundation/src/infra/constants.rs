@@ -3549,10 +3549,28 @@ pub const ENV_ENABLE_BRANDING: &str = "MODERN_FORMAT_BOOST_ENABLE_BRANDING";
 pub const ENV_HOME: &str = "HOME";
 pub const ENV_USERPROFILE: &str = "USERPROFILE";
 pub const ENV_JXL_INTENSITY_TARGET: &str = "MFB_JXL_INTENSITY_TARGET";
+pub const ENV_MFB_DRAG_DROP_ERROR_MODE: &str = "MFB_DRAG_DROP_ERROR_MODE";
 
 // --- Dolby Vision Constants ---
 /// Default compatibility ID for Dolby Vision Profile 8 (8.1).
 pub const DV_PROFILE8_DEFAULT_COMPAT_ID: u8 = 1;
+
+pub const JPEG_SOI_MAGIC: &[u8] = &[0xFF, 0xD8];
+pub const PNG_SIGNATURE_MAGIC: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+pub const ISOBMFF_BOX_MDAT: &[u8] = &[0x6D, 0x64, 0x61, 0x74];
+pub const JXL_CODESTREAM_MAGIC: &[u8] = &[0xFF, 0x0A];
+pub const JXL_CONTAINER_MAGIC: &[u8] = &[
+    0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A,
+];
+pub const JXL_BOX_JXLC: &[u8] = b"jxlc";
+pub const JXL_BOX_JXLP: &[u8; 4] = b"jxlp";
+pub const PNG_CHUNK_IHDR: &[u8] = b"IHDR";
+pub const PNG_CHUNK_PLTE: &[u8] = b"PLTE";
+pub const PNG_CHUNK_IDAT: &[u8] = b"IDAT";
+pub const PNG_CHUNK_IEND: &[u8] = b"IEND";
+pub const PNG_CHUNK_TRNS: &[u8] = b"tRNS";
+pub const AVIF_MEME_MIN_QUALITY: u8 = 0;
+pub const MAX_AVIF_BOXES: u32 = 2048;
 
 #[cfg(test)]
 mod tests {

@@ -163,7 +163,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -381,9 +381,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c89588d05638b5b4594a3348a2d6c20277e43a7f5c5202b05cc56888475a47b8"
+checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -460,8 +460,8 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.3"
-source = "git+https://github.com/clap-rs/clap#12e50b3bc855d506cdc07a3bdaece5416e6fc7ba"
+version = "4.6.4"
+source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -470,7 +470,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.2"
-source = "git+https://github.com/clap-rs/clap#12e50b3bc855d506cdc07a3bdaece5416e6fc7ba"
+source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
 dependencies = [
  "anstream",
  "anstyle",
@@ -480,19 +480,19 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.3"
-source = "git+https://github.com/clap-rs/clap#12e50b3bc855d506cdc07a3bdaece5416e6fc7ba"
+version = "4.6.4"
+source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#12e50b3bc855d506cdc07a3bdaece5416e6fc7ba"
+source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
 
 [[package]]
 name = "cmake"
@@ -549,6 +549,12 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
 name = "cpufeatures"
@@ -619,7 +625,7 @@ dependencies = [
 [[package]]
 name = "ctrlc"
 version = "3.5.2"
-source = "git+https://github.com/Detegr/rust-ctrlc#0aed47c35355ab7de53fa281201b8b924c2cfcb3"
+source = "git+https://github.com/Detegr/rust-ctrlc#3c7098cc637ddd381b8d888560eb5c11c60aa6b1"
 dependencies = [
  "dispatch2",
  "nix",
@@ -740,9 +746,9 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
 name = "encode_unicode"
@@ -870,7 +876,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#167053740e4e73d64bc644bebedcc11718cc2f4c"
+source = "git+https://github.com/rust-lang/flate2-rs#ec636bc37054d33d3390920127ddc064b7e2e1a0"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1051,9 +1057,9 @@ dependencies = [
 
 [[package]]
 name = "glob"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gmp-mpfr-sys"
@@ -1160,7 +1166,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#1257b0ff89a391cd7e8fbf0b19bea22a6d3ea4bc"
+source = "git+https://github.com/image-rs/image#034a1585dfec1b3eb2aa7489cf7d5825a98bf89f"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1268,7 +1274,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.48.0"
-source = "git+https://github.com/mitsuhiko/insta#3d62572f910cd19eba45673b37ad91293d82b689"
+source = "git+https://github.com/mitsuhiko/insta#54d0b9691c3a951c0f82e1d6fa8ebe6a7130804d"
 dependencies = [
  "console",
  "once_cell",
@@ -1329,14 +1335,14 @@ dependencies = [
 
 [[package]]
 name = "jpeg-encoder"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b0b36cbb4e6704f12f5b5d7b01dac593982c6550859ebd5a66fb15c9ea27fd5"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "jpegxl-rs"
 version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#884f36f271a4f8fb5dc18d9c5391bd9cc9d1c707"
+source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
 dependencies = [
  "bon",
  "byteorder",
@@ -1348,7 +1354,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#884f36f271a4f8fb5dc18d9c5391bd9cc9d1c707"
+source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
 dependencies = [
  "cmake",
 ]
@@ -1356,7 +1362,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#884f36f271a4f8fb5dc18d9c5391bd9cc9d1c707"
+source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -1607,9 +1613,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.187"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7743783ea728ef5c31194c6590797eed286449b4a4e87d626d8a51f0a94e732"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libdav1d-sys"
@@ -2093,7 +2099,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pgvector"
 version = "0.4.2"
-source = "git+https://github.com/pgvector/pgvector-rust#052f8aa4410ccd50694e380eab0f2d93b1c07b6a"
+source = "git+https://github.com/pgvector/pgvector-rust#36b39c5ff0f428897298037dde59925aec71eb6a"
 dependencies = [
  "bytes",
  "postgres-types",
@@ -2257,11 +2263,12 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.11.0"
-source = "git+https://github.com/proptest-rs/proptest#85a3de393331b951e20c5da1cdac9d342fc36a6f"
+source = "git+https://github.com/proptest-rs/proptest#a4ad984690d689a14b6b0c9fd7232eda5bb9681a"
 dependencies = [
  "bit-set",
  "bit-vec",
  "bitflags",
+ "core_detect",
  "num-traits",
  "rand 0.10.2",
  "rand_chacha 0.10.0",
@@ -2316,7 +2323,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.41.0"
-source = "git+https://github.com/tafia/quick-xml#56ae43f8279225463baf85254e36fe7ce5dcc081"
+source = "git+https://github.com/tafia/quick-xml#6d0842645b6c67822d5d07037f4e7267b12760ac"
 dependencies = [
  "memchr",
 ]
@@ -2722,7 +2729,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2758,9 +2765,9 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
-version = "3.5.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+checksum = "a6df5ed973ad8d834e09f824f9e9f449af6b9a3745f78dec7cc752770bd3bf11"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2772,13 +2779,13 @@ dependencies = [
 
 [[package]]
 name = "serial_test_derive"
-version = "3.5.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2910,9 +2917,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a207d6d6a2b7fc470b80443726053f18a2481b7e1eee970597051596567987a3"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2975,7 +2982,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#eef55c96d599fc7e484e08ce581f65494ccd6ade"
+source = "git+https://github.com/Stebalien/tempfile#de29cf162b96291736c8a4da3762d9adfed6e7ee"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",
@@ -3132,13 +3139,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.18"
+version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]
@@ -3203,9 +3211,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
+checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow 1.0.4",
 ]

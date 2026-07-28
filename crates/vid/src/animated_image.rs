@@ -1442,6 +1442,16 @@ fn size_guard_limit(input_size: u64, tolerance_ratio: f64, context: &str) -> Res
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
 /// Callers should ignore it rather than producing a video output.
+fn animation_analysis_is_static(is_animated: bool, duration_secs: Option<f32>) -> bool {
+    !is_animated
+        || duration_secs.is_some_and(|duration| {
+            duration
+                < foundation::numeric_cast::f64_to_f32_lossy(
+                    foundation::constants::NEGLIGIBLE_DURATION_SECS,
+                )
+        })
+}
+
 fn is_static_animated_image(path: &Path) -> Result<bool> {
     let ext = content_aware_extension_or_path_extension(
         path,
@@ -1461,15 +1471,10 @@ fn is_static_animated_image(path: &Path) -> Result<bool> {
         );
         VidQualityError::ConversionError(message)
     })?;
-    if let Some(duration_secs) = analysis.duration_secs
-        && duration_secs
-            < foundation::numeric_cast::f64_to_f32_lossy(
-                foundation::constants::NEGLIGIBLE_DURATION_SECS,
-            )
-    {
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(animation_analysis_is_static(
+        analysis.is_animated,
+        analysis.duration_secs,
+    ))
 }
 
 fn ignored_static_animated(input: &Path) -> Result<TaskResult> {
@@ -2641,7 +2646,8 @@ pub fn convert_to_avif_meme(input: &Path, options: &ConvertOptions) -> Result<Ta
         }
     } else {
         log_detail!(
-            "Animated AVIF Meme Mode: preserving alpha with FFmpeg AV1 encoder for {}",
+            "Animated AVIF Meme Mode: compositing alpha on black for AVIF compatibility with \
+             FFmpeg AV1 encoder for {}",
             input.display()
         );
         match ensure_avif_animation_ffmpeg_support() {
@@ -3392,6 +3398,14 @@ mod tests {
                 .contains("static animated image analysis failed"),
             "malformed true GIF must fail the probe, got: {err}"
         );
+    }
+
+    #[test]
+    fn animation_domain_rejects_single_frame_even_without_duration() {
+        assert!(animation_analysis_is_static(false, None));
+        assert!(animation_analysis_is_static(false, Some(1.0)));
+        assert!(!animation_analysis_is_static(true, None));
+        assert!(!animation_analysis_is_static(true, Some(1.0)));
     }
 
     #[test]

@@ -634,8 +634,23 @@ const MC_FORBIDDEN_M172_SILENT_MKDIR: &[&str] = &["let _ = std::fs::create_dir_a
 
 const MC_FORBIDDEN_M173_SILENT_FS: &[&str] = &[
     "let _ = std::fs::remove_file",
+    "let _ = std::fs::remove_dir",
+    "let _ = std::fs::remove_dir_all",
     "let _ = std::fs::rename",
     "let _ = std::fs::copy",
+    "let _ = std::fs::write",
+    "let _ = std::fs::create_dir",
+    "let _ = std::fs::create_dir_all",
+    "let _ = std::fs::set_permissions",
+    "let _ = fs::remove_file",
+    "let _ = fs::remove_dir",
+    "let _ = fs::remove_dir_all",
+    "let _ = fs::rename",
+    "let _ = fs::copy",
+    "let _ = fs::write",
+    "let _ = fs::create_dir",
+    "let _ = fs::create_dir_all",
+    "let _ = fs::set_permissions",
 ];
 
 const MC_FORBIDDEN_M174_FILE_STEM_RAW: &[&str] =
@@ -2013,6 +2028,10 @@ fn delivery_pattern_offenders_outside_gate(root: &Path, patterns: &[&str]) -> Ve
             .unwrap_or_else(|err| panic!("read {}: {err:?}", file.display())); // audited: contract test assertion path; panic/expect is test-only failure signal
         let prod = production_scope(&content);
         for (idx, line) in prod.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                continue;
+            }
             if patterns.iter().any(|pattern| line.contains(pattern)) {
                 let rel = file.strip_prefix(root).unwrap_or(&file);
                 offenders.push(format!("{}:{}: {}", rel.display(), idx + 1, line.trim()));
@@ -18561,8 +18580,15 @@ fn production_media_cleanup_does_not_drop_safe_remove_file_results() {
     let forbidden = [
         "let _ = foundation::io_utils::safe_remove_file",
         "let _ = crate::io_utils::safe_remove_file",
+        "let _ = foundation::io_utils::safe_remove_dir",
+        "let _ = crate::io_utils::safe_remove_dir",
+        "let _ = foundation::io_utils::safe_remove_dir_all",
+        "let _ = crate::io_utils::safe_remove_dir_all",
         "let _ = crate::media_conversion_gate::delivery_rename_or_audit",
         "let _ = foundation::media_conversion_gate::delivery_rename_or_audit",
+        "let _ = crate::media_conversion_gate::delivery_remove_file_or_audit",
+        "let _ = foundation::media_conversion_gate::delivery_remove_file_or_audit",
+        "let _ = delivery_remove_file_or_audit",
     ];
     let mut offenders = Vec::new();
 

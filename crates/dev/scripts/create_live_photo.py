@@ -4,13 +4,14 @@ Convert video to Apple Live Photo format (IMG_xxxx.JPG/HEIC + IMG_xxxx.MOV).
 Supports high-quality encoding, HEIC format, and Live Photo metadata injection.
 """
 
-from mfb_ui_tokens import pick_symbol
 import argparse
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+from mfb_ui_tokens import pick_symbol
 
 
 def check_dependencies(needs_heif=False, needs_makelive=False):

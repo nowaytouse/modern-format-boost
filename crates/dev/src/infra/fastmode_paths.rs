@@ -112,32 +112,37 @@ pub fn build_fast_img_restore_command(
     ]
 }
 
-/// Build the Rust full loop-intent video `FastMode` command.
+/// Build the Rust animated-image/video `FastMode` command.
 #[must_use]
 pub fn build_fast_vid_command(
     vid_binary: &Path,
     target_dir: &Path,
     output_dir: &Path,
-    _shortest_path: bool,
+    shortest_path: bool,
     strategy: Option<&str>,
 ) -> Vec<String> {
     let mut command = vec![
         vid_binary.to_string_lossy().to_string(),
-        "run".to_string(),
+        "fast-gif".to_string(),
         target_dir.to_string_lossy().to_string(),
         "--output".to_string(),
         output_dir.to_string_lossy().to_string(),
-        "--base-dir".to_string(),
-        target_dir.to_string_lossy().to_string(),
         "--recursive".to_string(),
         "--apple-compat".to_string(),
-        "--ultimate".to_string(),
-        "--archive".to_string(),
     ];
-    if let Some(strat) = strategy {
-        command.push("--strategy".to_string());
-        command.push(strat.to_string());
+    if shortest_path {
+        command.push("--shortest-path".to_string());
+        command.push("--auto-import".to_string());
     }
+    command.push("--strategy".to_string());
+    command.push(
+        if strategy == Some("avif") {
+            "avif"
+        } else {
+            "default"
+        }
+        .to_string(),
+    );
     command
 }
 
@@ -345,44 +350,48 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_vid_command_uses_full_loop_intent_run_pipeline() {
+    fn test_fast_vid_command_uses_fast_gif_pipeline_and_maps_jxl_strategy() {
         let command = build_fast_vid_command(
             Path::new("/opt/mfb/vid"),
             Path::new("/Users/example/Movies/Clips"),
             Path::new("/Users/example/Movies/Clips_optimized"),
             false,
-            None,
+            Some("jxl"),
         );
         assert_eq!(
             command,
             vec![
                 "/opt/mfb/vid".to_string(),
-                "run".to_string(),
+                "fast-gif".to_string(),
                 "/Users/example/Movies/Clips".to_string(),
                 "--output".to_string(),
                 "/Users/example/Movies/Clips_optimized".to_string(),
-                "--base-dir".to_string(),
-                "/Users/example/Movies/Clips".to_string(),
                 "--recursive".to_string(),
                 "--apple-compat".to_string(),
-                "--ultimate".to_string(),
-                "--archive".to_string(),
+                "--strategy".to_string(),
+                "default".to_string(),
             ]
         );
     }
 
     #[test]
-    fn test_fast_vid_shortest_path_command_stays_on_full_run_pipeline() {
+    fn test_fast_vid_shortest_path_enables_verified_import_and_avif_strategy() {
         let command = build_fast_vid_command(
             Path::new("/opt/mfb/vid"),
             Path::new("/Users/example/Movies/Clips"),
             Path::new("/Users/example/Movies/Clips_optimized"),
             true,
-            None,
+            Some("avif"),
         );
-        assert!(command.contains(&"run".to_string()));
-        assert!(!command.contains(&"fast-gif".to_string()));
-        assert!(!command.contains(&"--shortest-path".to_string()));
-        assert!(!command.contains(&"--auto-import".to_string()));
+        assert!(command.contains(&"fast-gif".to_string()));
+        assert!(command.contains(&"--shortest-path".to_string()));
+        assert!(command.contains(&"--auto-import".to_string()));
+        assert_eq!(
+            command
+                .windows(2)
+                .find(|pair| pair[0] == "--strategy")
+                .map(|pair| pair[1].as_str()),
+            Some("avif")
+        );
     }
 }

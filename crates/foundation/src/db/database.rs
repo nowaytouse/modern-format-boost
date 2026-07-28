@@ -1423,7 +1423,7 @@ fn maybe_alert_production_hdbscan_catalog_gap(conn: &mut Client, reason: &'stati
         branch = "production_hdbscan_catalog_missing",
         reason,
         disable_env = crate::constants::ENV_DISABLE_LOOP_HDBSCAN_FUSION,
-        "PRODUCTION ALERT: mature LoopIntent corpus without usable HDBSCAN catalog while fusion is enabled; KNN lookups reject at fusion. Run loop_intent_clustering.py after stats refresh, or set MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION=1"
+        "PRODUCTION ALERT: mature LoopIntent corpus without usable HDBSCAN catalog while fusion is enabled; KNN lookups reject at fusion. Run `cargo run --locked -p dev --bin training_pipeline -- finalize-loop-intent` after stats refresh, or set MODERN_FORMAT_DISABLE_LOOP_HDBSCAN_FUSION=1"
     );
 }
 

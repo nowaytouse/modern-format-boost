@@ -4,10 +4,11 @@
 This script creates synthetic media files needed for testing.
 """
 
-from mfb_ui_tokens import pick_symbol
 import subprocess
 import sys
 from pathlib import Path
+
+from mfb_ui_tokens import pick_symbol
 
 
 def run_ffmpeg(args: list[str], output_file: str) -> bool:

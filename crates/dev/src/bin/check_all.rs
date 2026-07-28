@@ -871,11 +871,15 @@ fn main() -> Result<()> {
 
     let git_files = git_tracked_existing_files(&repo_root);
     let py_files = files_with_suffixes(&git_files, &[".py"]);
-    let _shell_files = files_with_suffixes(&git_files, &[".sh"]);
+    let shell_files = files_with_suffixes(&git_files, &[".sh"]);
     let md_files = files_with_suffixes(&git_files, &[".md"]);
-    let json_files = files_with_suffixes(&git_files, &[".json"]);
+    let json_files = files_with_suffixes(&git_files, &[".json", ".jsonc"]);
     let yaml_files = files_with_suffixes(&git_files, &[".yml", ".yaml"]);
     let toml_files = files_with_suffixes(&git_files, &[".toml"]);
+    let sql_files = files_with_suffixes(&git_files, &[".sql"]);
+    let plist_files = files_with_suffixes(&git_files, &[".plist"]);
+    let web_files =
+        files_with_suffixes(&git_files, &[".vue", ".ts", ".js", ".cjs", ".css", ".html"]);
 
     // 1. Branch Guard
     let branch_output = Command::new("git")
@@ -898,9 +902,10 @@ fn main() -> Result<()> {
         }
     }
 
-    // 2. Fix mode
+    // 2. Fix mode (Explicit user opt-in for multi-language workspace formatting)
     if args.fix {
-        println!("Running auto-fixers...");
+        println!("Running multi-language auto-fixers across workspace...");
+        // Rust
         let _ = Command::new("cargo").args(["fmt", "--all"]).status();
         let _ = Command::new("cargo")
             .args([
@@ -914,6 +919,7 @@ fn main() -> Result<()> {
                 "--fix",
             ])
             .status();
+        // Python
         if command_exists("ruff") {
             let _ = Command::new("ruff").args(["check", "--fix", "."]).status();
             let _ = Command::new("ruff").args(["format", "."]).status();
@@ -923,6 +929,13 @@ fn main() -> Result<()> {
             pyupgrade_args.extend(py_files.iter().cloned());
             let _ = Command::new("pyupgrade").args(pyupgrade_args).status();
         }
+        // Shell
+        if command_exists("shfmt") && !shell_files.is_empty() {
+            let mut shfmt_args = vec!["-w".to_string(), "-i".to_string(), "4".to_string()];
+            shfmt_args.extend(shell_files.iter().cloned());
+            let _ = Command::new("shfmt").args(shfmt_args).status();
+        }
+        // Vue / Node
         let vue_path = vue_dir(&repo_root);
         if vue_path.join("package.json").is_file() {
             let vue_prefix = vue_path.to_string_lossy().into_owned();
@@ -930,18 +943,35 @@ fn main() -> Result<()> {
                 .args(["--prefix", &vue_prefix, "run", "format"])
                 .status();
         }
+        // Web / Prettier (MD, JSON, YAML, Vue, TS, JS, CSS, HTML)
         let mut prettier_targets = md_files.clone();
         prettier_targets.extend(json_files.iter().cloned());
         prettier_targets.extend(yaml_files.iter().cloned());
+        prettier_targets.extend(web_files.iter().cloned());
         if command_exists("prettier") && !prettier_targets.is_empty() {
             let mut prettier_args = vec!["--write".to_string()];
             prettier_args.extend(prettier_targets);
             let _ = Command::new("prettier").args(prettier_args).status();
         }
+        // TOML
         if let Some(cmd) = taplo_fmt_command(&toml_files, &[])
             && let Some((program, args)) = cmd.split_first()
         {
             let _ = Command::new(program).args(args).status();
+        }
+        // SQL (PostgreSQL dialect)
+        if command_exists("npx") && !sql_files.is_empty() {
+            for sql_file in &sql_files {
+                let _ = Command::new("npx")
+                    .args(["-y", "sql-formatter", "-l", "postgresql", "--fix", sql_file])
+                    .status();
+            }
+        }
+        // Plist (macOS)
+        if cfg!(target_os = "macos") && command_exists("plutil") && !plist_files.is_empty() {
+            let mut plutil_args = vec!["-convert".to_string(), "xml1".to_string()];
+            plutil_args.extend(plist_files.iter().cloned());
+            let _ = Command::new("plutil").args(plutil_args).status();
         }
     }
 
@@ -952,7 +982,11 @@ fn main() -> Result<()> {
         .status()
         .context("run cargo fmt")?;
     if !fmt_status.success() {
-        eprintln!("FAIL: cargo fmt check failed. Run cargo fmt --all to fix.");
+        eprintln!(
+            "FAIL: cargo fmt check failed.\n\
+             Hint: To format all workspace languages (Rust, Python, Shell, Vue, JS/TS, SQL, TOML, JSON, YAML, Markdown, Plist), run:\n\
+             cargo run --locked -p dev --bin check_all -- --fix"
+        );
         std::process::exit(1);
     }
     println!("  OK: formatting matches");
@@ -966,7 +1000,11 @@ fn main() -> Result<()> {
                     .status()
                     .context("run taplo fmt --check")?;
                 if !taplo_status.success() {
-                    eprintln!("FAIL: taplo fmt check failed.");
+                    eprintln!(
+                        "FAIL: taplo fmt check failed.\n\
+                         Hint: To format all workspace languages, run:\n\
+                         cargo run --locked -p dev --bin check_all -- --fix"
+                    );
                     std::process::exit(1);
                 }
             }

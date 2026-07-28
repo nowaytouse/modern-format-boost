@@ -2,12 +2,11 @@ import importlib.util
 import json
 import sys
 import unittest
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
@@ -663,6 +662,39 @@ def test_shortest_path_cleanup_removes_ds_store_and_orphan_empty_dirs(
                 "src": "source-blake3",
                 "out": "output-blake3",
                 "out_rel": "converted/a.JXL",
+            }
+        },
+        src_jpeg_count=1,
+    )
+
+    drag.delete_fast_img_shortest_path_output_dir(output)
+
+    assert not output.exists()
+    assert drag.FAST_IMG_OUTPUT_CLEANED is True
+
+
+def test_shortest_path_cleanup_removes_avif_marker_recorded_files(
+    tmp_path, monkeypatch
+):
+    drag = load_drag_processor(tmp_path, monkeypatch)
+    monkeypatch.setenv("MFB_HOME_ROOT", str(tmp_path / "mfb_state"))
+    source = tmp_path / "Album"
+    output = tmp_path / "Album_optimized"
+    source.mkdir()
+    (output / "converted").mkdir(parents=True)
+    # Valid AVIF header: ftypavif
+    avif_bytes = b"\x00\x00\x00\x1c\x66\x74\x79\x70\x61\x76\x69\x66\x00\x00\x00\x00"
+    (output / "converted" / "a.AVIF").write_bytes(avif_bytes)
+    write_fast_img_marker(
+        tmp_path / "mfb_state",
+        source,
+        output,
+        {
+            "converted/a.jpeg": {
+                "src": "source-blake3",
+                "out": "output-blake3",
+                "out_rel": "converted/a.AVIF",
+                "library_asset": "asset-12345",
             }
         },
         src_jpeg_count=1,

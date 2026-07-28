@@ -7766,7 +7766,8 @@ mapped_label = map_quality_label("file.jpg", lbl)
 
 ```python
 # Old: Only direct_links supported, field_path was incomplete
-if "direct_links" in api_info: return api_info["direct_links"]
+if "direct_links" in api_info:
+    return api_info["direct_links"]
 return []  # Simplified: only direct_links for now
 ```
 

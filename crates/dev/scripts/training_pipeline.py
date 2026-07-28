@@ -53,7 +53,9 @@ except ModuleNotFoundError:  # optional for `--help` and `ingest`
     _pg_sql = None
 
 try:
-    from tabulate import tabulate as _imported_tabulate_raw  # pyright: ignore[reportMissingModuleSource]
+    from tabulate import (
+        tabulate as _imported_tabulate_raw,  # pyright: ignore[reportMissingModuleSource]
+    )
 except ModuleNotFoundError:
     _imported_tabulate: Callable[..., str] | None = None
 else:
@@ -355,12 +357,16 @@ if psycopg2 is None or _imported_tabulate is None:
 if psycopg2 is None:
     try:
         import psycopg2  # pyright: ignore[reportMissingModuleSource]
-        from psycopg2 import sql as _pg_sql  # pyright: ignore[reportMissingModuleSource]
+        from psycopg2 import (
+            sql as _pg_sql,  # pyright: ignore[reportMissingModuleSource]
+        )
     except ModuleNotFoundError:
         pass
 if _imported_tabulate is None:
     try:
-        from tabulate import tabulate as _imported_tabulate_raw  # pyright: ignore[reportMissingModuleSource]
+        from tabulate import (
+            tabulate as _imported_tabulate_raw,  # pyright: ignore[reportMissingModuleSource]
+        )
     except ModuleNotFoundError:
         pass
     else:
@@ -723,13 +729,7 @@ def print_loop_distribution(conn: DbConnection) -> None:
         )
     )
     print(
-        "total={} null_embedding={} non_finite={} non_neutral_directory_score={} replica_source_paths={}".format(
-            total,
-            null_embedding,
-            non_finite,
-            non_neutral_directory_score,
-            replica_source_paths,
-        )
+        f"total={total} null_embedding={null_embedding} non_finite={non_finite} non_neutral_directory_score={non_neutral_directory_score} replica_source_paths={replica_source_paths}"
     )
 
 

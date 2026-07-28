@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys as _sys
 import time
 from collections import defaultdict
 from collections.abc import Sequence
@@ -24,8 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Protocol
-
-import sys as _sys
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in _sys.path:
@@ -518,7 +517,7 @@ def run_clustering(connstr: str, *, min_cluster_size: int | None) -> int:
 
 
 def main() -> None:
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("loop_intent_clustering.py", require_invoker=True)
     parser = argparse.ArgumentParser(

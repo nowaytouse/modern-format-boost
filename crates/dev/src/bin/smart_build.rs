@@ -1195,7 +1195,123 @@ fn bundle_file_needs_sync(src: &Path, dest: &Path) -> bool {
     }
 }
 
-fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
+fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: bool) -> Result<bool> {
+    let dylib_name = if cfg!(target_os = "macos") {
+        "libfoundation.dylib"
+    } else if cfg!(target_os = "windows") {
+        "foundation.dll"
+    } else {
+        "libfoundation.so"
+    };
+
+    let target_dylib = project_root.join("target").join("release").join(dylib_name);
+    let artifact_dir = project_root
+        .join("crates")
+        .join(".modern_format_boost")
+        .join("artifacts");
+    fs::create_dir_all(&artifact_dir)
+        .with_context(|| format!("create artifact dir {}", artifact_dir.display()))?;
+    let artifact_dylib = artifact_dir.join(dylib_name);
+
+    if force || !target_dylib.is_file() {
+        println!(
+            "{}Building foundation dylib (cdylib)...{}",
+            style.cyan, style.reset
+        );
+        let status = Command::new("cargo")
+            .args([
+                "rustc",
+                "--release",
+                "-p",
+                "foundation",
+                "--lib",
+                "--crate-type",
+                "cdylib",
+            ])
+            .current_dir(project_root)
+            .status()
+            .context("cargo rustc foundation cdylib failed")?;
+        if !status.success() {
+            anyhow::bail!(
+                "cargo rustc cdylib failed with exit status {:?}",
+                status.code()
+            );
+        }
+    }
+    if !target_dylib.is_file() {
+        anyhow::bail!(
+            "cargo build succeeded but foundation dylib is missing: {}",
+            target_dylib.display()
+        );
+    }
+
+    if force || bundle_file_needs_sync(&target_dylib, &artifact_dylib) {
+        fs::copy(&target_dylib, &artifact_dylib).with_context(|| {
+            format!(
+                "copy {} to {}",
+                target_dylib.display(),
+                artifact_dylib.display()
+            )
+        })?;
+        println!(
+            "{}Synced foundation dylib to artifact: {}{}",
+            style.green,
+            artifact_dylib.display(),
+            style.reset
+        );
+    }
+
+    let app_bundle = project_root.join("Modern Format Boost.app");
+    if !app_bundle.is_dir() {
+        return Ok(false);
+    }
+
+    let app_res = app_bundle
+        .join("Contents")
+        .join("Resources")
+        .join(dylib_name);
+    let app_fw_dir = app_bundle.join("Contents").join("Frameworks");
+    fs::create_dir_all(&app_fw_dir)
+        .with_context(|| format!("create framework dir {}", app_fw_dir.display()))?;
+    let app_fw = app_fw_dir.join(dylib_name);
+    let mut app_changed = false;
+    for destination in [&app_res, &app_fw] {
+        if force || bundle_file_needs_sync(&target_dylib, destination) {
+            fs::copy(&target_dylib, destination).with_context(|| {
+                format!(
+                    "copy {} to {}",
+                    target_dylib.display(),
+                    destination.display()
+                )
+            })?;
+            app_changed = true;
+        }
+    }
+
+    if app_changed && cfg!(target_os = "macos") {
+        if !command_exists("codesign") {
+            anyhow::bail!("codesign not found; cannot sign foundation dylib");
+        }
+        for destination in [&app_res, &app_fw] {
+            let status = Command::new("codesign")
+                .arg("--force")
+                .arg("--sign")
+                .arg(app_bundle_codesign_identity())
+                .arg(destination)
+                .status()
+                .with_context(|| format!("codesign {}", destination.display()))?;
+            if !status.success() {
+                anyhow::bail!("codesign failed for {}", destination.display());
+            }
+        }
+    }
+
+    Ok(app_changed)
+}
+
+fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()> {
+    let foundation_changed = sync_foundation_dylib_artifact(project_root, style, force)?;
+
     let app_res_dir = project_root
         .join("Modern Format Boost.app")
         .join("Contents")
@@ -1222,16 +1338,25 @@ fn sync_app_bundle(project_root: &Path, style: &Style) -> Result<()> {
             }
         }
     }
-    if changed_bins.is_empty() {
+    if changed_bins.is_empty() && !foundation_changed {
         println!("{}App Bundle already current.{}", style.dim, style.reset);
         return Ok(());
     }
-    println!(
-        "{}App Bundle updated ({} binary file(s)).{}",
-        style.green,
-        changed_bins.len(),
-        style.reset
-    );
+
+    if foundation_changed {
+        println!(
+            "{}App Bundle foundation dylib updated.{}",
+            style.green, style.reset
+        );
+    }
+    if !changed_bins.is_empty() {
+        println!(
+            "{}App Bundle updated ({} binary file(s)).{}",
+            style.green,
+            changed_bins.len(),
+            style.reset
+        );
+    }
 
     sign_app_bundle(project_root, style, &changed_bins)?;
 
@@ -1354,7 +1479,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     }
 
     // Make sure we sync the Rust binaries into the newly created App bundle
-    sync_app_bundle(project_root, style)?;
+    sync_app_bundle(project_root, style, false)?;
 
     Ok(())
 }
@@ -1558,7 +1683,7 @@ fn main() -> Result<()> {
             "{}{}[sync mode]{} Syncing binaries to app bundle (no build).",
             style.cyan, style.bold, style.reset
         );
-        sync_app_bundle(&project_root, &style)?;
+        sync_app_bundle(&project_root, &style, args.force)?;
         return Ok(());
     }
 
@@ -1776,7 +1901,7 @@ fn main() -> Result<()> {
         }
     }
 
-    sync_app_bundle(&project_root, &style)?;
+    sync_app_bundle(&project_root, &style, args.force)?;
 
     Ok(())
 }

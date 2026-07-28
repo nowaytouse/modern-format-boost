@@ -29,8 +29,8 @@ SCRIPT_DIR = Path(__file__).parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from mfb_config_load import load_consumer_json  # noqa: E402
-from mfb_entry_guard import guard_main, run_delegated  # noqa: E402
+from mfb_config_load import load_consumer_json
+from mfb_entry_guard import guard_main, run_delegated
 
 CONFIG_PATH = SCRIPT_DIR.parent / "src" / "config" / "directory_keywords.json"
 CONFIG_CONSUMER = "backfill_directory_scores.py"

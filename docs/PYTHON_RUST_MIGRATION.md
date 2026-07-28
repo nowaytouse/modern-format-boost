@@ -4,7 +4,7 @@ Production and CI orchestration are Rust-first. Python remains only where its
 ecosystem is part of the implementation or where a compatibility bridge is
 still covered by tests.
 
-## Completion status (2026-07-22)
+## Completion status (2026-07-28)
 
 Operational migration is complete for production and CI entry points:
 
@@ -32,6 +32,20 @@ compatibility, or test role is still required.
 The Rust training orchestrator may invoke Python ML workers when a model step
 depends on Python-native libraries. That delegation does not make the legacy
 Python orchestrator the public entry point.
+
+## Intentional operational boundaries
+
+- CI media dependency bootstrap is a standalone Rust binary compiled directly
+  with `rustc`, so it has no Cargo or native-library bootstrap cycle.
+- Active GitHub workflows do not invoke `.py`, `.sh`, or `.bash` script files.
+- `check_all --fix` owns source formatting. `kondo` cache cleanup belongs to
+  `smart_build --clean`; formatting no longer deletes build caches as a side
+  effect.
+- Packaged Python bridges prefer the App bundle foundation library only when it
+  is at least as new as source-tree artifacts. A newer release library is synced
+  instead of silently loading a stale bundle copy.
+- `smart_build --sync` treats a foundation library update as an App bundle
+  mutation, verifies nested signing, and reseals the outer bundle.
 
 ## Migrated operational entry points
 

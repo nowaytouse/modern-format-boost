@@ -384,7 +384,9 @@ pub fn choose_fast_img_strategy() -> Result<String> {
     println!("       {dim}Fast lossless encoding of JPEGs to JXL.{reset}");
     println!("   {bold}2{reset} - {green}AVIF (Meme Mode){reset}");
     println!(
-        "       {dim}Meme Mode (表情包模式): Strict static encoding of images to AVIF.{reset}"
+        "       {dim}Meme Mode (表情包模式): lossy static AVIF encoding; may lose metadata or \
+         transparency and can fall back when output grows. It ignores Ultimate/Extreme flags and \
+         is not an archival mode.{reset}"
     );
     let answer = read_line(&format!(
         "\n   {bold}Choose strategy [1/2] ({green}Enter = Default{reset}{bold}): {reset}"
@@ -410,10 +412,9 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
              local AVIF folder cleanup.{reset}"
         );
     } else {
-        let format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
         println!(
-            "       {dim}{format_name}-only delivery, strict verification, automatic iCloud Photos import, then \
-             local {format_name} folder cleanup.{reset}"
+            "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
+             local JXL folder cleanup.{reset}"
         );
     }
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
@@ -428,18 +429,21 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
              deleted after strict verification.{reset}"
         );
     }
-    println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
-    println!(
-        "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure \
-         preserved.{reset}"
-    );
+    if strategy != "avif" {
+        println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
+        println!(
+            "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure \
+             preserved.{reset}"
+        );
+    }
+    let choices = if strategy == "avif" { "1/2" } else { "1/2/3" };
     let answer = read_line(&format!(
-        "\n   {bold}Choose Fast Mode path [1/2/3] ({green}Enter = Shortest Path{reset}{bold}): \
+        "\n   {bold}Choose Fast Mode path [{choices}] ({green}Enter = Shortest Path{reset}{bold}): \
          {reset}"
     ))?;
     Ok(match answer.trim() {
         "2" => FastImgAction::Normal,
-        "3" => FastImgAction::RestoreJpeg,
+        "3" if strategy != "avif" => FastImgAction::RestoreJpeg,
         _ => FastImgAction::ShortestPath,
     })
 }
@@ -454,16 +458,16 @@ pub fn choose_fast_vid_shortest_path(strategy: &str) -> Result<bool> {
     println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
     if strategy == "avif" {
         println!(
-            "       {dim}AVIF-only (Meme Mode) animated image delivery, no loop intent judgment.{reset}"
+            "       {dim}Meme Mode skips loop-intent judgment. This launcher enables Apple \
+             compatibility, so delivery is forced to GIF even when AVIF is selected.{reset}"
         );
     } else {
-        println!(
-            "       {dim}Full LoopIntent video and animated-image delivery through Rust vid \
-             run.{reset}"
-        );
+        println!("       {dim}LoopIntent-gated GIF delivery for animated images and video.{reset}");
     }
     println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
-    println!("       {dim}Full vid pipeline adjacent output with archive-quality settings.{reset}");
+    println!(
+        "       {dim}Verified adjacent GIF/AVIF output without automatic Photos import.{reset}"
+    );
     let answer = read_line(&format!(
         "\n   {bold}Choose Fast Video path [1/2] ({green}Enter = Shortest Path{reset}{bold}): \
          {reset}"
@@ -1247,9 +1251,12 @@ pub fn delete_fast_img_shortest_path_output_dir(
         }
         let true_format = detect_true_format(&target)
             .with_context(|| format!("fast-img cleanup probe failed for {}", target.display()))?;
-        if true_format != "jxl" {
+        if !matches!(
+            true_format.as_str(),
+            "jxl" | "avif" | "webp" | "jpeg" | "png" | "heic" | "gif" | "bmp" | "tiff"
+        ) {
             bail!(
-                "fast-img cleanup refused non-JXL marker output {} (true_format={true_format})",
+                "fast-img cleanup refused non-image marker output {} (true_format={true_format})",
                 target.display()
             );
         }
@@ -1271,7 +1278,7 @@ pub fn delete_fast_img_shortest_path_output_dir(
     let fully_removed = !output_dir.exists();
     if fully_removed {
         println!(
-            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s) and empty output \
+            "   {} Shortest Path cleanup: removed {deleted} imported output file(s) and empty output \
              folder after verified iCloud import: {}",
             pick_symbol("✓", "[OK]"),
             output_dir.display()

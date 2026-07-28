@@ -3,6 +3,18 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 #[test]
+fn open_image_with_limits_uses_magic_bytes_for_mislabeled_png() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("qqcache-mislabeled.gif");
+    image::DynamicImage::new_rgba8(2, 3)
+        .save_with_format(&path, image::ImageFormat::Png)
+        .expect("write PNG with GIF extension");
+
+    let decoded = open_image_with_limits(&path).expect("decode by PNG magic bytes");
+    assert_eq!((decoded.width(), decoded.height()), (2, 3));
+}
+
+#[test]
 fn parse_png_structure_rejects_truncated_text_chunk() {
     let mut data = Vec::new();
     data.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
@@ -360,23 +372,51 @@ fn detect_animation_webp_fps_from_anmf_delays_in_tempdir() {
 #[test]
 fn test_all_control_groups_lossless_lossy() {
     let formats = [
-        ("WebP", "/tmp/test_lossless.webp", "/tmp/test_lossy.webp", DetectedFormat::WebP),
-        ("AVIF", "/tmp/test_lossless.avif", "/tmp/test_lossy.avif", DetectedFormat::AVIF),
-        ("TIFF", "/tmp/test_lossless.tiff", "/tmp/test_lossy.tiff", DetectedFormat::TIFF),
-        ("JXL", "/tmp/test_lossless.jxl", "/tmp/test_lossy.jxl", DetectedFormat::JXL),
+        (
+            "WebP",
+            "/tmp/test_lossless.webp",
+            "/tmp/test_lossy.webp",
+            DetectedFormat::WebP,
+        ),
+        (
+            "AVIF",
+            "/tmp/test_lossless.avif",
+            "/tmp/test_lossy.avif",
+            DetectedFormat::AVIF,
+        ),
+        (
+            "TIFF",
+            "/tmp/test_lossless.tiff",
+            "/tmp/test_lossy.tiff",
+            DetectedFormat::TIFF,
+        ),
+        (
+            "JXL",
+            "/tmp/test_lossless.jxl",
+            "/tmp/test_lossy.jxl",
+            DetectedFormat::JXL,
+        ),
     ];
-    
+
     for (name, lossless_path, lossy_path, format) in &formats {
         let l_path = std::path::Path::new(lossless_path);
         let y_path = std::path::Path::new(lossy_path);
-        
+
         if l_path.exists() && y_path.exists() {
             let l_res = detect_compression(format, l_path);
             let y_res = detect_compression(format, y_path);
-            
+
             println!("Control Group {name}: lossless={l_res:?}, lossy={y_res:?}");
-            assert_eq!(l_res.unwrap(), CompressionType::Lossless, "Format {name} lossless was detected as lossy");
-            assert_eq!(y_res.unwrap(), CompressionType::Lossy, "Format {name} lossy was detected as lossless");
+            assert_eq!(
+                l_res.unwrap(),
+                CompressionType::Lossless,
+                "Format {name} lossless was detected as lossy"
+            );
+            assert_eq!(
+                y_res.unwrap(),
+                CompressionType::Lossy,
+                "Format {name} lossy was detected as lossless"
+            );
         }
     }
 }

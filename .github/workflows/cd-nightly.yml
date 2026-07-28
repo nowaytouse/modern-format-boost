@@ -50,7 +50,8 @@ jobs:
           if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
             BREW_BIN="/usr/local/bin/brew"
             if [[ ! -x "${BREW_BIN}" ]]; then
-              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
+              echo "Intel Homebrew is missing from the GitHub runner image." >&2
+              exit 1
             fi
           else
             BREW_BIN="brew"

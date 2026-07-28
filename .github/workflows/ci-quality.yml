@@ -49,17 +49,10 @@ jobs:
 
       - name: Install actionlint & yamllint
         run: |
-          # Install actionlint
-          for i in {1..3}; do
-            curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
-              -o /tmp/download-actionlint.bash && break
-            if [ "$i" -eq 3 ]; then
-              echo "Failed to download actionlint installer after 3 attempts" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          sudo bash /tmp/download-actionlint.bash latest /usr/local/bin
+          # Build actionlint directly; do not execute downloaded installer scripts.
+          go version
+          GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          sudo install -m 0755 "$RUNNER_TEMP/actionlint-bin/actionlint" /usr/local/bin/actionlint
 
           # Install yamllint via apt to avoid PEP 668 issues on Ubuntu 24.04
           sudo apt-get update -qq
@@ -217,10 +210,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y curl meson ninja-build nasm
 
+      - name: Build standalone media dependency installer
+        run: rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+
       - name: Install upstream media dependencies before compiling the MPC downloader
         env:
           MFB_SKIP_MPC_INSTALL: "1"
-        run: bash scripts/ci/install_media_dependencies.sh
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
 
       - name: Download GNU MPC with mirror failover
         run: |
@@ -231,7 +227,7 @@ jobs:
       - name: Install GNU MPC from the mirror-verified archive
         env:
           MFB_MPC_ONLY: "1"
-        run: bash scripts/ci/install_media_dependencies.sh
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
 
       - name: Install Vue quality dependencies
         run: npm ci --prefix crates/dev/src/vue --ignore-scripts
@@ -363,8 +359,11 @@ jobs:
           toolchain: nightly-2026-07-16
           components: clippy, rustfmt, miri, rust-src, llvm-tools
 
+      - name: Build standalone media dependency installer
+        run: rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+
       - name: Install upstream media and MPC dependencies
-        run: bash scripts/ci/install_media_dependencies.sh
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
 
       - name: Install Audit Tools
         run: |

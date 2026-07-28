@@ -104,7 +104,7 @@ impl VerificationGate for Gate1Local {
         let checks = vec![
             check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
             check_blake3_logged_outputs(ctx),
-            check_exact_metadata_copies(ctx),
+            check_metadata_policy(ctx),
             check_nonzero_size(ctx.expected_count, &jxl_files),
             check_orientation_absent(&jxl_files),
             check_decode_probe(&jxl_files, ctx.output_format),
@@ -448,6 +448,58 @@ fn check_blake3_logged_outputs(ctx: &PipelineCtx) -> CheckDetail {
         failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
         format!("{} final source/output hashes current", ctx.expected_count),
         actual,
+        failures,
+    )
+}
+
+fn check_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
+    if ctx.output_format == Some(crate::image::format_detect::FormatKind::Avif) {
+        return check_meme_metadata_policy(ctx);
+    }
+    check_exact_metadata_copies(ctx)
+}
+
+fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
+    let mut failures = Vec::new();
+    let mut adopted = 0usize;
+    for (rel_path, entry) in &ctx.blake3_log {
+        let src = ctx.src_dir.join(rel_path);
+        let out_rel = entry.out_rel.as_deref().map_or_else(
+            || PathBuf::from(rel_path).with_extension("avif"),
+            PathBuf::from,
+        );
+        let out = ctx.working_copy.join(out_rel);
+        match crate::image::format_detect::detect_true_format(&src) {
+            Ok(crate::image::format_detect::FormatKind::Avif) => {
+                adopted = adopted.saturating_add(1);
+                if entry.src != entry.out {
+                    failures.push(out);
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_gate1_meme_source_format",
+                    &src,
+                    format!("Meme Mode source format detection failed during Gate 1: {err}"),
+                );
+                failures.push(out);
+            }
+        }
+    }
+    let passed = failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count;
+    detail(
+        "metadata",
+        passed,
+        format!(
+            "{} Meme Mode metadata-optional outputs; adopted AVIF sources byte-identical",
+            ctx.expected_count
+        ),
+        format!(
+            "{} checked, {adopted} adopted AVIF, {} failed",
+            ctx.blake3_log.len(),
+            failures.len()
+        ),
         failures,
     )
 }
@@ -1192,6 +1244,79 @@ mod tests {
     }
 
     #[test]
+    fn gate1_meme_metadata_allows_non_avif_source_metadata_changes() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.png");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3]))
+            .save(&src)
+            .unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: Some(crate::image::format_detect::FormatKind::Avif),
+        };
+        ctx.blake3_log.insert(
+            "a.png".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.avif".to_string()),
+                src: "source-hash".to_string(),
+                out: "encoded-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let result = super::check_metadata_policy(&ctx);
+
+        assert!(result.passed, "{result:?}");
+    }
+
+    #[test]
+    fn gate1_meme_metadata_requires_adopted_avif_to_stay_byte_identical() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        std::fs::write(
+            src_dir.join("a.avif"),
+            [
+                0x00, 0x00, 0x00, 0x18, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f', 0x00, 0x00,
+                0x00, 0x00, b'a', b'v', b'i', b'f',
+            ],
+        )
+        .unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc.clone(),
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: Some(crate::image::format_detect::FormatKind::Avif),
+        };
+        ctx.blake3_log.insert(
+            "a.avif".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.avif".to_string()),
+                src: "source-hash".to_string(),
+                out: "changed-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let result = super::check_metadata_policy(&ctx);
+
+        assert!(!result.passed);
+        assert_eq!(result.affected_files, vec![wc.join("a.avif")]);
+    }
+
+    #[test]
     fn apply_gate1_records_metadata_check_result() {
         let mut marker = super::WorkingCopyMarker::new(
             PathBuf::from("/tmp/mfb-src"),
@@ -1572,6 +1697,8 @@ pub struct WorkingCopyMarker {
     /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
     #[serde(default = "default_strategy")]
     pub strategy: String,
+    #[serde(default)]
+    pub metadata_policy_version: u32,
 }
 
 fn default_strategy() -> String {
@@ -1598,6 +1725,7 @@ impl WorkingCopyMarker {
             tier2_imported_assets: Vec::new(),
             error: None,
             strategy: "jxl".to_string(),
+            metadata_policy_version: 0,
         }
     }
 

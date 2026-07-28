@@ -13,9 +13,9 @@ use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::{
-    IntegrityResult, apply_library_assets_to_marker, build_fast_img_output_import_candidates,
-    import_media_outputs_with_library_verifier, is_true_jpeg,
-    library_handle_from_marker_import_proof, prompt_user_confirm, safe_delete_jpeg_source,
+    IntegrityResult, PhotosImportCandidate, apply_library_assets_to_marker,
+    build_fast_img_output_import_candidates, import_media_outputs_with_library_verifier,
+    is_true_jpeg, library_handle_from_marker_import_proof, safe_delete_jpeg_source,
     safe_delete_matching_xmp_sidecar, verify_final_avif_delivery_integrity,
     verify_final_jxl_delivery_integrity,
 };
@@ -27,11 +27,11 @@ use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
     Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
     Gate3Deep, LibraryHandle, PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
-    confirm_import_required, deep_scan_complete_or_later, encode_complete_or_later,
-    gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
-    import_complete_or_later, marker_checks_from_result, marker_path_for_working_copy,
-    output_prepared_or_later, prepare_jxl_output_dir, read_marker, resolve_working_copy_dir,
-    retry_resume_stage, working_copy_dir, write_marker_atomic,
+    deep_scan_complete_or_later, encode_complete_or_later, gate1_complete_or_later,
+    gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
+    marker_checks_from_result, marker_path_for_working_copy, output_prepared_or_later,
+    prepare_jxl_output_dir, read_marker, resolve_working_copy_dir, retry_resume_stage,
+    working_copy_dir, write_marker_atomic,
 };
 use foundation::quality_matcher::SourceCodec;
 use foundation::{
@@ -44,6 +44,7 @@ use img::{
 };
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -134,7 +135,7 @@ enum Commands {
         #[arg(long)]
         no_resume: bool,
 
-        /// Static still delivery: `hevc`→JXL (default), `av1`→AVIF. Does not invoke `vid`; animated files are ignored.
+        /// Static still delivery: `hevc`→JXL. `av1` is rejected; AVIF is reserved for fast-img Meme Mode.
         #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
         codec: String,
     },
@@ -235,7 +236,7 @@ enum Commands {
         #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
         strategy: String,
 
-        /// Accepted for CLI compatibility. `FastImg` Meme Mode keeps its normal three-probe search.
+        /// Accepted for CLI compatibility. Meme Mode keeps its bounded coarse-plus-binary search.
         #[arg(long = "extreme-precision", default_value_t = false)]
         extreme_precision: bool,
     },
@@ -272,6 +273,22 @@ const fn command_requires_database(command: &Commands) -> bool {
     )
 }
 
+fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
+    if matches!(
+        command,
+        Commands::Run {
+            codec,
+            ..
+        } if codec == "av1"
+    ) {
+        anyhow::bail!(
+            "manual AVIF selection is unavailable in img run; AVIF is reserved for fast-img \
+             Meme Mode. Use img fast-img --strategy avif <input>"
+        );
+    }
+    Ok(())
+}
+
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
@@ -288,6 +305,7 @@ fn main_inner() -> anyhow::Result<()> {
         .map_err(|e| e.context("Failed to initialize img logging"))?;
 
     let cli = Cli::parse();
+    validate_command_strategy(&cli.command)?;
 
     // Initialize Ctrl+C guard for long-running batch operations
     foundation::ctrlc_guard::init();
@@ -415,16 +433,7 @@ fn main_inner() -> anyhow::Result<()> {
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let should_delete = delete_original || in_place;
 
-            let img_static_delivery = match resolve_cli_img_static_delivery(&codec, apple_compat) {
-                Ok(d) => d,
-                Err(e) => {
-                    log_fatal!(
-                        foundation::infra::static_logs::messages::LABEL_CONFIG,
-                        &e.to_string(),
-                    );
-                    std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-                }
-            };
+            let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
 
             let flag_mode =
                 match foundation::validate_flags_result_with_ultimate(foundation::FlagRequest {
@@ -2196,7 +2205,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
 
     if extreme_precision {
         println!(
-            "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its normal three-probe search"
+            "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its bounded coarse-plus-binary search"
         );
     }
 
@@ -2273,6 +2282,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                             path.display(),
                             e
                         );
+                        // Keep unreadable supported media in the source accounting.
+                        // The encode preflight fails closed and records its explicit
+                        // retained-source disposition instead of silently losing it.
+                        source_jpegs.push(path);
                     }
                 }
             }
@@ -2287,7 +2300,9 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             src_dir.display()
         );
-        println!("[MEME    ] AVIF quality search: q=100..20; keep the smallest verified candidate");
+        println!(
+            "[MEME    ] AVIF quality search: q=100..0; use pure-media budget with smallest verified pure-media fallback"
+        );
     } else {
         println!(
             "[FASTIMG ] selected {} true JPEGs in {}",
@@ -2564,32 +2579,25 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             retry.0 || fast_img_auto_retry_failed_marker(&marker),
         )
     };
+    let refresh_jxl_metadata =
+        encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
+    let previous_resume_stage = marker.stage.clone();
     if !resume_local_delivery_for_shortest_path
-        && encode_complete_or_later(&resume_stage)
-        && !fast_img_marker_outputs_current(&marker)?
+        && fast_img_downgrade_resume_if_outputs_stale(&mut marker, &mut resume_stage)?
     {
         println!(
             "[RESUME  ] existing marker has missing/drifted {output_format_name} output; rebuilding local {output_format_name} outputs"
         );
         tracing::warn!(
             target: "fast_img",
-            stage = %marker.stage.as_str(),
+            stage = %previous_resume_stage.as_str(),
             working_copy = %working_copy.display(),
             "fast-img marker output proof is not current; downgrading resume stage to output_prepared"
         );
-        resume_stage = FastImgStageName::OutputPrepared;
-        marker.encoded_count = 0;
-        marker.gate1_checks = Gate1Checks::default();
-        marker.gate2_checks = Gate2Checks::default();
-        marker.gate3_checks = Gate3Checks::default();
-        marker.blake3_log.clear();
-        marker.skipped_sources.clear();
     }
     if !resume_local_delivery_for_shortest_path && !retry_failed_sources_from_cleanup {
         marker.src_jpeg_count = source_jpegs.len();
     }
-    let refresh_encode_complete_resume_outputs =
-        encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
     marker.stage = if output_prepared_or_later(&resume_stage) {
         resume_stage
     } else {
@@ -2619,6 +2627,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         write_marker_atomic(&marker)?;
     }
 
+    fast_img_refresh_and_persist_marker_deliveries(
+        &mut marker,
+        &src_dir,
+        strategy,
+        refresh_jxl_metadata,
+    )?;
+
     if !encode_complete_or_later(&marker.stage) {
         fast_img_run_encode_phase(
             &mut marker,
@@ -2631,13 +2646,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             ExpertOptionsFlag(allow_expert_options),
             strategy,
         )?;
-    }
-
-    if refresh_encode_complete_resume_outputs {
-        let refreshed = fast_img_refresh_marker_jxl_deliveries(&mut marker, &src_dir)?;
-        if refreshed > 0 {
-            write_marker_atomic(&marker)?;
-        }
     }
 
     foundation::restore_delivery_directory_metadata(&saved_dir_timestamps, &src_dir, &working_copy)
@@ -2902,14 +2910,16 @@ fn fast_img_planned_output_rel(
     source: &Path,
     working_copy: &Path,
     rel: &Path,
+    strategy: &str,
 ) -> anyhow::Result<(PathBuf, String)> {
-    let naive_out = working_copy.join(rel.with_extension("JXL"));
+    let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
+    let naive_out = working_copy.join(rel.with_extension(ext_name));
     let reserved_out = foundation::conversion::reserve_output_path(source, &naive_out);
     let out_rel_key =
         fast_img_output_rel_key(&reserved_out, working_copy, "fast_img_planned_output_rel")?;
     if reserved_out != naive_out {
         println!(
-            "[NOTICE  ] {} reserved output {out_rel_key} due to filename collision with an existing reservation or on-disk JXL",
+            "[NOTICE  ] {} reserved output {out_rel_key} due to filename collision with an existing reservation or on-disk {ext_name}",
             rel.to_string_lossy()
         );
         tracing::warn!(
@@ -2992,11 +3002,14 @@ fn fast_img_effective_encode_parallelism(
 
 /// Quality exploration result for AVIF Meme Mode.
 enum AvifQualityExploreResult {
-    /// Smallest complete AVIF candidate that passed the verification gate.
+    /// Highest-quality candidate within the source's pure-media budget, or the
+    /// smallest verified pure-media fallback when none fit.
     Found {
         quality: u8,
         temp_path: PathBuf,
         output_size: u64,
+        pure_media_size: u64,
+        selection: &'static str,
     },
     /// The source cannot produce a verifiable AVIF at any permitted quality.
     SourceUnavailable { reason: String },
@@ -3091,9 +3104,11 @@ fn avif_input_decoder_command(
         }
         AvifInputDecoder::ImageMagick => {
             let mut builder = foundation::MagickBuilder::new();
+            let input_spec = format!("{}[0]", source.display());
             builder
-                .input(source)
-                .arg("-flatten")
+                .input(&input_spec)
+                .arg("-alpha")
+                .arg("set")
                 .arg("-strip")
                 .depth(16)
                 .output(temp_path);
@@ -3108,6 +3123,43 @@ fn run_avif_input_decoder(
     source: &Path,
     temp_path: &Path,
 ) -> anyhow::Result<&'static str> {
+    if decoder == AvifInputDecoder::ImageMagick {
+        let mut identify = foundation::IdentifyBuilder::new();
+        identify.format("%n\n").input(source);
+        let process_res = foundation::process_runner::ManagedProcess::spawn(&mut identify.build())
+            .and_then(|proc| {
+                proc.wait_timeout(std::time::Duration::from_secs(10), "identify frame count")
+            });
+        let output = process_res.with_context(|| {
+            format!(
+                "ImageMagick identify failed to run for static decode preflight of {}",
+                source.display()
+            )
+        })?;
+        anyhow::ensure!(
+            output.status.success(),
+            "ImageMagick identify returned non-zero exit status for {}",
+            source.display()
+        );
+        let first_line = output.stdout.lines().next().ok_or_else(|| {
+            anyhow::anyhow!(
+                "ImageMagick identify produced empty output for {}",
+                source.display()
+            )
+        })?;
+        let count: usize = first_line.trim().parse().with_context(|| {
+            format!(
+                "ImageMagick identify frame count parse failed for '{}' in {}",
+                first_line.trim(),
+                source.display()
+            )
+        })?;
+        anyhow::ensure!(
+            count == 1,
+            "ImageMagick static decode refused multi-image input ({count} frames/pages in {})",
+            source.display()
+        );
+    }
     let (mut command, tool_name) = avif_input_decoder_command(decoder, source, temp_path)?;
     let output = foundation::process_runner::ManagedProcess::spawn(&mut command)
         .and_then(|process| {
@@ -3208,94 +3260,656 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
 }
 
 const AVIF_MEME_SPEED: u8 = 0;
-const AVIF_MEME_MIN_QUALITY: u8 = 20;
+pub(crate) use foundation::infra::constants::{
+    AVIF_MEME_MIN_QUALITY, ISOBMFF_BOX_MDAT, JPEG_SOI_MAGIC, JXL_BOX_JXLC, JXL_BOX_JXLP,
+    JXL_CODESTREAM_MAGIC, JXL_CONTAINER_MAGIC, PNG_CHUNK_IDAT, PNG_CHUNK_IEND, PNG_CHUNK_IHDR,
+    PNG_CHUNK_PLTE, PNG_CHUNK_TRNS, PNG_SIGNATURE_MAGIC,
+};
 
-type AvifMemeCandidate = (u8, PathBuf, u64);
+#[derive(Clone, Debug)]
+struct AvifMemeCandidate {
+    quality: u8,
+    temp_path: PathBuf,
+    output_size: u64,
+    pure_media_size: u64,
+}
+
+pub(crate) fn jpeg_pure_media_size(path: &Path) -> anyhow::Result<u64> {
+    let total_size = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut signature = [0_u8; 2];
+    file.read_exact(&mut signature)?;
+    anyhow::ensure!(
+        signature == *JPEG_SOI_MAGIC,
+        "JPEG pure-media probe found an invalid SOI marker"
+    );
+
+    let mut metadata_size = 0_u64;
+    let mut in_scan = false;
+    loop {
+        let mut byte = [0_u8; 1];
+        let (marker, marker_size) = if in_scan {
+            loop {
+                file.read_exact(&mut byte)?;
+                if byte[0] != 0xFF {
+                    continue;
+                }
+                let mut marker_size = 1_u64;
+                let marker = loop {
+                    file.read_exact(&mut byte)?;
+                    marker_size += 1;
+                    if byte[0] != 0xFF {
+                        break byte[0];
+                    }
+                };
+                if marker == 0x00 || (0xD0..=0xD7).contains(&marker) {
+                    continue;
+                }
+                break (marker, marker_size);
+            }
+        } else {
+            file.read_exact(&mut byte)?;
+            anyhow::ensure!(
+                byte[0] == 0xFF,
+                "JPEG pure-media probe found data outside a scan"
+            );
+            let mut marker_size = 1_u64;
+            let marker = loop {
+                file.read_exact(&mut byte)?;
+                marker_size += 1;
+                if byte[0] != 0xFF {
+                    break byte[0];
+                }
+            };
+            (marker, marker_size)
+        };
+
+        if marker == 0xD9 {
+            return file
+                .stream_position()?
+                .checked_sub(metadata_size)
+                .ok_or_else(|| anyhow::anyhow!("JPEG metadata size exceeds file size"));
+        }
+        anyhow::ensure!(
+            marker != 0x00 && marker != 0xD8,
+            "JPEG pure-media probe reached an invalid marker"
+        );
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            // Standalone/restart markers carry no length field and do not leave entropy scan.
+            continue;
+        }
+
+        let mut length_bytes = [0_u8; 2];
+        file.read_exact(&mut length_bytes)?;
+        let segment_length = u16::from_be_bytes(length_bytes);
+        anyhow::ensure!(
+            segment_length >= 2,
+            "JPEG pure-media probe found an invalid segment length"
+        );
+        let payload_size = u64::from(segment_length - 2);
+        let payload_start = file.stream_position()?;
+        anyhow::ensure!(
+            payload_start
+                .checked_add(payload_size)
+                .is_some_and(|end| end <= total_size),
+            "JPEG pure-media probe found a truncated segment"
+        );
+        if (0xE0..=0xEF).contains(&marker) || marker == 0xFE {
+            metadata_size = metadata_size
+                .checked_add(marker_size + u64::from(segment_length))
+                .ok_or_else(|| anyhow::anyhow!("JPEG metadata size overflow"))?;
+        }
+        file.seek(SeekFrom::Current(i64::from(segment_length) - 2))?;
+        in_scan = marker == 0xDA;
+    }
+}
+
+pub(crate) fn png_pure_media_size(path: &Path) -> anyhow::Result<u64> {
+    let total_size = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut signature = [0_u8; 8];
+    file.read_exact(&mut signature)?;
+    anyhow::ensure!(
+        signature == *PNG_SIGNATURE_MAGIC,
+        "PNG pure-media probe found an invalid signature"
+    );
+
+    let mut pure_media_size = 0_u64;
+    let mut saw_ihdr = false;
+    let mut saw_idat = false;
+    let mut saw_iend = false;
+    while file.stream_position()? < total_size {
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let payload_size = u64::from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]));
+        let chunk_type = &header[4..8];
+        let payload_start = file.stream_position()?;
+        anyhow::ensure!(
+            payload_start
+                .checked_add(payload_size)
+                .and_then(|end| end.checked_add(4))
+                .is_some_and(|end| end <= total_size),
+            "PNG pure-media probe found a truncated chunk"
+        );
+
+        if chunk_type == PNG_CHUNK_IHDR
+            || chunk_type == PNG_CHUNK_PLTE
+            || chunk_type == PNG_CHUNK_TRNS
+            || chunk_type == PNG_CHUNK_IDAT
+        {
+            pure_media_size = pure_media_size
+                .checked_add(payload_size)
+                .ok_or_else(|| anyhow::anyhow!("PNG pure-media size overflow"))?;
+        }
+        saw_ihdr |= chunk_type == PNG_CHUNK_IHDR;
+        saw_idat |= chunk_type == PNG_CHUNK_IDAT;
+        saw_iend |= chunk_type == PNG_CHUNK_IEND;
+        file.seek(SeekFrom::Current(
+            i64::try_from(payload_size + 4)
+                .map_err(|_| anyhow::anyhow!("PNG chunk is too large to seek"))?,
+        ))?;
+        if saw_iend {
+            break;
+        }
+    }
+
+    anyhow::ensure!(
+        saw_ihdr && saw_idat && saw_iend,
+        "PNG pure-media probe found an incomplete image"
+    );
+    Ok(pure_media_size)
+}
+
+pub(crate) fn avif_mdat_payload_size(path: &Path) -> anyhow::Result<u64> {
+    let total_size = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut offset = 0_u64;
+    let mut pure_media_size = 0_u64;
+    let mut box_count = 0_u32;
+    use foundation::infra::constants::MAX_AVIF_BOXES;
+
+    while offset < total_size {
+        box_count = box_count.saturating_add(1);
+        anyhow::ensure!(
+            box_count <= MAX_AVIF_BOXES,
+            "AVIF pure-media probe: exceeded maximum allowed box count limit"
+        );
+        anyhow::ensure!(
+            total_size - offset >= 8,
+            "AVIF pure-media probe found a truncated box header"
+        );
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        let mut header_size = 8_u64;
+        let box_size = match size32 {
+            0 => total_size - offset,
+            1 => {
+                let mut extended = [0_u8; 8];
+                file.read_exact(&mut extended)?;
+                header_size = 16;
+                u64::from_be_bytes(extended)
+            }
+            size => u64::from(size),
+        };
+        anyhow::ensure!(
+            box_size >= header_size && box_size <= total_size - offset,
+            "AVIF pure-media probe found an invalid box size"
+        );
+        if &header[4..8] == ISOBMFF_BOX_MDAT {
+            pure_media_size = pure_media_size
+                .checked_add(box_size - header_size)
+                .ok_or_else(|| anyhow::anyhow!("AVIF pure-media size overflow"))?;
+        }
+        offset += box_size;
+        file.seek(SeekFrom::Start(offset))?;
+    }
+
+    anyhow::ensure!(
+        pure_media_size > 0,
+        "AVIF pure-media probe found no mdat payload"
+    );
+    Ok(pure_media_size)
+}
+
+pub(crate) fn source_pure_media_size(
+    path: &Path,
+    format: FormatKind,
+) -> anyhow::Result<Option<u64>> {
+    match format {
+        FormatKind::Jpeg => jpeg_pure_media_size(path).map(Some),
+        FormatKind::Png => png_pure_media_size(path).map(Some),
+        FormatKind::Avif => Ok(None),
+        FormatKind::Jxl => jxl_pure_bitstream_size(path).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// Parse a JXL container file and return the total codestream payload bytes
+/// (sum of all `jxlp`/`jxlc` box payloads). For naked JXL codestreams (no
+/// container, identified by the `FF 0A` magic), returns the whole file size.
+/// Metadata boxes (`Exif`, `xml `, `jbrd`, `jxll`) are excluded.
+///
+/// # Errors
+/// Returns an error if the file is not a recognized JXL format or is truncated.
+pub(crate) fn jxl_pure_bitstream_size(path: &Path) -> anyhow::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let total_size = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+
+    // Naked JXL codestream: starts with FF 0A
+    let mut magic2 = [0u8; 2];
+    file.read_exact(&mut magic2)?;
+    if magic2 == *JXL_CODESTREAM_MAGIC {
+        return Ok(total_size);
+    }
+
+    // JXL container magic
+    file.seek(SeekFrom::Start(0))?;
+    let mut container_magic = [0u8; 12];
+    file.read_exact(&mut container_magic)?;
+    anyhow::ensure!(
+        container_magic == *JXL_CONTAINER_MAGIC,
+        "JXL pure-bitstream probe: not a recognized JXL file"
+    );
+
+    file.seek(SeekFrom::Start(0))?;
+    let mut offset = 0u64;
+    let mut bitstream_size = 0u64;
+
+    while offset < total_size {
+        anyhow::ensure!(
+            total_size - offset >= 8,
+            "JXL pure-bitstream probe: truncated box header"
+        );
+        let mut hdr = [0u8; 8];
+        file.read_exact(&mut hdr)?;
+        let size32 = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+        let box_type = &hdr[4..8];
+        let mut header_size = 8u64;
+        let box_size = match size32 {
+            0 => total_size - offset,
+            1 => {
+                let mut ext = [0u8; 8];
+                file.read_exact(&mut ext)?;
+                header_size = 16;
+                u64::from_be_bytes(ext)
+            }
+            n => u64::from(n),
+        };
+        anyhow::ensure!(
+            box_size >= header_size && box_size <= total_size - offset,
+            "JXL pure-bitstream probe: invalid box size"
+        );
+        let payload = box_size - header_size;
+        if box_type == JXL_BOX_JXLP {
+            anyhow::ensure!(
+                payload >= 4,
+                "JXL pure-bitstream probe: jxlp box payload shorter than 4-byte sequence header"
+            );
+            // jxlp: 4-byte sequence index + codestream fragment
+            bitstream_size = bitstream_size
+                .checked_add(payload - 4)
+                .ok_or_else(|| anyhow::anyhow!("JXL bitstream size overflow"))?;
+        } else if box_type == JXL_BOX_JXLC {
+            // jxlc: full codestream in a single box (no index prefix)
+            bitstream_size = bitstream_size
+                .checked_add(payload)
+                .ok_or_else(|| anyhow::anyhow!("JXL bitstream size overflow"))?;
+        }
+        // ftyp, Exif, xml , jbrd, jxll, etc. are metadata — excluded.
+        offset += box_size;
+        file.seek(SeekFrom::Start(offset))?;
+    }
+
+    anyhow::ensure!(
+        bitstream_size > 0,
+        "JXL pure-bitstream probe: no jxlp/jxlc payload found"
+    );
+    Ok(bitstream_size)
+}
+
+fn avif_meme_candidate_fits_source(
+    candidate: &AvifMemeCandidate,
+    source_size: u64,
+    source_pure_media_size: Option<u64>,
+) -> bool {
+    source_pure_media_size.map_or(
+        candidate.output_size <= source_size,
+        |source_pure_media_size| candidate.pure_media_size <= source_pure_media_size,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SizeBudgetBasis {
+    PureMedia,
+    CompleteFile,
+}
 
 fn retain_smallest_avif_meme_candidate(
     best: &mut Option<AvifMemeCandidate>,
     candidate: AvifMemeCandidate,
+    basis: SizeBudgetBasis,
 ) -> Option<PathBuf> {
+    let is_better_than = |curr: &AvifMemeCandidate, cand: &AvifMemeCandidate| -> bool {
+        match basis {
+            SizeBudgetBasis::PureMedia => {
+                (
+                    curr.pure_media_size,
+                    curr.output_size,
+                    std::cmp::Reverse(curr.quality),
+                ) <= (
+                    cand.pure_media_size,
+                    cand.output_size,
+                    std::cmp::Reverse(cand.quality),
+                )
+            }
+            SizeBudgetBasis::CompleteFile => {
+                (
+                    curr.output_size,
+                    curr.pure_media_size,
+                    std::cmp::Reverse(curr.quality),
+                ) <= (
+                    cand.output_size,
+                    cand.pure_media_size,
+                    std::cmp::Reverse(cand.quality),
+                )
+            }
+        }
+    };
+
     if best
         .as_ref()
-        .is_some_and(|(_, _, best_size)| *best_size <= candidate.2)
+        .is_some_and(|current| is_better_than(current, &candidate))
     {
-        return Some(candidate.1);
+        return Some(candidate.temp_path);
     }
-    best.replace(candidate).map(|(_, path, _)| path)
+    best.replace(candidate).map(|candidate| candidate.temp_path)
 }
 
-fn explore_avif_meme_quality(
+struct SingleProbeResult {
+    candidate: AvifMemeCandidate,
+    fits_source: bool,
+}
+
+fn probe_single_avif_quality(
     source: &Path,
     encoder_input: &Path,
+    quality: u8,
+    source_size: u64,
+    source_pure_media_size: Option<u64>,
     convert_options: &img::lossless_converter::ConvertOptions,
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
-) -> AvifQualityExploreResult {
-    const COARSE_STEP: u8 = 10;
-    let mut best: Option<AvifMemeCandidate> = None;
-    let mut quality = 100u8;
-
-    loop {
-        foundation::log_detail!(&format!(
-            "AVIF Meme Mode quality probe: q={quality} (speed={AVIF_MEME_SPEED}) for {}",
-            source.display()
-        ));
-        match img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+) -> Result<SingleProbeResult, String> {
+    foundation::log_detail!(&format!(
+        "AVIF Meme Mode quality probe: q={quality} (speed={AVIF_MEME_SPEED}) for {}",
+        source.display()
+    ));
+    let (temp_path, output_size) =
+        img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
             quality,
             Some(AVIF_MEME_SPEED),
             metadata_retry,
             convert_options,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let pure_media_size = match avif_mdat_payload_size(&temp_path) {
+        Ok(size) => size,
+        Err(error) => {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "fast_img_probe_cleanup",
+                &temp_path,
+            );
+            return Err(format!("pure-media measurement failed: {error}"));
+        }
+    };
+
+    foundation::log_detail!(&format!(
+        "AVIF Meme Mode quality probe: q={quality} verified complete_file_size={output_size}B pure_media_size={pure_media_size}B"
+    ));
+    let candidate = AvifMemeCandidate {
+        quality,
+        temp_path,
+        output_size,
+        pure_media_size,
+    };
+    let fits_source =
+        avif_meme_candidate_fits_source(&candidate, source_size, source_pure_media_size);
+    Ok(SingleProbeResult {
+        candidate,
+        fits_source,
+    })
+}
+
+fn explore_avif_meme_quality(
+    source: &Path,
+    format: FormatKind,
+    encoder_input: &Path,
+    convert_options: &img::lossless_converter::ConvertOptions,
+    metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
+) -> AvifQualityExploreResult {
+    const COARSE_STEP: u8 = 10;
+    let source_size = match std::fs::metadata(source) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => {
+            return AvifQualityExploreResult::SourceUnavailable {
+                reason: format!("cannot read source size for pure-media comparison: {error}"),
+            };
+        }
+    };
+
+    // Fail-open: If pure media sizing fails or is unsupported for format, fall back to complete file size budget
+    let source_pure_media_size = match source_pure_media_size(source, format) {
+        Ok(size) => size,
+        Err(error) => {
+            tracing::warn!(
+                target: "fast_img",
+                source = %source.display(),
+                "cannot measure source pure-media payload ({error}); falling back to complete file size budget"
+            );
+            None
+        }
+    };
+
+    let mut best_fallback: Option<AvifMemeCandidate> = None;
+    let mut coarse_quality = 100u8;
+    let mut first_fit_quality: Option<u8> = None;
+    let mut high_fail_quality: Option<u8> = None;
+    let mut current_passed_candidate: Option<AvifMemeCandidate> = None;
+    let mut last_probe_error = None;
+
+    // Phase 1: Coarse step probing (100 down to 0)
+    loop {
+        match probe_single_avif_quality(
+            source,
+            encoder_input,
+            coarse_quality,
+            source_size,
+            source_pure_media_size,
+            convert_options,
+            metadata_retry,
         ) {
-            Ok((temp_path, output_size)) => {
-                foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe: q={quality} verified complete_file_size={output_size}B"
-                ));
-                if let Some(cleanup) = retain_smallest_avif_meme_candidate(
-                    &mut best,
-                    (quality, temp_path, output_size),
-                ) {
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "fast_img_probe_cleanup",
-                        &cleanup,
-                    );
+            Ok(res) => {
+                if res.fits_source {
+                    if coarse_quality == 100 {
+                        // q=100 fits budget directly, which is the absolute maximum quality
+                        return AvifQualityExploreResult::Found {
+                            quality: res.candidate.quality,
+                            temp_path: res.candidate.temp_path,
+                            output_size: res.candidate.output_size,
+                            pure_media_size: res.candidate.pure_media_size,
+                            selection: if source_pure_media_size.is_some() {
+                                "pure_media_budget"
+                            } else {
+                                "complete_file_budget"
+                            },
+                        };
+                    }
+                    first_fit_quality = Some(coarse_quality);
+                    current_passed_candidate = Some(res.candidate);
+                    break;
+                } else {
+                    high_fail_quality = Some(coarse_quality);
+                    let budget_basis = if source_pure_media_size.is_some() {
+                        SizeBudgetBasis::PureMedia
+                    } else {
+                        SizeBudgetBasis::CompleteFile
+                    };
+                    if let Some(cleanup) = retain_smallest_avif_meme_candidate(
+                        &mut best_fallback,
+                        res.candidate,
+                        budget_basis,
+                    ) {
+                        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                            "fast_img_probe_cleanup",
+                            &cleanup,
+                        );
+                    }
                 }
             }
-            Err(error) => {
-                let reason = error.to_string();
-                foundation::log_detail!(&format!(
-                    "AVIF Meme Mode quality probe: q={quality} error — {reason}"
-                ));
-                if avif_quality_probe_error_is_source_invariant(&reason) {
-                    if best.is_none() {
-                        return AvifQualityExploreResult::SourceUnavailable { reason };
-                    }
-                    break;
+            Err(reason) => {
+                if avif_quality_probe_error_is_source_invariant(&reason) && best_fallback.is_none()
+                {
+                    return AvifQualityExploreResult::SourceUnavailable { reason };
                 }
+                last_probe_error = Some(reason);
             }
         }
 
-        if quality == AVIF_MEME_MIN_QUALITY {
+        if coarse_quality == AVIF_MEME_MIN_QUALITY {
             break;
         }
-        quality = quality
-            .saturating_sub(COARSE_STEP)
-            .max(AVIF_MEME_MIN_QUALITY);
+        coarse_quality = coarse_quality.saturating_sub(COARSE_STEP);
     }
 
-    match best {
-        Some((quality, temp_path, output_size)) => AvifQualityExploreResult::Found {
-            quality,
-            temp_path,
-            output_size,
+    // Phase 2: Binary search refinement in (low_pass, high_fail) to find true max quality within budget
+    if let (Some(low_pass), Some(high_fail)) = (first_fit_quality, high_fail_quality) {
+        let mut low = low_pass;
+        let mut high = high_fail;
+
+        while high.saturating_sub(low) > 1 {
+            let mid = low + (high - low) / 2;
+            match probe_single_avif_quality(
+                source,
+                encoder_input,
+                mid,
+                source_size,
+                source_pure_media_size,
+                convert_options,
+                metadata_retry,
+            ) {
+                Ok(res) => {
+                    if res.fits_source {
+                        // Higher quality mid fits budget! Replace lower-quality candidate
+                        if let Some(old) = current_passed_candidate.replace(res.candidate) {
+                            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                                "fast_img_probe_cleanup",
+                                &old.temp_path,
+                            );
+                        }
+                        low = mid;
+                    } else {
+                        // mid exceeds budget, clean up its temp output and shrink upper bound
+                        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                            "fast_img_probe_cleanup",
+                            &res.candidate.temp_path,
+                        );
+                        high = mid;
+                    }
+                }
+                Err(reason) => {
+                    last_probe_error = Some(reason);
+                    high = mid;
+                }
+            }
+        }
+
+        if let Some(final_candidate) = current_passed_candidate {
+            if let Some(cleanup) = best_fallback.take().map(|c| c.temp_path) {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "fast_img_probe_cleanup",
+                    &cleanup,
+                );
+            }
+            return AvifQualityExploreResult::Found {
+                quality: final_candidate.quality,
+                temp_path: final_candidate.temp_path,
+                output_size: final_candidate.output_size,
+                pure_media_size: final_candidate.pure_media_size,
+                selection: if source_pure_media_size.is_some() {
+                    "pure_media_budget"
+                } else {
+                    "complete_file_budget"
+                },
+            };
+        }
+    }
+
+    match best_fallback {
+        Some(candidate) => AvifQualityExploreResult::Found {
+            quality: candidate.quality,
+            temp_path: candidate.temp_path,
+            output_size: candidate.output_size,
+            pure_media_size: candidate.pure_media_size,
+            selection: if source_pure_media_size.is_some() {
+                "smallest_pure_media_fallback"
+            } else {
+                "smallest_complete_file_fallback"
+            },
         },
         None => AvifQualityExploreResult::SourceUnavailable {
             reason: format!(
-                "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}"
+                "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
+                last_probe_error
+                    .as_deref()
+                    .map_or_else(String::new, |reason| format!(
+                        "; last probe error: {reason}"
+                    ))
             ),
         },
     }
+}
+
+fn fast_img_adopt_static_avif(
+    source: &Path,
+    output: &Path,
+) -> anyhow::Result<foundation::TaskResult> {
+    foundation::ensure_parent_dir_exists(output)?;
+    let temp_output = foundation::conversion::temp_path_for_output(output);
+    let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
+    let input_size = std::fs::metadata(source)
+        .with_context(|| format!("stat Meme Mode source AVIF {}", source.display()))?
+        .len();
+    let copied = std::fs::copy(source, &temp_output).with_context(|| {
+        format!(
+            "copy Meme Mode source AVIF unchanged {} -> {}",
+            source.display(),
+            temp_output.display()
+        )
+    })?;
+    anyhow::ensure!(
+        copied == input_size,
+        "Meme Mode source AVIF copy length mismatch: expected={input_size} copied={copied}"
+    );
+    foundation::io_utils::robust_move(&temp_output, output).with_context(|| {
+        format!(
+            "commit adopted Meme Mode AVIF {} -> {}",
+            temp_output.display(),
+            output.display()
+        )
+    })?;
+    Ok(foundation::TaskResult::converted_with_message(
+        source,
+        output,
+        input_size,
+        copied,
+        "Meme Mode adopted an existing static AVIF without re-encoding",
+    ))
 }
 
 fn fast_img_run_encode_job_inner(
@@ -3309,67 +3923,55 @@ fn fast_img_run_encode_job_inner(
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
-        let convert_options = foundation::ConvertOptions {
-            output_dir: Some(working_copy.to_path_buf()),
-            base_dir: Some(src_dir.to_path_buf()),
-            flags: foundation::ConvertFlags::FORCE,
-            ..Default::default()
-        };
+        if format == FormatKind::Avif {
+            fast_img_adopt_static_avif(&job.source, &working_copy.join(&job.out_rel_key))?
+        } else {
+            let convert_options = foundation::ConvertOptions {
+                output_dir: Some(working_copy.to_path_buf()),
+                base_dir: Some(src_dir.to_path_buf()),
+                flags: foundation::ConvertFlags::FORCE,
+                ..Default::default()
+            };
 
-        let encoder_input = match prepare_fast_img_avif_encoder_input(&job.source, format) {
-            Ok(input) => input,
-            Err(err) => {
-                let reason =
-                    format!("AVIF target conversion unavailable after official decode: {err}");
-                foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): {reason}; preserving source {}",
-                    job.source.display()
-                ));
-                return Ok(FastImgTranscodeOutcome::Skipped(
-                    FastImgSkippedSourceProof {
-                        rel_key: job.rel_key.clone(),
-                        src_hash: calculate_blake3_hash(&job.source)?,
-                        reason,
-                    },
-                ));
-            }
-        };
-        let mut metadata_retry = img::lossless_converter::AvifencMetadataRetryState::strip_all();
-        match explore_avif_meme_quality(
-            &job.source,
-            &encoder_input.path,
-            &convert_options,
-            &mut metadata_retry,
-        ) {
-            AvifQualityExploreResult::Found {
-                quality,
-                temp_path,
-                output_size,
-            } => {
-                foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): smallest verified candidate q={quality} complete_file_size={output_size}B for {} ({format:?})",
-                    job.source.display()
-                ));
-                img::lossless_converter::finalize_meme_avif_probe(
-                    &job.source,
-                    &temp_path,
-                    &convert_options,
-                )?
-            }
-            AvifQualityExploreResult::SourceUnavailable { reason } => {
-                foundation::log_detail!(&format!(
-                    "Meme Mode (AVIF): source cannot produce a verifiable AVIF; preserving {}: {reason}",
-                    job.source.display()
-                ));
-                return Ok(FastImgTranscodeOutcome::Skipped(
-                    FastImgSkippedSourceProof {
-                        rel_key: job.rel_key.clone(),
-                        src_hash: calculate_blake3_hash(&job.source)?,
-                        reason: format!(
-                            "AVIF source preflight could not produce a verifiable target output: {reason}"
-                        ),
-                    },
-                ));
+            let encoder_input = prepare_fast_img_avif_encoder_input(&job.source, format)
+                .with_context(|| {
+                    format!(
+                        "AVIF target encoding unavailable after official decode for {}",
+                        job.source.display()
+                    )
+                })?;
+            let mut metadata_retry =
+                img::lossless_converter::AvifencMetadataRetryState::strip_all();
+            match explore_avif_meme_quality(
+                &job.source,
+                format,
+                &encoder_input.path,
+                &convert_options,
+                &mut metadata_retry,
+            ) {
+                AvifQualityExploreResult::Found {
+                    quality,
+                    temp_path,
+                    output_size,
+                    pure_media_size,
+                    selection,
+                } => {
+                    foundation::log_detail!(&format!(
+                        "Meme Mode (AVIF): selected q={quality} selection={selection} complete_file_size={output_size}B pure_media_size={pure_media_size}B for {} ({format:?})",
+                        job.source.display()
+                    ));
+                    img::lossless_converter::finalize_meme_avif_probe(
+                        &job.source,
+                        &temp_path,
+                        &convert_options,
+                    )?
+                }
+                AvifQualityExploreResult::SourceUnavailable { reason } => {
+                    anyhow::bail!(
+                        "AVIF source preflight could not produce a verifiable target output for {}: {reason}",
+                        job.source.display()
+                    );
+                }
             }
         }
     } else {
@@ -3511,25 +4113,19 @@ fn fast_img_remove_failed_encode_output(
     err: &FastImgTranscodeError,
 ) -> anyhow::Result<()> {
     let out_rel = fast_img_checked_rel_path(&err.out_rel_key)?;
-    let output = working_copy.join(out_rel);
-    match std::fs::remove_file(&output) {
-        Ok(()) => {
-            tracing::warn!(
-                target: "fast_img",
-                source_rel = %err.rel_key,
-                output = %output.display(),
-                "removed failed fast-img output before continuing batch"
-            );
-            Ok(())
-        }
-        Err(remove_err) if remove_err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(remove_err) => Err(remove_err).with_context(|| {
-            format!(
-                "fast-img failed to remove failed output {}; refusing to continue with a stale/corrupt JXL in the delivery directory",
-                output.display()
-            )
-        }),
-    }
+    let primary_output = working_copy.join(&out_rel);
+    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+        "fast_img remove failed encode output",
+        &primary_output,
+    );
+
+    tracing::warn!(
+        target: "fast_img",
+        source_rel = %err.rel_key,
+        primary_output = %primary_output.display(),
+        "removed failed fast-img output before continuing batch"
+    );
+    Ok(())
 }
 
 fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow::Result<String> {
@@ -3566,28 +4162,244 @@ fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow:
     );
     Ok(refreshed_hash)
 }
+pub const FAST_IMG_AVIF_CLEAN_POLICY_VERSION: u32 = 2;
 
-fn fast_img_refresh_marker_jxl_deliveries(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReuseDecision {
+    Reusable { hash: String },
+    NeedsReencode { reason: String },
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RefreshSummary {
+    refreshed: usize,
+    invalidated: usize,
+    marker_changed: bool,
+}
+
+fn fast_img_reset_delivery_gate_proofs(marker: &mut WorkingCopyMarker, stage: FastImgStageName) {
+    marker.stage = stage;
+    marker.gate1_checks = Gate1Checks::default();
+    marker.gate2_checks = Gate2Checks::default();
+    marker.gate3_checks = Gate3Checks::default();
+    marker.tier2_imported_assets.clear();
+    for entry in marker.blake3_log.values_mut() {
+        entry.library_asset = None;
+    }
+    marker.error = None;
+}
+
+fn fast_img_downgrade_stale_resume_marker(
+    marker: &mut WorkingCopyMarker,
+    resume_stage: &mut FastImgStageName,
+) {
+    *resume_stage = FastImgStageName::OutputPrepared;
+    fast_img_reset_delivery_gate_proofs(marker, FastImgStageName::OutputPrepared);
+}
+
+fn fast_img_downgrade_resume_if_outputs_stale(
+    marker: &mut WorkingCopyMarker,
+    resume_stage: &mut FastImgStageName,
+) -> anyhow::Result<bool> {
+    if !encode_complete_or_later(resume_stage) || fast_img_marker_outputs_current(marker)? {
+        return Ok(false);
+    }
+    fast_img_downgrade_stale_resume_marker(marker, resume_stage);
+    Ok(true)
+}
+
+fn fast_img_check_reused_delivery(
+    output: &Path,
+    strategy: &str,
+    marker_policy_ver: u32,
+    expected_output_hash: &str,
+) -> anyhow::Result<ReuseDecision> {
+    let metadata = match std::fs::metadata(output) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: format!("output is missing or unreadable: {}", output.display()),
+            });
+        }
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Ok(ReuseDecision::NeedsReencode {
+            reason: format!(
+                "output is missing or not a non-empty regular file: {}",
+                output.display()
+            ),
+        });
+    }
+
+    if strategy == "avif" {
+        if marker_policy_ver < FAST_IMG_AVIF_CLEAN_POLICY_VERSION {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: format!(
+                    "legacy AVIF marker policy version ({marker_policy_ver} < {FAST_IMG_AVIF_CLEAN_POLICY_VERSION}); forcing clean re-encode"
+                ),
+            });
+        }
+        if expected_output_hash.is_empty() {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: "recorded AVIF output hash proof is empty; forcing re-encode".to_string(),
+            });
+        }
+        let actual_hash = calculate_blake3_hash(output)?;
+        if actual_hash != expected_output_hash {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: format!(
+                    "AVIF output BLAKE3 mismatch (recorded: {expected_output_hash}, actual: {actual_hash}); forcing clean re-encode"
+                ),
+            });
+        }
+        Ok(ReuseDecision::Reusable {
+            hash: expected_output_hash.to_string(),
+        })
+    } else {
+        if expected_output_hash.is_empty() {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: "recorded JXL output hash proof is empty; forcing re-encode".to_string(),
+            });
+        }
+        let actual_hash = calculate_blake3_hash(output)?;
+        if actual_hash != expected_output_hash {
+            return Ok(ReuseDecision::NeedsReencode {
+                reason: format!(
+                    "JXL output BLAKE3 mismatch (recorded: {expected_output_hash}, actual: {actual_hash}); forcing clean re-encode"
+                ),
+            });
+        }
+        Ok(ReuseDecision::Reusable {
+            hash: expected_output_hash.to_string(),
+        })
+    }
+}
+
+fn fast_img_refresh_marker_deliveries(
     marker: &mut WorkingCopyMarker,
     src_dir: &Path,
-) -> anyhow::Result<usize> {
-    let mut refreshed = 0usize;
+    strategy: &str,
+    refresh_jxl_metadata: bool,
+) -> anyhow::Result<RefreshSummary> {
+    fast_img_refresh_marker_deliveries_with(
+        marker,
+        src_dir,
+        strategy,
+        refresh_jxl_metadata,
+        fast_img_refresh_reused_jxl_delivery,
+    )
+}
+
+fn fast_img_refresh_marker_deliveries_with<F>(
+    marker: &mut WorkingCopyMarker,
+    src_dir: &Path,
+    strategy: &str,
+    refresh_jxl_metadata: bool,
+    refresh_jxl: F,
+) -> anyhow::Result<RefreshSummary>
+where
+    F: Fn(&Path, &Path) -> anyhow::Result<String>,
+{
+    let target_ext = if strategy == "avif" { "AVIF" } else { "JXL" };
+    let mut summary = RefreshSummary::default();
+    let mut refreshed_output_changed = false;
     for (rel, entry) in &mut marker.blake3_log {
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
         let out_rel = if let Some(out_rel) = entry.out_rel.as_deref() {
             fast_img_checked_rel_path(out_rel)?
         } else {
-            fast_img_checked_rel_path(rel)?.with_extension("JXL")
+            let derived = fast_img_checked_rel_path(rel)?.with_extension(target_ext);
+            entry.out_rel = Some(derived.to_string_lossy().to_string());
+            summary.marker_changed = true;
+            derived
         };
-        let output = marker.working_copy.join(out_rel);
-        let refreshed_out_hash = fast_img_refresh_reused_jxl_delivery(&source, &output)?;
-        if entry.out != refreshed_out_hash {
-            entry.library_asset = None;
+        let output = marker.working_copy.join(&out_rel);
+        let mut decision = fast_img_check_reused_delivery(
+            &output,
+            strategy,
+            marker.metadata_policy_version,
+            &entry.out,
+        )?;
+        if strategy != "avif"
+            && refresh_jxl_metadata
+            && matches!(decision, ReuseDecision::Reusable { .. })
+        {
+            anyhow::ensure!(
+                source.is_file(),
+                "fast-img JXL metadata refresh requires missing source {}; preserving output and marker proof",
+                source.display()
+            );
+            decision = match refresh_jxl(&source, &output) {
+                Ok(hash) => ReuseDecision::Reusable { hash },
+                Err(err) => ReuseDecision::NeedsReencode {
+                    reason: format!("JXL delivery refresh failed: {err}"),
+                },
+            };
         }
-        entry.out = refreshed_out_hash;
-        refreshed += 1;
+        match decision {
+            ReuseDecision::Reusable { hash } => {
+                if entry.out != hash {
+                    if !entry.out.is_empty() {
+                        refreshed_output_changed = true;
+                    }
+                    entry.library_asset = None;
+                    entry.out = hash;
+                    summary.marker_changed = true;
+                }
+                summary.refreshed += 1;
+            }
+            ReuseDecision::NeedsReencode { reason } => {
+                anyhow::ensure!(
+                    source.is_file(),
+                    "fast-img output requires re-encode but source is missing {}; preserving output and marker proof ({reason})",
+                    source.display()
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    rel = %rel,
+                    reason = %reason,
+                    "marker delivery refresh invalidated output; clearing recorded proof for re-encode"
+                );
+                entry.out.clear();
+                entry.library_asset = None;
+                summary.marker_changed = true;
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "fast_img invalidate obsolete reused output",
+                    &output,
+                );
+                summary.invalidated += 1;
+            }
+        }
     }
-    Ok(refreshed)
+
+    if summary.invalidated > 0 {
+        fast_img_reset_delivery_gate_proofs(marker, FastImgStageName::OutputPrepared);
+        summary.marker_changed = true;
+    } else if refreshed_output_changed {
+        let stage = if gate1_complete_or_later(&marker.stage) {
+            FastImgStageName::TranscodeComplete
+        } else {
+            marker.stage.clone()
+        };
+        fast_img_reset_delivery_gate_proofs(marker, stage);
+        summary.marker_changed = true;
+    }
+
+    Ok(summary)
+}
+
+fn fast_img_refresh_and_persist_marker_deliveries(
+    marker: &mut WorkingCopyMarker,
+    src_dir: &Path,
+    strategy: &str,
+    refresh_jxl_metadata: bool,
+) -> anyhow::Result<RefreshSummary> {
+    let summary =
+        fast_img_refresh_marker_deliveries(marker, src_dir, strategy, refresh_jxl_metadata)?;
+    if summary.marker_changed {
+        write_marker_atomic(marker)?;
+    }
+    Ok(summary)
 }
 
 fn fast_img_validate_recorded_source_hashes_current(
@@ -4099,7 +4911,12 @@ fn fast_img_marker_entry_output_path(
     let out_rel = if let Some(out_rel) = entry.out_rel.as_deref() {
         fast_img_checked_rel_path(out_rel)?
     } else {
-        fast_img_checked_rel_path(rel)?.with_extension("JXL")
+        let target_ext = if marker.strategy == "avif" {
+            "AVIF"
+        } else {
+            "JXL"
+        };
+        fast_img_checked_rel_path(rel)?.with_extension(target_ext)
     };
     Ok(marker.working_copy.join(out_rel))
 }
@@ -4296,12 +5113,14 @@ fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyho
             if !file_type.is_file() {
                 continue;
             }
+            let is_marker = path.file_name().is_some_and(|name| name == ".mfb_wc");
+            if is_marker {
+                continue;
+            }
             let is_target = path
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("jxl") || extension.eq_ignore_ascii_case("avif")
-                });
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(target_ext));
             if is_target {
                 continue;
             }
@@ -5866,6 +6685,94 @@ fn print_photos_verifier_proof_summary(library: &LibraryHandle, expected_count: 
     }
 }
 
+fn fast_img_record_controllable_media_import_failures(
+    marker: &mut WorkingCopyMarker,
+    candidates: &[PhotosImportCandidate],
+    library: &mut LibraryHandle,
+) -> anyhow::Result<usize> {
+    if library.import_error_count == 0 {
+        return Ok(0);
+    }
+
+    let imported = library
+        .imported_assets
+        .iter()
+        .map(|asset| asset.rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let rejected_outputs = candidates
+        .iter()
+        .filter(|candidate| !imported.contains(candidate.rel_path.as_str()))
+        .map(|candidate| candidate.rel_path.clone())
+        .collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        rejected_outputs.len() == library.import_error_count,
+        "Photos partial-import accounting mismatch: rejected_outputs={} import_errors={}",
+        rejected_outputs.len(),
+        library.import_error_count
+    );
+
+    let mut rejected_sources = Vec::new();
+    for (source_rel, entry) in &marker.blake3_log {
+        let output = fast_img_marker_entry_output_path(marker, source_rel, entry)?;
+        let output_rel =
+            fast_img_output_rel_key(&output, &marker.working_copy, "photos_rejected_output_rel")?;
+        if rejected_outputs.contains(&output_rel) {
+            rejected_sources.push((source_rel.clone(), output, output_rel));
+        }
+    }
+    anyhow::ensure!(
+        rejected_sources.len() == rejected_outputs.len(),
+        "Photos rejected-output mapping mismatch: outputs={} sources={}",
+        rejected_outputs.len(),
+        rejected_sources.len()
+    );
+
+    for (source_rel, output, output_rel) in rejected_sources {
+        let entry = marker.blake3_log.remove(&source_rel).with_context(|| {
+            format!("missing marker entry for rejected Photos output {output_rel}")
+        })?;
+        match std::fs::remove_file(&output) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "remove Photos-rejected working-copy output {}",
+                        output.display()
+                    )
+                });
+            }
+        }
+        marker.skipped_sources.remove(&source_rel);
+        marker.failed_sources.insert(
+            source_rel.clone(),
+            SkippedSourceEntry {
+                src: entry.src,
+                reason: format!(
+                    "Photos rejected this media item during normal-mode isolated import: {output_rel}"
+                ),
+            },
+        );
+        println!(
+            "[FAIL    ] {source_rel}: Photos rejected isolated import; source retained and remaining media continue"
+        );
+    }
+
+    let failure_count = library.import_error_count;
+    library.import_error_count = 0;
+    marker.encoded_count = marker.blake3_log.len();
+    marker.gate2_checks = Gate2Checks::default();
+    marker.gate3_checks = Gate3Checks::default();
+    Ok(failure_count)
+}
+
+fn fast_img_commit_transcode_complete(marker: &mut WorkingCopyMarker, strategy: &str) {
+    if strategy == "avif" {
+        marker.metadata_policy_version = FAST_IMG_AVIF_CLEAN_POLICY_VERSION;
+    }
+    marker.stage = FastImgStageName::TranscodeComplete;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fast_img_run_encode_phase(
     marker: &mut WorkingCopyMarker,
@@ -5933,19 +6840,50 @@ fn fast_img_run_encode_phase(
                 resume_out.context("missing fast-img resume output after current proof")?;
             let resume_out_rel_key =
                 fast_img_output_rel_key(&resume_out, working_copy, "fast_img_resume_output_rel")?;
-            let refreshed_out_hash = fast_img_refresh_reused_jxl_delivery(source, &resume_out)?;
-            if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
-                if entry.out != refreshed_out_hash {
-                    entry.library_asset = None;
+            let expected_hash = marker
+                .blake3_log
+                .get(&rel_key)
+                .map(|e| e.out.as_str())
+                .unwrap_or("");
+            match fast_img_check_reused_delivery(
+                &resume_out,
+                strategy,
+                marker.metadata_policy_version,
+                expected_hash,
+            )? {
+                ReuseDecision::Reusable { hash } => {
+                    if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
+                        if entry.out != hash {
+                            entry.library_asset = None;
+                        }
+                        entry.out = hash;
+                        entry.out_rel = Some(resume_out_rel_key.clone());
+                    }
+                    println!(
+                        "[{encode_label}] reused verified output for {rel_key} -> {resume_out_rel_key}"
+                    );
+                    completed_from_resume += 1;
+                    continue;
                 }
-                entry.out = refreshed_out_hash;
-                entry.out_rel = Some(resume_out_rel_key.clone());
+                ReuseDecision::NeedsReencode { reason } => {
+                    tracing::warn!(
+                        target: "fast_img",
+                        source_rel = %rel_key,
+                        reason = %reason,
+                        "reused output invalidated; scheduling clean re-encode"
+                    );
+                    if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
+                        entry.out.clear();
+                        entry.library_asset = None;
+                        entry.out_rel = Some(resume_out_rel_key);
+                    }
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img invalidate obsolete reused output",
+                        &resume_out,
+                    );
+                    write_marker_atomic(marker)?;
+                }
             }
-            println!(
-                "[{encode_label}] reused verified output for {rel_key} -> {resume_out_rel_key}"
-            );
-            completed_from_resume += 1;
-            continue;
         }
 
         // If the marker already has a recorded out_rel for this source from a
@@ -5986,7 +6924,7 @@ fn fast_img_run_encode_phase(
             }
             (reserved, out_rel_key)
         } else {
-            fast_img_planned_output_rel(source, working_copy, rel)?
+            fast_img_planned_output_rel(source, working_copy, rel, strategy)?
         };
 
         jobs.push(FastImgTranscodeJob {
@@ -6117,6 +7055,7 @@ fn fast_img_run_encode_phase(
                     );
                     encoded += 1;
                     marker.encoded_count = encoded;
+                    write_marker_atomic(marker)?;
                 }
                 FastImgTranscodeOutcome::Skipped(proof) => {
                     fast_img_emit_explicit_skip(&proof.rel_key, &proof.reason);
@@ -6202,7 +7141,7 @@ fn fast_img_run_encode_phase(
     if reconciled > 0 {
         println!("[SKIP    ] {reconciled} {source_kind}(s) reconciled as explicit skips");
     }
-    marker.stage = FastImgStageName::TranscodeComplete;
+    fast_img_commit_transcode_complete(marker, strategy);
     write_marker_atomic(marker)?;
     Ok(())
 }
@@ -6218,7 +7157,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     retry_failed_sources_from_cleanup: bool,
     resume_local_delivery_for_shortest_path: bool,
     shortest_path: ShortestPathFlag,
-    auto_import: AutoImportFlag,
+    _auto_import: AutoImportFlag,
     reuse_marker_import_proof: bool,
     strategy: &str,
 ) -> anyhow::Result<()> {
@@ -6250,7 +7189,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             "[SKIP    ] {reconciled} {source_kind}(s) reconciled as explicit skips before delivery"
         );
     }
-    let expected_count = fast_img_effective_expected_count(
+    let mut expected_count = fast_img_effective_expected_count(
         marker,
         source_jpegs.len(),
         resume_local_delivery_for_shortest_path,
@@ -6328,7 +7267,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     let import_candidates = build_fast_img_output_import_candidates(marker);
-    let library_handle = if import_complete_or_later(&marker.stage) {
+    let mut library_handle = if import_complete_or_later(&marker.stage) {
         let library_handle = if reuse_marker_import_proof
             && let Some(library_handle) = library_handle_from_marker_import_proof(marker)
                 .map_err(|err| anyhow::anyhow!("fast-img marker import proof invalid: {err}"))?
@@ -6348,23 +7287,8 @@ fn fast_img_run_verification_and_delivery_pipeline(
         };
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
-        write_marker_atomic(marker)?;
         library_handle
     } else {
-        if confirm_import_required(&marker.stage, auto_import.0) {
-            let confirmed = prompt_user_confirm(&format!(
-                "Gate 1 passed. Import {expected_count} {ext_name} file(s) to Photos? [y/N] "
-            ))?;
-            if !confirmed {
-                marker.stage = FastImgStageName::Aborted;
-                marker.error = Some("ConfirmImport declined by user".to_string());
-                write_marker_atomic(marker)?;
-                anyhow::bail!(
-                    "fast-img aborted at ConfirmImport; wc preserved at {}",
-                    working_copy.display()
-                );
-            }
-        }
         let library_handle = import_media_outputs_with_library_verifier(&import_candidates)
             .map_err(|err| {
                 anyhow::anyhow!("fast-img shortest-path AVIF import verifier failed: {err}")
@@ -6373,9 +7297,26 @@ fn fast_img_run_verification_and_delivery_pipeline(
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
-        write_marker_atomic(marker)?;
         library_handle
     };
+    let controlled_import_failures = fast_img_record_controllable_media_import_failures(
+        marker,
+        &import_candidates,
+        &mut library_handle,
+    )?;
+    if controlled_import_failures > 0 {
+        expected_count = fast_img_effective_expected_count(
+            marker,
+            source_jpegs.len(),
+            resume_local_delivery_for_shortest_path,
+        );
+        marker.stage = FastImgStageName::ImportComplete;
+        marker.error = None;
+        println!(
+            "[PHOTOS ] normal mode retained {controlled_import_failures} rejected source(s); continuing Gates 2/3 for {expected_count} verified import(s)"
+        );
+    }
+    write_marker_atomic(marker)?;
 
     if !gate2_complete_or_later(&marker.stage) {
         print_photos_verifier_proof_summary(&library_handle, expected_count);
@@ -6812,11 +7753,10 @@ mod fast_img_hardening_tests {
         fast_img_marker_input_state_is_stale, fast_img_marker_outputs_current,
         fast_img_pipeline_ctx, fast_img_planned_output_rel, fast_img_post_gate1_policy,
         fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
-        fast_img_recover_non_directory_working_copy, fast_img_refresh_marker_jxl_deliveries,
-        fast_img_refresh_reused_jxl_delivery, fast_img_remove_failed_encode_output,
-        fast_img_resolve_working_copy_for_run, fast_img_run_encode_phase,
-        fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_target_files,
-        fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
+        fast_img_recover_non_directory_working_copy, fast_img_refresh_reused_jxl_delivery,
+        fast_img_remove_failed_encode_output, fast_img_resolve_working_copy_for_run,
+        fast_img_run_encode_phase, fast_img_skip_hashes_match, fast_img_source_hash_set,
+        fast_img_strip_non_target_files, fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
         restore_jpeg_jxlinfo_has_jpeg_reconstruction, restore_jpeg_output_path_for,
@@ -6832,8 +7772,8 @@ mod fast_img_hardening_tests {
     };
     use foundation::image::format_detect::FormatKind;
     use foundation::pipeline::verification::{
-        Blake3Entry, FastImgStageName, Gate2Import, Gate3Deep, PipelineCtx, SkippedSourceEntry,
-        VerificationGate, WorkingCopyMarker,
+        Blake3Entry, FastImgStageName, Gate1Checks, Gate2Checks, Gate2Import, Gate3Checks,
+        Gate3Deep, PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
     };
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -7681,6 +8621,9 @@ mod fast_img_hardening_tests {
         let old_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
         marker.stage = FastImgStageName::TranscodeComplete;
+        marker.gate1_checks.count = foundation::pipeline::verification::CheckPassed(true);
+        marker.gate2_checks.count = foundation::pipeline::verification::CheckPassed(true);
+        marker.gate3_checks.count_x3 = foundation::pipeline::verification::CheckPassed(true);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
@@ -7691,15 +8634,27 @@ mod fast_img_hardening_tests {
             },
         );
 
-        let refreshed = fast_img_refresh_marker_jxl_deliveries(&mut marker, &src_root)?;
-        let entry = marker
+        let summary = super::fast_img_refresh_and_persist_marker_deliveries(
+            &mut marker,
+            &src_root,
+            "hevc",
+            true,
+        )?;
+        let persisted = super::read_marker(&marker.working_copy)?;
+        let entry = persisted
             .blake3_log
             .get("a.jpg")
             .ok_or_else(|| anyhow::anyhow!("missing refreshed marker entry"))?;
 
-        assert_eq!(refreshed, 1);
+        assert_eq!(summary.refreshed, 1);
+        assert_eq!(summary.invalidated, 0);
+        assert!(summary.marker_changed);
         assert_ne!(entry.out, old_hash);
         assert_eq!(entry.library_asset, None);
+        assert_eq!(persisted.stage, FastImgStageName::TranscodeComplete);
+        assert_eq!(persisted.gate1_checks, Gate1Checks::default());
+        assert_eq!(persisted.gate2_checks, Gate2Checks::default());
+        assert_eq!(persisted.gate3_checks, Gate3Checks::default());
         Ok(())
     }
 
@@ -8689,6 +9644,15 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn normal_img_run_rejects_manual_avif_before_database_preflight() -> anyhow::Result<()> {
+        let parsed = Cli::try_parse_from(["img", "run", "/media/in", "--codec", "av1"])?;
+
+        let error = super::validate_command_strategy(&parsed.command).unwrap_err();
+        assert!(error.to_string().contains("img fast-img --strategy avif"));
+        Ok(())
+    }
+
+    #[test]
     fn fast_img_command_accepts_archive_flag() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["img", "fast-img", "/photos", "--archive"])?;
 
@@ -9078,9 +10042,9 @@ mod fast_img_hardening_tests {
         write_jpeg(&input_jpg_file, b"jpg")?;
 
         let (_, out_path_jxl) =
-            fast_img_planned_output_rel(&source_jpeg, &wc, Path::new("photo.jpeg"))?;
+            fast_img_planned_output_rel(&source_jpeg, &wc, Path::new("photo.jpeg"), "hevc")?;
         let (_, collision_jxl_rel) =
-            fast_img_planned_output_rel(&input_jpg_file, &wc, Path::new("photo.jpg"))?;
+            fast_img_planned_output_rel(&input_jpg_file, &wc, Path::new("photo.jpg"), "hevc")?;
 
         assert_eq!(out_path_jxl, "photo.JXL");
         assert_ne!(out_path_jxl, collision_jxl_rel);
@@ -9354,6 +10318,70 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn normal_mode_records_only_rejected_photos_item_as_failed() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let working_copy = root.path().join("working");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&working_copy)?;
+        let mut marker = WorkingCopyMarker::new(src_dir, working_copy.clone(), 2)
+            .with_strategy("avif".to_string());
+        for name in ["a", "b"] {
+            std::fs::write(working_copy.join(format!("{name}.AVIF")), name.as_bytes())?;
+            marker.blake3_log.insert(
+                format!("{name}.png"),
+                Blake3Entry {
+                    src: format!("src-{name}"),
+                    out: format!("out-{name}"),
+                    out_rel: Some(format!("{name}.AVIF")),
+                    library_asset: None,
+                },
+            );
+        }
+        let candidates = ["a", "b"]
+            .into_iter()
+            .map(|name| foundation::fast_img::PhotosImportCandidate {
+                path: working_copy.join(format!("{name}.AVIF")),
+                rel_path: format!("{name}.AVIF"),
+                blake3: format!("out-{name}"),
+                album_name: "test".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let mut library = foundation::pipeline::verification::LibraryHandle {
+            imported_assets: vec![foundation::pipeline::verification::LibraryAssetRecord {
+                rel_path: "a.AVIF".to_string(),
+                blake3: "out-a".to_string(),
+                sync_status: "photos_local".to_string(),
+                quarantined: false,
+                photos_uuid: Some("UUID-A".to_string()),
+                library_blake3: None,
+            }],
+            import_error_count: 1,
+        };
+        apply_library_assets_to_marker(&mut marker, &library)?;
+
+        assert_eq!(
+            super::fast_img_record_controllable_media_import_failures(
+                &mut marker,
+                &candidates,
+                &mut library,
+            )?,
+            1
+        );
+        assert_eq!(library.import_error_count, 0);
+        assert!(marker.blake3_log.contains_key("a.png"));
+        assert_eq!(
+            marker.blake3_log["a.png"].library_asset.as_deref(),
+            Some("out-a")
+        );
+        assert!(marker.failed_sources.contains_key("b.png"));
+        assert!(working_copy.join("a.AVIF").is_file());
+        assert!(!working_copy.join("b.AVIF").exists());
+        assert_eq!(fast_img_effective_expected_count(&marker, 2, false), 1);
+        Ok(())
+    }
+
+    #[test]
     fn shortest_path_library_handle_passes_gate2_and_gate3_with_real_file_probe()
     -> anyhow::Result<()> {
         let root = TempDir::new()?;
@@ -9620,7 +10648,7 @@ mod fast_img_hardening_tests {
     #[test]
     fn fast_img_avif_meme_quality_uses_normal_precision_and_speed_zero() {
         assert_eq!(super::AVIF_MEME_SPEED, 0);
-        assert_eq!(super::AVIF_MEME_MIN_QUALITY, 20);
+        assert_eq!(super::AVIF_MEME_MIN_QUALITY, 0);
     }
 
     #[test]
@@ -9679,45 +10707,152 @@ mod fast_img_hardening_tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert_eq!(tool, "ImageMagick");
-        assert!(args.iter().any(|arg| arg == "-flatten"));
+        assert!(args.iter().any(|arg| arg.ends_with("static.gif[0]")));
+        assert!(!args.iter().any(|arg| arg == "-flatten"));
+        assert!(args.iter().any(|arg| arg == "-alpha"));
+        assert!(args.iter().any(|arg| arg == "set"));
         assert!(args.iter().any(|arg| arg == "-strip"));
         Ok(())
     }
 
     #[test]
-    fn meme_avif_keeps_smallest_verified_candidate_even_when_all_are_larger() -> anyhow::Result<()>
-    {
-        let input_size = 1_000_u64;
-        let mut best = None;
+    fn meme_avif_uses_pure_media_budget_and_smallest_pure_fallback() -> anyhow::Result<()> {
+        let q100 = super::AvifMemeCandidate {
+            quality: 100,
+            temp_path: std::path::PathBuf::from("q100.avif"),
+            output_size: 1_300,
+            pure_media_size: 900,
+        };
+        assert!(super::avif_meme_candidate_fits_source(
+            &q100,
+            1_000,
+            Some(950)
+        ));
+        assert!(!super::avif_meme_candidate_fits_source(&q100, 1_000, None));
 
+        let mut best = None;
         assert!(
             super::retain_smallest_avif_meme_candidate(
                 &mut best,
-                (100, std::path::PathBuf::from("q100.avif"), 1_300),
+                q100,
+                super::SizeBudgetBasis::PureMedia
             )
             .is_none()
         );
         assert_eq!(
             super::retain_smallest_avif_meme_candidate(
                 &mut best,
-                (90, std::path::PathBuf::from("q90.avif"), 1_200),
+                super::AvifMemeCandidate {
+                    quality: 90,
+                    temp_path: std::path::PathBuf::from("q90.avif"),
+                    output_size: 1_200,
+                    pure_media_size: 850,
+                },
+                super::SizeBudgetBasis::PureMedia,
             ),
             Some(std::path::PathBuf::from("q100.avif"))
         );
         assert_eq!(
             super::retain_smallest_avif_meme_candidate(
                 &mut best,
-                (80, std::path::PathBuf::from("q80.avif"), 1_250),
+                super::AvifMemeCandidate {
+                    quality: 80,
+                    temp_path: std::path::PathBuf::from("q80.avif"),
+                    output_size: 1_150,
+                    pure_media_size: 875,
+                },
+                super::SizeBudgetBasis::PureMedia,
             ),
             Some(std::path::PathBuf::from("q80.avif"))
         );
 
-        let Some((quality, _, output_size)) = best else {
+        let Some(candidate) = best else {
             anyhow::bail!("verified candidate must be retained");
         };
-        assert_eq!(quality, 90);
-        assert_eq!(output_size, 1_200);
-        assert!(output_size > input_size);
+        assert_eq!(candidate.quality, 90);
+        assert_eq!(candidate.output_size, 1_200);
+        assert_eq!(candidate.pure_media_size, 850);
+        Ok(())
+    }
+
+    #[test]
+    fn pure_media_parsers_exclude_jpeg_and_png_metadata() -> anyhow::Result<()> {
+        fn append_png_chunk(
+            bytes: &mut Vec<u8>,
+            chunk_type: &[u8; 4],
+            payload: &[u8],
+        ) -> anyhow::Result<()> {
+            bytes.extend_from_slice(&u32::try_from(payload.len())?.to_be_bytes());
+            bytes.extend_from_slice(chunk_type);
+            bytes.extend_from_slice(payload);
+            bytes.extend_from_slice(&[0_u8; 4]);
+            Ok(())
+        }
+
+        let root = TempDir::new()?;
+        let jpeg_path = root.path().join("metadata.jpg");
+        let jpeg = [
+            &[0xFF, 0xD8][..],
+            &[0xFF, 0xE1, 0x00, 0x06, 1, 2, 3, 4],
+            &[0xFF, 0xFE, 0x00, 0x04, 5, 6],
+            &[0xFF, 0xDB, 0x00, 0x04, 7, 8],
+            &[0xFF, 0xDA, 0x00, 0x04, 9, 10, 11, 12],
+            &[0xFF, 0xE2, 0x00, 0x04, 13, 14],
+            &[0xFF, 0xDA, 0x00, 0x04, 15, 16, 17, 0xFF, 0xD9],
+        ]
+        .concat();
+        std::fs::write(&jpeg_path, &jpeg)?;
+        assert_eq!(
+            super::jpeg_pure_media_size(&jpeg_path)?,
+            u64::try_from(jpeg.len())? - 20
+        );
+
+        let png_path = root.path().join("metadata.png");
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        append_png_chunk(&mut png, b"IHDR", &[0_u8; 13])?;
+        append_png_chunk(&mut png, b"tEXt", &[0_u8; 100])?;
+        append_png_chunk(&mut png, b"PLTE", &[0_u8; 3])?;
+        append_png_chunk(&mut png, b"tRNS", &[0_u8; 1])?;
+        append_png_chunk(&mut png, b"IDAT", &[0_u8; 5])?;
+        append_png_chunk(&mut png, b"IEND", &[])?;
+        std::fs::write(&png_path, png)?;
+        assert_eq!(super::png_pure_media_size(&png_path)?, 22);
+        Ok(())
+    }
+
+    #[test]
+    fn avif_pure_media_parser_counts_only_mdat_payloads() -> anyhow::Result<()> {
+        fn append_box(
+            bytes: &mut Vec<u8>,
+            box_type: &[u8; 4],
+            payload: &[u8],
+        ) -> anyhow::Result<()> {
+            let size = u32::try_from(payload.len() + 8)?;
+            bytes.extend_from_slice(&size.to_be_bytes());
+            bytes.extend_from_slice(box_type);
+            bytes.extend_from_slice(payload);
+            Ok(())
+        }
+
+        let root = TempDir::new()?;
+        let avif_path = root.path().join("payload.avif");
+        let mut avif = Vec::new();
+        append_box(&mut avif, b"ftyp", &[0_u8; 12])?;
+        append_box(&mut avif, b"meta", &[0_u8; 7])?;
+        append_box(&mut avif, b"mdat", &[0_u8; 11])?;
+        avif.extend_from_slice(&1_u32.to_be_bytes());
+        avif.extend_from_slice(b"mdat");
+        avif.extend_from_slice(&19_u64.to_be_bytes());
+        avif.extend_from_slice(&[0_u8; 3]);
+        std::fs::write(&avif_path, avif)?;
+        assert_eq!(super::avif_mdat_payload_size(&avif_path)?, 14);
+
+        let truncated_path = root.path().join("truncated.avif");
+        std::fs::write(
+            &truncated_path,
+            [20_u32.to_be_bytes().as_slice(), b"mdat", &[0_u8; 3]].concat(),
+        )?;
+        assert!(super::avif_mdat_payload_size(&truncated_path).is_err());
         Ok(())
     }
 
@@ -9757,6 +10892,35 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn mislabeled_png_completes_local_avif_encode_and_pixel_verification() -> anyhow::Result<()> {
+        if foundation::tools::require(&["avifenc", "avifdec"]).is_err() {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&wc)?;
+        let source = src_dir.join("qqcache.gif");
+        image::DynamicImage::new_rgba8(16, 16)
+            .save_with_format(&source, image::ImageFormat::Png)?;
+        let job = super::FastImgTranscodeJob {
+            source: source.clone(),
+            src_hash: foundation::common_utils::calculate_blake3_hash(&source)?,
+            rel_key: "qqcache.gif".to_string(),
+            out_rel_key: "qqcache.AVIF".to_string(),
+        };
+
+        let outcome =
+            super::fast_img_run_encode_job_inner(&job, &src_dir, &wc, 1, false, false, "avif")?;
+        let super::FastImgTranscodeOutcome::Converted(proof) = outcome else {
+            anyhow::bail!("mislabeled PNG should produce a verified AVIF output");
+        };
+        assert!(wc.join(proof.out_rel).is_file());
+        Ok(())
+    }
+
+    #[test]
     fn test_fast_img_avif_stops_repeating_source_invariant_probe_errors() {
         assert!(super::avif_quality_probe_error_is_source_invariant(
             "AVIF pixel equivalence failed at q=90: pixel-diff: cannot open source image: malformed GIF header"
@@ -9773,26 +10937,527 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn fast_img_avif_source_is_reencoded_not_adopted() -> anyhow::Result<()> {
+    fn fast_img_avif_source_is_adopted_byte_exactly() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("source.AVIF");
+        let output = root.path().join("working/nested/source.AVIF");
+        let bytes = b"byte-exact static AVIF fixture";
+        std::fs::write(&source, bytes)?;
+
+        let result = super::fast_img_adopt_static_avif(&source, &output)?;
+
+        assert!(result.success);
+        let output_display = output.display().to_string();
+        assert_eq!(result.output_path.as_deref(), Some(output_display.as_str()));
+        assert_eq!(std::fs::read(&output)?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn jxl_pure_bitstream_parser_excludes_container_metadata() -> anyhow::Result<()> {
+        use foundation::infra::constants::{
+            JXL_BOX_JXLP, JXL_CODESTREAM_MAGIC, JXL_CONTAINER_MAGIC,
+        };
+        fn append_jxl_box(
+            bytes: &mut Vec<u8>,
+            box_type: &[u8; 4],
+            payload: &[u8],
+        ) -> anyhow::Result<()> {
+            let size = u32::try_from(payload.len() + 8)?;
+            bytes.extend_from_slice(&size.to_be_bytes());
+            bytes.extend_from_slice(box_type);
+            bytes.extend_from_slice(payload);
+            Ok(())
+        }
+
+        let root = TempDir::new()?;
+
+        // Container JXL with ftyp, Exif, jxlp (codestream), and xml
+        let container_jxl_path = root.path().join("container.jxl");
+        let mut jxl_bytes = Vec::new();
+        // Container signature box (12 bytes)
+        jxl_bytes.extend_from_slice(JXL_CONTAINER_MAGIC);
+        append_jxl_box(&mut jxl_bytes, b"ftyp", b"jxl \x00\x00\x00\x00")?;
+        append_jxl_box(&mut jxl_bytes, b"Exif", &[0_u8; 50])?;
+        // jxlp box: 4-byte sequence index + 100 bytes codestream fragment
+        let mut jxlp_payload = Vec::new();
+        jxlp_payload.extend_from_slice(&0_u32.to_be_bytes()); // index 0
+        jxlp_payload.extend_from_slice(&[0xAB_u8; 100]); // 100 payload bytes
+        append_jxl_box(&mut jxl_bytes, JXL_BOX_JXLP, &jxlp_payload)?;
+        append_jxl_box(&mut jxl_bytes, b"xml ", &[0_u8; 30])?;
+        std::fs::write(&container_jxl_path, &jxl_bytes)?;
+
         assert_eq!(
-            super::avif_input_decoder(FormatKind::Avif),
-            Some(super::AvifInputDecoder::Avif),
-            "source AVIF must be decoded before Meme Mode encoding"
+            super::jxl_pure_bitstream_size(&container_jxl_path)?,
+            100,
+            "JXL pure bitstream parser must return 100 (jxlp payload minus 4-byte sequence header)"
         );
 
-        let source = include_str!("main.rs");
-        let start = source
-            .find("fn fast_img_run_encode_job_inner(")
-            .ok_or_else(|| anyhow::anyhow!("fast_img_run_encode_job_inner source anchor"))?;
-        let end = source[start..]
-            .find("\nfn fast_img_run_encode_job(")
-            .map(|offset| start + offset)
-            .ok_or_else(|| anyhow::anyhow!("fast_img_run_encode_job source anchor"))?;
-        let body = &source[start..end];
+        // Naked JXL codestream (starts with FF 0A)
+        let naked_jxl_path = root.path().join("naked.jxl");
+        let naked_bytes = [
+            JXL_CODESTREAM_MAGIC[0],
+            JXL_CODESTREAM_MAGIC[1],
+            0x12,
+            0x34,
+            0x56,
+            0x78,
+        ];
+        std::fs::write(&naked_jxl_path, naked_bytes)?;
+        assert_eq!(
+            super::jxl_pure_bitstream_size(&naked_jxl_path)?,
+            u64::try_from(naked_bytes.len())?,
+            "Naked JXL codestream size must equal file size"
+        );
 
-        assert!(body.contains("prepare_fast_img_avif_encoder_input"));
-        assert!(!body.contains("std::fs::copy(&job.source"));
-        assert!(!body.contains("adopting directly"));
+        Ok(())
+    }
+
+    #[test]
+    fn jpeg_pure_media_size_handles_restart_markers_correctly() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("restart.jpg");
+        let mut jpeg = Vec::new();
+        jpeg.extend_from_slice(&[0xFF, 0xD8]);
+        jpeg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x07, b'J', b'F', b'I', b'F', 0x00]);
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x03, 0x01, 0x00]);
+        jpeg.extend_from_slice(&[0x11, 0x22, 0xFF, 0xD0, 0x33, 0x44, 0xFF, 0xD1, 0x55]);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+
+        std::fs::write(&path, &jpeg)?;
+
+        let pure_size = super::jpeg_pure_media_size(&path)?;
+        assert_eq!(pure_size, 19);
+        Ok(())
+    }
+
+    #[test]
+    fn retain_smallest_candidate_respects_budget_basis_conflict() {
+        let candidate_a = super::AvifMemeCandidate {
+            quality: 70,
+            temp_path: std::path::PathBuf::from("a.avif"),
+            output_size: 100,
+            pure_media_size: 90,
+        };
+        let candidate_b = super::AvifMemeCandidate {
+            quality: 90,
+            temp_path: std::path::PathBuf::from("b.avif"),
+            output_size: 110,
+            pure_media_size: 80,
+        };
+
+        let mut best_complete = None;
+        super::retain_smallest_avif_meme_candidate(
+            &mut best_complete,
+            candidate_a.clone(),
+            super::SizeBudgetBasis::CompleteFile,
+        );
+        super::retain_smallest_avif_meme_candidate(
+            &mut best_complete,
+            candidate_b.clone(),
+            super::SizeBudgetBasis::CompleteFile,
+        );
+        assert_eq!(
+            best_complete.unwrap().temp_path,
+            std::path::PathBuf::from("a.avif")
+        );
+
+        let mut best_pure = None;
+        super::retain_smallest_avif_meme_candidate(
+            &mut best_pure,
+            candidate_a,
+            super::SizeBudgetBasis::PureMedia,
+        );
+        super::retain_smallest_avif_meme_candidate(
+            &mut best_pure,
+            candidate_b,
+            super::SizeBudgetBasis::PureMedia,
+        );
+        assert_eq!(
+            best_pure.unwrap().temp_path,
+            std::path::PathBuf::from("b.avif")
+        );
+    }
+
+    #[test]
+    fn fast_img_planned_output_rel_uses_strategy_extension_and_removes_failed_outputs()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&wc)?;
+        let src = root.path().join("test.gif");
+        std::fs::write(&src, b"bad_gif")?;
+
+        let (_, out_jxl) =
+            super::fast_img_planned_output_rel(&src, &wc, Path::new("test.gif"), "hevc")?;
+        assert_eq!(out_jxl, "test.JXL");
+
+        let (_, out_avif) =
+            super::fast_img_planned_output_rel(&src, &wc, Path::new("test.gif"), "avif")?;
+        assert_eq!(out_avif, "test.AVIF");
+
+        // Simulate failed transcode residue cleanup
+        let avif_path = wc.join("test.AVIF");
+        let jxl_path = wc.join("test.JXL");
+        std::fs::write(&avif_path, b"corrupted")?;
+        std::fs::write(&jxl_path, b"corrupted")?;
+
+        let err = super::FastImgTranscodeError {
+            rel_key: "test.gif".to_string(),
+            out_rel_key: out_avif,
+            src_hash: "hash".to_string(),
+            reason: "malformed gif".to_string(),
+        };
+
+        super::fast_img_remove_failed_encode_output(&wc, &err)?;
+        assert!(!avif_path.exists(), "target output AVIF must be removed");
+        assert!(jxl_path.exists(), "unrelated JXL must not be deleted");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_avif_matching_hash_reusable() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let output = root.path().join("photo.AVIF");
+        std::fs::write(&output, b"avif_data")?;
+        let hash = foundation::common_utils::calculate_blake3_hash(&output)?;
+
+        let res = super::fast_img_check_reused_delivery(
+            &output,
+            "avif",
+            super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION,
+            &hash,
+        )?;
+
+        match res {
+            super::ReuseDecision::Reusable {
+                hash: returned_hash,
+            } => {
+                assert_eq!(returned_hash, hash);
+            }
+            super::ReuseDecision::NeedsReencode { reason } => {
+                panic!("expected Reusable, got NeedsReencode: {reason}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_avif_hash_drift_forces_reencode() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&wc)?;
+
+        let source = src_dir.join("photo.jpg");
+        let output = wc.join("photo.AVIF");
+        std::fs::write(&source, b"source_data")?;
+        std::fs::write(&output, b"tampered_avif_data")?;
+
+        let res = super::fast_img_check_reused_delivery(
+            &output,
+            "avif",
+            super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION,
+            "expected_recorded_hash_A",
+        )?;
+        assert!(matches!(res, super::ReuseDecision::NeedsReencode { .. }));
+
+        let mut marker = WorkingCopyMarker::new(src_dir.clone(), wc, 1);
+        marker.strategy = "avif".to_string();
+        marker.metadata_policy_version = super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION;
+        marker.stage = FastImgStageName::TranscodeComplete;
+        marker.blake3_log.insert(
+            "photo.jpg".to_string(),
+            foundation::pipeline::verification::Blake3Entry {
+                src: "hash123".to_string(),
+                out: "expected_recorded_hash_A".to_string(),
+                out_rel: Some("photo.AVIF".to_string()),
+                library_asset: None,
+            },
+        );
+
+        let summary =
+            super::fast_img_refresh_marker_deliveries(&mut marker, &src_dir, "avif", false)?;
+        assert_eq!(summary.refreshed, 0);
+        assert_eq!(summary.invalidated, 1);
+        assert!(summary.marker_changed);
+
+        assert_eq!(marker.stage, FastImgStageName::OutputPrepared);
+        let entry = marker.blake3_log.get("photo.jpg").unwrap();
+        assert!(
+            entry.out.is_empty(),
+            "entry.out must be cleared on hash drift"
+        );
+        assert_eq!(entry.out_rel.as_deref(), Some("photo.AVIF"));
+        assert!(!marker.skipped_sources.contains_key("photo.jpg"));
+        assert!(!output.exists(), "old tampered output must be deleted");
+        Ok(())
+    }
+
+    #[test]
+    fn test_avif_marker_entry_output_path_fallback() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let wc = root.path().join("wc");
+        let mut marker = WorkingCopyMarker::new(root.path().to_path_buf(), wc.clone(), 1);
+        marker.strategy = "avif".to_string();
+
+        let entry = foundation::pipeline::verification::Blake3Entry {
+            src: "hash".to_string(),
+            out: "out".to_string(),
+            out_rel: None,
+            library_asset: None,
+        };
+
+        let path = super::fast_img_marker_entry_output_path(&marker, "photo.jpg", &entry)?;
+        assert_eq!(path, wc.join("photo.AVIF"));
+
+        marker.strategy = "hevc".to_string();
+        let path_jxl = super::fast_img_marker_entry_output_path(&marker, "photo.jpg", &entry)?;
+        assert_eq!(path_jxl, wc.join("photo.JXL"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_jxl_refresh_unchanged_keeps_stage() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&wc)?;
+        let source = src_dir.join("photo.jpg");
+        let output = wc.join("photo.JXL");
+        std::fs::write(&source, b"source")?;
+        std::fs::write(&output, b"jxl")?;
+        let output_hash = foundation::common_utils::calculate_blake3_hash(&output)?;
+
+        let mut marker = WorkingCopyMarker::new(src_dir.clone(), wc, 1);
+        marker.stage = FastImgStageName::Gate1Passed;
+        marker.gate1_checks.count = foundation::pipeline::verification::CheckPassed(true);
+        marker.blake3_log.insert(
+            "photo.jpg".to_string(),
+            foundation::pipeline::verification::Blake3Entry {
+                src: foundation::common_utils::calculate_blake3_hash(&source)?,
+                out: output_hash,
+                out_rel: Some("photo.JXL".to_string()),
+                library_asset: Some("asset_123".to_string()),
+            },
+        );
+
+        let summary =
+            super::fast_img_refresh_marker_deliveries(&mut marker, &src_dir, "hevc", false)?;
+        assert_eq!(summary.refreshed, 1);
+        assert_eq!(summary.invalidated, 0);
+        assert!(!summary.marker_changed);
+        assert_eq!(marker.stage, FastImgStageName::Gate1Passed);
+        assert_eq!(
+            marker.gate1_checks.count,
+            foundation::pipeline::verification::CheckPassed(true)
+        );
+        assert_eq!(
+            marker
+                .blake3_log
+                .get("photo.jpg")
+                .and_then(|entry| entry.library_asset.as_deref()),
+            Some("asset_123")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_missing_source_preserves_stale_output_and_marker_proof() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&wc)?;
+
+        let output = wc.join("photo.AVIF");
+        std::fs::write(&output, b"stale_avif")?;
+
+        let mut marker = WorkingCopyMarker::new(src_dir.clone(), wc, 1);
+        marker.strategy = "avif".to_string();
+        marker.metadata_policy_version = super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION;
+        marker.stage = FastImgStageName::TranscodeComplete;
+        marker.blake3_log.insert(
+            "photo.jpg".to_string(),
+            foundation::pipeline::verification::Blake3Entry {
+                src: "src_hash".to_string(),
+                out: "recorded_hash".to_string(),
+                out_rel: Some("photo.AVIF".to_string()),
+                library_asset: Some("asset_id".to_string()),
+            },
+        );
+        let before = marker.clone();
+
+        let err = super::fast_img_refresh_marker_deliveries(&mut marker, &src_dir, "avif", false)
+            .expect_err("missing source must stop before destructive invalidation");
+        assert!(err.to_string().contains("source is missing"));
+        assert!(
+            err.to_string()
+                .contains("preserving output and marker proof")
+        );
+        assert!(output.exists());
+        assert_eq!(marker.blake3_log, before.blake3_log);
+        assert_eq!(marker.stage, before.stage);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resume_preserves_valid_entries_and_only_requeues_drifted_output() -> anyhow::Result<()>
+    {
+        let root = TempDir::new()?;
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(&src_dir)?;
+        std::fs::create_dir_all(&wc)?;
+
+        let source_a = src_dir.join("a.png");
+        let source_b = src_dir.join("b.png");
+        let skipped_source = src_dir.join("skip.gif");
+        let output_a = wc.join("a.AVIF");
+        let output_b = wc.join("b.AVIF");
+        std::fs::write(&source_a, b"source-a")?;
+        std::fs::write(&source_b, b"source-b")?;
+        std::fs::write(&skipped_source, b"source-skip")?;
+        std::fs::write(&output_a, b"output-a")?;
+        std::fs::write(&output_b, b"drifted-output-b")?;
+
+        let output_a_hash = foundation::common_utils::calculate_blake3_hash(&output_a)?;
+        let mut marker = WorkingCopyMarker::new(src_dir.clone(), wc, 3);
+        marker.strategy = "avif".to_string();
+        marker.metadata_policy_version = super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION;
+        marker.stage = FastImgStageName::TranscodeComplete;
+        marker.blake3_log.insert(
+            "a.png".to_string(),
+            foundation::pipeline::verification::Blake3Entry {
+                src: foundation::common_utils::calculate_blake3_hash(&source_a)?,
+                out: output_a_hash.clone(),
+                out_rel: Some("a.AVIF".to_string()),
+                library_asset: Some("asset-a".to_string()),
+            },
+        );
+        marker.blake3_log.insert(
+            "b.png".to_string(),
+            foundation::pipeline::verification::Blake3Entry {
+                src: foundation::common_utils::calculate_blake3_hash(&source_b)?,
+                out: "recorded-output-b".to_string(),
+                out_rel: Some("b.AVIF".to_string()),
+                library_asset: Some("asset-b".to_string()),
+            },
+        );
+        marker.skipped_sources.insert(
+            "skip.gif".to_string(),
+            SkippedSourceEntry {
+                src: foundation::common_utils::calculate_blake3_hash(&skipped_source)?,
+                reason: "animated source".to_string(),
+            },
+        );
+
+        let mut resume_stage = FastImgStageName::TranscodeComplete;
+        assert!(super::fast_img_downgrade_resume_if_outputs_stale(
+            &mut marker,
+            &mut resume_stage
+        )?);
+        let summary = super::fast_img_refresh_and_persist_marker_deliveries(
+            &mut marker,
+            &src_dir,
+            "avif",
+            false,
+        )?;
+        assert_eq!(summary.invalidated, 1);
+
+        let persisted = super::read_marker(&marker.working_copy)?;
+        let entry_a = persisted
+            .blake3_log
+            .get("a.png")
+            .ok_or_else(|| anyhow::anyhow!("missing valid entry A"))?;
+        let entry_b = persisted
+            .blake3_log
+            .get("b.png")
+            .ok_or_else(|| anyhow::anyhow!("missing drifted entry B"))?;
+        assert_eq!(entry_a.out, output_a_hash);
+        assert_eq!(entry_a.out_rel.as_deref(), Some("a.AVIF"));
+        assert!(entry_b.out.is_empty());
+        assert_eq!(entry_b.out_rel.as_deref(), Some("b.AVIF"));
+        assert!(persisted.skipped_sources.contains_key("skip.gif"));
+        assert_eq!(persisted.blake3_log.len(), 2);
+        assert!(output_a.exists());
+        assert!(!output_b.exists());
+        assert!(super::fast_img_skip_hashes_match(
+            &source_a, &output_a, entry_a
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_metadata_policy_version_written_on_avif_transcode_complete() -> anyhow::Result<()> {
+        let mut marker = WorkingCopyMarker::new(PathBuf::from("/src"), PathBuf::from("/wc"), 1);
+        marker.metadata_policy_version = 0;
+
+        super::fast_img_commit_transcode_complete(&mut marker, "avif");
+
+        assert_eq!(
+            marker.metadata_policy_version,
+            super::FAST_IMG_AVIF_CLEAN_POLICY_VERSION
+        );
+        assert_eq!(marker.stage, FastImgStageName::TranscodeComplete);
+
+        let mut jxl_marker = WorkingCopyMarker::new(PathBuf::from("/src"), PathBuf::from("/wc"), 1);
+        jxl_marker.metadata_policy_version = 0;
+        super::fast_img_commit_transcode_complete(&mut jxl_marker, "hevc");
+
+        assert_eq!(
+            jxl_marker.metadata_policy_version, 0,
+            "JXL strategy must NOT write AVIF policy version"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_failed_cleanup_does_not_delete_case_variant() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let wc = root.path().join("wc");
+        std::fs::create_dir_all(wc.join("target"))?;
+        std::fs::create_dir_all(wc.join("sibling"))?;
+
+        let target = wc.join("target/image.avif");
+        let sibling = wc.join("sibling/image.AVIF");
+        std::fs::write(&target, b"failed_target")?;
+        std::fs::write(&sibling, b"sibling_file")?;
+
+        let err = super::FastImgTranscodeError {
+            rel_key: "image.jpg".to_string(),
+            out_rel_key: "target/image.avif".to_string(),
+            src_hash: "hash".to_string(),
+            reason: "encode failed".to_string(),
+        };
+
+        super::fast_img_remove_failed_encode_output(&wc, &err)?;
+        assert!(!target.exists(), "exact out_rel_key must be removed");
+        assert!(
+            sibling.exists(),
+            "unrelated sibling file must NOT be removed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_imagemagick_identify_fail_closed_on_error() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("non_existent.png");
+        let temp_path = root.path().join("temp.png");
+
+        let res = super::run_avif_input_decoder(
+            super::AvifInputDecoder::ImageMagick,
+            &source,
+            &temp_path,
+        );
+        assert!(
+            res.is_err(),
+            "ImageMagick identify preflight must fail-closed on missing file/error"
+        );
         Ok(())
     }
 }

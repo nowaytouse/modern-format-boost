@@ -15,7 +15,7 @@ import platform
 import subprocess
 import sys
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 
@@ -154,7 +154,7 @@ def cargo_component_argv(
     return cargo_argv(toolchain, component, *args)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _cached_toolchain() -> RustToolchain:
     return resolve_rust_toolchain()
 

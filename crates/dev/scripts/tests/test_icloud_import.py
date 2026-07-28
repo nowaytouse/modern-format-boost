@@ -3,13 +3,12 @@
 Synthesized fixtures only — no project assets.
 """
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import icloud_import
-
 
 # ── strip_folder_suffix ──────────────────────────────────────────────────────
 

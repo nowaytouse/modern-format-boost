@@ -92,7 +92,7 @@ use crate::tool_builders::JxlinfoBuilder;
 use crate::tooling::builder_base::ToolBuilder;
 use crate::unified_error::{ImgQualityError, Result};
 use crate::{DjxlBuilder, FfmpegBuilder, FfprobeBuilder};
-use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
+use image::{DynamicImage, GenericImageView, ImageReaderOptions, Rgba};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -142,7 +142,6 @@ fn open_image_with_limits_without_png_heuristic(path: &Path) -> Result<DynamicIm
 
 fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::ImageFormat>)> {
     use image::Limits;
-    let _file = File::open(path)?;
     let mut limits = Limits::default();
     limits.max_alloc = Some(crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES);
 
@@ -166,9 +165,12 @@ fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::
         _ => None, // Fall back to extension-based detection
     };
 
-    let mut reader = ImageReader::open(path)?;
-    let _ = reader.set_limits(limits);
-    let (img, _metadata) = reader.decode().map_err(ImgQualityError::from)?;
+    let mut reader = ImageReaderOptions::open(path)?;
+    reader.limits(limits);
+    if let Some(detected_format) = format {
+        reader.set_format(detected_format);
+    }
+    let img = reader.decode().map_err(ImgQualityError::from)?;
 
     // Use detected format from magic bytes
     Ok((img, format))

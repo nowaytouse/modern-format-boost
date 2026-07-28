@@ -596,7 +596,11 @@ fn run_fast_img_delivery_check(
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
-        source_files_label: "Recorded source JPEGs".to_string(),
+        source_files_label: if strategy == "avif" {
+            "Recorded source static images".to_string()
+        } else {
+            "Recorded source JPEGs".to_string()
+        },
         optimized_files_label: if strategy == "avif" {
             "Optimized AVIF files".to_string()
         } else {
@@ -665,6 +669,7 @@ fn run_fast_img_delivery_check(
     let mut recorded_source_jpegs: u64 = 0;
     let mut skipped_source_rels = HashSet::new();
     let mut failed_source_rels = HashSet::new();
+    let mut successful_source_rels = HashSet::new();
     let mut skipped_sources = HashMap::new();
     let mut failed_sources = HashMap::new();
 
@@ -690,6 +695,9 @@ fn run_fast_img_delivery_check(
                 failed_sources.insert(k.clone(), v.clone());
             }
         }
+        if let Some(encoded) = m.get("blake3_log").and_then(|v| v.as_object()) {
+            successful_source_rels.extend(encoded.keys().cloned());
+        }
         if let Some(arr) = m.get("tier2_imported_assets").and_then(|v| v.as_array()) {
             tier2_recorded = arr.len();
             for item in arr {
@@ -709,6 +717,19 @@ fn run_fast_img_delivery_check(
                 }
             }
         }
+    }
+
+    if strategy == "avif" {
+        source_true_jpegs.clear();
+        successful_source_rels
+            .iter()
+            .chain(&skipped_source_rels)
+            .chain(&failed_source_rels)
+            .map(|rel| source_dir.join(rel))
+            .filter(|path| path.is_file())
+            .for_each(|path| source_true_jpegs.push(path));
+        source_true_jpegs.sort();
+        source_true_jpegs.dedup();
     }
 
     let mut skipped_sources_present = Vec::new();
@@ -828,7 +849,7 @@ fn run_fast_img_delivery_check(
         // when all sources were intentionally skipped). Avoid modifying
         // stats.has_warnings to keep existing programmatic behavior/tests stable.
         report.push_str(
-            "\nWARNING: No optimized outputs produced because all recorded source JPEGs were \
+            "\nWARNING: No optimized outputs produced because all recorded source files were \
              skipped or failed.\n",
         );
         report.push_str(
@@ -841,7 +862,11 @@ fn run_fast_img_delivery_check(
     stats.count_matches_with_handoff = count_matches;
     stats.count_fully_explained = count_matches;
     stats.count_status_label = if count_matches {
-        Some("FAST_IMG_JXL_ONLY_DELIVERY".to_string())
+        Some(if strategy == "avif" {
+            "FAST_IMG_AVIF_MEME_DELIVERY".to_string()
+        } else {
+            "FAST_IMG_JXL_ONLY_DELIVERY".to_string()
+        })
     } else {
         None
     };
@@ -854,15 +879,20 @@ fn run_fast_img_delivery_check(
     if let Some(ref err) = marker_error {
         report.push_str(&format!("  Error:                  {err}\n"));
     }
+    let source_kind = if strategy == "avif" {
+        "static images"
+    } else {
+        "JPEGs"
+    };
     report.push_str(&format!(
-        "Recorded source JPEGs:       {recorded_source_jpegs}\n"
+        "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
     ));
     report.push_str(&format!(
-        "Recorded skipped JPEGs:      {}\n",
+        "Recorded skipped sources:    {}\n",
         skipped_source_rels.len()
     ));
     report.push_str(&format!(
-        "Recorded failed JPEGs:       {}\n",
+        "Recorded failed sources:     {}\n",
         failed_source_rels.len()
     ));
     let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
@@ -909,8 +939,13 @@ fn run_fast_img_delivery_check(
         }
         if !unexpected_source_true_jpegs.is_empty() {
             report.push_str(&format!(
-                "  - {} unexpected source JPEG(s) remained under source (not deleted):\n",
-                unexpected_source_true_jpegs.len()
+                "  - {} unexpected source {} remained under source (not deleted):\n",
+                unexpected_source_true_jpegs.len(),
+                if strategy == "avif" {
+                    "static image(s)"
+                } else {
+                    "JPEG(s)"
+                }
             ));
             for p in &unexpected_source_true_jpegs {
                 report.push_str(&format!(
@@ -1008,8 +1043,12 @@ fn run_fast_img_delivery_check(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
         ));
-        report.push_str("  - All non-skipped/non-failed source JPEGs were successfully deleted\n");
-        report.push_str("  - Optimized directory contains only JXL delivery files\n");
+        report.push_str(&format!(
+            "  - All non-skipped/non-failed source {source_kind} were successfully deleted\n"
+        ));
+        report.push_str(&format!(
+            "  - Optimized directory contains only {ext_name} delivery files\n"
+        ));
         if tier2_recorded > 0 {
             report.push_str(
                 "  - All tier-2 modern lossy files were successfully deleted after verification\n",
@@ -2463,6 +2502,57 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.optimized_files, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_meme_delivery_rejects_recorded_static_source_left_behind() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let optimized = tempdir.path().join("Album_optimized");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&optimized).unwrap();
+
+        fs::write(
+            source.join("meme.png"),
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+        )
+        .unwrap();
+        fs::write(
+            optimized.join("meme.avif"),
+            b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avif",
+        )
+        .unwrap();
+        let marker_data = serde_json::json!({
+            "working_copy": optimized.to_string_lossy().to_string(),
+            "src_jpeg_count": 1,
+            "strategy": "avif",
+            "blake3_log": {
+                "meme.png": {
+                    "out_rel": "meme.avif",
+                    "src": "source-hash",
+                    "out": "output-hash",
+                    "library_asset": null
+                }
+            },
+            "skipped_sources": {},
+            "failed_sources": {}
+        });
+        fs::write(
+            optimized.join("fastmode_img_marker.json"),
+            serde_json::to_string(&marker_data).unwrap(),
+        )
+        .unwrap();
+
+        let mut report = String::new();
+        let stats =
+            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "avif")
+                .unwrap();
+
+        assert_eq!(stats.source_remaining_files, 1);
+        assert!(stats.integrity_failures > 0);
+        assert!(report.contains("unexpected source static image"));
+        assert!(report.contains("Optimized AVIF files:"));
     }
 
     #[test]

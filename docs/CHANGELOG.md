@@ -7,22 +7,28 @@ All notable changes to this project will be documented in this file.
 ### Reliability, Delivery & CI Repairs
 
 - **FastImg AVIF Meme Mode**: Static-image delivery now normalizes every
-  supported source before `avifenc --speed 0 --jobs all`, probes `q=100..20`,
-  and commits the smallest complete candidate that passes health and pixel
-  gates even when it is larger than the source. It never forces `q=0`; source
-  AVIF files are decoded and re-encoded, clean output omits source
-  Exif/XMP/ICC/gain-map data, and animated or damaged GIF input is rejected.
+  supported source before `avifenc --speed 0 --jobs all` and probes
+  `q=100..0`. JPEG, PNG, and JXL sources use metadata-free media budgets while
+  AVIF candidates count only `mdat`; source AVIF intentionally keeps the
+  complete-file budget. The highest verified quality within budget wins, with
+  the smallest candidate under the same budget basis as fallback. Source AVIF
+  files are decoded and re-encoded, clean output omits source
+  Exif/XMP/ICC/gain-map data, and damaged supported media remains explicitly
+  counted and retained instead of disappearing during static-container scan.
 - **Photos Import Safety**: FastImg JXL shortest-path import is rejected before
   writes. `icloud_import` now performs a no-side-effect preflight that detects
   JXL by extension and container/codestream signature before it can rename a
   directory or invoke Photos; verified AVIF output uses the recorded output
-  paths for generic library-side verification. Import delivery now uses one-file
-  transactions and checkpoints only exact UUID matches, so a later failure cannot
-  replay already confirmed files.
+  paths for generic library-side verification. Normal-mode delivery isolates
+  media in one-file transactions, preserves verified successes across
+  controllable rejections, and uses filtered Photos folder/album lookup instead
+  of repeatedly enumerating a large library; debug mode remains fail-fast.
 - **Explicit Repair Count Gate**: The JXL import doctor no longer embeds a
   fixed affected-file count or default range. Callers must supply the expected
   minimum and maximum for that run, and repair rechecks the same range. Local
-  source and synthetic tests do not claim a real Photos import count or result.
+  source and synthetic tests do not invent a real Photos import count. For the
+  documented 4,798-file QQCache copy only, accounting is 3,343 admitted
+  candidates, one retained damaged item, and 3,342 expected outputs.
 - **Actionable Logs**: Successful per-file forensic validation is retained in
   trace session logs while terminal output focuses on progress, failures, and
   final decisions.

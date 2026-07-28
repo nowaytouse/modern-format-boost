@@ -16,7 +16,10 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from quality_regression_model import DEFAULT_CONNSTR, NULLABLE_EMBED_FEATURES  # noqa: E402
+from quality_regression_model import (
+    DEFAULT_CONNSTR,
+    NULLABLE_EMBED_FEATURES,
+)
 
 try:
     import psycopg2

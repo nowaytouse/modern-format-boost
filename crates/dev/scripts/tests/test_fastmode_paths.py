@@ -5,14 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 RUST_BIN_DIR = SCRIPT_DIR.parent / "src" / "bin"
 RUST_INFRA_DIR = SCRIPT_DIR.parent / "src" / "infra"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import fastmode_paths  # noqa: E402
+import fastmode_paths
 
 
 class TestFastModePaths(unittest.TestCase):

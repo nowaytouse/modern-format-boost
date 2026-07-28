@@ -92,12 +92,13 @@ Step-by-Step Instructions:
 This script will detect and preserve existing ffmpeg installations to avoid conflicts.
 """
 
-from mfb_ui_tokens import pick_symbol
 import os
 import platform
 import shutil
 import subprocess
 import sys
+
+from mfb_ui_tokens import pick_symbol
 
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
@@ -127,7 +128,7 @@ def main():
     _scripts = Path(__file__).resolve().parent
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("install_deps.py")
     print_c(

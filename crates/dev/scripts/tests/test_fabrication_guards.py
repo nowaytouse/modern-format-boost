@@ -9,21 +9,20 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 
-import fabrication_policy  # noqa: E402
-import loop_intent_clustering  # noqa: E402
-import mfb_entry_guard  # noqa: E402
-import post_training_closure  # noqa: E402
-import run_training  # noqa: E402
-import start_training_four  # noqa: E402
+import fabrication_policy
+import loop_intent_clustering
+import mfb_entry_guard
+import post_training_closure
+import run_training
+import start_training_four
 
 try:
-    import mfb_tool_refresh  # type: ignore[import-not-found]  # noqa: E402
+    import mfb_tool_refresh  # type: ignore[import-not-found]
 except ModuleNotFoundError:
     mfb_tool_refresh = None
 
@@ -92,13 +91,15 @@ class TestFabricationGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "corpus"
             root.mkdir()
-            with patch.object(
-                run_training.os,
-                "scandir",
-                side_effect=OSError("permission denied"),
+            with (
+                patch.object(
+                    run_training.os,
+                    "scandir",
+                    side_effect=OSError("permission denied"),
+                ),
+                self.assertRaises(run_training.ScanPlanningError),
             ):
-                with self.assertRaises(run_training.ScanPlanningError):
-                    list(run_training.iter_media_files(root))
+                list(run_training.iter_media_files(root))
 
     def test_iter_media_files_fails_closed_on_unreadable_entry(self):
         class BrokenEntry:
@@ -125,22 +126,26 @@ class TestFabricationGuards(unittest.TestCase):
                     list(run_training.iter_media_files(root))
 
     def test_file_size_ge_rule_fails_closed_on_stat_error(self):
-        with patch.object(
-            run_training.Path,
-            "stat",
-            side_effect=OSError("stat denied"),
+        with (
+            patch.object(
+                run_training.Path,
+                "stat",
+                side_effect=OSError("stat denied"),
+            ),
+            self.assertRaises(run_training.ScanPlanningError),
         ):
-            with self.assertRaises(run_training.ScanPlanningError):
-                run_training.rule_file_size_kb_ge(Path("/tmp/source.jpg"), 1)
+            run_training.rule_file_size_kb_ge(Path("/tmp/source.jpg"), 1)
 
     def test_file_size_le_rule_fails_closed_on_stat_error(self):
-        with patch.object(
-            run_training.Path,
-            "stat",
-            side_effect=OSError("stat denied"),
+        with (
+            patch.object(
+                run_training.Path,
+                "stat",
+                side_effect=OSError("stat denied"),
+            ),
+            self.assertRaises(run_training.ScanPlanningError),
         ):
-            with self.assertRaises(run_training.ScanPlanningError):
-                run_training.rule_file_size_kb_le(Path("/tmp/source.jpg"), 1)
+            run_training.rule_file_size_kb_le(Path("/tmp/source.jpg"), 1)
 
     def test_fail_closed_training_default_enabled(self):
         with patch.dict(os.environ, {}, clear=False):
@@ -499,28 +504,28 @@ class TestFabricationGuards(unittest.TestCase):
             captured_env.update(kwargs["env"])
             return FakeProc()
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with (
-                patch.object(
-                    run_training, "training_lane_pid_is_active", return_value=False
-                ),
-                patch.object(run_training, "record_stale_lane_death"),
-                patch.object(
-                    run_training,
-                    "ensure_foundation_dylib",
-                    return_value="/tmp/libfoundation.dylib",
-                ),
-                patch.object(run_training.subprocess, "Popen", side_effect=fake_popen),
-                patch.object(run_training.time, "sleep", return_value=None),
-            ):
-                start_training_four.start_lane(
-                    lane="static_high",
-                    argv_tail=["--training-mode", "static", "--label", "high"],
-                    log_root=Path(tmp),
-                    stamp="teststamp",
-                    connstr="postgresql://localhost/modern_format_boost",
-                    dry_run=False,
-                )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(
+                run_training, "training_lane_pid_is_active", return_value=False
+            ),
+            patch.object(run_training, "record_stale_lane_death"),
+            patch.object(
+                run_training,
+                "ensure_foundation_dylib",
+                return_value="/tmp/libfoundation.dylib",
+            ),
+            patch.object(run_training.subprocess, "Popen", side_effect=fake_popen),
+            patch.object(run_training.time, "sleep", return_value=None),
+        ):
+            start_training_four.start_lane(
+                lane="static_high",
+                argv_tail=["--training-mode", "static", "--label", "high"],
+                log_root=Path(tmp),
+                stamp="teststamp",
+                connstr="postgresql://localhost/modern_format_boost",
+                dry_run=False,
+            )
 
         self.assertEqual(
             captured_env["MFB_TRAINING_ERROR_MODE"],
@@ -565,14 +570,14 @@ class TestFabricationGuards(unittest.TestCase):
                 "run_rust_ingest",
                 return_value=failed,
             ) as ingest_mock,
+            self.assertRaises(SystemExit) as raised,
         ):
-            with self.assertRaises(SystemExit) as raised:
-                run_training.ingest_quality_via_cli(
-                    [Path("/tmp/a.heic"), Path("/tmp/b.jpg")],
-                    "high",
-                    "image_quality",
-                    "postgresql://localhost/modern_format_boost",
-                )
+            run_training.ingest_quality_via_cli(
+                [Path("/tmp/a.heic"), Path("/tmp/b.jpg")],
+                "high",
+                "image_quality",
+                "postgresql://localhost/modern_format_boost",
+            )
 
         self.assertEqual(raised.exception.code, 1)
         ingest_mock.assert_called_once()
@@ -649,13 +654,15 @@ class TestFabricationGuards(unittest.TestCase):
         )
 
     def test_start_training_four_rejects_workspace_home_root_logs(self):
-        with tempfile.TemporaryDirectory() as tmp_home:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmp_home,
+            patch.dict(
                 os.environ,
                 {"HOME": tmp_home, "MFB_HOME_ROOT": str(start_training_four.ROOT)},
                 clear=False,
-            ):
-                resolved = start_training_four.resolve_launch_log_root(None)
+            ),
+        ):
+            resolved = start_training_four.resolve_launch_log_root(None)
 
         self.assertEqual(
             resolved,
@@ -738,29 +745,27 @@ class TestFabricationGuards(unittest.TestCase):
             def poll(self):
                 return None
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with (
-                patch.object(
-                    run_training,
-                    "ensure_foundation_dylib",
-                    return_value="/tmp/libfoundation.dylib",
-                ),
-                patch.object(run_training.subprocess, "Popen", return_value=FakeProc()),
-                patch.object(run_training.time, "sleep", return_value=None),
-                patch.object(
-                    Path, "write_text", side_effect=PermissionError("pid denied")
-                ),
-                patch.object(run_training.os, "kill") as kill_mock,
-            ):
-                with self.assertRaises(RuntimeError) as raised:
-                    start_training_four.start_lane(
-                        lane="static_high",
-                        argv_tail=["--training-mode", "static", "--label", "high"],
-                        log_root=Path(tmp),
-                        stamp="teststamp",
-                        connstr="postgresql://localhost/modern_format_boost",
-                        dry_run=False,
-                    )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(
+                run_training,
+                "ensure_foundation_dylib",
+                return_value="/tmp/libfoundation.dylib",
+            ),
+            patch.object(run_training.subprocess, "Popen", return_value=FakeProc()),
+            patch.object(run_training.time, "sleep", return_value=None),
+            patch.object(Path, "write_text", side_effect=PermissionError("pid denied")),
+            patch.object(run_training.os, "kill") as kill_mock,
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                start_training_four.start_lane(
+                    lane="static_high",
+                    argv_tail=["--training-mode", "static", "--label", "high"],
+                    log_root=Path(tmp),
+                    stamp="teststamp",
+                    connstr="postgresql://localhost/modern_format_boost",
+                    dry_run=False,
+                )
 
         kill_mock.assert_called_once_with(FakeProc.pid, 15)
         self.assertIn("pid file write failed", str(raised.exception))

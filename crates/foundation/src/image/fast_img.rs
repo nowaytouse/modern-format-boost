@@ -1021,6 +1021,12 @@ pub struct PhotosImportCandidate {
     pub album_name: String,
 }
 
+#[derive(Debug, Default)]
+struct PhotosMediaImportReport {
+    report_pairs: Vec<(String, String)>,
+    failed_count: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct FastImgQueryRecord {
     uuid: String,
@@ -1074,6 +1080,18 @@ impl PhotosImportStrategy {
     }
 }
 
+fn photos_import_fail_fast_enabled() -> bool {
+    let mode = std::env::var(crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', ' '], "-");
+    matches!(
+        mode.as_str(),
+        "debug" | "fail-fast" | "failfast" | "abort" | "strict"
+    )
+}
+
 /// Import JXL outputs into Photos and return a concrete verifier handle.
 ///
 /// This deliberately does not use `osxphotos import`: current osxphotos filters
@@ -1109,17 +1127,29 @@ pub fn import_media_outputs_with_library_verifier(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
-    let report_pairs = import_media_outputs_with_photos_applescript(candidates)?;
+    let import_report = import_media_outputs_with_photos_applescript(candidates)?;
+    let imported_rel_paths = import_report
+        .report_pairs
+        .iter()
+        .map(|(rel_path, _)| rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let imported_candidates = candidates
+        .iter()
+        .filter(|candidate| imported_rel_paths.contains(candidate.rel_path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
     let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-    library_handle_from_media_output_probes(
-        candidates,
-        &report_pairs,
+    let mut library_handle = library_handle_from_media_output_probes(
+        &imported_candidates,
+        &import_report.report_pairs,
         query_osxphotos_asset_probes,
         quarantine_probe,
-    )
+    )?;
+    library_handle.import_error_count = import_report.failed_count;
+    Ok(library_handle)
 }
 
 /// Build Photos import rows from the exact outputs recorded by a fast-img run.
@@ -1302,23 +1332,21 @@ end mfbImportFileList
 
 on mfbEnsureTopLevelFolder(folderName)
     tell application "Photos"
-        repeat with candidateFolder in folders
-            if name of candidateFolder is folderName then
-                return candidateFolder
-            end if
-        end repeat
-        return make new folder named folderName
+        try
+            return first folder whose name is folderName
+        on error
+            return make new folder named folderName
+        end try
     end tell
 end mfbEnsureTopLevelFolder
 
 on mfbEnsureChildFolder(parentFolder, folderName)
     tell application "Photos"
-        repeat with candidateFolder in folders of parentFolder
-            if name of candidateFolder is folderName then
-                return candidateFolder
-            end if
-        end repeat
-        return make new folder named folderName at parentFolder
+        try
+            return first folder of parentFolder whose name is folderName
+        on error
+            return make new folder named folderName at parentFolder
+        end try
     end tell
 end mfbEnsureChildFolder
 
@@ -1346,24 +1374,22 @@ on mfbEnsureAlbumIdForPath(albumPath)
         end if
         set targetAlbumName to item (count of pathItems) of pathItems
         tell application "Photos"
-            repeat with candidateAlbum in albums of targetFolder
-                if name of candidateAlbum is targetAlbumName then
-                    return (id of candidateAlbum as text)
-                end if
-            end repeat
-            set createdAlbum to make new album named targetAlbumName at targetFolder
-            return (id of createdAlbum as text)
+            try
+                return (id of (first album of targetFolder whose name is targetAlbumName) as text)
+            on error
+                set createdAlbum to make new album named targetAlbumName at targetFolder
+                return (id of createdAlbum as text)
+            end try
         end tell
     else
         set targetAlbumName to item 1 of pathItems
         tell application "Photos"
-            repeat with candidateAlbum in albums
-                if name of candidateAlbum is targetAlbumName then
-                    return (id of candidateAlbum as text)
-                end if
-            end repeat
-            set createdAlbum to make new album named targetAlbumName
-            return (id of createdAlbum as text)
+            try
+                return (id of (first album whose name is targetAlbumName) as text)
+            on error
+                set createdAlbum to make new album named targetAlbumName
+                return (id of createdAlbum as text)
+            end try
         end tell
     end if
 end mfbEnsureAlbumIdForPath
@@ -1395,6 +1421,7 @@ where
     let mut pending_imported = import_pending_jxl_entries_with_checkpoint(
         &mut checkpoint_marker,
         &pending_entries,
+        photos_import_fail_fast_enabled(),
         &mut query_assets,
         &mut is_quarantined,
         &mut prepare_import_session,
@@ -1427,21 +1454,71 @@ where
 
 fn import_media_outputs_with_photos_applescript(
     candidates: &[PhotosImportCandidate],
-) -> Result<Vec<(String, String)>> {
+) -> Result<PhotosMediaImportReport> {
+    let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
+        run_photos_import_applescript_session("media", manifest_entries)
+    };
+    import_media_outputs_with_photos_applescript_with(
+        candidates,
+        photos_import_fail_fast_enabled(),
+        &mut run_import_batch,
+    )
+}
+
+fn import_media_outputs_with_photos_applescript_with<R>(
+    candidates: &[PhotosImportCandidate],
+    fail_fast: bool,
+    run_import_batch: &mut R,
+) -> Result<PhotosMediaImportReport>
+where
+    R: FnMut(&[(PathBuf, String)]) -> Result<String>,
+{
     if candidates.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PhotosMediaImportReport::default());
     }
     validate_photos_import_candidates(candidates)?;
-    let manifest_entries = photos_import_candidate_manifest_entries(candidates);
-    let stdout = run_photos_import_applescript_session("media", &manifest_entries)?;
-    let report_pairs = photos_import_pairs_from_candidates(candidates, stdout.as_bytes())?;
+    if fail_fast {
+        let manifest_entries = photos_import_candidate_manifest_entries(candidates);
+        let stdout = run_import_batch(&manifest_entries)?;
+        return Ok(PhotosMediaImportReport {
+            report_pairs: photos_import_pairs_from_candidates(candidates, stdout.as_bytes())?,
+            failed_count: 0,
+        });
+    }
+
+    let mut report = PhotosMediaImportReport::default();
+    for candidate in candidates {
+        let single_candidate = std::slice::from_ref(candidate);
+        let manifest_entries = photos_import_candidate_manifest_entries(single_candidate);
+        let result = run_import_batch(&manifest_entries).and_then(|stdout| {
+            photos_import_pairs_from_candidates(single_candidate, stdout.as_bytes())
+        });
+        match result {
+            Ok(mut report_pairs) => report.report_pairs.append(&mut report_pairs),
+            Err(err) if photos_import_controllable_item_failure(&err.to_string()) => {
+                report.failed_count = report.failed_count.checked_add(1).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "Photos media import failure count overflowed".to_string(),
+                    )
+                })?;
+                tracing::error!(
+                    target: "photos_import",
+                    rel_path = %candidate.rel_path,
+                    detail = %err,
+                    "Photos rejected one media file; continuing normal-mode import"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
     tracing::info!(
         target: "photos_import",
-        imported = report_pairs.len(),
+        imported = report.report_pairs.len(),
+        failed = report.failed_count,
         batch_size = fast_img_photos_import_batch_size(),
         "Photos AppleScript media import complete"
     );
-    Ok(report_pairs)
+    Ok(report)
 }
 
 fn photos_import_checkpoint_plan<P>(
@@ -1493,6 +1570,7 @@ where
 fn import_pending_jxl_entries_with_checkpoint<Q, P, R>(
     marker: &mut WorkingCopyMarker,
     pending_entries: &[PhotosImportPendingEntry],
+    fail_fast: bool,
     query_assets: &mut Q,
     is_quarantined: &mut P,
     prepare_import_session: &mut impl FnMut(&str) -> Result<()>,
@@ -1524,6 +1602,7 @@ where
         FAST_IMG_PHOTOS_IMPORT_RELAUNCH_INTERVAL_FILES,
     )?;
     let mut imported_assets = Vec::new();
+    let mut deferred_item_failures = Vec::new();
     for window in windows {
         let end = window.start.checked_add(window.len).ok_or_else(|| {
             ImgQualityError::AnalysisError(
@@ -1578,61 +1657,104 @@ where
             let mut poisoned_attempts = 0usize;
             let stdout = loop {
                 match run_import_batch(&manifest_entries) {
-                    Ok(stdout) => break stdout,
+                    Ok(stdout) => break Some(stdout),
                     Err(err) => {
                         let detail = err.to_string();
-                        let Some(poison_reason) = photos_import_poison_reason(&detail) else {
-                            return Err(err);
-                        };
-                        tracing::warn!(
-                            target: "photos_import",
-                            window_start = window.start,
-                            batch_number,
-                            batch_count,
-                            poisoned_attempts,
-                            poison_reason,
-                            detail = %detail,
-                            "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
-                        );
-                        if poisoned_attempts >= FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT {
+                        if fail_fast {
                             return Err(err);
                         }
-                        handle_photos_import_recovery(
-                            "poisoned_session",
-                            &mut relaunch_photos_for_import_recovery,
-                        )?;
-                        poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
-                            ImgQualityError::AnalysisError(
-                                "Photos import poison retry counter overflowed".to_string(),
-                            )
-                        })?;
-                        tracing::info!(
-                            target: "photos_import",
-                            window_start = window.start,
-                            batch_number,
-                            batch_count,
-                            poisoned_attempts,
-                            poison_reason,
-                            "Photos import recovery complete; automatically retrying current batch"
-                        );
+                        if let Some(poison_reason) = photos_import_poison_reason(&detail)
+                            && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                        {
+                            tracing::warn!(
+                                target: "photos_import",
+                                window_start = window.start,
+                                batch_number,
+                                batch_count,
+                                poisoned_attempts,
+                                poison_reason,
+                                detail = %detail,
+                                "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
+                            );
+                            handle_photos_import_recovery(
+                                "poisoned_session",
+                                &mut relaunch_photos_for_import_recovery,
+                            )?;
+                            poisoned_attempts =
+                                poisoned_attempts.checked_add(1).ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "Photos import poison retry counter overflowed".to_string(),
+                                    )
+                                })?;
+                            tracing::info!(
+                                target: "photos_import",
+                                window_start = window.start,
+                                batch_number,
+                                batch_count,
+                                poisoned_attempts,
+                                poison_reason,
+                                "Photos import recovery complete; automatically retrying current batch"
+                            );
+                            continue;
+                        }
+                        if batch_entries.len() == 1
+                            && photos_import_controllable_item_failure(&detail)
+                        {
+                            let source_rel = batch_entries[0].source_rel.clone();
+                            tracing::error!(
+                                target: "photos_import",
+                                source_rel = %source_rel,
+                                detail = %detail,
+                                "Photos rejected one file; continuing normal-mode import and deferring final failure"
+                            );
+                            deferred_item_failures.push((source_rel, detail));
+                            break None;
+                        }
+                        return Err(err);
                     }
                 }
+            };
+            let Some(stdout) = stdout else {
+                offset = end;
+                continue;
             };
             let output_paths = batch_entries
                 .iter()
                 .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
                 .collect::<Vec<_>>();
-            let report_pairs = fast_img_pairs_from_photos_import_ids(
-                &output_paths,
-                stdout.as_bytes(),
-                batch_entries.len(),
-            )?;
-            let mut batch_assets = library_records_from_pending_import(
-                batch_entries,
-                &report_pairs,
-                query_assets,
-                is_quarantined,
-            )?;
+            let batch_assets = (|| {
+                let report_pairs = fast_img_pairs_from_photos_import_ids(
+                    &output_paths,
+                    stdout.as_bytes(),
+                    batch_entries.len(),
+                )?;
+                library_records_from_pending_import(
+                    batch_entries,
+                    &report_pairs,
+                    query_assets,
+                    is_quarantined,
+                )
+            })();
+            let mut batch_assets = match batch_assets {
+                Ok(batch_assets) => batch_assets,
+                Err(err)
+                    if !fail_fast
+                        && batch_entries.len() == 1
+                        && photos_import_controllable_item_failure(&err.to_string()) =>
+                {
+                    let source_rel = batch_entries[0].source_rel.clone();
+                    tracing::error!(
+                        target: "photos_import",
+                        source_rel = %source_rel,
+                        detail = %err,
+                        "Photos returned no usable proof for one file; continuing normal-mode import and deferring final failure"
+                    );
+                    deferred_item_failures.push((source_rel, err.to_string()));
+                    offset = end;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             checkpoint_photos_import_window(marker, batch_entries, &batch_assets)?;
             imported_assets.append(&mut batch_assets);
             offset = end;
@@ -1660,6 +1782,17 @@ where
                 FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS,
             ));
         }
+    }
+    if !deferred_item_failures.is_empty() {
+        let failed_files = deferred_item_failures
+            .iter()
+            .map(|(source_rel, _)| source_rel.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos import continued after {} controllable file rejection(s); verified successes were checkpointed and all sources remain protected. Pending failures: {failed_files}",
+            deferred_item_failures.len()
+        )));
     }
     Ok(imported_assets)
 }
@@ -2233,6 +2366,13 @@ fn photos_import_poison_reason(detail: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn photos_import_controllable_item_failure(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    photos_zero_import_context(detail).is_some()
+        || lower.contains("photos returned 0 imported items")
+        || lower.contains("photos applescript import returned 0 ids for 1 ")
 }
 
 fn handle_photos_import_recovery(
@@ -4688,6 +4828,71 @@ mod tests {
     }
 
     #[test]
+    fn generic_media_import_continues_normal_mode_and_fails_fast_in_debug_mode() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut candidates = Vec::new();
+        for name in ["a", "b", "c"] {
+            let path = temp_dir.path().join(format!("{name}.AVIF"));
+            std::fs::write(&path, name.as_bytes()).unwrap();
+            candidates.push(PhotosImportCandidate {
+                rel_path: format!("{name}.AVIF"),
+                blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+                path,
+                album_name: "✨media".to_string(),
+            });
+        }
+
+        let mut normal_calls = Vec::new();
+        let report = import_media_outputs_with_photos_applescript_with(
+            &candidates,
+            false,
+            &mut |manifest_entries: &[(PathBuf, String)]| {
+                assert_eq!(manifest_entries.len(), 1);
+                let stem = manifest_entries[0]
+                    .0
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("missing test file stem".to_string())
+                    })?
+                    .to_string();
+                normal_calls.push(stem.clone());
+                if stem == "b" {
+                    Ok(String::new())
+                } else {
+                    Ok(format!("UUID-{stem}\n"))
+                }
+            },
+        )?;
+        assert_eq!(normal_calls, ["a", "b", "c"]);
+        assert_eq!(report.failed_count, 1);
+        assert_eq!(
+            report.report_pairs,
+            [
+                ("a.AVIF".to_string(), "UUID-a".to_string()),
+                ("c.AVIF".to_string(), "UUID-c".to_string())
+            ]
+        );
+
+        let mut fail_fast_calls = 0usize;
+        let err = import_media_outputs_with_photos_applescript_with(
+            &candidates,
+            true,
+            &mut |manifest_entries: &[(PathBuf, String)]| {
+                fail_fast_calls += 1;
+                assert_eq!(manifest_entries.len(), 3);
+                Err(ImgQualityError::AnalysisError(
+                    "Photos returned 0 imported items".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(fail_fast_calls, 1);
+        assert!(err.to_string().contains("Photos returned 0 imported items"));
+        Ok(())
+    }
+
+    #[test]
     fn index_photos_probes_by_uuid_fails_when_query_incomplete() {
         let err = index_photos_probes_by_uuid(
             &["UUID-A".to_string(), "UUID-B".to_string()],
@@ -4724,6 +4929,15 @@ mod tests {
         assert!(
             FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("if (batchNumber mod digestPauseInterval)"),
             "Photos import script must insert digest pauses every N batches"
+        );
+        assert!(
+            FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT
+                .contains("first album whose name is targetAlbumName"),
+            "large Photos libraries require filtered album lookup"
+        );
+        assert!(
+            !FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("repeat with candidateAlbum in albums"),
+            "per-file imports must not rescan every Photos album"
         );
     }
 
@@ -4913,6 +5127,7 @@ mod tests {
         let err = import_pending_jxl_entries_with_checkpoint(
             &mut checkpoint_marker,
             &pending,
+            true,
             &mut query_assets,
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
@@ -4944,6 +5159,108 @@ mod tests {
                 "{key} should remain pending after the next one-file transaction failed"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn photos_import_normal_mode_continues_after_one_rejected_file() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let _home_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            temp_dir.path().to_str().unwrap(),
+        );
+        let src_root = temp_dir.path().join("src");
+        let wc = temp_dir.path().join("Batch_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 3);
+        for name in ["a", "b", "c"] {
+            let rel_path = format!("{name}.JXL");
+            let path = wc.join(&rel_path);
+            std::fs::write(&path, name.as_bytes()).unwrap();
+            marker.blake3_log.insert(
+                format!("{name}.jpg"),
+                Blake3Entry {
+                    out_rel: Some(rel_path),
+                    src: format!("src-{name}"),
+                    out: crate::common_utils::calculate_blake3_hash(&path)?,
+                    library_asset: None,
+                },
+            );
+        }
+
+        let mut import_calls = Vec::new();
+        let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| -> Result<String> {
+            let stem = batch_entries[0]
+                .0
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError("missing test file stem".to_string())
+                })?
+                .to_string();
+            import_calls.push(stem.clone());
+            if stem == "b" {
+                Ok(String::new())
+            } else {
+                Ok(format!("UUID-{stem}\n"))
+            }
+        };
+        let mut query_assets = |uuids: &[String]| {
+            uuids
+                .iter()
+                .map(|uuid| {
+                    let stem = uuid.trim_start_matches("UUID-");
+                    Ok(FastImgLibraryAssetProbe {
+                        uuid: uuid.clone(),
+                        path: wc.join(format!("{stem}.JXL")),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let mut is_quarantined = |_path: &Path| Ok(false);
+        let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let err = import_pending_jxl_entries_with_checkpoint(
+            &mut marker,
+            &pending,
+            false,
+            &mut query_assets,
+            &mut is_quarantined,
+            &mut |_reason: &str| Ok(()),
+            &mut run_import_batch,
+        )
+        .unwrap_err();
+
+        assert_eq!(import_calls, ["a", "b", "c"]);
+        assert!(
+            err.to_string()
+                .contains("continued after 1 controllable file rejection")
+        );
+        assert!(err.to_string().contains("b.jpg"));
+        assert!(
+            marker
+                .blake3_log
+                .get("a.jpg")
+                .and_then(|entry| entry.library_asset.as_ref())
+                .is_some()
+        );
+        assert!(
+            marker
+                .blake3_log
+                .get("b.jpg")
+                .and_then(|entry| entry.library_asset.as_ref())
+                .is_none()
+        );
+        assert!(
+            marker
+                .blake3_log
+                .get("c.jpg")
+                .and_then(|entry| entry.library_asset.as_ref())
+                .is_some()
+        );
         Ok(())
     }
 
@@ -4991,6 +5308,7 @@ mod tests {
         let err = import_pending_jxl_entries_with_checkpoint(
             &mut marker,
             &pending,
+            false,
             &mut query_assets,
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
@@ -5085,6 +5403,7 @@ mod tests {
         let records = import_pending_jxl_entries_with_checkpoint(
             &mut marker,
             &pending,
+            false,
             &mut query_assets,
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
@@ -5195,6 +5514,7 @@ mod tests {
         let records = import_pending_jxl_entries_with_checkpoint(
             &mut marker,
             &pending,
+            false,
             &mut query_assets,
             &mut is_quarantined,
             &mut prepare_import_session,

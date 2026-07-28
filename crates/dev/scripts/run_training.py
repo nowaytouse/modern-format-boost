@@ -25,7 +25,6 @@ Version 6.4: RUST TIER PROBE (collect=ingest entropy) + TIER AUDIT JSONL/JSONB
 """
 
 from __future__ import annotations
-from mfb_ui_tokens import pick_symbol
 
 import argparse
 import json
@@ -40,50 +39,60 @@ import time
 import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
 from typing import Any, Final, NamedTuple, cast
+
+from mfb_ui_tokens import pick_symbol
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from mfb_entry_guard import (  # noqa: E402
-    QUALITY_MODEL_PYTHON_ENV,
-    TRAINING_SOURCE_MAP_ENV,
-    detach_to_background,
-    guard_main,
-    helper_env,
-    run_delegated,
-    run_rust_ingest as _guarded_run_rust_ingest,
-)
-from mfb_config_load import ensure_allowed_keys  # noqa: E402
-from mfb_performance import ScanGovernor  # noqa: E402
-from mfb_training_scan import (  # noqa: E402
-    ScanSegment,
-    ScanPlanningError,
-    format_scan_plan_summary,
-    plan_scan_segments,
-)
-from fabrication_policy import (  # noqa: E402
+from fabrication_policy import (
     fail_closed_training_enabled,
     run_training_except_policy,
     training_quality_exit,
 )
-from mfb_dylib import apply_foundation_lib_env, ensure_foundation_dylib  # noqa: E402
-from media_scope import (  # noqa: E402
+from media_scope import (
     ANIMATION_CAPABLE_IMAGE_EXTS as MEDIA_SCOPE_ANIMATION_CAPABLE_IMAGE_EXTS,
+)
+from media_scope import (
     IMG_EXTS as MEDIA_SCOPE_IMAGE_EXTS,
-    MediaProbeError,
+)
+from media_scope import (
     PURE_VIDEO_EXTS as MEDIA_SCOPE_PURE_VIDEO_EXTS,
+)
+from media_scope import (
+    MediaProbeError,
     detect_true_format,
     is_animated_gif,
     is_animated_jxl,
     is_animated_png,
     is_animated_webp,
     is_probably_animated_isobmff,
+)
+from mfb_config_load import ensure_allowed_keys
+from mfb_dylib import apply_foundation_lib_env, ensure_foundation_dylib
+from mfb_entry_guard import (
+    QUALITY_MODEL_PYTHON_ENV,
+    TRAINING_SOURCE_MAP_ENV,
+    detach_to_background,
+    guard_main,
+    helper_env,
+    run_delegated,
+)
+from mfb_entry_guard import (
+    run_rust_ingest as _guarded_run_rust_ingest,
+)
+from mfb_performance import ScanGovernor
+from mfb_training_scan import (
+    ScanPlanningError,
+    ScanSegment,
+    format_scan_plan_summary,
+    plan_scan_segments,
 )
 
 # Cross-layer fail-closed contract:
@@ -119,7 +128,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 RULES_FILE = ROOT / "crates" / "dev" / "src" / "config" / "training_rules.json"
 RULES_LOCAL_FILE = RULES_FILE.parent / "training_rules.local.json"
 
-from mfb_log_paths import (  # noqa: E402
+from mfb_log_paths import (
     TRAINING_LOG_LANES,
     archive_training_session_bundle,
     coerce_log_dir,
@@ -130,7 +139,7 @@ from mfb_log_paths import (  # noqa: E402
     training_lane_slug,
     unified_log_dir,
 )
-from mfb_training_session_audit import (  # noqa: E402
+from mfb_training_session_audit import (
     TrainingSessionRecorder,
     format_exception,
     summarize_argv,
@@ -970,7 +979,7 @@ GLOBAL_LABEL_OWNERS: dict[str, str] = {}
 
 def clear_ephemeral_training_state() -> None:
     """Reset per-process collectors so a second plan/ingest in one interpreter cannot cross-contaminate."""
-    import mfb_entry_guard as _meg  # noqa: E402
+    import mfb_entry_guard as _meg
 
     GLOBAL_LABEL_OWNERS.clear()
     TIER_AUDIT_RECORDS.clear()
@@ -1006,7 +1015,7 @@ def reset_training_db(conn_str: str) -> None:
     Row counts cleared are printed for an audit trail.
     """
     try:
-        import psycopg2  # noqa: PLC0415
+        import psycopg2
     except ImportError:
         training_quality_exit(
             1,
@@ -1028,10 +1037,10 @@ def reset_training_db(conn_str: str) -> None:
             row = cur.fetchone()
             if not (row and row[0]):
                 continue
-            cur.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
             count_row = cur.fetchone()
             n = count_row[0] if count_row else 0
-            cur.execute(f"TRUNCATE TABLE {table}")  # noqa: S608
+            cur.execute(f"TRUNCATE TABLE {table}")
             total_deleted += n
             if n:
                 print(f"      cleared {table}: {n} rows")
@@ -1048,7 +1057,7 @@ def reset_training_db(conn_str: str) -> None:
         IndexError,
         AttributeError,
         UnicodeError,
-    ) as exc:  # noqa: BLE001
+    ) as exc:
         training_quality_exit(1, f"  [RESET-DB] ERROR: {exc}")
 
 
@@ -1068,7 +1077,7 @@ def sanitized_subprocess_env(
 
 def ingest_rust_cli_env(conn_str: str) -> dict[str, str]:
     """Delegate to ``mfb_entry_guard.rust_ingest_env``."""
-    from mfb_entry_guard import rust_ingest_env  # noqa: E402
+    from mfb_entry_guard import rust_ingest_env
 
     env = rust_ingest_env(conn_str)
     if training_ingest_progress_enabled():
@@ -1396,6 +1405,8 @@ try:
         sys.path.append(scripts_dir)
     from python_api import (
         get_last_ingest_error as imported_get_last_ingest_error,
+    )
+    from python_api import (
         ingest_media_samples_batch as imported_ingest_media_samples_batch,
     )
     from python_api import (
@@ -1414,8 +1425,8 @@ else:
     probe_loop_intent = imported_probe_loop_intent
     resolved_library_path = imported_resolved_library_path
     has_c_api = True
-    from mfb_dylib import apply_foundation_lib_env  # noqa: E402
-    from python_api import reset_rust_lib_cache  # noqa: E402
+    from mfb_dylib import apply_foundation_lib_env
+    from python_api import reset_rust_lib_cache
 
     apply_foundation_lib_env()
     reset_rust_lib_cache()
@@ -2559,8 +2570,10 @@ def write_tier_audit_jsonl(path: Path | None = None) -> Path | None:
     out = path or default_tier_audit_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
-        for record in TIER_AUDIT_RECORDS:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        handle.writelines(
+            json.dumps(record, ensure_ascii=False) + "\n"
+            for record in TIER_AUDIT_RECORDS
+        )
     return out
 
 

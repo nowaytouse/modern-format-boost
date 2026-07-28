@@ -130,6 +130,10 @@ pub fn resolve_cli_img_static_delivery(
     apple_compat: bool,
 ) -> Result<ImgStaticDelivery> {
     let delivery = ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        delivery != ImgStaticDelivery::Avif,
+        "manual AVIF selection is unavailable in img run; AVIF is reserved for fast-img Meme Mode. Use `img fast-img --strategy avif <input>`"
+    );
     delivery.validate_img_flags(apple_compat)?;
     Ok(delivery)
 }
@@ -684,14 +688,16 @@ mod tests {
     }
 
     #[test]
-    fn img_codec_labels_map_to_static_delivery_not_video() {
+    fn img_manual_avif_delivery_is_reserved_for_fast_img_meme_mode() {
         assert_eq!(
             resolve_cli_img_static_delivery("hevc", false).unwrap(),
             ImgStaticDelivery::Jxl
         );
-        assert_eq!(
-            resolve_cli_img_static_delivery("av1", false).unwrap(),
-            ImgStaticDelivery::Avif
+        let error = resolve_cli_img_static_delivery("av1", false)
+            .expect_err("manual AVIF selection must be rejected outside fast-img Meme Mode");
+        assert!(
+            error.to_string().contains("fast-img --strategy avif"),
+            "{error}"
         );
         assert!(resolve_cli_img_static_delivery("av1", true).is_err());
     }

@@ -27,7 +27,7 @@ pub enum DiffTolerance {
     JxlOrientation,
     /// Lossless HEIC/HEIF/WebP — one LSB per channel is allowed.
     LsbAvif,
-    /// Lossy AVIF (meme mode) — max 255 delta per channel.
+    /// Lossy AVIF (meme mode) — structure must still correlate with the source.
     LossyAvif,
 }
 
@@ -35,7 +35,8 @@ impl DiffTolerance {
     const fn max_delta(self) -> u8 {
         match self {
             Self::Exact => 0,
-            Self::JxlOrientation | Self::LossyAvif => u8::MAX,
+            Self::JxlOrientation => u8::MAX,
+            Self::LossyAvif => 0,
             Self::LsbAvif => 1,
         }
     }
@@ -43,6 +44,8 @@ impl DiffTolerance {
 
 const JXL_ORIENTATION_MIN_STRUCTURE_CORRELATION: f64 = 0.82;
 const JXL_ORIENTATION_LOW_VARIANCE_EPSILON: f64 = 1.0e-6;
+const LOSSY_AVIF_MIN_STRUCTURE_CORRELATION: f64 = 0.75;
+const LOSSY_AVIF_FLAT_MAX_DELTA: u8 = 32;
 
 #[must_use]
 pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
@@ -568,6 +571,9 @@ fn diff_dynamic_images(
     if tol == DiffTolerance::JxlOrientation {
         return diff_jxl_orientation_structure(ref_img, out_img);
     }
+    if tol == DiffTolerance::LossyAvif {
+        return diff_lossy_avif_structure(ref_img, out_img);
+    }
 
     let ref_bytes = ref_img.to_rgb8();
     let out_bytes = out_img.to_rgb8();
@@ -593,6 +599,45 @@ fn diff_dynamic_images(
     }
 
     Ok(PixelDiffResult::Match)
+}
+
+fn diff_lossy_avif_structure(
+    ref_img: &image::DynamicImage,
+    out_img: &image::DynamicImage,
+) -> Result<PixelDiffResult> {
+    let ref_visible = composite_on_black(ref_img);
+    let out_visible = composite_on_black(out_img);
+    let max_delta = max_rgb_delta(&ref_visible, &out_visible)?;
+    let correlation = pearson_correlation(&luma_samples(&ref_visible), &luma_samples(&out_visible));
+    let structure_matches = correlation
+        .is_some_and(|score| score >= LOSSY_AVIF_MIN_STRUCTURE_CORRELATION)
+        || (correlation.is_none() && max_delta <= LOSSY_AVIF_FLAT_MAX_DELTA);
+
+    if structure_matches {
+        Ok(PixelDiffResult::Match)
+    } else {
+        Ok(PixelDiffResult::Mismatch {
+            max_delta,
+            channel: 0,
+        })
+    }
+}
+
+fn composite_on_black(img: &image::DynamicImage) -> image::DynamicImage {
+    let rgba = img.to_rgba8();
+    image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(
+        rgba.width(),
+        rgba.height(),
+        |x, y| {
+            let pixel = rgba.get_pixel(x, y).0;
+            let alpha = u16::from(pixel[3]);
+            image::Rgb([
+                u8::try_from((u16::from(pixel[0]) * alpha) / 255).unwrap_or(u8::MAX),
+                u8::try_from((u16::from(pixel[1]) * alpha) / 255).unwrap_or(u8::MAX),
+                u8::try_from((u16::from(pixel[2]) * alpha) / 255).unwrap_or(u8::MAX),
+            ])
+        },
+    ))
 }
 
 fn diff_jxl_orientation_structure(
@@ -792,7 +837,7 @@ mod tests {
     };
     use crate::image::format_detect::FormatKind;
     use crate::unified_error::ImgQualityError;
-    use image::{DynamicImage, ImageBuffer, Rgb};
+    use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
     use tempfile::NamedTempFile;
 
     fn rgb_image(pixel: [u8; 3]) -> DynamicImage {
@@ -1038,6 +1083,62 @@ mod tests {
                 channel: 0
             }
         );
+    }
+
+    #[test]
+    fn lossy_avif_accepts_compression_drift_when_structure_matches() {
+        let ref_img = patterned_image(8, 8);
+        let out_img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(8, 8, |x, y| {
+            let source = ref_img.to_rgb8().get_pixel(x, y).0;
+            Rgb([
+                source[0].saturating_add(8),
+                source[1].saturating_add(8),
+                source[2].saturating_add(8),
+            ])
+        }));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::LossyAvif,
+            std::path::Path::new("out.avif"),
+        )
+        .unwrap();
+
+        assert_eq!(result, PixelDiffResult::Match);
+    }
+
+    #[test]
+    fn lossy_avif_rejects_unrelated_same_size_image() {
+        let ref_img = patterned_image(8, 8);
+        let out_img = DynamicImage::ImageRgb8(image::imageops::rotate180(&ref_img.to_rgb8()));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::LossyAvif,
+            std::path::Path::new("out.avif"),
+        )
+        .unwrap();
+
+        assert!(matches!(result, PixelDiffResult::Mismatch { .. }));
+    }
+
+    #[test]
+    fn lossy_avif_ignores_invisible_rgb_drift_under_full_transparency() {
+        let ref_img = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([0, 0, 0, 0])));
+        let out_img =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([128, 128, 128, 0])));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::LossyAvif,
+            std::path::Path::new("out.avif"),
+        )
+        .unwrap();
+
+        assert_eq!(result, PixelDiffResult::Match);
     }
 
     #[test]

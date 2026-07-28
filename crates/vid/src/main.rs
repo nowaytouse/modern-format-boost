@@ -130,6 +130,22 @@ const fn command_requires_database(command: &Commands) -> bool {
     !matches!(command, Commands::FastGif { .. })
 }
 
+fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
+    if matches!(
+        command,
+        Commands::Run {
+            strategy,
+            ..
+        } if strategy == "avif"
+    ) {
+        anyhow::bail!(
+            "manual AVIF selection is unavailable in vid run; AVIF is reserved for animated \
+             Meme Mode. Use vid fast-gif --strategy avif <input>"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 const fn fast_gif_shortest_path_supported() -> bool {
     true
@@ -314,13 +330,18 @@ fn fast_gif_convert_options(
     output_root: &Path,
     input_root: &Path,
     force: bool,
+    apple_compat: bool,
     quality_label: &str,
 ) -> foundation::conversion::ConvertOptions {
     foundation::conversion::ConvertOptions {
         output_dir: Some(output_root.to_path_buf()),
         base_dir: Some(input_root.to_path_buf()),
-        flags: foundation::conversion::ConvertFlags::APPLE_COMPAT
-            | foundation::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE
+        flags: foundation::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE
+            | if apple_compat {
+                foundation::conversion::ConvertFlags::APPLE_COMPAT
+            } else {
+                foundation::conversion::ConvertFlags::empty()
+            }
             | if force {
                 foundation::conversion::ConvertFlags::FORCE
             } else {
@@ -378,6 +399,10 @@ const fn fast_gif_effective_strategy(apple_compat: bool, requested_strategy: &st
     } else {
         requested_strategy
     }
+}
+
+fn fast_gif_requires_loop_intent(requested_strategy: &str) -> bool {
+    requested_strategy != "avif"
 }
 
 fn fast_gif_delivery_label(effective_strategy: &str) -> &'static str {
@@ -592,6 +617,7 @@ fn run_fast_gif(
         &output_root,
         &input_root,
         force,
+        apple_compat,
         if effective_strategy == "avif" {
             "Meme Mode"
         } else {
@@ -623,15 +649,17 @@ fn run_fast_gif(
             continue;
         }
 
-        let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(&file)?;
-        if !verdict.is_keep_gif() {
-            skipped += 1;
-            println!(
-                "[SKIP    ] {} loop-intent is not GIF: {}",
-                file.display(),
-                verdict.reason()
-            );
-            continue;
+        if fast_gif_requires_loop_intent(strategy) {
+            let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(&file)?;
+            if !verdict.is_keep_gif() {
+                skipped += 1;
+                println!(
+                    "[SKIP    ] {} loop-intent is not GIF: {}",
+                    file.display(),
+                    verdict.reason()
+                );
+                continue;
+            }
         }
 
         let result = vid::animated_image::convert_to_gif_apple_compat(&file, &options)
@@ -701,6 +729,10 @@ fn run_fast_gif(
         "[DONE    ] fast-gif converted {converted} {delivery_label} output(s) into {} ({skipped} skipped, {failed} failed)",
         output_root.display()
     );
+    println!("Succeeded: {converted}");
+    println!("Skipped: {skipped}");
+    println!("Ignored: 0");
+    println!("Failed: {failed}");
     if failed > 0 {
         anyhow::bail!("fast-gif failed to convert {failed} file(s); see [FAIL] lines above");
     }
@@ -719,6 +751,7 @@ fn main() -> anyhow::Result<()> {
     foundation::ctrlc_guard::init();
 
     let cli = Cli::parse();
+    validate_command_strategy(&cli.command)?;
     if command_requires_database(&cli.command) {
         // Enforce PostgreSQL dependency as mandatory for the DB-backed video toolchain.
         // Fast GIF mode is excluded: it performs content-aware scanning, LoopIntent
@@ -1311,9 +1344,10 @@ mod fast_gif_tests {
     use super::{
         Cli, Commands, FastGifDelivery, command_requires_database,
         fast_gif_avif_delivery_output_path, fast_gif_avif_output_path_for,
-        fast_gif_candidate_files, fast_gif_delivery_output_path, fast_gif_effective_strategy,
-        fast_gif_original_path_for, fast_gif_output_path_for, fast_gif_photos_import_candidates,
-        fast_gif_required_tools, fast_gif_shortest_path_supported,
+        fast_gif_candidate_files, fast_gif_convert_options, fast_gif_delivery_output_path,
+        fast_gif_effective_strategy, fast_gif_original_path_for, fast_gif_output_path_for,
+        fast_gif_photos_import_candidates, fast_gif_required_tools, fast_gif_requires_loop_intent,
+        fast_gif_shortest_path_supported, validate_command_strategy,
     };
     use clap::Parser;
     use clap::error::ErrorKind;
@@ -1446,6 +1480,37 @@ mod fast_gif_tests {
         assert_eq!(fast_gif_effective_strategy(true, "avif"), "gif");
         assert_eq!(fast_gif_effective_strategy(true, "default"), "gif");
         assert_eq!(fast_gif_effective_strategy(false, "avif"), "avif");
+        assert!(!fast_gif_requires_loop_intent("avif"));
+        assert!(fast_gif_requires_loop_intent("default"));
+    }
+
+    #[test]
+    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() {
+        let root = TempDir::new().unwrap();
+        let without_apple =
+            fast_gif_convert_options(root.path(), root.path(), false, false, "Meme Mode");
+        let with_apple =
+            fast_gif_convert_options(root.path(), root.path(), false, true, "Fast GIF");
+
+        assert!(
+            !without_apple
+                .flags
+                .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
+        );
+        assert!(
+            with_apple
+                .flags
+                .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
+        );
+    }
+
+    #[test]
+    fn normal_vid_run_rejects_manual_avif_strategy() -> anyhow::Result<()> {
+        let parsed = Cli::try_parse_from(["vid", "run", "/media/in", "--strategy", "avif"])?;
+
+        let error = validate_command_strategy(&parsed.command).unwrap_err();
+        assert!(error.to_string().contains("vid fast-gif --strategy avif"));
+        Ok(())
     }
 
     #[test]

@@ -2,10 +2,10 @@
 # GitHub Actions Workflow Health Check Script
 # This script helps identify common workflow issues before they cause failures
 
-import sys
-import shutil
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 # Colors for output

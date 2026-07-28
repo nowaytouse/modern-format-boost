@@ -40,16 +40,48 @@ def _artifact_stale(artifact: Path, built: Path) -> bool:
     return built.stat().st_mtime > artifact.stat().st_mtime
 
 
+def app_bundle_dylib_path() -> Path | None:
+    lib_name = rust_dylib_filename()
+    exe_path = Path(sys.executable).resolve()
+    for ancestor in [exe_path] + list(exe_path.parents):
+        if ancestor.suffix == ".app":
+            fw = ancestor / "Contents" / "Frameworks" / lib_name
+            res = ancestor / "Contents" / "Resources" / lib_name
+            if fw.is_file():
+                return fw
+            if res.is_file():
+                return res
+
+    app_bundle = ROOT / "Modern Format Boost.app"
+    if app_bundle.is_dir():
+        fw = app_bundle / "Contents" / "Frameworks" / lib_name
+        res = app_bundle / "Contents" / "Resources" / lib_name
+        if fw.is_file():
+            return fw
+        if res.is_file():
+            return res
+
+    return None
+
+
 def ensure_foundation_dylib(*, force_rebuild: bool = False) -> str:
     """Return path to stable dylib; rebuild/copy when missing or stale."""
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     artifact = artifact_dylib()
     built = target_release_dylib()
+    if not force_rebuild:
+        app_dylib = app_bundle_dylib_path()
+        if app_dylib is not None and not any(
+            path.is_file() and path.stat().st_mtime > app_dylib.stat().st_mtime
+            for path in (artifact, built)
+        ):
+            return str(app_dylib)
 
-    if force_rebuild or not built.is_file() or _artifact_stale(artifact, built):
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if force_rebuild or not built.is_file():
         print(
             "  [BUILD] syncing foundation dylib"
-            + (" (forced)" if force_rebuild else " (missing or stale artifact)"),
+            + (" (forced)" if force_rebuild else " (release dylib missing)"),
             flush=True,
         )
         subprocess.run(

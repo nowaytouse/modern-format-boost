@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 try:
@@ -41,12 +41,12 @@ def cprint(msg: str) -> None:
         print(_RICH_TAG.sub("", msg))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _has_command(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-@lru_cache(maxsize=None)
+@cache
 def _has_cargo_sub(sub: str) -> bool:
     """Prefer toolchain ``cargo-<sub>`` binaries (not broken rustup shims)."""
     try:
@@ -204,7 +204,7 @@ class NightlyComponents:
         return "nightly: " + " ".join(parts)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _rust_toolchain_channel_for_probe(repo_root: Path | None = None) -> str:
     """Match ``rust-toolchain.toml`` / active toolchain (not the generic ``nightly`` alias)."""
     root = repo_root or get_repo_root()
@@ -1057,7 +1057,7 @@ def main() -> None:
     _scripts = Path(__file__).resolve().parent
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("check_all.py")
     bootstrap_macos_path()

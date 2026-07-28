@@ -236,7 +236,7 @@ def main() -> int:
     _scripts = Path(__file__).resolve().parent
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("media_conversion_delivery_heatmap.py")
     parser = argparse.ArgumentParser(description=__doc__)

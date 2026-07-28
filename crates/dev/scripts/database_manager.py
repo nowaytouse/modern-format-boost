@@ -32,7 +32,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from mfb_entry_guard import guard_main, run_delegated  # noqa: E402
+from mfb_entry_guard import guard_main, run_delegated
 
 # ANSI color codes
 if colors_enabled():

@@ -20,7 +20,6 @@ if the DB is unreachable. ``--purge-session-state`` clears session logs only (st
 training lanes) and does not touch PostgreSQL analysis caches.
 """
 
-from mfb_ui_tokens import pick_symbol
 import argparse
 import fcntl
 import json
@@ -31,6 +30,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from mfb_ui_tokens import pick_symbol
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -185,7 +186,7 @@ def _pg_connstr() -> str:
 def _pg_connect_error() -> str | None:
     """Return None if PostgreSQL is reachable; otherwise a short error reason."""
     try:
-        import psycopg2  # noqa: F401
+        import psycopg2
     except ImportError:
         return "psycopg2 is not installed (install psycopg2-binary)"
     try:
@@ -508,7 +509,7 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
             print(
                 f"   {pick_symbol('🔒', ('[LOCK]'))} Session Locks: {BOLD}{YELLOW}{lock_count} active/stale{RESET}"
             )
-    print("")
+    print()
 
 
 def _blob_crc32_i32(payload: bytes) -> int:
@@ -1050,7 +1051,7 @@ def perform_full_cleanup(*, skip_confirm: bool = False):
     print(
         f"   {GREEN}- Training lane logs and local training SQLite are preserved{RESET}"
     )
-    print("")
+    print()
 
     if not skip_confirm:
         print(
@@ -1184,7 +1185,7 @@ def main():
     _scripts = Path(__file__).resolve().parent
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("cache_cleaner.py")
     parser = argparse.ArgumentParser(description="Modern Format Boost Cache Cleaner")

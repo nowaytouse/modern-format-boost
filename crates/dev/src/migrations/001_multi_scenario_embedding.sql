@@ -4,11 +4,9 @@
 -- - Image Quality (`image_quality_samples`)
 -- - Animated Image Quality (`animated_image_quality_samples`)
 -- - Video Quality (new table)
-
 -- ============================================================================
 -- PHASE 1: Ensure pgvector extension
 -- ============================================================================
-
 CREATE EXTENSION IF NOT EXISTS vector;
 
 DO $$
@@ -111,153 +109,165 @@ $$;
 -- ============================================================================
 -- PHASE 2: Create new scenario-specific tables
 -- ============================================================================
-
 -- 2.1 Loop Intent Samples
-
 CREATE TABLE IF NOT EXISTS loop_samples (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA UNIQUE NOT NULL,
-    source_path TEXT,
-    file_name   TEXT,
-    -- Physical features
-    width       INTEGER NOT NULL,
-    height      INTEGER NOT NULL,
-    duration_secs DOUBLE PRECISION NOT NULL,
-    frame_count BIGINT NOT NULL,
-    fps         DOUBLE PRECISION,
-    file_size_bytes BIGINT NOT NULL,
-    -- Loop-specific metrics
-    motion_periodicity  DOUBLE PRECISION,
-    temporal_jitter     DOUBLE PRECISION,
-    motion_gini         DOUBLE PRECISION,
-    loop_closure_score  DOUBLE PRECISION,
-    cadence_score       DOUBLE PRECISION,
-    -- Embedding (261D optimized for loop intent: 36 learned dims + 225 physics dims)
-    embedding   VECTOR(261),
-    -- Metadata
-    label       SMALLINT DEFAULT 0,  -- 0=non-loop, 1=loop, 2=video-loop
-    labeled_by  TEXT,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata    JSONB DEFAULT '{}'::jsonb
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA UNIQUE NOT NULL,
+  source_path TEXT,
+  file_name TEXT,
+  -- Physical features
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  duration_secs DOUBLE PRECISION NOT NULL,
+  frame_count BIGINT NOT NULL,
+  fps DOUBLE PRECISION,
+  file_size_bytes BIGINT NOT NULL,
+  -- Loop-specific metrics
+  motion_periodicity DOUBLE PRECISION,
+  temporal_jitter DOUBLE PRECISION,
+  motion_gini DOUBLE PRECISION,
+  loop_closure_score DOUBLE PRECISION,
+  cadence_score DOUBLE PRECISION,
+  -- Embedding (261D optimized for loop intent: 36 learned dims + 225 physics dims)
+  embedding VECTOR (261),
+  -- Metadata
+  label SMALLINT DEFAULT 0, -- 0=non-loop, 1=loop, 2=video-loop
+  labeled_by TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_loop_samples_blake3 ON loop_samples(blake3);
+CREATE INDEX IF NOT EXISTS idx_loop_samples_blake3 ON loop_samples (blake3);
+
 CREATE INDEX IF NOT EXISTS idx_loop_samples_hnsw ON loop_samples USING hnsw (embedding vector_l2_ops);
 
 -- 2.2 Image Quality Samples
-
 CREATE TABLE IF NOT EXISTS image_quality_samples (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA UNIQUE NOT NULL,
-    source_path TEXT,
-    -- Physical features
-    width       INTEGER NOT NULL,
-    height      INTEGER NOT NULL,
-    file_size_bytes BIGINT NOT NULL,
-    format      TEXT NOT NULL,
-    total_pixels BIGINT,
-    -- Quality metrics
-    entropy     DOUBLE PRECISION NOT NULL,
-    compression_ratio DOUBLE PRECISION NOT NULL,
-    spatial_bpp DOUBLE PRECISION NOT NULL,
-    is_lossless BOOLEAN NOT NULL,
-    -- Embedding (256D for image quality)
-    embedding   VECTOR(256),
-    -- Training label
-    quality_label TEXT,  -- 'png-high', 'png-low', 'modern-high', 'modern-low'
-    quality_score REAL NOT NULL CHECK (
-        quality_score = quality_score
-        AND quality_score >= 0.0
-        AND quality_score <= 1.0
-    ),
-    labeled_by  TEXT DEFAULT 'manual_training',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata    JSONB DEFAULT '{}'::jsonb
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA UNIQUE NOT NULL,
+  source_path TEXT,
+  -- Physical features
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  file_size_bytes BIGINT NOT NULL,
+  format TEXT NOT NULL,
+  total_pixels BIGINT,
+  -- Quality metrics
+  entropy DOUBLE PRECISION NOT NULL,
+  compression_ratio DOUBLE PRECISION NOT NULL,
+  spatial_bpp DOUBLE PRECISION NOT NULL,
+  is_lossless BOOLEAN NOT NULL,
+  -- Embedding (256D for image quality)
+  embedding VECTOR (256),
+  -- Training label
+  quality_label TEXT, -- 'png-high', 'png-low', 'modern-high', 'modern-low'
+  quality_score REAL NOT NULL CHECK (
+    quality_score = quality_score
+    AND quality_score >= 0.0
+    AND quality_score <= 1.0
+  ),
+  labeled_by TEXT DEFAULT 'manual_training',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_image_quality_blake3 ON image_quality_samples(blake3);
+CREATE INDEX IF NOT EXISTS idx_image_quality_blake3 ON image_quality_samples (blake3);
+
 CREATE INDEX IF NOT EXISTS idx_image_quality_hnsw ON image_quality_samples USING hnsw (embedding vector_l2_ops);
 
 -- 2.3 Animated Image Quality Samples
-
 CREATE TABLE IF NOT EXISTS animated_image_quality_samples (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA UNIQUE NOT NULL,
-    source_path TEXT,
-    -- Physical features
-    width       INTEGER NOT NULL,
-    height      INTEGER NOT NULL,
-    frame_count BIGINT NOT NULL,
-    duration_secs DOUBLE PRECISION NOT NULL,
-    fps         DOUBLE PRECISION,
-    -- Animated-image-specific metrics
-    palette_size INTEGER,
-    palette_depth DOUBLE PRECISION,
-    animation_smoothness DOUBLE PRECISION,
-    frame_delay_variation DOUBLE PRECISION,
-    -- Embedding (256D, 225 reference-frame physics dims + 31 animated-image dims)
-    embedding   VECTOR(256),
-    -- Training label
-    quality_score REAL NOT NULL CHECK (
-        quality_score = quality_score
-        AND quality_score >= 0.0
-        AND quality_score <= 1.0
-    ),
-    is_meme     BOOLEAN DEFAULT FALSE,
-    labeled_by  TEXT DEFAULT 'manual_training',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata    JSONB DEFAULT '{}'::jsonb
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA UNIQUE NOT NULL,
+  source_path TEXT,
+  -- Physical features
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  frame_count BIGINT NOT NULL,
+  duration_secs DOUBLE PRECISION NOT NULL,
+  fps DOUBLE PRECISION,
+  -- Animated-image-specific metrics
+  palette_size INTEGER,
+  palette_depth DOUBLE PRECISION,
+  animation_smoothness DOUBLE PRECISION,
+  frame_delay_variation DOUBLE PRECISION,
+  -- Embedding (256D, 225 reference-frame physics dims + 31 animated-image dims)
+  embedding VECTOR (256),
+  -- Training label
+  quality_score REAL NOT NULL CHECK (
+    quality_score = quality_score
+    AND quality_score >= 0.0
+    AND quality_score <= 1.0
+  ),
+  is_meme BOOLEAN DEFAULT FALSE,
+  labeled_by TEXT DEFAULT 'manual_training',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_animated_image_quality_blake3 ON animated_image_quality_samples(blake3);
+CREATE INDEX IF NOT EXISTS idx_animated_image_quality_blake3 ON animated_image_quality_samples (blake3);
+
 CREATE INDEX IF NOT EXISTS idx_animated_image_quality_hnsw ON animated_image_quality_samples USING hnsw (embedding vector_l2_ops);
 
 -- 2.4 Video Quality Samples
-
 CREATE TABLE IF NOT EXISTS video_quality_samples (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA UNIQUE NOT NULL,
-    source_path TEXT,
-    -- Physical features
-    width       INTEGER NOT NULL,
-    height      INTEGER NOT NULL,
-    duration_secs DOUBLE PRECISION NOT NULL,
-    frame_count BIGINT NOT NULL,
-    fps         DOUBLE PRECISION,
-    file_size_bytes BIGINT NOT NULL,
-    codec       TEXT NOT NULL,
-    bitrate_mbps REAL,
-    -- Video quality metrics (real container/runtime signals)
-    bit_depth   SMALLINT,
-    has_audio   BOOLEAN NOT NULL DEFAULT FALSE,
-    is_variable_frame_rate BOOLEAN NOT NULL DEFAULT FALSE,
-    is_hdr      BOOLEAN NOT NULL DEFAULT FALSE,
-    motion_intensity REAL,
-    temporal_stability REAL,
-    -- Embedding (256D for video quality)
-    embedding   VECTOR(256),
-    -- Training label
-    quality_score REAL NOT NULL CHECK (
-        quality_score = quality_score
-        AND quality_score >= 0.0
-        AND quality_score <= 1.0
-    ),
-    labeled_by  TEXT DEFAULT 'manual_training',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata    JSONB DEFAULT '{}'::jsonb
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA UNIQUE NOT NULL,
+  source_path TEXT,
+  -- Physical features
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  duration_secs DOUBLE PRECISION NOT NULL,
+  frame_count BIGINT NOT NULL,
+  fps DOUBLE PRECISION,
+  file_size_bytes BIGINT NOT NULL,
+  codec TEXT NOT NULL,
+  bitrate_mbps REAL,
+  -- Video quality metrics (real container/runtime signals)
+  bit_depth SMALLINT,
+  has_audio BOOLEAN NOT NULL DEFAULT FALSE,
+  is_variable_frame_rate BOOLEAN NOT NULL DEFAULT FALSE,
+  is_hdr BOOLEAN NOT NULL DEFAULT FALSE,
+  motion_intensity REAL,
+  temporal_stability REAL,
+  -- Embedding (256D for video quality)
+  embedding VECTOR (256),
+  -- Training label
+  quality_score REAL NOT NULL CHECK (
+    quality_score = quality_score
+    AND quality_score >= 0.0
+    AND quality_score <= 1.0
+  ),
+  labeled_by TEXT DEFAULT 'manual_training',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_video_quality_blake3 ON video_quality_samples(blake3);
+CREATE INDEX IF NOT EXISTS idx_video_quality_blake3 ON video_quality_samples (blake3);
+
 CREATE INDEX IF NOT EXISTS idx_video_quality_hnsw ON video_quality_samples USING hnsw (embedding vector_l2_ops);
 
 -- Idempotent column upgrades for older deployments that already had the table.
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS frame_count BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS codec TEXT NOT NULL DEFAULT 'unknown';
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS bit_depth SMALLINT;
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS has_audio BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_variable_frame_rate BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE video_quality_samples ADD COLUMN IF NOT EXISTS is_hdr BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS frame_count BIGINT NOT NULL DEFAULT 0;
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NOT NULL DEFAULT 0;
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS codec TEXT NOT NULL DEFAULT 'unknown';
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS bit_depth SMALLINT;
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS has_audio BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS is_variable_frame_rate BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE video_quality_samples
+ADD COLUMN IF NOT EXISTS is_hdr BOOLEAN NOT NULL DEFAULT FALSE;
 
 DO $$
 BEGIN
@@ -358,91 +368,90 @@ BEGIN
 END;
 $$;
 
-ALTER TABLE loop_samples
-VALIDATE CONSTRAINT loop_samples_media_metadata_check;
-ALTER TABLE image_quality_samples
-VALIDATE CONSTRAINT image_quality_samples_media_metadata_check;
-ALTER TABLE animated_image_quality_samples
-VALIDATE CONSTRAINT animated_image_quality_samples_media_metadata_check;
-ALTER TABLE video_quality_samples
-VALIDATE CONSTRAINT video_quality_samples_media_metadata_check;
+ALTER TABLE loop_samples VALIDATE CONSTRAINT loop_samples_media_metadata_check;
+
+ALTER TABLE image_quality_samples VALIDATE CONSTRAINT image_quality_samples_media_metadata_check;
+
+ALTER TABLE animated_image_quality_samples VALIDATE CONSTRAINT animated_image_quality_samples_media_metadata_check;
+
+ALTER TABLE video_quality_samples VALIDATE CONSTRAINT video_quality_samples_media_metadata_check;
 
 -- ============================================================================
 -- PHASE 3: Inference logging tables (one per scenario)
 -- ============================================================================
-
 CREATE TABLE IF NOT EXISTS loop_intent_inference_log (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA,
-    source_path TEXT,
-    knn_score   DOUBLE PRECISION,
-    knn_confidence DOUBLE PRECISION,
-    knn_neighbor_count INTEGER,
-    final_verdict TEXT NOT NULL DEFAULT 'unknown',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA,
+  source_path TEXT,
+  knn_score DOUBLE PRECISION,
+  knn_confidence DOUBLE PRECISION,
+  knn_neighbor_count INTEGER,
+  final_verdict TEXT NOT NULL DEFAULT 'unknown',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS image_quality_inference_log (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA,
-    source_path TEXT,
-    knn_score   DOUBLE PRECISION,
-    knn_confidence DOUBLE PRECISION,
-    knn_neighbor_count INTEGER,
-    bpp_fallback_score DOUBLE PRECISION,
-    final_verdict TEXT NOT NULL DEFAULT 'low',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA,
+  source_path TEXT,
+  knn_score DOUBLE PRECISION,
+  knn_confidence DOUBLE PRECISION,
+  knn_neighbor_count INTEGER,
+  bpp_fallback_score DOUBLE PRECISION,
+  final_verdict TEXT NOT NULL DEFAULT 'low',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS animated_image_quality_inference_log (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA,
-    source_path TEXT,
-    knn_score   DOUBLE PRECISION,
-    knn_confidence DOUBLE PRECISION,
-    knn_neighbor_count INTEGER,
-    final_verdict TEXT NOT NULL DEFAULT 'unknown',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA,
+  source_path TEXT,
+  knn_score DOUBLE PRECISION,
+  knn_confidence DOUBLE PRECISION,
+  knn_neighbor_count INTEGER,
+  final_verdict TEXT NOT NULL DEFAULT 'unknown',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS video_quality_inference_log (
-    id          BIGSERIAL PRIMARY KEY,
-    blake3      BYTEA,
-    source_path TEXT,
-    knn_score   DOUBLE PRECISION,
-    knn_confidence DOUBLE PRECISION,
-    knn_neighbor_count INTEGER,
-    final_verdict TEXT NOT NULL DEFAULT 'unknown',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id BIGSERIAL PRIMARY KEY,
+  blake3 BYTEA,
+  source_path TEXT,
+  knn_score DOUBLE PRECISION,
+  knn_confidence DOUBLE PRECISION,
+  knn_neighbor_count INTEGER,
+  final_verdict TEXT NOT NULL DEFAULT 'unknown',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================
 -- PHASE 4: Metadata tables for tracking
 -- ============================================================================
-
 CREATE TABLE IF NOT EXISTS multi_scenario_metadata (
-    scenario    TEXT PRIMARY KEY,  -- 'loop_intent', 'image_quality', 'animated_image_quality', 'video_quality'
-    table_name  TEXT NOT NULL,
-    embedding_dimension INTEGER NOT NULL,
-    sample_count BIGINT DEFAULT 0,
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    feature_stats JSONB DEFAULT '{}'::jsonb,
-    collection_stats JSONB DEFAULT '{}'::jsonb
+  scenario TEXT PRIMARY KEY, -- 'loop_intent', 'image_quality', 'animated_image_quality', 'video_quality'
+  table_name TEXT NOT NULL,
+  embedding_dimension INTEGER NOT NULL,
+  sample_count BIGINT DEFAULT 0,
+  last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  feature_stats JSONB DEFAULT '{}'::jsonb,
+  collection_stats JSONB DEFAULT '{}'::jsonb
 );
 
 -- Initialize metadata
-INSERT INTO multi_scenario_metadata (scenario, table_name, embedding_dimension)
+INSERT INTO
+  multi_scenario_metadata (scenario, table_name, embedding_dimension)
 VALUES
-    ('loop_intent', 'loop_samples', 261),
-    ('image_quality', 'image_quality_samples', 256),
-    ('animated_image_quality', 'animated_image_quality_samples', 256),
-    ('video_quality', 'video_quality_samples', 256)
+  ('loop_intent', 'loop_samples', 261),
+  ('image_quality', 'image_quality_samples', 256),
+  (
+    'animated_image_quality',
+    'animated_image_quality_samples',
+    256
+  ),
+  ('video_quality', 'video_quality_samples', 256)
 ON CONFLICT (scenario) DO NOTHING;
 
-CREATE OR REPLACE FUNCTION normalize_image_quality_score()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION normalize_image_quality_score () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF NEW.quality_score IS NULL THEN
         NEW.quality_score := CASE
@@ -456,15 +465,12 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_normalize_image_quality_score ON image_quality_samples;
-CREATE TRIGGER trg_normalize_image_quality_score
-BEFORE INSERT OR UPDATE ON image_quality_samples
-FOR EACH ROW
-EXECUTE FUNCTION normalize_image_quality_score();
 
-CREATE OR REPLACE FUNCTION sync_multi_scenario_metadata_sample_count()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE TRIGGER trg_normalize_image_quality_score
+BEFORE INSERT OR UPDATE ON image_quality_samples FOR EACH ROW
+EXECUTE FUNCTION normalize_image_quality_score ();
+
+CREATE OR REPLACE FUNCTION sync_multi_scenario_metadata_sample_count () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         UPDATE multi_scenario_metadata
@@ -487,10 +493,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION sync_multi_scenario_metadata_on_truncate()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION sync_multi_scenario_metadata_on_truncate () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     UPDATE multi_scenario_metadata
     SET sample_count = 0,
@@ -501,54 +504,55 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_sync_loop_samples_metadata ON loop_samples;
+
 CREATE TRIGGER trg_sync_loop_samples_metadata
-AFTER INSERT OR UPDATE OR DELETE ON loop_samples
-FOR EACH ROW
-EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count();
+AFTER INSERT OR UPDATE OR DELETE ON loop_samples FOR EACH ROW
+EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count ();
 
 DROP TRIGGER IF EXISTS trg_sync_image_quality_samples_metadata ON image_quality_samples;
+
 CREATE TRIGGER trg_sync_image_quality_samples_metadata
-AFTER INSERT OR UPDATE OR DELETE ON image_quality_samples
-FOR EACH ROW
-EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count();
+AFTER INSERT OR UPDATE OR DELETE ON image_quality_samples FOR EACH ROW
+EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count ();
 
 DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata ON animated_image_quality_samples;
+
 CREATE TRIGGER trg_sync_animated_image_quality_samples_metadata
-AFTER INSERT OR UPDATE OR DELETE ON animated_image_quality_samples
-FOR EACH ROW
-EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count();
+AFTER INSERT OR UPDATE OR DELETE ON animated_image_quality_samples FOR EACH ROW
+EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count ();
 
 DROP TRIGGER IF EXISTS trg_sync_video_quality_samples_metadata ON video_quality_samples;
+
 CREATE TRIGGER trg_sync_video_quality_samples_metadata
-AFTER INSERT OR UPDATE OR DELETE ON video_quality_samples
-FOR EACH ROW
-EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count();
+AFTER INSERT OR UPDATE OR DELETE ON video_quality_samples FOR EACH ROW
+EXECUTE FUNCTION sync_multi_scenario_metadata_sample_count ();
 
 DROP TRIGGER IF EXISTS trg_sync_loop_samples_metadata_truncate ON loop_samples;
+
 CREATE TRIGGER trg_sync_loop_samples_metadata_truncate
-AFTER TRUNCATE ON loop_samples
-FOR EACH STATEMENT
-EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
+AFTER TRUNCATE ON loop_samples FOR EACH STATEMENT
+EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate ();
 
 DROP TRIGGER IF EXISTS trg_sync_image_quality_samples_metadata_truncate ON image_quality_samples;
+
 CREATE TRIGGER trg_sync_image_quality_samples_metadata_truncate
-AFTER TRUNCATE ON image_quality_samples
-FOR EACH STATEMENT
-EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
+AFTER TRUNCATE ON image_quality_samples FOR EACH STATEMENT
+EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate ();
 
 DROP TRIGGER IF EXISTS trg_sync_animated_image_quality_samples_metadata_truncate ON animated_image_quality_samples;
+
 CREATE TRIGGER trg_sync_animated_image_quality_samples_metadata_truncate
-AFTER TRUNCATE ON animated_image_quality_samples
-FOR EACH STATEMENT
-EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
+AFTER TRUNCATE ON animated_image_quality_samples FOR EACH STATEMENT
+EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate ();
 
 DROP TRIGGER IF EXISTS trg_sync_video_quality_samples_metadata_truncate ON video_quality_samples;
+
 CREATE TRIGGER trg_sync_video_quality_samples_metadata_truncate
-AFTER TRUNCATE ON video_quality_samples
-FOR EACH STATEMENT
-EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate();
+AFTER TRUNCATE ON video_quality_samples FOR EACH STATEMENT
+EXECUTE FUNCTION sync_multi_scenario_metadata_on_truncate ();
+
 -- ============================================================================
 -- Migration Complete
 -- ============================================================================
-
-SELECT 'Multi-Scenario Embedding Schema Created Successfully!' as status;
+SELECT
+  'Multi-Scenario Embedding Schema Created Successfully!' as status;

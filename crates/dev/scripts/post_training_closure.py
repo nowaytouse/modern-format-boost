@@ -19,7 +19,11 @@ ROOT = SCRIPT_DIR.parent.parent.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from mfb_log_paths import TRAINING_LOG_LANES, coerce_log_dir, persistent_log_dir  # noqa: E402
+from mfb_log_paths import (
+    TRAINING_LOG_LANES,
+    coerce_log_dir,
+    persistent_log_dir,
+)
 
 LANES = tuple(TRAINING_LOG_LANES)
 

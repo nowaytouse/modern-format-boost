@@ -10,13 +10,13 @@
     "MD041": false,
     "MD055": false,
     "MD056": false,
-    "MD060": false
+    "MD060": false,
   },
   "ignores": [
     "target/",
     ".gemini/",
     "crates/.modern_format_boost/.venv/",
     ".venv_training/",
-    "docs/README_AR.md"
-  ]
+    "docs/README_AR.md",
+  ],
 }

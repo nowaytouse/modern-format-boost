@@ -51,12 +51,27 @@ def candidate_library_paths() -> list[Path]:
         lib_name = "foundation.dll"
     else:
         lib_name = "libfoundation.so"
+
     artifact = ROOT / "crates" / ".modern_format_boost" / "artifacts" / lib_name
     built = LIB_DIR / lib_name
     release = RELEASE_LIB_DIR / lib_name
-    if artifact.is_file():
-        return [artifact, built, release]
-    return [built, release, artifact]
+    candidates = []
+    scripts_dir = Path(__file__).resolve().parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from mfb_dylib import app_bundle_dylib_path
+
+    app_dylib = app_bundle_dylib_path()
+    if app_dylib is not None and not any(
+        path.is_file() and path.stat().st_mtime > app_dylib.stat().st_mtime
+        for path in (artifact, built, release)
+    ):
+        candidates.append(app_dylib)
+    for p in [artifact, built, release]:
+        if p not in candidates:
+            candidates.append(p)
+
+    return candidates
 
 
 def _resolve_lib_path_for_load() -> Path:
@@ -66,7 +81,7 @@ def _resolve_lib_path_for_load() -> Path:
     scripts_dir = Path(__file__).resolve().parent
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
-    from mfb_dylib import ensure_foundation_dylib  # noqa: PLC0415
+    from mfb_dylib import ensure_foundation_dylib
 
     return Path(ensure_foundation_dylib())
 
@@ -248,7 +263,7 @@ if __name__ == "__main__":
     _scripts = Path(__file__).resolve().parent
     if str(_scripts) not in sys.path:
         sys.path.insert(0, str(_scripts))
-    from mfb_entry_guard import guard_main  # noqa: E402
+    from mfb_entry_guard import guard_main
 
     guard_main("python_api.py")
     print("Modern Format Boost - Python to Rust Direct Ingestion API")

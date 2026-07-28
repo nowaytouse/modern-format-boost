@@ -3,8 +3,8 @@
 # This script creates a local environment file that is IGNORED by Git.
 # Use this to safely store your database credentials without leaking them.
 
-import sys
 import json
+import sys
 from pathlib import Path
 
 # Colors

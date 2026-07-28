@@ -10,7 +10,6 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-
 MFB_DEFAULT_HOME_DIRNAME = ".modern_format_boost"
 FAST_IMG_FORCE_SMART_BUILD = False
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from mfb_ui_tokens import pick_symbol
 import argparse
 import os
 import shutil
@@ -7,8 +6,8 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from typing import Optional
 
+from mfb_ui_tokens import pick_symbol
 from session_audit import append_session_audit
 
 # collect_optimized.py v14
@@ -26,7 +25,7 @@ VIDEO_EXTENSIONS = {".mov", ".mp4"}
 TARGET_VIDEO_CODECS = {"hevc"}
 PROBE_FAILURE_PREVIEW = 10
 
-CodecProbe = Callable[[str], tuple[Optional[str], Optional[str]]]
+CodecProbe = Callable[[str], tuple[str | None, str | None]]
 
 
 class CollectMetadataError(RuntimeError):

@@ -1228,8 +1228,13 @@ pub fn convert_to_jxl(
             if is_extreme_explore
                 && distance > 0.0
                 && explore_result.is_none()
-                && let Some(result) =
-                    try_jxl_to_avif_extreme_handoff(input, &temp_output, input_size, options)?
+                && let Some(result) = try_jxl_to_avif_extreme_handoff(
+                    input,
+                    &actual_input,
+                    &temp_output,
+                    input_size,
+                    options,
+                )?
             {
                 return Ok(result);
             }
@@ -2808,7 +2813,11 @@ fn build_avifenc_command(
         Some(configured_speed) => configured_speed,
         None => 0,
     };
-    builder.speed(effective_speed).jobs("all").yuv("444");
+    builder
+        .speed(effective_speed)
+        .jobs("all")
+        .yuv("444")
+        .cicp("1/13/0");
 
     if lossless {
         builder.lossless(true);
@@ -3402,7 +3411,7 @@ pub fn finalize_meme_avif_probe(
 }
 
 const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
-const JXL_TO_AVIF_MIN_QUALITY: u8 = 20;
+const JXL_TO_AVIF_MIN_QUALITY: u8 = 10;
 const JXL_TO_AVIF_BINARY_PROBE_BUDGET: usize = 7;
 
 fn search_highest_fitting_avif_quality_with<Probe>(
@@ -3462,6 +3471,7 @@ where
 
 fn try_jxl_to_avif_extreme_handoff(
     input: &Path,
+    encoder_input: &Path,
     jxl_temp_output: &Path,
     input_size: u64,
     options: &ConvertOptions,
@@ -3481,7 +3491,7 @@ fn try_jxl_to_avif_extreme_handoff(
         ));
         match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             input,
-            input,
+            encoder_input,
             quality,
             None,
             &mut metadata_retry,
@@ -3522,7 +3532,7 @@ fn try_jxl_to_avif_extreme_handoff(
     let (avif_temp_output, avif_size) =
         match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             input,
-            input,
+            encoder_input,
             quality,
             None,
             &mut metadata_retry,
@@ -5356,9 +5366,12 @@ mod tests {
                     .map(|pair| pair[1].as_str()),
                 Some("444")
             );
-            assert!(
-                !args.iter().any(|arg| arg == "--cicp"),
-                "avifenc must choose lossless and lossy color signalling"
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "--cicp")
+                    .map(|pair| pair[1].as_str()),
+                Some("1/13/0"),
+                "RGB encoder input must use Identity CICP to avoid matrix color drift"
             );
         }
     }
@@ -6277,12 +6290,12 @@ mod tests {
 
     #[test]
     fn jxl_to_avif_search_exhausts_before_preserving_source() {
-        assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 20);
+        assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 10);
         let (quality, probe_count) =
             search_highest_fitting_avif_quality_with(1_000, |_quality| Some(1_001));
 
         assert_eq!(quality, None);
-        assert_eq!(probe_count, 9);
+        assert_eq!(probe_count, 10);
     }
 
     /// Build a minimal byte sequence that satisfies both `is_jpeg_complete` and
