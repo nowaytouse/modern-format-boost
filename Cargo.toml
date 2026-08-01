@@ -3,11 +3,10 @@ members = [
   "crates/vid",
   "crates/img",
   "crates/foundation",
-  "crates/jxl_import_doctor",
   "crates/dev",
-  "crates/dev/src/fuzz",
+  "crates/dev/fuzz",
 ]
-exclude = ["crates/dev/src/dispatch2", "crates/dev/src/vue/src-tauri"]
+exclude = ["crates/dev/dispatch2", "crates/gui/src-tauri"]
 resolver = "2"
 
 [workspace.lints.rust]

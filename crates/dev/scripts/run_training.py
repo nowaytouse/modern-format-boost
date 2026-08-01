@@ -56,6 +56,7 @@ from fabrication_policy import (
     run_training_except_policy,
     training_quality_exit,
 )
+from fastmode_paths import default_mfb_state_root
 from media_scope import (
     ANIMATION_CAPABLE_IMAGE_EXTS as MEDIA_SCOPE_ANIMATION_CAPABLE_IMAGE_EXTS,
 )
@@ -181,7 +182,7 @@ TRAINING_PIPELINE_SCRIPT = ROOT / "crates" / "dev" / "scripts" / "training_pipel
 TRAINING_REQUIREMENTS_FILE = ROOT / "crates" / "dev" / "scripts" / "requirements.txt"
 TRAIN_BIN_QUALITY = ROOT / "target" / "debug" / "train_quality"
 TRAIN_BIN_KNN = ROOT / "target" / "debug" / "train_knn"
-WORKSPACE_VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
+STATE_VENV_PYTHON = default_mfb_state_root() / ".venv" / "bin" / "python"
 RUN_TRAINING_SCRIPT = SCRIPTS_DIR / "run_training.py"
 DEFAULT_CONNSTR = "postgresql://localhost/modern_format_boost"
 # Hard SSOT ingest ceilings — enforced in enforce_training_db_caps() after profile merge.
@@ -418,8 +419,8 @@ def parse_positive_float_env(name: str, default: float) -> float:
 
 
 def four_lane_python_exe() -> str:
-    if WORKSPACE_VENV_PYTHON.is_file():
-        return str(WORKSPACE_VENV_PYTHON)
+    if STATE_VENV_PYTHON.is_file():
+        return str(STATE_VENV_PYTHON)
     return sys.executable
 
 
@@ -667,16 +668,7 @@ def ensure_reset_db_before_training(*, reset_db: bool, dry_run: bool) -> None:
 
 
 def training_cache_base_dir() -> Path:
-    base = (
-        os.environ.get("MFB_HOME_ROOT")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or str(ROOT)
-    )
-    path = Path(base).expanduser()
-    if path.name != ".modern_format_boost":
-        path = path / ".modern_format_boost"
-    return path / "cache"
+    return default_mfb_state_root() / "cache"
 
 
 def image_quality_model_dir() -> Path:
@@ -4001,8 +3993,8 @@ def preferred_training_python() -> str:
     explicit = os.environ.get(QUALITY_MODEL_PYTHON_ENV)
     if explicit and explicit.strip():
         return explicit.strip()
-    if WORKSPACE_VENV_PYTHON.exists():
-        return str(WORKSPACE_VENV_PYTHON)
+    if STATE_VENV_PYTHON.exists():
+        return str(STATE_VENV_PYTHON)
     return sys.executable
 
 

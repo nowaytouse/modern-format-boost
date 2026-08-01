@@ -46,6 +46,7 @@ use dev::media::scope::{
     extract_routed_video_paths_from_audit, preserve_handoff_gaps,
     report_handoff_preserve_gaps_from_paths,
 };
+use foundation::BatchErrorMode;
 use foundation::process_lock::DirLock;
 use std::fs;
 use std::io::{self, Write};
@@ -55,12 +56,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
-// ── Error mode constants (mirrors Python MFB_DRAG_DROP_ERROR_MODE)
-// ────────────
-const DRAG_DROP_ERROR_MODE_ENV: &str = "MFB_DRAG_DROP_ERROR_MODE";
-const DRAG_DROP_FAIL_FAST_ENV: &str = "MFB_DRAG_DROP_FAIL_FAST";
-const DRAG_DROP_ERROR_MODE_FAIL_FAST: &str = "fail-fast";
-const DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE: &str = "log-and-continue";
 const DRAG_DROP_CHILD_ULTIMATE: bool = true;
 const DRAG_DROP_CHILD_VERBOSE: bool = true;
 
@@ -730,53 +725,8 @@ const fn mode_needs_db_health(mode: &LaunchMode) -> bool {
 
 // ── safety checks (ported from drag_and_drop_processor.py) ──────────────────
 
-/// Resolve the current drag/drop error mode from the environment.
-///
-/// Mirrors `drag_drop_error_mode()` in the Python implementation.
-/// Checks `MFB_DRAG_DROP_FAIL_FAST` (legacy) first, then
-/// `MFB_DRAG_DROP_ERROR_MODE`. Any unrecognised value falls through to
-/// log-and-continue.
-fn drag_drop_error_mode() -> &'static str {
-    fn truthy(v: &str) -> bool {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    }
-
-    // Legacy fast-fail env (backwards compat with Python)
-    let val = match std::env::var(DRAG_DROP_FAIL_FAST_ENV) {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => String::new(),
-    };
-    if truthy(&val) {
-        return DRAG_DROP_ERROR_MODE_FAIL_FAST;
-    }
-
-    let raw = match std::env::var(DRAG_DROP_ERROR_MODE_ENV) {
-        Ok(value) => value.trim().to_ascii_lowercase(),
-        Err(_) => String::new(),
-    };
-    let normalized = raw.replace(['_', ' '], "-");
-    match normalized.as_str() {
-        "fail-fast" | "failfast" | "abort" | "strict" => DRAG_DROP_ERROR_MODE_FAIL_FAST,
-        "" | "continue" | "log-and-continue" | "batch-report" | "report" | "normal" => {
-            DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE
-        }
-        _ => {
-            eprintln!(
-                "{} Unknown {DRAG_DROP_ERROR_MODE_ENV}={raw:?}; falling back to \
-                 {DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE}",
-                pick_symbol("⚠️", "[WARN]")
-            );
-            DRAG_DROP_ERROR_MODE_LOG_AND_CONTINUE
-        }
-    }
-}
-
-/// Returns true when errors should abort immediately (fail-fast mode).
-fn drag_drop_fail_fast_enabled() -> bool {
-    drag_drop_error_mode() == DRAG_DROP_ERROR_MODE_FAIL_FAST
+fn drag_drop_error_should_abort(mode: BatchErrorMode, error: &anyhow::Error) -> bool {
+    mode.should_abort_error(error)
 }
 
 fn read_optional_text_file(path: &Path) -> Option<String> {
@@ -799,11 +749,16 @@ fn read_optional_text_file(path: &Path) -> Option<String> {
 /// Uses `serde_json` for robust JSON parsing — the previous hand-rolled
 /// `split(',')` approach silently mishandled values containing commas (e.g.
 /// `PostgreSQL` multi-host connection strings).
-fn load_local_env(project_root: &Path) {
+fn load_local_env(_project_root: &Path) {
+    let Ok(conf_dir) = foundation::process_lock::get_mfb_root() else {
+        eprintln!(
+            "{} MFB state root unavailable; skipping local environment",
+            pick_symbol("⚠️", "[WARN]")
+        );
+        return;
+    };
     // JSON source (preferred)
-    let json_path = project_root
-        .join("crates/.modern_format_boost")
-        .join("local_env.json");
+    let json_path = conf_dir.join("local_env.json");
     if json_path.is_file() {
         if let Some(content) = read_optional_text_file(&json_path) {
             match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content) {
@@ -833,9 +788,7 @@ fn load_local_env(project_root: &Path) {
     }
 
     // Shell fallback: `export KEY="VALUE"`
-    let sh_path = project_root
-        .join("crates/.modern_format_boost")
-        .join("local_env.sh");
+    let sh_path = conf_dir.join("local_env.sh");
     if sh_path.is_file()
         && let Some(content) = read_optional_text_file(&sh_path)
     {
@@ -890,7 +843,7 @@ fn verify_database_mandatory(project_root: &Path) -> Result<()> {
         eprintln!("  1. Ensure PostgreSQL is running locally.");
         eprintln!("  2. Run the private setup helper:");
         eprintln!("       rust-script crates/dev/src/bin/setup_private_db.rs");
-        eprintln!("  3. Or create: crates/.modern_format_boost/local_env.json");
+        eprintln!("  3. Or create: ~/.modern_format_boost/local_env.json");
         eprintln!("     with: {{\"MFB_PG_CONNSTR\": \"postgresql://user:pass@localhost/db\"}}");
         if !diag.trim().is_empty() {
             eprintln!("  Diagnostic: {}", diag.trim());
@@ -1359,7 +1312,7 @@ fn plan_cli_invocations(
 ) -> Result<Vec<LaunchCommand>> {
     if args.vue {
         bail!(
-            "Vue prototype is scaffolding only; invoke it separately from crates/dev/src/vue \
+            "Vue prototype is scaffolding only; invoke it separately from crates/gui \
              without processing files"
         );
     }
@@ -1598,7 +1551,8 @@ fn run_drag_drop(
         check_system_resources(&args.inputs[0], 1024u64 * 1024 * 1024)?;
     }
 
-    let fail_fast = drag_drop_fail_fast_enabled();
+    let error_mode = BatchErrorMode::current();
+    let fail_fast = error_mode.is_fail_fast();
     let commands = if let Some(ref scan) = scan {
         if mode_uses_standard_pipeline(&args.mode) {
             plan_routed_pipeline_commands(args, &root, scan, fail_fast)?
@@ -1655,7 +1609,7 @@ fn run_drag_drop(
                         summary.img = stats;
                     }
                 }
-                Err(err) if fail_fast => return Err(err),
+                Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
                 Err(err) => first_error = Some(err),
             }
             if first_error.is_none() {
@@ -1712,7 +1666,7 @@ fn run_drag_drop(
                         )?;
                     }
                 }
-                Err(err) if fail_fast => return Err(err),
+                Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
                 Err(err) => first_error = Some(err),
             }
         }
@@ -1766,7 +1720,7 @@ fn run_drag_drop(
                     } else if is_vid {
                         summary.vid.failed += 1;
                     }
-                    if fail_fast {
+                    if drag_drop_error_should_abort(error_mode, &err) {
                         return Err(err);
                     }
                     eprintln!(
@@ -1792,7 +1746,7 @@ fn run_drag_drop(
                 if output.is_dir()
                     && let Err(err) = run_post_adjacent_steps(args, &root, sess, scan, &mut summary)
                 {
-                    if fail_fast {
+                    if drag_drop_error_should_abort(error_mode, &err) {
                         return Err(err);
                     }
                     eprintln!(
@@ -2562,7 +2516,7 @@ fn main() -> Result<()> {
     // Vue launcher check
     if args.vue {
         bail!(
-            "Vue launcher is not implemented; run crates/dev/src/vue scripts directly during UI \
+            "Vue launcher is not implemented; run crates/gui scripts directly during UI \
              prototyping"
         );
     }
@@ -2628,6 +2582,26 @@ fn report_drag_drop_failure(result: &Result<()>) {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn drag_drop_error_policy_continues_only_classified_recoverable_errors() {
+        let recoverable: anyhow::Error =
+            foundation::UnifiedError::analysis_error("bad media").into();
+        assert!(!drag_drop_error_should_abort(
+            BatchErrorMode::LogAndContinue,
+            &recoverable
+        ));
+        assert!(drag_drop_error_should_abort(
+            BatchErrorMode::FailFast,
+            &recoverable
+        ));
+
+        let unknown = anyhow::anyhow!("spawn or system failure");
+        assert!(drag_drop_error_should_abort(
+            BatchErrorMode::LogAndContinue,
+            &unknown
+        ));
+    }
 
     #[test]
     fn cli_binary_uses_release_path_for_workspace_like_roots() {

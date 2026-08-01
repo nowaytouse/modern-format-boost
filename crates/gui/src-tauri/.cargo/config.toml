@@ -1,0 +1,5 @@
+[build]
+# Redirect Tauri/Cargo build output to the workspace root target directory
+# so src-tauri does not maintain a separate 5 GB target tree.
+# Path: crates/gui/src-tauri/ → 3 levels up → workspace root
+target-dir = "../../../target"

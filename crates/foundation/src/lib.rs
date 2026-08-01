@@ -373,12 +373,12 @@ pub use ffprobe::{
     is_ffprobe_available, parse_frame_rate, probe_video,
 };
 pub use metadata::{
-    MetadataCopyCheck, MetadataDeliveryReport, MetadataLayerOutcome,
-    apply_file_timestamps_for_delivery, apply_saved_timestamps_to_dst, copy, preserve,
-    preserve_directory, preserve_directory_with_log, preserve_for_delivery, preserve_pro,
+    MetadataCopyCheck, MetadataDeliveryReport, MetadataLayerOutcome, MetadataOutputPolicy,
+    OutputMetadataAudit, apply_file_timestamps_for_delivery, apply_saved_timestamps_to_dst, copy,
+    preserve, preserve_directory, preserve_directory_with_log, preserve_for_delivery, preserve_pro,
     restore_delivery_directory_metadata, restore_directory_timestamps,
     restore_timestamps_from_source_to_output, save_directory_timestamps,
-    verify_exact_metadata_copy,
+    verify_exact_metadata_copy, verify_output_embedded_metadata,
 };
 pub use progress::{
     Batch, CoarseProgressBar, DetailedCoarseProgressBar, Explore, ExploreLogger, FixedBottom,
@@ -413,18 +413,14 @@ pub use video_quality_detector::{
 };
 
 pub use video_explorer::{
-    CompressionVerifyStrategy, ExploreConfig, ExploreMode, ExploreResult, IterationMetrics,
-    METADATA_MARGIN_MAX, METADATA_MARGIN_MIN, METADATA_MARGIN_PERCENT, QualityThresholds,
-    SMALL_FILE_THRESHOLD, SsimSource, TransparencyReport, VideoEncoder, VideoExplorer,
-    calculate_metadata_margin, can_compress_with_metadata, compression_target_size,
-    detect_metadata_size, explore_av1, explore_av1_compress_only,
-    explore_av1_compress_with_quality, explore_av1_quality_match, explore_av1_size_only,
-    explore_compress_only, explore_compress_with_quality, explore_hevc, explore_hevc_compress_only,
-    explore_hevc_compress_with_quality, explore_hevc_quality_match, explore_hevc_size_only,
-    explore_precise_quality_match, explore_precise_quality_match_with_compression,
-    explore_quality_match, explore_size_only, precision, precision::SearchPhase,
-    precision::ThreePhaseSearch, pure_video_size, verify_compression_precise,
-    verify_compression_simple,
+    ExploreConfig, ExploreMode, ExploreResult, IterationMetrics, QualityThresholds, SsimSource,
+    TransparencyReport, VideoEncoder, VideoExplorer, detect_metadata_size, explore_av1,
+    explore_av1_compress_only, explore_av1_compress_with_quality, explore_av1_quality_match,
+    explore_av1_size_only, explore_compress_only, explore_compress_with_quality, explore_hevc,
+    explore_hevc_compress_only, explore_hevc_compress_with_quality, explore_hevc_quality_match,
+    explore_hevc_size_only, explore_precise_quality_match,
+    explore_precise_quality_match_with_compression, explore_quality_match, explore_size_only,
+    precision, precision::SearchPhase, precision::ThreePhaseSearch,
 };
 
 pub use types::EncoderPreset;
@@ -478,7 +474,7 @@ pub use error_handler::{ErrorAction, ErrorCategory, handle_error};
 
 // Re-export unified error types
 pub use unified_error::{
-    ImgResult, Result as UnifiedResult, UnifiedError, VidQualityError, VidResult,
+    BatchErrorMode, ImgResult, Result as UnifiedResult, UnifiedError, VidQualityError, VidResult,
 };
 
 pub use anyhow;
@@ -516,13 +512,13 @@ pub use crf_constants::{
 
 pub use stream_size::{
     DEFAULT_OVERHEAD_PERCENT, ExtractionMethod, Info as StreamSizeInfo, MKV_OVERHEAD_PERCENT,
-    MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT, extract_stream_sizes,
-    get_container_overhead_percent, get_output_video,
+    MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT, StrictPureMediaMeasurement, extract_stream_sizes,
+    get_container_overhead_percent, get_output_video, measure_strict_pure_media,
 };
 
 pub use pure_media_verifier::{
     PureMediaVerifyResult, is_video_compressed, verify_pure_media_compression,
-    video_compression_ratio,
+    verify_strict_pure_media_measurements, verify_strict_pure_media_paths, video_compression_ratio,
 };
 
 pub use types::{

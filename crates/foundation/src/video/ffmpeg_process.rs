@@ -67,7 +67,9 @@ pub fn ffmpeg_timeout() -> Duration {
         Ok(raw) => {
             let trimmed = raw.trim();
             match trimmed.parse::<u64>() {
-                Ok(secs) if (30..=86_400).contains(&secs) => {
+                Ok(secs)
+                    if (30..=crate::constants::VIDEO_PROCESS_HARD_TIMEOUT_SECS).contains(&secs) =>
+                {
                     return Duration::from_secs(secs);
                 }
                 Ok(_) | Err(_) => {}
@@ -150,7 +152,11 @@ impl FfmpegProcess {
     /// Returns error if waiting for child process fails or output reader
     /// threads fail.
     pub fn wait_with_output(self) -> Result<(ExitStatus, String)> {
-        self.wait_with_output_timeout(ffmpeg_timeout(), "ffmpeg process")
+        self.wait_with_output_liveness_timeout(
+            ffmpeg_timeout(),
+            crate::process_runner::video_process_hard_timeout(),
+            "ffmpeg process",
+        )
     }
 
     /// Wait for `FFmpeg` process to complete with a hard timeout.
@@ -159,8 +165,22 @@ impl FfmpegProcess {
     /// Returns error if waiting fails, the timeout is exceeded, or output
     /// reader threads fail.
     pub fn wait_with_output_timeout(
-        mut self,
+        self,
         timeout: Duration,
+        context: &str,
+    ) -> Result<(ExitStatus, String)> {
+        self.wait_with_output_liveness_timeout(timeout, timeout, context)
+    }
+
+    /// Wait for `FFmpeg` using a soft estimate and a hard deadman deadline.
+    ///
+    /// # Errors
+    /// Returns error if waiting fails, the hard timeout is exceeded, or output
+    /// reader threads fail.
+    pub fn wait_with_output_liveness_timeout(
+        mut self,
+        soft_timeout: Duration,
+        hard_timeout: Duration,
         context: &str,
     ) -> Result<(ExitStatus, String)> {
         // If caller never took stdout, drain it in background so FFmpeg does not block
@@ -179,9 +199,10 @@ impl FfmpegProcess {
                 }
             })
         });
-        let status_result = crate::process_runner::wait_child_with_timeout(
+        let status_result = crate::process_runner::wait_child_with_liveness_timeout(
             &mut self.child,
-            timeout,
+            soft_timeout,
+            hard_timeout,
             &format!("{context}: {}", self.command_line),
         );
         if let Some(h) = stdout_drain {
@@ -625,6 +646,20 @@ Conversion failed!
         assert!(is_recoverable_error("Resource temporarily unavailable"));
         assert!(is_recoverable_error("Cannot allocate memory"));
         assert!(!is_recoverable_error("Invalid input file"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn ffmpeg_soft_timeout_accepts_video_hard_deadline() {
+        let _guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_FFMPEG_TIMEOUT_SECS,
+            &crate::constants::VIDEO_PROCESS_HARD_TIMEOUT_SECS.to_string(),
+        );
+
+        assert_eq!(
+            ffmpeg_timeout(),
+            crate::process_runner::video_process_hard_timeout()
+        );
     }
 }
 

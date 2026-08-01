@@ -7231,5 +7231,5 @@ mod tests {
 
 #[cfg(test)]
 mod advanced_tests {
-    include!("../tests/loop_intent_probe.rs");
+    include!("../../tests/internal/loop_intent_probe.rs");
 }

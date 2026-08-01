@@ -352,16 +352,6 @@ fn write_closure_cycle2(
     Ok(())
 }
 
-#[allow(dead_code)]
-fn find_python(repo_root: &Path) -> PathBuf {
-    let venv_py = repo_root.join("crates/.modern_format_boost/.venv/bin/python");
-    if venv_py.is_file() {
-        venv_py
-    } else {
-        PathBuf::from("python3")
-    }
-}
-
 fn default_log_dir(repo_root: &Path) -> PathBuf {
     // Mirror mfb_log_paths.persistent_log_dir()
     std::env::var("HOME")

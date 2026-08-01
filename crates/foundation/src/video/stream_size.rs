@@ -5,8 +5,7 @@
 //! stages.
 //!
 //! ## Core Features
-//! - Extract pure video stream size (excluding container overhead)
-//! - Extract audio stream size (if present)
+//! - Extract pure video + audio payload size (excluding container overhead)
 //! - Calculate container overhead
 //! - Supports multiple extraction methods (direct ffprobe / bitrate calculation
 //!   / estimation)
@@ -14,7 +13,12 @@
 use crate::builder_base::ToolBuilder;
 use rug::Rational;
 use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractionMethod {
@@ -55,6 +59,25 @@ pub struct Info {
     pub audio_bitrate: Option<u64>,
 }
 
+/// Strict packet-payload measurement for a video delivery decision.
+///
+/// Unlike [`Info`], this value cannot be produced from a bitrate or container
+/// estimate: it is the sum of ffprobe-reported video and audio packet bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrictPureMediaMeasurement {
+    pub video_packet_bytes: u64,
+    pub audio_packet_bytes: u64,
+    pub total_file_size: u64,
+}
+
+impl StrictPureMediaMeasurement {
+    #[must_use]
+    pub const fn pure_media_size(&self) -> u64 {
+        self.video_packet_bytes
+            .saturating_add(self.audio_packet_bytes)
+    }
+}
+
 impl Info {
     #[must_use]
     pub const fn pure_media_size(&self) -> u64 {
@@ -75,6 +98,219 @@ impl Info {
     pub fn is_overhead_excessive(&self) -> bool {
         self.container_overhead_percent() > 10.0
     }
+}
+
+/// Reject a loose diagnostic estimate when a production gate requires packet
+/// payload proof.
+///
+/// # Errors
+/// Returns an error unless `info` is marked as a direct ffprobe measurement.
+pub fn strict_pure_media_measurement_from_info(
+    info: &Info,
+) -> anyhow::Result<StrictPureMediaMeasurement> {
+    if info.extraction_method != ExtractionMethod::FfprobeDirect {
+        anyhow::bail!(
+            "strict pure-media measurement requires ffprobe packet payloads, got {}",
+            info.extraction_method.description()
+        );
+    }
+    Ok(StrictPureMediaMeasurement {
+        video_packet_bytes: info.video_stream_size,
+        audio_packet_bytes: info.audio_stream_size,
+        total_file_size: info.total_file_size,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketStreamKind {
+    Video,
+    Audio,
+}
+
+/// Measure video and audio packet payload bytes without using container ratios,
+/// metadata margins, or bitrate-duration estimates.
+///
+/// ffprobe packet output is consumed one line at a time by a reader thread;
+/// the child is bounded by the project's normal ffprobe timeout.
+///
+/// # Errors
+/// Returns an error if ffprobe cannot identify streams, packet output is
+/// malformed, the scan times out, or no video payload is present.
+pub fn measure_strict_pure_media(path: &Path) -> anyhow::Result<StrictPureMediaMeasurement> {
+    let total_file_size = crate::io_utils::metadata_with_retry(path)
+        .map_err(|err| anyhow::anyhow!("read media size for {}: {err}", path.display()))?
+        .len();
+    let stream_kinds = strict_stream_kinds(path)?;
+    let (video_packet_bytes, audio_packet_bytes, video_packets) =
+        scan_packet_payload_bytes(path, &stream_kinds)?;
+    video_packet_bytes
+        .checked_add(audio_packet_bytes)
+        .ok_or_else(|| anyhow::anyhow!("strict pure-media packet byte total overflow"))?;
+    if video_packets == 0 {
+        anyhow::bail!(
+            "strict pure-media measurement found no video packets in {}",
+            path.display()
+        );
+    }
+    Ok(StrictPureMediaMeasurement {
+        video_packet_bytes,
+        audio_packet_bytes,
+        total_file_size,
+    })
+}
+
+fn strict_stream_kinds(path: &Path) -> anyhow::Result<BTreeMap<u32, PacketStreamKind>> {
+    let mut command = Command::new(crate::constants::TOOL_FFPROBE);
+    command
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=index,codec_type",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path);
+    let context = format!("strict pure-media stream map for {}", path.display());
+    let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
+        .map_err(|err| anyhow::anyhow!("{context}: {err}"))?
+        .wait_timeout(
+            Duration::from_secs(crate::constants::FFPROBE_TIMEOUT_SECS),
+            &context,
+        )
+        .map_err(|err| anyhow::anyhow!("{context}: {err}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{context}: ffprobe exited {:?}: {}",
+            output.status.code(),
+            output.stderr
+        );
+    }
+
+    let mut kinds = BTreeMap::new();
+    for line in output.stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((index, codec_type)) = line.split_once(',') else {
+            anyhow::bail!("{context}: malformed stream row {line:?}");
+        };
+        let index = index
+            .trim()
+            .parse::<u32>()
+            .map_err(|err| anyhow::anyhow!("{context}: invalid stream index {index:?}: {err}"))?;
+        let kind = match codec_type.trim() {
+            "video" => PacketStreamKind::Video,
+            "audio" => PacketStreamKind::Audio,
+            _ => continue,
+        };
+        kinds.insert(index, kind);
+    }
+    if !kinds.values().any(|kind| *kind == PacketStreamKind::Video) {
+        anyhow::bail!("{context}: no video stream");
+    }
+    Ok(kinds)
+}
+
+fn scan_packet_payload_bytes(
+    path: &Path,
+    stream_kinds: &BTreeMap<u32, PacketStreamKind>,
+) -> anyhow::Result<(u64, u64, u64)> {
+    let mut command = Command::new(crate::constants::TOOL_FFPROBE);
+    command
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "packet=stream_index,size",
+            "-show_packets",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let context = format!("strict pure-media packet scan for {}", path.display());
+    let mut child = command
+        .spawn()
+        .map_err(|err| anyhow::anyhow!("{context}: failed to start ffprobe: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("{context}: ffprobe stdout unavailable"))?;
+    let stream_kinds = stream_kinds.clone();
+    let reader = thread::spawn(move || -> anyhow::Result<(u64, u64, u64)> {
+        let mut video_bytes = 0u64;
+        let mut audio_bytes = 0u64;
+        let mut video_packets = 0u64;
+        let mut first_error = None;
+        for line in BufReader::new(stdout).lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(err) => {
+                    first_error.get_or_insert_with(|| format!("read packet output: {err}"));
+                    break;
+                }
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Some((stream_index, size)) = line.split_once(',') else {
+                first_error.get_or_insert_with(|| format!("malformed packet row {line:?}"));
+                continue;
+            };
+            let parsed = stream_index.trim().parse::<u32>().and_then(|stream_index| {
+                size.trim().parse::<u64>().map(|size| (stream_index, size))
+            });
+            let (stream_index, size) = match parsed {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    first_error
+                        .get_or_insert_with(|| format!("invalid packet row {line:?}: {err}"));
+                    continue;
+                }
+            };
+            match stream_kinds.get(&stream_index) {
+                Some(PacketStreamKind::Video) => {
+                    let Some(next_bytes) = video_bytes.checked_add(size) else {
+                        first_error
+                            .get_or_insert_with(|| "video packet byte total overflow".into());
+                        break;
+                    };
+                    let Some(next_packets) = video_packets.checked_add(1) else {
+                        first_error.get_or_insert_with(|| "video packet count overflow".into());
+                        break;
+                    };
+                    video_bytes = next_bytes;
+                    video_packets = next_packets;
+                }
+                Some(PacketStreamKind::Audio) => {
+                    let Some(next_bytes) = audio_bytes.checked_add(size) else {
+                        first_error
+                            .get_or_insert_with(|| "audio packet byte total overflow".into());
+                        break;
+                    };
+                    audio_bytes = next_bytes;
+                }
+                None => {}
+            }
+        }
+        if let Some(error) = first_error {
+            anyhow::bail!("{error}");
+        }
+        Ok((video_bytes, audio_bytes, video_packets))
+    });
+
+    let status = crate::process_runner::wait_child_with_timeout(
+        &mut child,
+        Duration::from_secs(crate::constants::FFPROBE_TIMEOUT_SECS),
+        &context,
+    )
+    .map_err(|err| anyhow::anyhow!("{context}: {err}"))?;
+    let packet_sizes = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("{context}: packet reader panicked"))??;
+    if !status.success() {
+        anyhow::bail!("{context}: ffprobe exited {:?}", status.code());
+    }
+    Ok(packet_sizes)
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -334,24 +570,33 @@ fn calculate_stream_size_and_bitrate(
 #[must_use]
 pub fn can_compress_pure_video(
     output_path: &Path,
-    input_video_stream_size: u64,
+    input_pure_media_size: u64,
     allow_size_tolerance: bool,
 ) -> bool {
-    let output_info = extract_stream_sizes(output_path);
+    let output_pure_media_size = match measure_strict_pure_media(output_path) {
+        Ok(measurement) => measurement.pure_media_size(),
+        Err(err) => {
+            crate::media_conversion_gate::delivery_encode_batch_audit(
+                "strict_pure_media_measurement",
+                format!("{}: {err}", output_path.display()),
+            );
+            return false;
+        }
+    };
 
     let result = if allow_size_tolerance {
-        output_info.video_stream_size
-            < input_video_stream_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
+        output_pure_media_size
+            < input_pure_media_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
-        output_info.video_stream_size < input_video_stream_size
+        output_pure_media_size < input_pure_media_size
     };
 
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_DETECTION,
         &format!(
-            "can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
-            output_info.video_stream_size,
-            input_video_stream_size,
+            "can_compress_pure_video: output_pure_media={} vs input_pure_media={} (tolerance={}) → {}",
+            output_pure_media_size,
+            input_pure_media_size,
             allow_size_tolerance,
             if result {
                 format!(
@@ -470,6 +715,32 @@ mod tests {
         assert_eq!(info.pure_media_size(), 1100);
         assert!((info.container_overhead_percent() - 8.33).abs() < 0.1_f64);
         assert!(!info.is_overhead_excessive());
+    }
+
+    #[test]
+    fn strict_measurement_rejects_bitrate_and_estimated_info() {
+        for extraction_method in [
+            ExtractionMethod::BitrateCalculation,
+            ExtractionMethod::Estimated,
+        ] {
+            let info = Info {
+                video_stream_size: 1_000,
+                audio_stream_size: 100,
+                total_file_size: 1_200,
+                container_overhead: 100,
+                extraction_method,
+                duration_secs: 1.0,
+                video_bitrate: Some(8_000),
+                audio_bitrate: Some(800),
+            };
+            let error = strict_pure_media_measurement_from_info(&info)
+                .expect_err("strict packet measurement must reject estimates");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires ffprobe packet payloads")
+            );
+        }
     }
 
     #[test]

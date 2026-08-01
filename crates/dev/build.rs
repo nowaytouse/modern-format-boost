@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
             Ok(val) => val,
             Err(e) => return Err(Box::new(e)),
         };
-        let Some(workspace_root) = std::path::Path::new(&manifest_dir)
+        let Some(_workspace_root) = std::path::Path::new(&manifest_dir)
             .parent()
             .and_then(|path| path.parent())
         else {
@@ -14,9 +14,14 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
             ));
         };
 
-        // Link to the .tmp_lib directory which contains the libstdc++ -> libc++
-        // workaround
-        let tmp_lib = workspace_root.join("crates/.modern_format_boost/.tmp_lib");
+        let home_root = std::env::var("MFB_HOME_ROOT")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".modern_format_boost"))
+            })
+            .unwrap_or_else(|_| std::env::temp_dir().join(".modern_format_boost"));
+        let tmp_lib = home_root.join(".tmp_lib");
         if tmp_lib.exists() {
             println!("cargo:rustc-link-search=native={}", tmp_lib.display());
         }

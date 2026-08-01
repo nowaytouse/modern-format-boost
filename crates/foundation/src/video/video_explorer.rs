@@ -75,139 +75,11 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = crate::constants::BINARY_SEARCH_MA
 /// Hard global limit for any single file exploration to prevent infinite loops.
 pub const GLOBAL_MAX_ITERATIONS: u32 = crate::constants::GLOBAL_MAX_ITERATIONS;
 
-/// Files below this size are considered "small" and may trigger more aggressive
-/// margins.
-pub const SMALL_FILE_THRESHOLD: u64 = crate::constants::SMALL_FILE_THRESHOLD_BYTES;
-
-/// Minimum absolute metadata margin in bytes.
-pub const METADATA_MARGIN_MIN: u64 = crate::constants::METADATA_MARGIN_MIN_BYTES;
-
-/// Maximum absolute metadata margin in bytes.
-pub const METADATA_MARGIN_MAX: u64 = crate::constants::METADATA_MARGIN_MAX_BYTES;
-
-/// Target metadata overhead percentage (0.5%).
-pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO;
-
-/// Calculates the target metadata margin for a given input size.
-#[inline]
-/// # Panics
-/// Panics if `METADATA_MARGIN_PERCENT` constant is not finite.
-#[must_use]
-pub fn calculate_metadata_margin(input_size: u64) -> u64 {
-    let percent_based = {
-        #[cfg(feature = "high-precision")]
-        {
-            let margin = match crate::numeric_cast::f64_to_rational_strict(
-                METADATA_MARGIN_PERCENT,
-                "METADATA_MARGIN_PERCENT",
-            ) {
-                Some(v) => v,
-                None => unreachable!(
-                    "CRITICAL: METADATA_MARGIN_PERCENT constant ({}) must be finite in \
-                     calculate_metadata_margin (input_size={})",
-                    METADATA_MARGIN_PERCENT, input_size
-                ),
-            };
-            let m = Rational::from(input_size) * margin;
-            match crate::numeric_cast::f64_to_u64_strict(m.to_f64(), "margin") {
-                Some(v) => v,
-                None => unreachable!(
-                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in \
-                     calculate_metadata_margin (input_size={}, result_f64={})",
-                    input_size,
-                    m.to_f64()
-                ),
-            }
-        }
-        #[cfg(not(feature = "high-precision"))]
-        {
-            match crate::numeric_cast::f64_to_u64_strict(
-                crate::numeric_cast::u64_to_f64(input_size) * METADATA_MARGIN_PERCENT,
-                "metadata_margin",
-            ) {
-                Some(v) => v,
-                None => unreachable!(
-                    "CRITICAL: Computed metadata margin is invalid (NaN/Inf/overflow) in \
-                     calculate_metadata_margin [non-rug] (input_size={}, percent={})",
-                    input_size, METADATA_MARGIN_PERCENT
-                ),
-            }
-        }
-    };
-    percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
-}
-
 /// Calculates the metadata size from pre- and post-insertion file sizes.
 #[inline]
 #[must_use]
 pub const fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
     post_metadata_size.saturating_sub(pre_metadata_size)
-}
-
-/// Extracts the pure video size by subtracting metadata from the total file
-/// size.
-#[inline]
-#[must_use]
-pub const fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
-    total_size.saturating_sub(metadata_size)
-}
-
-/// Calculates the target file size for compression, accounting for metadata
-/// overhead.
-#[inline]
-#[must_use]
-pub fn compression_target_size(input_size: u64) -> u64 {
-    let margin = calculate_metadata_margin(input_size);
-    input_size.saturating_sub(margin)
-}
-
-/// Returns true if the output file size is below the compression target
-/// (accounting for metadata).
-#[inline]
-#[must_use]
-pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
-    output_size < compression_target_size(input_size)
-}
-
-/// Strategy used to verify whether compression actually reduced file size.
-///
-/// Current conversion decisions are based on total output file size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompressionVerifyStrategy {
-    /// Legacy stream-only comparison mode. Retained for API compatibility.
-    PureVideo,
-    /// Compare the total output file size (including container/metadata).
-    TotalSize,
-}
-
-/// Verifies compression using total output file size.
-///
-/// Returns `(can_compress, compare_size, strategy_used)`.
-#[inline]
-#[must_use]
-pub const fn verify_compression_precise(
-    output_size: u64,
-    input_size: u64,
-    _actual_metadata_size: u64,
-) -> (bool, u64, CompressionVerifyStrategy) {
-    (
-        output_size < input_size,
-        output_size,
-        CompressionVerifyStrategy::TotalSize,
-    )
-}
-
-/// Simplified compression verification: returns `(can_compress, compare_size)`.
-#[inline]
-#[must_use]
-pub const fn verify_compression_simple(
-    output_size: u64,
-    input_size: u64,
-    actual_metadata_size: u64,
-) -> (bool, u64) {
-    let (can_compress, compare_size, _) =
-        verify_compression_precise(output_size, input_size, actual_metadata_size);
-    (can_compress, compare_size)
 }
 
 pub use precision::*;
@@ -506,20 +378,17 @@ pub(crate) fn exploration_margin_from_ssim(ssim: f64, min_ssim: f64) -> Option<f
     crate::algorithm_seal::exploration_unit_probability(((ssim - min_ssim) / denom).clamp(0.0, 1.0))
 }
 
-/// Size headroom vs metadata-adjusted compression target (measured output bytes
-/// only). Returns `None` when output is not below target — never fabricates
-/// `Some(0.0)`.
 #[must_use]
 pub(crate) fn exploration_size_margin_from_output(
-    input_size: u64,
-    output_size: u64,
+    input_pure_media_size: u64,
+    output_pure_media_size: u64,
 ) -> Option<f64> {
-    let target = compression_target_size(input_size);
-    if target == 0 || output_size >= target {
+    if input_pure_media_size == 0 || output_pure_media_size >= input_pure_media_size {
         return None;
     }
-    let margin = crate::numeric_cast::u64_to_f64(target.saturating_sub(output_size))
-        / crate::numeric_cast::u64_to_f64(target.max(1));
+    let margin = crate::numeric_cast::u64_to_f64(
+        input_pure_media_size.saturating_sub(output_pure_media_size),
+    ) / crate::numeric_cast::u64_to_f64(input_pure_media_size);
     crate::algorithm_seal::exploration_unit_probability((margin / 0.05).min(1.0))
 }
 
@@ -732,10 +601,10 @@ pub struct ExploreResult {
     pub confidence_detail: ConfidenceBreakdown,
     /// The minimum SSIM threshold that was used during exploration.
     pub actual_min_ssim: f64,
-    /// Size of the input video stream (excluding container overhead).
-    pub input_video_stream_size: u64,
-    /// Size of the output video stream (excluding container overhead).
-    pub output_video_stream_size: u64,
+    /// Exact input video + audio packet payload bytes used by size decisions.
+    pub input_pure_media_size: u64,
+    /// Exact output video + audio packet payload bytes used by size decisions.
+    pub output_pure_media_size: u64,
     /// Container overhead in bytes (metadata, headers, etc.).
     pub container_overhead: u64,
     /// Ultimate mode 3D quality gate: VMAF Y-channel score (0–100).
@@ -773,8 +642,8 @@ impl Default for ExploreResult {
             confidence: None,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: crate::constants::EXPLORE_DEFAULT_MIN_SSIM,
-            input_video_stream_size: 0,
-            output_video_stream_size: 0,
+            input_pure_media_size: 0,
+            output_pure_media_size: 0,
             container_overhead: 0,
             vmaf_y_score: None,
             cambi_score: None,
@@ -958,7 +827,7 @@ impl ExploreResult {
         }
     }
 
-    /// Whether the explore output is smaller than the input (total file).
+    /// Whether the explore output has a smaller pure-media payload than the input.
     #[must_use]
     pub fn size_compression_met(&self) -> bool {
         self.size_target_met.is_passed()
@@ -2019,9 +1888,6 @@ pub struct ExploreConfig {
     /// Whether to use ultimate mode (stricter quality gates, more thorough
     /// search).
     pub ultimate_mode: bool,
-    /// Legacy toggle retained for API compatibility.
-    /// Compression success is determined by total output file size.
-    pub use_pure_media_comparison: bool,
 }
 
 impl Default for ExploreConfig {
@@ -2035,7 +1901,6 @@ impl Default for ExploreConfig {
             quality_thresholds: QualityThresholds::default(),
             max_iterations: EXPLORE_DEFAULT_MAX_ITERATIONS,
             ultimate_mode: false,
-            use_pure_media_comparison: false,
         }
     }
 }
@@ -2546,8 +2411,8 @@ pub struct VideoExplorer {
     max_threads: usize,
     /// Encoder preset (speed vs quality tradeoff).
     preset: EncoderPreset,
-    /// Size of the input video stream (excluding container overhead).
-    input_video_stream_size: u64,
+    /// Exact input video + audio packet payload bytes used by size decisions.
+    input_pure_media_size: u64,
     /// Optional HDR x265 encoder parameters.
     hdr_x265_params: Option<String>,
     /// Whether to use Apple-compatible container tags.
@@ -2791,8 +2656,6 @@ fn summarize_ffmpeg_failure(stderr_content: &str) -> String {
 }
 
 impl VideoExplorer {
-    /// Internal builder that validates paths, detects GPU availability, and
-    /// initializes state.
     fn build(args: VideoExplorerBuildArgs<'_>) -> Result<Self> {
         Self::validate_paths(args.input, args.output)?;
 
@@ -2800,7 +2663,14 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
         let use_gpu = Self::resolve_gpu_usage(args.use_gpu, args.encoder);
-        let input_video_stream_size = Self::resolve_input_video_stream_size(args.input);
+        let input_pure_media_size = crate::stream_size::measure_strict_pure_media(args.input)
+            .with_context(|| {
+                format!(
+                    "Strict pure-media input measurement failed for {}",
+                    args.input.display()
+                )
+            })?
+            .pure_media_size();
         let source_codec_name = Self::resolve_source_codec_name(args.input, args.source_codec_name);
 
         Ok(Self {
@@ -2813,7 +2683,7 @@ impl VideoExplorer {
             max_threads: args.max_threads,
             use_gpu,
             preset: args.preset,
-            input_video_stream_size,
+            input_pure_media_size,
             hdr_x265_params: args.hdr_x265_params,
             apple_compat: args.apple_compat,
             source_codec_name,
@@ -2838,11 +2708,6 @@ impl VideoExplorer {
                 VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
                 VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
             }
-    }
-
-    fn resolve_input_video_stream_size(input: &Path) -> u64 {
-        let stream_info = crate::stream_size::extract_stream_sizes(input);
-        stream_info.video_stream_size
     }
 
     fn resolve_source_codec_name(
@@ -2961,10 +2826,6 @@ impl VideoExplorer {
         })
     }
 
-    /// Runs the quality exploration according to the configured mode.
-    ///
-    /// # Errors
-    /// Returns an error if exploration fails.
     pub fn explore(&self) -> Result<ExploreResult> {
         if self.config.ultimate_mode {
             bail!(
@@ -2973,7 +2834,7 @@ impl VideoExplorer {
                  contract"
             );
         }
-        let result = match self.config.mode {
+        let mut result = match self.config.mode {
             ExploreMode::SizeOnly => self.explore_size_only(),
             ExploreMode::QualityMatch => self.explore_quality_match(),
             ExploreMode::PreciseQualityMatch => self.explore_precise_quality_match(),
@@ -2983,6 +2844,18 @@ impl VideoExplorer {
             ExploreMode::CompressOnly => self.explore_compress_only(),
             ExploreMode::CompressWithQuality => self.explore_compress_with_quality(),
         }?;
+        let output_pure_media_size = result.output_size;
+        result.output_size = fs::metadata(&self.output_path)
+            .with_context(|| {
+                format!(
+                    "Failed to read final explored output size for {}",
+                    self.output_path.display()
+                )
+            })?
+            .len();
+        result.input_pure_media_size = self.input_pure_media_size;
+        result.output_pure_media_size = output_pure_media_size;
+        result.container_overhead = result.output_size.saturating_sub(output_pure_media_size);
         Ok(result.sealed())
     }
 
@@ -3130,7 +3003,7 @@ impl VideoExplorer {
             size_target_met: if size_ok {
                 CheckResult::Passed
             } else {
-                CheckResult::Failed("Total file size target not met".into())
+                CheckResult::Failed("Pure-media size target not met".into())
             },
             quality_passed,
             log,
@@ -4025,7 +3898,7 @@ impl VideoExplorer {
                 use_gpu: false,
                 max_threads: self.max_threads,
                 preset: self.preset,
-                input_video_stream_size: self.input_video_stream_size,
+                input_pure_media_size: self.input_pure_media_size,
                 hdr_x265_params: self.hdr_x265_params.clone(),
                 apple_compat: self.apple_compat,
                 source_codec_name: self.source_codec_name.clone(),
@@ -4158,9 +4031,10 @@ impl VideoExplorer {
         let progress_handle = child.stdout.take().map(|stdout| {
             spawn_ffmpeg_progress_stream(stdout, plan.accel_type.clone(), plan.duration_secs)
         });
-        let status_result = crate::process_runner::wait_child_with_timeout(
+        let status_result = crate::process_runner::wait_child_with_liveness_timeout(
             &mut child,
             crate::ffmpeg_process::ffmpeg_timeout(),
+            crate::process_runner::video_process_hard_timeout(),
             &format!("ffmpeg encode for {}", self.output_path.display()),
         );
 
@@ -4192,11 +4066,16 @@ impl VideoExplorer {
             );
         }
 
-        let size = fs::metadata(&self.output_path)
-            .context("Failed to read output file")?
-            .len();
+        let pure_media_size = crate::stream_size::measure_strict_pure_media(&self.output_path)
+            .with_context(|| {
+                format!(
+                    "Strict pure-media output measurement failed for {}",
+                    self.output_path.display()
+                )
+            })?
+            .pure_media_size();
 
-        Ok(size)
+        Ok(pure_media_size)
     }
 
     fn get_input_duration(&self) -> Result<Option<f64>> {
@@ -4228,8 +4107,8 @@ impl VideoExplorer {
         Ok(Some(duration_secs))
     }
 
-    fn calc_change_pct(&self, output_size: u64) -> f64 {
-        calc_change_pct_for_input_size(self.input_size, output_size)
+    fn calc_change_pct(&self, output_pure_media_size: u64) -> f64 {
+        calc_change_pct_for_input_size(self.input_pure_media_size, output_pure_media_size)
     }
 
     #[inline]
@@ -4237,7 +4116,7 @@ impl VideoExplorer {
         if self.can_compress_with_margin(output_size) {
             CheckResult::Passed
         } else {
-            CheckResult::Failed("Total file size target not met".into())
+            CheckResult::Failed("Pure-media size target not met".into())
         }
     }
 
@@ -4257,13 +4136,13 @@ impl VideoExplorer {
     }
 
     #[inline]
-    fn can_compress_with_margin(&self, output_size: u64) -> bool {
-        can_compress_with_metadata(output_size, self.input_size)
+    const fn can_compress_with_margin(&self, output_pure_media_size: u64) -> bool {
+        output_pure_media_size < self.input_pure_media_size
     }
 
     #[inline]
-    fn get_compression_target(&self) -> u64 {
-        compression_target_size(self.input_size)
+    const fn get_compression_target(&self) -> u64 {
+        self.input_pure_media_size
     }
 
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
@@ -6542,28 +6421,6 @@ mod tests {
             calculate_zero_gains_for_duration_and_range(300.0, 41.0, false).unwrap(),
             LONG_VIDEO_REQUIRED_ZERO_GAINS
         );
-    }
-
-    #[test]
-    fn test_explore_config_defaults_to_total_size_comparison() {
-        assert!(
-            !ExploreConfig::default().use_pure_media_comparison,
-            "compression decisions should default to total file size"
-        );
-    }
-
-    #[test]
-    fn test_verify_compression_precise_uses_total_size_for_small_files() {
-        let input_size = SMALL_FILE_THRESHOLD.saturating_sub(1);
-        let output_size = input_size.saturating_add(10_000);
-        let metadata_size = 50_000;
-
-        let (can_compress, compare_size, strategy) =
-            verify_compression_precise(output_size, input_size, metadata_size);
-
-        assert!(!can_compress, "larger total file should fail compression");
-        assert_eq!(compare_size, output_size);
-        assert_eq!(strategy, CompressionVerifyStrategy::TotalSize);
     }
 
     #[test]

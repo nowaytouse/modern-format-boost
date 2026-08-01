@@ -241,11 +241,12 @@ impl XmpMerger {
                         let local_name = attr.key.local_name();
                         let name_ref = local_name.as_ref();
 
-                        let target = if name_ref.windows(10).any(|w| w == b"DocumentID") {
+                        let target = if name_ref.as_bytes().windows(10).any(|w| w == b"DocumentID")
+                        {
                             Some("DocumentID")
-                        } else if name_ref.windows(11).any(|w| w == b"DerivedFrom") {
+                        } else if name_ref.as_bytes().windows(11).any(|w| w == b"DerivedFrom") {
                             Some("DerivedFrom")
-                        } else if name_ref.windows(6).any(|w| w == b"Source") {
+                        } else if name_ref.as_bytes().windows(6).any(|w| w == b"Source") {
                             Some("Source")
                         } else {
                             None
@@ -1550,5 +1551,5 @@ mod tests {
 
 #[cfg(test)]
 mod xmp_jxl_apple_compat_contract {
-    include!("../tests/xmp_jxl_apple_compat_contract.rs");
+    include!("../../tests/internal/xmp_jxl_apple_compat_contract.rs");
 }

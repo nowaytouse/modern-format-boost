@@ -6,9 +6,24 @@
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+#[must_use]
+pub const fn image_process_hard_timeout() -> Duration {
+    Duration::from_secs(crate::constants::IMAGE_PROCESS_HARD_TIMEOUT_SECS)
+}
+
+#[must_use]
+pub const fn animated_image_process_hard_timeout() -> Duration {
+    Duration::from_secs(crate::constants::ANIMATED_IMAGE_PROCESS_HARD_TIMEOUT_SECS)
+}
+
+#[must_use]
+pub const fn video_process_hard_timeout() -> Duration {
+    Duration::from_secs(crate::constants::VIDEO_PROCESS_HARD_TIMEOUT_SECS)
+}
 
 /// Wait for a raw child process with a hard timeout.
 ///
@@ -20,8 +35,25 @@ pub fn wait_child_with_timeout(
     timeout: Duration,
     context: &str,
 ) -> Result<ExitStatus> {
+    wait_child_with_liveness_timeout(child, timeout, timeout, context)
+}
+
+/// Wait for a child process using a diagnostic soft deadline and a hard
+/// deadline. A process that is still alive at the soft deadline is allowed to
+/// continue; only the hard deadline kills it.
+///
+/// # Errors
+/// Returns an error if polling, killing, or reaping the child fails or when the
+/// hard deadline expires.
+pub fn wait_child_with_liveness_timeout(
+    child: &mut Child,
+    soft_timeout: Duration,
+    hard_timeout: Duration,
+    context: &str,
+) -> Result<ExitStatus> {
+    let soft_timeout = soft_timeout.min(hard_timeout);
     let start = Instant::now();
-    let deadline = start + timeout;
+    let mut soft_deadline_reported = soft_timeout == hard_timeout;
     loop {
         if let Some(status) = child
             .try_wait()
@@ -29,15 +61,26 @@ pub fn wait_child_with_timeout(
         {
             return Ok(status);
         }
-        if Instant::now() > deadline {
+        let elapsed = start.elapsed();
+        if !soft_deadline_reported && elapsed >= soft_timeout {
+            soft_deadline_reported = true;
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "process_soft_timeout_alive",
+                format!(
+                    "{context}: subprocess is still alive after {soft_timeout:?}; allowing it to \
+                     continue until hard timeout {hard_timeout:?}"
+                ),
+            );
+        }
+        if elapsed >= hard_timeout {
             kill_child_after_timeout(child, context)?;
             let status = child
                 .wait()
                 .with_context(|| format!("Failed to reap timed-out process for {context}"))?;
             anyhow::bail!(
-                "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, \
+                "{context} timed out at hard timeout after {elapsed:?} / {hard_timeout:?} \
+                 (soft timeout {soft_timeout:?}; subprocess killed, \
                  exit_code={exit_code})",
-                elapsed = start.elapsed(),
                 exit_code = crate::media_conversion_gate::process_exit_code_for_context(
                     status.code(),
                     "process_runner_wait_child_timeout",
@@ -47,6 +90,28 @@ pub fn wait_child_with_timeout(
         }
         thread::sleep(Duration::from_millis(35));
     }
+}
+
+/// Run a captured command with liveness-aware deadlines while preserving the
+/// standard-library `Output` shape used by legacy callers.
+///
+/// # Errors
+/// Returns an I/O error when spawning, waiting, draining, or the hard deadline
+/// fails.
+pub fn run_command_with_liveness_timeout(
+    command: &mut Command,
+    soft_timeout: Duration,
+    hard_timeout: Duration,
+    context: &str,
+) -> std::io::Result<Output> {
+    let output = ManagedProcess::spawn_captured(command)
+        .and_then(|process| process.wait_liveness_timeout(soft_timeout, hard_timeout, context))
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(Output {
+        status: output.status,
+        stdout: output.stdout.into_bytes(),
+        stderr: output.stderr.into_bytes(),
+    })
 }
 
 fn kill_child_after_timeout(child: &mut Child, context: &str) -> Result<Option<ExitStatus>> {
@@ -249,9 +314,24 @@ impl ManagedProcess {
     /// Returns error if waiting, killing, or draining the process fails, or
     /// when the deadline is exceeded.
     pub fn wait_timeout(self, timeout: Duration, context: &str) -> Result<ProcessOutput> {
+        self.wait_liveness_timeout(timeout, timeout, context)
+    }
+
+    /// Wait with a diagnostic soft deadline and a hard kill deadline.
+    ///
+    /// # Errors
+    /// Returns error if waiting, killing, or draining fails, when the hard
+    /// deadline is exceeded.
+    pub fn wait_liveness_timeout(
+        self,
+        soft_timeout: Duration,
+        hard_timeout: Duration,
+        context: &str,
+    ) -> Result<ProcessOutput> {
+        let soft_timeout = soft_timeout.min(hard_timeout);
         let mut this = self;
         let start = Instant::now();
-        let deadline = start + timeout;
+        let mut soft_deadline_reported = soft_timeout == hard_timeout;
         loop {
             if let Some(status) = this.child.try_wait().with_context(|| {
                 format!(
@@ -261,7 +341,18 @@ impl ManagedProcess {
             })? {
                 return this.finalize(status);
             }
-            if Instant::now() > deadline {
+            let elapsed = start.elapsed();
+            if !soft_deadline_reported && elapsed >= soft_timeout {
+                soft_deadline_reported = true;
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "process_soft_timeout_alive",
+                    format!(
+                        "{context}: subprocess is still alive after {soft_timeout:?}; allowing it \
+                         to continue until hard timeout {hard_timeout:?}"
+                    ),
+                );
+            }
+            if elapsed >= hard_timeout {
                 let child_id = this.child.id();
                 let command_line = this.command_line.clone();
                 kill_child_after_timeout(&mut this.child, &command_line)?;
@@ -303,7 +394,8 @@ impl ManagedProcess {
                     format!("... [truncated {stderr_len} bytes] ...\n{tail}")
                 };
                 anyhow::bail!(
-                    "{context} timed out after {elapsed:?} / {timeout:?} (subprocess killed, \
+                    "{context} timed out at hard timeout after {elapsed:?} / {hard_timeout:?} \
+                     (soft timeout {soft_timeout:?}; subprocess killed, \
                      exit_code={exit_code_label})\n   Command: {command_line}\n   Pid: \
                      {child_id}\n   Stdout bytes: {stdout_len}, stderr bytes: {stderr_len}\n   \
                      Stdout tail: {stdout_tail}\n   Stderr:\n{stderr_summary}\n",
@@ -452,6 +544,81 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn liveness_timeout_allows_live_process_past_soft_deadline() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.08")
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn sleep fixture: {e:?}"));
+
+        let status = wait_child_with_liveness_timeout(
+            &mut child,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+            "unit liveness fixture",
+        )
+        .unwrap_or_else(|e| panic!("live process should finish before hard deadline: {e:?}"));
+
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn liveness_timeout_kills_process_at_hard_deadline() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 2")
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn sleep fixture: {e:?}"));
+
+        let err = wait_child_with_liveness_timeout(
+            &mut child,
+            Duration::from_millis(10),
+            Duration::from_millis(40),
+            "unit hard deadline fixture",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("hard timeout"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_liveness_timeout_allows_live_process_past_soft_deadline() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 0.08; printf done");
+        let output = ManagedProcess::spawn_captured(&mut command)
+            .and_then(|process| {
+                process.wait_liveness_timeout(
+                    Duration::from_millis(10),
+                    Duration::from_secs(1),
+                    "managed liveness fixture",
+                )
+            })
+            .unwrap_or_else(|e| panic!("managed live process should finish: {e:?}"));
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, "done\n");
+    }
+
+    #[test]
+    fn media_hard_deadlines_match_design() {
+        assert_eq!(
+            image_process_hard_timeout(),
+            Duration::from_secs(7 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            animated_image_process_hard_timeout(),
+            Duration::from_secs(7 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            video_process_hard_timeout(),
+            Duration::from_secs(14 * 24 * 60 * 60)
+        );
     }
 
     #[cfg(unix)]

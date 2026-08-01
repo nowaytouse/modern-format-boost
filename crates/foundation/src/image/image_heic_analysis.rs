@@ -997,5 +997,5 @@ pub fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]
 
 #[cfg(test)]
 mod tests {
-    include!("../tests/heic_analysis.rs");
+    include!("../../tests/internal/heic_analysis.rs");
 }

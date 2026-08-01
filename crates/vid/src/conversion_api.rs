@@ -100,6 +100,30 @@ fn task_result_to_conversion_output(
         });
     }
 
+    if !result.success {
+        let output_size = result.output_size.unwrap_or(detection.file_size);
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: result
+                .output_path
+                .unwrap_or_else(|| input.display().to_string()),
+            strategy,
+            input_size: detection.file_size,
+            output_size,
+            size_ratio: if detection.file_size == 0 {
+                1.0
+            } else {
+                Rational::from((output_size, detection.file_size)).to_f64()
+            },
+            success: false,
+            message: result.message,
+            final_crf: 0.0,
+            exploration_attempts: 0,
+            blake3: result.blake3,
+            ignored: false,
+        });
+    }
+
     if result.skipped {
         let output_path = result.output_path.unwrap_or_else(|| {
             foundation::media_conversion_gate::delivery_pipeline_batch_audit(
@@ -195,15 +219,16 @@ fn cleanup_output_file(path: &Path, context: &str) {
     foundation::media_conversion_gate::delivery_remove_file_or_audit(context, path);
 }
 
-struct ExploreQualityFailureDecision {
-    fail_reason: String,
-    fail_message: String,
+struct ExploreGateRejectionDecision {
+    failed: bool,
+    reason: String,
+    message: String,
     protect_msg: String,
     delete_msg: String,
     label: &'static str,
 }
 
-impl ExploreQualityFailureDecision {
+impl ExploreGateRejectionDecision {
     fn inspect_and_log(input: &Path, explore_result: &foundation::ExploreResult) -> Self {
         let ultimate_contract = explore_result.uses_ultimate_quality_contract();
         let actual_ssim = explore_result.ssim;
@@ -220,8 +245,9 @@ impl ExploreQualityFailureDecision {
                 &reason,
             );
             return Self {
-                fail_reason: format!("Quality validation failed: {reason}"),
-                fail_message: format!("Skipped: {reason}"),
+                failed: true,
+                reason: format!("Quality validation failed: {reason}"),
+                message: format!("Failed: {reason}"),
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_SIZE
                     .to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_SIZE
@@ -237,8 +263,9 @@ impl ExploreQualityFailureDecision {
                 foundation::infra::static_logs::messages::MSG_SSIM_NA_DETAIL,
             );
             return Self {
-                fail_reason: "SSIM calculation failed".to_string(),
-                fail_message: "Skipped: SSIM calculation failed".to_string(),
+                failed: true,
+                reason: "SSIM calculation failed".to_string(),
+                message: "Failed: SSIM calculation failed".to_string(),
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_SSIM_NA.to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_SSIM_FAIL.to_string(),
                 label: foundation::infra::static_logs::messages::LABEL_SSIM_CALC_FAILED,
@@ -252,12 +279,11 @@ impl ExploreQualityFailureDecision {
                 format!("SSIM {actual_ssim:.4} < {threshold:.4}"),
             );
             return Self {
-                fail_reason: format!(
+                failed: true,
+                reason: format!(
                     "Quality validation failed: SSIM {actual_ssim:.4} < {threshold:.4}"
                 ),
-                fail_message: format!(
-                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
-                ),
+                message: format!("Failed: SSIM {actual_ssim:.4} below threshold {threshold:.4}"),
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_LOW
                     .to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_LOW
@@ -277,8 +303,9 @@ impl ExploreQualityFailureDecision {
             &reason,
         );
         Self {
-            fail_reason: format!("Quality validation failed: {reason}"),
-            fail_message: format!("Skipped: {reason}"),
+            failed: false,
+            reason: format!("Optimization target not met: {reason}"),
+            message: format!("Skipped: {reason}"),
             protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
             delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
             label: foundation::infra::static_logs::messages::LABEL_QUALITY_FAIL,
@@ -286,7 +313,9 @@ impl ExploreQualityFailureDecision {
     }
 
     fn emit(&self, input: &Path) {
-        foundation::progress_mode::video_skipped(input, &self.fail_message);
+        if !self.failed {
+            foundation::progress_mode::video_skipped(input, &self.message);
+        }
         foundation::media_conversion_gate::explore_quality_skip_summary_audit(
             self.label,
             &self.protect_msg,
@@ -294,7 +323,7 @@ impl ExploreQualityFailureDecision {
         );
     }
 
-    fn into_skip_output(
+    fn into_output(
         self,
         input: &Path,
         detection: &Detection,
@@ -305,7 +334,7 @@ impl ExploreQualityFailureDecision {
             output_path: input.display().to_string(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
-                reason: self.fail_reason,
+                reason: self.reason,
                 command: String::new(),
                 preserve_audio: detection.flags.streams.has_audio,
                 crf: explore_result.optimal_crf,
@@ -314,8 +343,8 @@ impl ExploreQualityFailureDecision {
             input_size: detection.file_size,
             output_size: detection.file_size,
             size_ratio: 1.0,
-            success: false,
-            message: self.fail_message,
+            success: !self.failed,
+            message: self.message,
             final_crf: explore_result.optimal_crf,
             exploration_attempts: u8::try_from(explore_result.iterations).map_err(|_| {
                 foundation::unified_error::UnifiedError::IterationLimitExceeded(
@@ -334,8 +363,8 @@ impl ExploreQualityFailureDecision {
 
 struct FinalQualityGateFailureDecision {
     quality_summary: String,
-    skip_reason: String,
-    skip_message: String,
+    reason: String,
+    message: String,
 }
 
 impl FinalQualityGateFailureDecision {
@@ -366,16 +395,16 @@ impl FinalQualityGateFailureDecision {
         );
 
         Self {
-            skip_reason: if ultimate_contract {
+            reason: if ultimate_contract {
                 format!("3D quality gate failed ({quality_summary})")
             } else {
                 format!("Quality target failed ({quality_summary})")
             },
-            skip_message: if ultimate_contract {
-                format!("Skipped: 3D quality gate failed ({quality_summary})")
+            message: if ultimate_contract {
+                format!("Failed: 3D quality gate failed ({quality_summary})")
             } else {
                 format!(
-                    "Skipped: MS-SSIM {quality_summary} below target {:.2}",
+                    "Failed: MS-SSIM {quality_summary} below target {:.2}",
                     foundation::constants::VIDEO_QUALITY_GATE_THRESHOLD
                 )
             },
@@ -383,7 +412,7 @@ impl FinalQualityGateFailureDecision {
         }
     }
 
-    fn into_skip_output(
+    fn into_failed_output(
         self,
         input: &Path,
         detection: &Detection,
@@ -394,7 +423,7 @@ impl FinalQualityGateFailureDecision {
             output_path: input.display().to_string(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
-                reason: self.skip_reason,
+                reason: self.reason,
                 command: String::new(),
                 preserve_audio: detection.flags.streams.has_audio,
                 crf: result.optimal_crf,
@@ -404,7 +433,7 @@ impl FinalQualityGateFailureDecision {
             output_size: detection.file_size,
             size_ratio: 1.0,
             success: false,
-            message: self.skip_message,
+            message: self.message,
             final_crf: result.optimal_crf,
             exploration_attempts: u8::try_from(result.iterations).map_err(|_| {
                 foundation::unified_error::UnifiedError::IterationLimitExceeded(
@@ -1782,25 +1811,29 @@ ignored: false,
             if !explore_result.pipeline_acceptable(config.match_quality(), config.explore_smaller())
                 && (config.match_quality() || config.explore_smaller())
             {
-                let total_file_compressed = explore_result.output_size < detection.file_size;
-                let total_size_ratio = if detection.file_size > 0 {
-                    let ratio = Rational::from((explore_result.output_size, detection.file_size));
+                let pure_media_compressed =
+                    explore_result.output_pure_media_size < explore_result.input_pure_media_size;
+                let pure_media_size_ratio = if explore_result.input_pure_media_size > 0 {
+                    let ratio = Rational::from((
+                        explore_result.output_pure_media_size,
+                        explore_result.input_pure_media_size,
+                    ));
                     ratio.to_f64()
                 } else {
                     1.0_f64
                 };
                 let decision =
-                    ExploreQualityFailureDecision::inspect_and_log(input, &explore_result);
+                    ExploreGateRejectionDecision::inspect_and_log(input, &explore_result);
                 decision.emit(input);
 
-                // Keep/discard by total file size only (video stream is internal metric).
+                // Keep/discard by exact video + audio packet payload; total size is reporting only.
                 if foundation::should_keep_apple_fallback_hevc_output(
                     foundation::AppleFallbackKeepRequest {
                         codec_str: detection.codec.as_str(),
-                        total_size_ratio,
+                        pure_media_size_ratio,
                         flags: foundation::AppleFallbackFlags {
                             outcome: foundation::AppleOutcomeFlags {
-                                total_file_compressed,
+                                pure_media_compressed,
                                 allow_size_tolerance: config.allow_size_tolerance(),
                             },
                             context: foundation::AppleContextFlags {
@@ -1875,7 +1908,7 @@ ignored: false,
                 }
 
                 foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "explore_quality_skip_temp",
+                    "explore_gate_rejected_temp",
                     &temp_path,
                 );
                 foundation::copy_on_skip_or_fail(
@@ -1886,7 +1919,7 @@ ignored: false,
                 )
                 .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-                return decision.into_skip_output(input, &detection, &explore_result);
+                return decision.into_output(input, &detection, &explore_result);
             }
 
             (
@@ -2090,7 +2123,7 @@ ignored: false,
             )
             .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-            return decision.into_skip_output(input, &detection, result);
+            return decision.into_failed_output(input, &detection, result);
         }
     }
 
@@ -2105,77 +2138,76 @@ ignored: false,
     let metadata_delta =
         foundation::video_explorer::detect_metadata_size(pre_metadata_size, actual_output_size);
 
-    let input_stream_info = foundation::extract_stream_sizes(input);
-    let output_stream_info = foundation::extract_stream_sizes(&output_path);
-
-    let verify_result = foundation::verify_pure_media_compression(
-        &input_stream_info,
-        &output_stream_info,
+    let verify_result = foundation::verify_strict_pure_media_paths(
+        input,
+        &output_path,
         config.allow_size_tolerance(),
-    );
+    )
+    .map_err(|err| {
+        VidQualityError::ConversionError(format!(
+            "Strict pure-media verification failed for {} -> {}: {err}",
+            input.display(),
+            output_path.display()
+        ))
+    })?;
 
     if metadata_delta > 0
-        || output_stream_info.container_overhead
+        || verify_result.output_container_overhead
             > foundation::constants::CONTAINER_OVERHEAD_REPORT_THRESHOLD
     {
         foundation::log_detail!(&format!(" Metadata: +{metadata_delta} bytes"));
         foundation::log_detail!(&format!(
-            "{} Container overhead: {} bytes ({:.1}%)",
+            "{} Container/metadata overhead: {} bytes",
             foundation::modern_ui::symbols::pick("📦", "[PKG]"),
-            output_stream_info.container_overhead,
-            output_stream_info.container_overhead_percent()
+            verify_result.output_container_overhead,
         ));
     }
 
-    let total_file_compressed = actual_output_size < detection.file_size;
-    let total_size_ratio = if detection.file_size > 0 {
-        let ratio = Rational::from((actual_output_size, detection.file_size));
+    let pure_media_compressed =
+        verify_result.output_pure_media_size < verify_result.input_pure_media_size;
+    let pure_media_size_ratio = if verify_result.input_pure_media_size > 0 {
+        let ratio = Rational::from((
+            verify_result.output_pure_media_size,
+            verify_result.input_pure_media_size,
+        ));
         ratio.to_f64()
     } else {
         1.0_f64
     };
-    let total_within_tolerance = if config.allow_size_tolerance() {
-        // Allow up to standard tolerance increase for container overhead
-        actual_output_size
-            <= detection
-                .file_size
-                .saturating_add(foundation::DEFAULT_SIZE_TOLERANCE_BYTES)
-    } else {
-        total_file_compressed
-    };
+    let pure_media_within_tolerance = verify_result.pure_media_compressed;
 
-    // --- require_compression phase: primary decision by total file size. ---
-    if config.require_compression() && !total_within_tolerance {
+    // --- require_compression phase: primary decision by exact video + audio packet payload. ---
+    if config.require_compression() && !pure_media_within_tolerance {
         foundation::media_conversion_gate::delivery_api_path_fallback_audit(
             "compression_requirement_failed",
             input,
             format!(
-                "total file {} → {} ({:+.1}%)",
-                foundation::format_bytes(input_stream_info.total_file_size),
-                foundation::format_bytes(output_stream_info.total_file_size),
-                verify_result.total_size_change_percent()
+                "pure media {} → {} ({:+.1}%)",
+                foundation::format_bytes(verify_result.input_pure_media_size),
+                foundation::format_bytes(verify_result.output_pure_media_size),
+                verify_result.pure_media_size_change_percent()
             ),
         );
         log_detail!(&format!(
-            "video stream diagnostic: {} -> {} ({:+.1}%), container_overhead={}B",
-            foundation::format_bytes(input_stream_info.video_stream_size),
-            foundation::format_bytes(output_stream_info.video_stream_size),
-            verify_result.video_size_change_percent(),
-            output_stream_info.container_overhead
+            "total-file diagnostic: {} -> {} ({:+.1}%), container_overhead_diff={:+}B",
+            foundation::format_bytes(detection.file_size),
+            foundation::format_bytes(actual_output_size),
+            verify_result.total_size_change_percent(),
+            verify_result.container_overhead_diff
         ));
         foundation::log_detail!(&format!(
             "{} Original file PROTECTED",
             foundation::modern_ui::symbols::SHIELD
         ));
 
-        // Apple-compat fallback: still decided purely by total file behavior (video stream is internal detail).
+        // Apple-compat fallback uses the same pure-media payload contract.
         if foundation::should_keep_apple_fallback_hevc_output(
             foundation::AppleFallbackKeepRequest {
                 codec_str: detection.codec.as_str(),
-                total_size_ratio,
+                pure_media_size_ratio,
                 flags: foundation::AppleFallbackFlags {
                     outcome: foundation::AppleOutcomeFlags {
-                        total_file_compressed,
+                        pure_media_compressed,
                         allow_size_tolerance: config.allow_size_tolerance(),
                     },
                     context: foundation::AppleContextFlags {
@@ -2189,7 +2221,7 @@ ignored: false,
             foundation::media_conversion_gate::apple_compat_fallback_audit(
                 "apple_compat_hevc_compression",
                 input,
-                "compression check failed (total file not smaller enough); keeping best-effort HEVC",
+                "pure-media compression check failed; keeping best-effort HEVC",
             );
             foundation::log_detail!(&format!(
                 "Keeping best-effort output: last attempt CRF {final_crf:.1} ({attempts} iterations), file is HEVC and importable"
@@ -2209,10 +2241,11 @@ ignored: false,
                 },
                 input_size: detection.file_size,
                 output_size: actual_output_size,
-                size_ratio: total_size_ratio,
+                size_ratio: Rational::from((actual_output_size, detection.file_size.max(1)))
+                    .to_f64(),
                 success: true,
                 message: format!(
-                    "Apple compat fallback: kept best-effort output (CRF {final_crf:.1}, {attempts} iters); compression check failed — total file not smaller enough, but file is HEVC and importable"
+                    "Apple compat fallback: kept best-effort output (CRF {final_crf:.1}, {attempts} iters); pure-media compression check failed, but file is HEVC and importable"
                 ),
                 final_crf,
                 exploration_attempts: attempts,
@@ -2224,9 +2257,9 @@ ignored: false,
         if output_path.exists() {
             cleanup_output_file(&output_path, "compression failure cleanup");
             foundation::log_detail!(&format!(
-                "↳ Discarded output: File size increased to {} ({:+.1}%)",
-                foundation::format_bytes(actual_output_size),
-                verify_result.total_size_change_percent()
+                "↳ Discarded output: pure media increased to {} ({:+.1}%)",
+                foundation::format_bytes(verify_result.output_pure_media_size),
+                verify_result.pure_media_size_change_percent()
             ));
         }
         if temp_path.exists() {
@@ -2250,10 +2283,10 @@ ignored: false,
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: format!(
-                    "Compression failed: total file {} → {} ({:+.1}%)",
-                    foundation::format_bytes(input_stream_info.total_file_size),
-                    foundation::format_bytes(output_stream_info.total_file_size),
-                    verify_result.total_size_change_percent(),
+                    "Compression target not met: pure media {} → {} ({:+.1}%)",
+                    foundation::format_bytes(verify_result.input_pure_media_size),
+                    foundation::format_bytes(verify_result.output_pure_media_size),
+                    verify_result.pure_media_size_change_percent(),
                 ),
                 command: String::new(),
                 preserve_audio: detection.flags.streams.has_audio,
@@ -2263,11 +2296,11 @@ ignored: false,
             input_size: detection.file_size,
             output_size: detection.file_size,
             size_ratio: 1.0,
-            success: false,
+            success: true,
             message: format!(
-                "Skipped: total file not smaller ({} → {})",
-                foundation::format_bytes(input_stream_info.total_file_size),
-                foundation::format_bytes(output_stream_info.total_file_size),
+                "Skipped: pure media not smaller ({} → {})",
+                foundation::format_bytes(verify_result.input_pure_media_size),
+                foundation::format_bytes(verify_result.output_pure_media_size),
             ),
             final_crf,
             exploration_attempts: attempts,
@@ -2276,10 +2309,10 @@ ignored: false,
         });
     }
 
-    if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0_f64 {
+    if verify_result.is_container_overhead_issue() {
         log_detail!(&format!(
-            "video stream shrank ({:+.1}%) but total file grew ({:+.1}%) due to container overhead diff {:+}B",
-            verify_result.video_size_change_percent(),
+            "pure media shrank ({:+.1}%) but total file grew ({:+.1}%) due to container overhead diff {:+}B",
+            verify_result.pure_media_size_change_percent(),
             verify_result.total_size_change_percent(),
             verify_result.container_overhead_diff
         ));
@@ -3761,31 +3794,102 @@ mod tests {
     }
 
     #[test]
-    fn test_explore_quality_failure_prefers_total_size_reason_over_stream_growth() {
-        let decision = ExploreQualityFailureDecision::inspect_and_log(
+    fn test_explore_quality_failure_reports_pure_media_reason() {
+        let explore_result = foundation::ExploreResult {
+            quality_passed: foundation::types::CheckResult::Failed(
+                "Pure media not smaller than input".to_string(),
+            ),
+            ssim: Some(0.99_f64),
+            actual_min_ssim: 0.95,
+            input_pure_media_size: 1_000_000,
+            output_pure_media_size: 1_100_000,
+            ..Default::default()
+        };
+        let decision = ExploreGateRejectionDecision::inspect_and_log(
             Path::new("/tmp/test.mov"),
-            &foundation::ExploreResult {
-                quality_passed: foundation::types::CheckResult::Failed(
-                    "Total file not smaller than input".to_string(),
-                ),
-                ssim: Some(0.99_f64),
-                actual_min_ssim: 0.95,
-                input_video_stream_size: 1_000_000,
-                output_video_stream_size: 1_100_000,
-                ..Default::default()
-            },
+            &explore_result,
         );
 
         assert_eq!(
-            decision.fail_message,
-            "Skipped: Total file not smaller than input"
+            decision.message,
+            "Skipped: Pure media not smaller than input"
         );
         assert!(
             decision
-                .fail_reason
-                .contains("Total file not smaller than input")
+                .reason
+                .contains("Pure media not smaller than input")
         );
-        assert!(!decision.fail_message.contains("video stream"));
+        assert!(!decision.failed);
+        assert!(!decision.message.contains("total file"));
+        let output = decision
+            .into_output(
+                Path::new("/tmp/test.mov"),
+                &Detection {
+                    file_size: 1_000_000,
+                    ..Default::default()
+                },
+                &explore_result,
+            )
+            .expect("size gate output");
+        assert_eq!(output.outcome(), foundation::conversion::Outcome::Skipped);
+    }
+
+    #[test]
+    fn quality_verification_rejection_is_failed_not_skipped() {
+        let explore_result = foundation::ExploreResult {
+            quality_passed: foundation::types::CheckResult::Failed(
+                "SSIM below threshold".to_string(),
+            ),
+            ssim: Some(0.80),
+            actual_min_ssim: 0.95,
+            ..Default::default()
+        };
+        let decision = ExploreGateRejectionDecision::inspect_and_log(
+            Path::new("/tmp/test.mov"),
+            &explore_result,
+        );
+
+        assert!(decision.failed);
+        assert!(decision.message.starts_with("Failed:"));
+        let output = decision
+            .into_output(
+                Path::new("/tmp/test.mov"),
+                &Detection {
+                    file_size: 1_000_000,
+                    ..Default::default()
+                },
+                &explore_result,
+            )
+            .expect("quality failure output");
+        assert_eq!(output.outcome(), foundation::conversion::Outcome::Failed);
+    }
+
+    #[test]
+    fn animated_task_failure_remains_failed_in_video_adapter() {
+        let input = Path::new("/tmp/corrupt.gif");
+        let output = task_result_to_conversion_output(
+            input,
+            &Detection {
+                file_size: 100,
+                ..Default::default()
+            },
+            ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: "decode failure".to_string(),
+                command: String::new(),
+                preserve_audio: false,
+                crf: 0.0,
+                lossless: false,
+            },
+            foundation::TaskResult::failed(input, 100, "decode failed", "decode_failed"),
+            0.0,
+            0,
+            None,
+        )
+        .expect("failed task output");
+
+        assert_eq!(output.outcome(), foundation::conversion::Outcome::Failed);
+        assert_eq!(output.message, "decode failed");
     }
 
     #[test]

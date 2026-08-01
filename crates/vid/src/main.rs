@@ -639,7 +639,7 @@ fn run_fast_gif(
                     output,
                 });
                 converted += 1;
-            } else if !result.success && result.skipped {
+            } else if !result.success {
                 failed += 1;
                 println!("[FAIL    ] {} {}", file.display(), result.message);
             } else {
@@ -671,9 +671,7 @@ fn run_fast_gif(
                 output,
             });
             converted += 1;
-        } else if !result.success && result.skipped {
-            // failed_with_fallback: encode failed and the original was copied as fallback.
-            // This is a real failure, not a content-based skip.
+        } else if !result.success {
             failed += 1;
             println!("[FAIL    ] {} {}", file.display(), result.message);
         } else {
@@ -1009,6 +1007,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                     resume,
                     protect_destructive_dirs: delete_original || in_place,
+                    error_mode: foundation::BatchErrorMode::current(),
                 },
                 |file| {
                     auto_convert_with_cache(file, &config, cache.as_ref())

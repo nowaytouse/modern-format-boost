@@ -426,17 +426,13 @@ fn finalize_conversion_output(
         }
     });
 
-    // Compress mode: goal is strictly smaller; equal or larger = not achieved (keep original).
+    // Compress mode: goal is a strictly smaller encoded image payload.
     if config.compress() {
-        let out_size =
-            foundation::numeric_cast::option_u64_strict(output_size, "output_size_compress_check")
-                .ok_or_else(|| {
-                    ImgQualityError::ConversionError(
-                        "Output file size missing after conversion".to_string(),
-                    )
-                })?;
-
-        if out_size >= detection.file_size {
+        let input_payload = foundation::image::static_payload::measure(input_path)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        let output_payload = foundation::image::static_payload::measure(output_path)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        if output_payload >= input_payload {
             cleanup_output_file(output_path, "oversized output in compress mode");
             foundation::copy_on_skip_or_fail(
                 input_path,
@@ -450,8 +446,9 @@ fn finalize_conversion_output(
                 output_path: input_path.display().to_string(),
                 skipped: true,
                 ignored: false,
-                message: "Skipped: output size unchanged or larger (compression goal not achieved)"
-                    .to_string(),
+                message:
+                    "Skipped: encoded image payload unchanged or larger (compression goal not achieved)"
+                        .to_string(),
                 original_size: detection.file_size,
                 output_size: None,
                 size_reduction: None,
@@ -591,7 +588,13 @@ fn convert_to_jxl(
         builder.apple_compat(true);
     }
 
-    let status = builder.build().output()?;
+    let mut command = builder.build();
+    let status = foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        foundation::process_runner::image_process_hard_timeout(),
+        "JXL image conversion",
+    )?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
@@ -618,15 +621,16 @@ fn convert_to_jxl(
         )));
     }
 
-    // Compress mode: only accept if output is strictly smaller than input
+    // Compress mode: compare encoded image payload only.
     if config.compress() {
-        let input_size = foundation::io_utils::metadata_with_retry(input)
-            .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {e}")))?
-            .len();
-        if output_size >= input_size {
+        let input_payload = foundation::image::static_payload::measure(input)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        let output_payload = foundation::image::static_payload::jxl(output)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        if output_payload >= input_payload {
             cleanup_output_file(output, "non-compressing JXL output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
+                "Compress mode: JXL payload ({output_payload} bytes) not smaller than source payload ({input_payload} bytes)"
             )));
         }
     }
@@ -659,7 +663,13 @@ fn convert_to_avif(
 
     builder.quality(q);
 
-    let status = builder.build().output()?;
+    let mut command = builder.build();
+    let status = foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        foundation::process_runner::image_process_hard_timeout(),
+        "AVIF image conversion",
+    )?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
@@ -684,13 +694,16 @@ fn convert_to_avif(
         )));
     }
 
-    // Check compress mode: skip if output is not smaller than input
+    // Check compress mode using encoded payload, never complete-file size.
     if config.compress() {
-        let input_size = std::fs::metadata(input)?.len();
-        if output_size >= input_size {
+        let input_payload = foundation::image::static_payload::measure(input)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        let output_payload = foundation::image::static_payload::isobmff_mdat(output)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        if output_payload >= input_payload {
             cleanup_output_file(output, "non-compressing AVIF output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
+                "Compress mode: AVIF payload ({output_payload} bytes) not smaller than source payload ({input_payload} bytes)"
             )));
         }
     }

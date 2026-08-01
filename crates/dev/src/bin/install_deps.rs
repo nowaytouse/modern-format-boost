@@ -197,9 +197,11 @@ fn main() -> Result<()> {
                 pick_symbol("🔧", "[TOOL]")
             ),
         );
-        let tmp_lib_dir = Path::new("crates/.modern_format_boost/.tmp_lib");
+        let home_root =
+            foundation::process_lock::get_mfb_root().context("resolve MFB state root")?;
+        let tmp_lib_dir = home_root.join(".tmp_lib");
         if !tmp_lib_dir.exists() {
-            fs::create_dir_all(tmp_lib_dir)?;
+            fs::create_dir_all(&tmp_lib_dir)?;
         }
 
         // 1. Create libstdc++.tbd pointing to system libc++.tbd in the SDK

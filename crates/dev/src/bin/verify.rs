@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::infra::hardening::optional_env;
 use dev::infra::ui_tokens::pick_symbol;
 use dev::media::scope::{
     SKIP_EXTS, classify_missing_entry, detect_true_format, integrity_stem_key,
@@ -263,41 +262,12 @@ fn same_path(p1: &Path, p2: &Path) -> bool {
     c1 == c2
 }
 
-fn mfb_home_root() -> PathBuf {
-    if let Some(root) = optional_env("MFB_HOME_ROOT") {
-        return PathBuf::from(root).expanduser();
-    }
-    if let Some(home) = optional_env("HOME") {
-        return PathBuf::from(home).join(".modern_format_boost");
-    }
-    PathBuf::from("crates/.modern_format_boost")
-}
-
-trait ExpandUserPath {
-    fn expanduser(self) -> PathBuf;
-}
-
-impl ExpandUserPath for PathBuf {
-    fn expanduser(self) -> PathBuf {
-        let Some(s) = self.to_str() else {
-            return self;
-        };
-        if s == "~" {
-            if let Some(home) = optional_env("HOME") {
-                return Self::from(home);
-            }
-        } else if let Some(rest) = s.strip_prefix("~/")
-            && let Some(home) = optional_env("HOME")
-        {
-            return Self::from(home).join(rest);
-        }
-        self
-    }
-}
-
 fn fast_img_marker_candidates(optimized_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut list = Vec::new();
-    let marker_dir = mfb_home_root().join("fast_img").join("markers");
+    let marker_dir = foundation::process_lock::get_mfb_root()
+        .map_err(|e| format!("MFB state root unavailable: {e}"))?
+        .join("fast_img")
+        .join("markers");
     if marker_dir.is_dir() {
         let entries = fs::read_dir(&marker_dir)
             .map_err(|e| format!("fast-img marker dir unreadable: {marker_dir:?}: {e}"))?;

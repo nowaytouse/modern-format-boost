@@ -246,15 +246,15 @@ impl ConversionOutput {
             return crate::conversion::Outcome::Ignored;
         }
 
+        if !self.success {
+            return crate::conversion::Outcome::Failed;
+        }
+
         if self.strategy.target == TargetVideoFormat::Skip
             || self.output_path.is_empty()
             || self.output_size == 0
         {
             return crate::conversion::Outcome::Skipped;
-        }
-
-        if !self.success {
-            return crate::conversion::Outcome::Failed;
         }
 
         crate::conversion::Outcome::Converted
@@ -401,7 +401,11 @@ mod smoke_tests {
         assert_eq!(output.outcome(), crate::conversion::Outcome::Failed);
 
         output.strategy.target = TargetVideoFormat::Skip;
-        output.message = "Skipped: quality gate".to_string();
+        output.message = "Failed: quality gate".to_string();
+        assert_eq!(output.outcome(), crate::conversion::Outcome::Failed);
+
+        output.success = true;
+        output.message = "Skipped: size gate".to_string();
         assert_eq!(output.outcome(), crate::conversion::Outcome::Skipped);
 
         output.strategy.target = TargetVideoFormat::HevcLosslessMkv;

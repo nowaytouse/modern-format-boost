@@ -181,16 +181,16 @@ fn vue_update_script_names() -> &'static [&'static str] {
 }
 
 fn vue_dir(project_root: &Path) -> PathBuf {
-    project_root
-        .join("crates")
-        .join("dev")
-        .join("src")
-        .join("vue")
+    project_root.join("crates").join("gui")
+}
+
+fn tauri_dir(project_root: &Path) -> PathBuf {
+    project_root.join("crates").join("gui").join("src-tauri")
 }
 
 fn tauri_app_bundle_path(project_root: &Path) -> PathBuf {
     // Tauri build output is redirected to the workspace root target via
-    // src-tauri/.cargo/config.toml (target-dir = "../../../../../target").
+    // tauri/.cargo/config.toml (target-dir = "../../../target").
     project_root
         .join("target")
         .join("release")
@@ -559,7 +559,7 @@ fn gui_needs_rebuild(project_root: &Path) -> bool {
     // Tauri's Rust entry points belong to the GUI bundle, but ordinary dev-bin
     // changes are copied into an existing app bundle after their own incremental build.
     newest_input = newest_input.max(newest_source_mtime_in_dir(
-        &vue_root.join("src-tauri"),
+        &tauri_dir(project_root),
         RUST_SOURCE_EXTENSIONS,
     ));
     let bundle_binary = tauri_app_bundle_path(project_root)
@@ -1029,7 +1029,8 @@ fn bootstrap_macos_path() {
 }
 
 fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()> {
-    let cache_file = project_root.join("crates/.modern_format_boost/.last_tool_refresh");
+    let home_root = foundation::process_lock::get_mfb_root().context("resolve MFB state root")?;
+    let cache_file = home_root.join(".last_tool_refresh");
     if !force {
         match std::fs::metadata(&cache_file)
             .and_then(|meta| meta.modified())
@@ -1090,14 +1091,9 @@ fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()
 
     let req_path = project_root.join("crates/dev/scripts/requirements.txt");
     if req_path.is_file() {
-        let python = if project_root
-            .join("crates/.modern_format_boost/.venv/bin/python")
-            .is_file()
-        {
-            project_root
-                .join("crates/.modern_format_boost/.venv/bin/python")
-                .to_string_lossy()
-                .to_string()
+        let venv_py = home_root.join(".venv/bin/python");
+        let python = if venv_py.is_file() {
+            venv_py.to_string_lossy().to_string()
         } else {
             "python3".to_string()
         };
@@ -1205,10 +1201,8 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
     };
 
     let target_dylib = project_root.join("target").join("release").join(dylib_name);
-    let artifact_dir = project_root
-        .join("crates")
-        .join(".modern_format_boost")
-        .join("artifacts");
+    let home_root = foundation::process_lock::get_mfb_root().context("resolve MFB state root")?;
+    let artifact_dir = home_root.join("artifacts");
     fs::create_dir_all(&artifact_dir)
         .with_context(|| format!("create artifact dir {}", artifact_dir.display()))?;
     let artifact_dylib = artifact_dir.join(dylib_name);
@@ -1222,6 +1216,7 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
             .args([
                 "rustc",
                 "--release",
+                "--locked",
                 "-p",
                 "foundation",
                 "--lib",
@@ -1377,13 +1372,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
         anyhow::bail!("codesign not found; cannot seal Modern Format Boost.app");
     }
 
-    let entitlements = project_root
-        .join("crates")
-        .join("dev")
-        .join("src")
-        .join("vue")
-        .join("src-tauri")
-        .join("entitlements.plist");
+    let entitlements = tauri_dir(project_root).join("entitlements.plist");
     let app_resources = app_bundle.join("Contents").join("Resources");
     for bin in changed_bins {
         let bundled = app_resources.join(bin);
@@ -1668,7 +1657,9 @@ fn main() -> Result<()> {
 
     if args.update {
         perform_updates(&project_root, &style, args.force)?;
-        let cache_file = project_root.join("crates/.modern_format_boost/.last_tool_refresh");
+        let home_root =
+            foundation::process_lock::get_mfb_root().context("resolve MFB state root")?;
+        let cache_file = home_root.join(".last_tool_refresh");
         if let Some(parent) = cache_file.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create update cache directory {}", parent.display()))?;
@@ -1975,7 +1966,7 @@ mod tests {
         fs::write(&binary, b"verify")?;
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let ignored = root.join("crates/dev/src/vue/node_modules/pkg/index.js");
+        let ignored = root.join("crates/gui/node_modules/pkg/index.js");
         fs::create_dir_all(ignored.parent().unwrap())?;
         fs::write(ignored, "export default 'ignored';")?;
 
@@ -2081,7 +2072,7 @@ mod tests {
     fn gui_rebuild_ignores_unrelated_dev_binary_sources() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let root = tempdir.path();
-        let vue_source = root.join("crates/dev/src/vue/src/App.vue");
+        let vue_source = root.join("crates/gui/src/App.vue");
         fs::create_dir_all(vue_source.parent().unwrap())?;
         fs::write(&vue_source, "<template><main /></template>")?;
 
@@ -2112,9 +2103,9 @@ mod tests {
 
         assert!(should_terminate_process_identity(
             "node",
-            "/work/modern_format_boost/crates/dev/src/vue/node_modules/.bin/vite",
+            "/work/modern_format_boost/crates/gui/node_modules/.bin/vite",
             command_mentions_project(
-                "/work/modern_format_boost/crates/dev/src/vue/node_modules/.bin/vite",
+                "/work/modern_format_boost/crates/gui/node_modules/.bin/vite",
                 project_root
             ),
         ));

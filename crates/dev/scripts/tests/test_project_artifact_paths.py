@@ -21,7 +21,7 @@ class TestProjectArtifactPaths(unittest.TestCase):
         self.lib_path_env.start()
         self.addCleanup(self.lib_path_env.stop)
 
-    def test_python_api_candidates_use_project_state_artifacts_dir(self):
+    def test_python_api_candidates_use_central_state_artifacts_dir(self):
         if sys.platform == "darwin":
             lib_name = "libfoundation.dylib"
         elif sys.platform == "win32":
@@ -29,9 +29,7 @@ class TestProjectArtifactPaths(unittest.TestCase):
         else:
             lib_name = "libfoundation.so"
 
-        expected = (
-            python_api.ROOT / "crates" / ".modern_format_boost" / "artifacts" / lib_name
-        )
+        expected = mfb_dylib.ARTIFACT_DIR / lib_name
         candidates = python_api.candidate_library_paths()
 
         self.assertIn(expected, candidates)
@@ -70,7 +68,7 @@ class TestProjectArtifactPaths(unittest.TestCase):
                 root / "Modern Format Boost.app" / "Contents" / "Frameworks" / lib_name
             )
             release_dylib = root / "target" / "release" / lib_name
-            artifact_dir = root / "crates" / ".modern_format_boost" / "artifacts"
+            artifact_dir = root / ".modern_format_boost" / "artifacts"
             app_dylib.parent.mkdir(parents=True)
             release_dylib.parent.mkdir(parents=True)
             app_dylib.touch()
@@ -79,6 +77,11 @@ class TestProjectArtifactPaths(unittest.TestCase):
             os.utime(release_dylib, (2, 2))
 
             with (
+                patch.dict(
+                    os.environ,
+                    {"MFB_HOME_ROOT": str(root / ".modern_format_boost")},
+                    clear=False,
+                ),
                 patch.object(mfb_dylib, "ROOT", root),
                 patch.object(mfb_dylib, "ARTIFACT_DIR", artifact_dir),
                 patch.object(python_api, "ROOT", root),
@@ -95,8 +98,8 @@ class TestProjectArtifactPaths(unittest.TestCase):
             self.assertEqual(first_existing, release_dylib)
             self.assertEqual(ensured, artifact_dir / lib_name)
 
-    def test_mfb_dylib_uses_project_state_artifacts_dir(self):
+    def test_mfb_dylib_uses_central_state_artifacts_dir(self):
         self.assertEqual(
             mfb_dylib.ARTIFACT_DIR,
-            mfb_dylib.ROOT / "crates" / ".modern_format_boost" / "artifacts",
+            mfb_dylib.HOME_ROOT / "artifacts",
         )

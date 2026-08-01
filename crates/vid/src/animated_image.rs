@@ -1,10 +1,11 @@
 //! - `vid`: all video encoding (including animated image → video)
 
-use crate::{Rational, Result, VidQualityError};
+use crate::{Result, VidQualityError};
 use foundation::ToolBuilder;
 use foundation::conversion::{ConvertOptions, TaskResult};
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Output};
 
 use foundation::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use foundation::conversion::{
@@ -12,6 +13,16 @@ use foundation::conversion::{
 };
 use foundation::loop_intent::{LoopMeta, is_lossless_exploration_safe};
 use foundation::{log_detail, log_info};
+
+fn run_animated_process(mut command: Command) -> std::io::Result<Output> {
+    foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        foundation::ffmpeg_process::ffmpeg_timeout(),
+        foundation::process_runner::animated_image_process_hard_timeout(),
+        "animated media subprocess",
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VideoStreamInfo {
     index: usize,
@@ -117,16 +128,14 @@ fn animated_avif_sequence_frame_count(path: &Path) -> Result<u64> {
                 "avifdec is required to verify animated AVIF meme output".to_string(),
             )
         })?;
-    let output = std::process::Command::new(tool)
-        .arg("--info")
-        .arg(path)
-        .output()
-        .map_err(|err| {
-            VidQualityError::ConversionError(format!(
-                "avifdec --info failed to start for {}: {err}",
-                path.display()
-            ))
-        })?;
+    let mut command = Command::new(tool);
+    command.arg("--info").arg(path);
+    let output = run_animated_process(command).map_err(|err| {
+        VidQualityError::ConversionError(format!(
+            "avifdec --info failed to start for {}: {err}",
+            path.display()
+        ))
+    })?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let info = format!("{stdout}\n{stderr}");
@@ -205,7 +214,7 @@ fn encode_animated_avif_with_ffmpeg(
         builder.arg(arg);
     }
     builder.format("avif").output(temp_output);
-    builder.build().output()
+    run_animated_process(builder.build())
 }
 
 fn encode_animated_avif_with_avifenc(
@@ -234,12 +243,13 @@ fn encode_animated_avif_with_avifenc(
         .pix_fmt_str("yuv420p")
         .format("yuv4mpegpipe")
         .output(temp_y4m);
-    let raster_output = raster.build().output()?;
+    let raster_output = run_animated_process(raster.build())?;
     if !raster_output.status.success() {
         return Ok(raster_output);
     }
 
-    std::process::Command::new(avifenc)
+    let mut command = Command::new(avifenc);
+    command
         .arg("--speed")
         .arg("0")
         .arg("--jobs")
@@ -247,19 +257,18 @@ fn encode_animated_avif_with_avifenc(
         .arg("-q")
         .arg("100")
         .arg(temp_y4m)
-        .arg(temp_output)
-        .output()
+        .arg(temp_output);
+    run_animated_process(command)
 }
 
 fn ffmpeg_muxers_listing() -> Result<String> {
     let mut command = foundation::FfmpegBuilder::new().get_resolved_command();
-    let output = command
+    command
         .arg(foundation::constants::FFMPEG_ARG_HIDE_BANNER)
-        .arg("-muxers")
-        .output()
-        .map_err(|err| {
-            VidQualityError::ConversionError(format!("ffmpeg -muxers failed to start: {err}"))
-        })?;
+        .arg("-muxers");
+    let output = run_animated_process(command).map_err(|err| {
+        VidQualityError::ConversionError(format!("ffmpeg -muxers failed to start: {err}"))
+    })?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -319,15 +328,16 @@ fn required_tool_available(name: &str) -> bool {
     foundation::common_utils::resolve_tool_path(name).is_some()
 }
 
-struct AnimatedQualityFailureDecision {
+struct AnimatedGateRejectionDecision {
+    failed: bool,
     label: &'static str,
     protect_msg: String,
     delete_msg: String,
-    skip_message: String,
-    skip_code: &'static str,
+    message: String,
+    reason_code: &'static str,
 }
 
-impl AnimatedQualityFailureDecision {
+impl AnimatedGateRejectionDecision {
     fn inspect_and_log(input: &Path, explore_result: &foundation::ExploreResult) -> Self {
         let ultimate_contract = explore_result.uses_ultimate_quality_contract();
         let actual_ssim = explore_result.ssim;
@@ -345,13 +355,14 @@ impl AnimatedQualityFailureDecision {
                 &reason,
             );
             return Self {
+                failed: true,
                 label: foundation::infra::static_logs::messages::LABEL_QUALITY_SIZE_FAIL,
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_SIZE
                     .to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_SIZE
                     .to_string(),
-                skip_message: format!("Skipped: {reason}"),
-                skip_code: "quality_failed",
+                message: format!("Failed: {reason}"),
+                reason_code: "quality_failed",
             };
         }
 
@@ -365,14 +376,15 @@ impl AnimatedQualityFailureDecision {
                 ),
             );
             return Self {
+                failed: true,
                 label: foundation::infra::static_logs::messages::LABEL_SSIM_CALC_FAILED,
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_SSIM_NA.to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_SSIM_FAIL.to_string(),
-                skip_message: format!(
-                    "Skipped: {}",
+                message: format!(
+                    "Failed: {}",
                     foundation::infra::static_logs::messages::SSIM_CALC_FAILED
                 ),
-                skip_code: "quality_failed",
+                reason_code: "quality_failed",
             };
         }
 
@@ -389,13 +401,14 @@ impl AnimatedQualityFailureDecision {
                 format!("SSIM {ssim:.4} < {threshold:.4} (Score: {score_str})"),
             );
             return Self {
+                failed: true,
                 label: foundation::infra::static_logs::messages::LABEL_QUALITY_FAIL,
                 protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_LOW
                     .to_string(),
                 delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_LOW
                     .to_string(),
-                skip_message: format!("Skipped: SSIM {ssim:.4} below threshold {threshold:.4}"),
-                skip_code: "quality_failed",
+                message: format!("Failed: SSIM {ssim:.4} below threshold {threshold:.4}"),
+                reason_code: "quality_failed",
             };
         }
 
@@ -410,11 +423,12 @@ impl AnimatedQualityFailureDecision {
             &reason,
         );
         Self {
+            failed: false,
             label: foundation::infra::static_logs::messages::LABEL_QUALITY_FAIL,
             protect_msg: foundation::infra::static_logs::messages::PROTECT_QUALITY_SIZE.to_string(),
             delete_msg: foundation::infra::static_logs::messages::DISCARD_QUALITY_SIZE.to_string(),
-            skip_message: format!("Skipped: {reason}"),
-            skip_code: "quality_failed",
+            message: format!("Skipped: {reason}"),
+            reason_code: "size_gate",
         }
     }
 
@@ -429,8 +443,8 @@ impl AnimatedQualityFailureDecision {
 
 struct AnimatedFinalGateFailureDecision {
     label: &'static str,
-    skip_message: String,
-    skip_code: &'static str,
+    message: String,
+    reason_code: &'static str,
 }
 
 impl AnimatedFinalGateFailureDecision {
@@ -465,15 +479,15 @@ impl AnimatedFinalGateFailureDecision {
 
         Self {
             label,
-            skip_message: if ultimate_contract {
-                format!("Skipped: 3D quality gate failed ({quality_summary})")
+            message: if ultimate_contract {
+                format!("Failed: 3D quality gate failed ({quality_summary})")
             } else {
                 format!(
-                    "Skipped: MS-SSIM {quality_summary} below target {:.2}",
+                    "Failed: MS-SSIM {quality_summary} below target {:.2}",
                     foundation::constants::VIDEO_QUALITY_GATE_THRESHOLD
                 )
             },
-            skip_code: "quality_gate_failed",
+            reason_code: "quality_gate_failed",
         }
     }
 
@@ -487,14 +501,13 @@ impl AnimatedFinalGateFailureDecision {
 }
 
 fn probe_video_streams(input: &Path) -> Result<Vec<VideoStreamInfo>> {
-    let output = match foundation::FfprobeBuilder::new()
+    let command = foundation::FfprobeBuilder::new()
         .input(input)
         .loglevel("error")
         .print_format("json")
         .show_streams()
-        .build()
-        .output()
-    {
+        .build();
+    let output = match run_animated_process(command) {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             return Err(VidQualityError::ConversionError(format!(
@@ -635,7 +648,7 @@ fn avif_video_stream_count(input: &Path, context: &str) -> Result<usize> {
         .show_entries("stream=index")
         .print_format("csv=p=0");
 
-    let output = builder.build().output().map_err(|err| {
+    let output = run_animated_process(builder.build()).map_err(|err| {
         let message = format!(
             "AVIF stream-count probe failed to start for {} in {context}: {err}",
             input.display()
@@ -690,7 +703,7 @@ fn extract_frames_for_gifski(
         .pix_fmt(foundation::PixFmt::Rgba)
         .output(&frame_pattern);
 
-    let output = builder.build().output().map_err(|e| {
+    let output = run_animated_process(builder.build()).map_err(|e| {
         foundation::media_conversion_gate::delivery_api_path_fallback_audit(
             "gif_frame_extract_ffmpeg",
             input,
@@ -812,7 +825,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         let mut builder = foundation::WebpmuxBuilder::new();
         builder.get_frame(i).input(input).output(&frame_webp_path);
 
-        let extract_result = builder.build().output().map_err(|e| {
+        let extract_result = run_animated_process(builder.build()).map_err(|e| {
             VidQualityError::ConversionError(format!("webpmux extract failed: {e}"))
         })?;
 
@@ -831,7 +844,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .pix_fmt(foundation::PixFmt::Rgba)
             .output(&frame_png_path);
 
-        let convert_result = builder.build().output().map_err(|e| {
+        let convert_result = run_animated_process(builder.build()).map_err(|e| {
             VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {e}"))
         })?;
 
@@ -900,7 +913,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .arg("0") // Loop forever
         .output(output_apng);
 
-    let ffmpeg_result = builder.build().output().map_err(|e| {
+    let ffmpeg_result = run_animated_process(builder.build()).map_err(|e| {
         VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {e}"))
     })?;
 
@@ -1035,7 +1048,7 @@ fn prepare_early_fallback(
                     0
                 }
             };
-            PrepareAnimatedRasterOutcome::Early(TaskResult::skipped_custom(
+            PrepareAnimatedRasterOutcome::Early(TaskResult::failed(
                 input,
                 input_size,
                 &format!("{message} (original copy failed: {e})"),
@@ -1189,7 +1202,7 @@ pub(crate) fn prepare_animated_raster_for_encode(
             let temp_apng_path = temp_apng.path().to_path_buf();
             let mut builder = foundation::DjxlBuilder::new();
             builder.input(input).output(&temp_apng_path);
-            let djxl_result = builder.build().output();
+            let djxl_result = run_animated_process(builder.build());
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose() {
@@ -1308,7 +1321,7 @@ pub(crate) fn prepare_animated_raster_for_encode(
                     .arg("0")
                     .vcodec(foundation::VideoCodec::Apng)
                     .output(&temp_apng_path);
-                match builder.build().output() {
+                match run_animated_process(builder.build()) {
                     Ok(res) if res.status.success() => (temp_apng_path, Some(temp_apng)),
                     Ok(res) => {
                         let stderr = String::from_utf8_lossy(&res.stderr);
@@ -1425,19 +1438,6 @@ pub fn assess_loop_intent_for_fast_gif(path: &Path) -> Result<foundation::LoopIn
 /// video that the scorer says should stay in the GIF domain.
 fn is_gif_meme(path: &Path) -> bool {
     assess_loop_intent_for_path(path).is_some_and(|verdict| verdict.is_keep_gif())
-}
-
-fn size_guard_limit(input_size: u64, tolerance_ratio: f64, context: &str) -> Result<u64> {
-    let input_rat = Rational::from(input_size);
-    let tol_rat = Rational::from_f64(tolerance_ratio).ok_or_else(|| {
-        VidQualityError::ConversionError(format!(
-            "Invalid size tolerance ratio in {context}: {tolerance_ratio}"
-        ))
-    })?;
-    let res: Rational = input_rat * tol_rat;
-    foundation::numeric_cast::f64_to_u64_strict(res.to_f64().round(), context).ok_or_else(|| {
-        VidQualityError::ConversionError(format!("Failed to calculate size guard in {context}"))
-    })
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
@@ -1629,7 +1629,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<TaskResu
         .arg("-movflags")
         .arg("+faststart")
         .output(&temp_output);
-    let result = builder.build().output();
+    let result = run_animated_process(builder.build());
 
     // Clean up temporary APNG file if it was created
     drop(temp_apng_file);
@@ -1826,7 +1826,7 @@ pub fn convert_to_mp4_matched(
             let temp_apng_path = temp_apng.path().to_path_buf();
             let mut builder = foundation::DjxlBuilder::new();
             builder.input(input).output(&temp_apng_path);
-            let djxl_result = builder.build().output();
+            let djxl_result = run_animated_process(builder.build());
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose() {
@@ -1927,7 +1927,7 @@ pub fn convert_to_mp4_matched(
                 .vcodec(foundation::VideoCodec::Apng)
                 .output(&temp_apng_path);
 
-            let res = builder.build().output()?;
+            let res = run_animated_process(builder.build())?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
             } else {
@@ -1996,7 +1996,7 @@ pub fn convert_to_mp4_matched(
                     .arg("0")
                     .output(&temp_stream_path);
 
-                let extract_result = builder.build().output();
+                let extract_result = run_animated_process(builder.build());
 
                 match extract_result {
                     Ok(output) if output.status.success() && temp_stream_path.exists() => {
@@ -2167,19 +2167,6 @@ pub fn convert_to_mp4_matched(
         log_detail!("{log}");
     }
 
-    let tolerance_ratio = if options.allow_size_tolerance() {
-        1.0 + foundation::constants::DEFAULT_SIZE_TOLERANCE_RATIO
-    } else {
-        1.0_f64
-    };
-    let max_allowed_size = {
-        size_guard_limit(
-            input_size,
-            tolerance_ratio,
-            "animated_video_max_allowed_size",
-        )?
-    };
-
     // apple_compat mode: compatibility takes priority over file size.
     // However, if the source is already apple-compatible (like GIF/APNG), size guard stays active.
     // For definitive loop assets, compatibility/domain correctness beats size.
@@ -2187,46 +2174,57 @@ pub fn convert_to_mp4_matched(
     let is_guard_active =
         foundation::is_size_guard_active(&input_ext, options.apple_compat()) && !is_gif_meme(input);
 
-    if is_guard_active && explore_result.output_size > max_allowed_size {
-        let size_increase_pct = {
-            let ratio = Rational::from((explore_result.output_size, input_size.max(1)));
-            (ratio.to_f64() - 1.0_f64) * 100.0_f64
-        };
-        let codec_name = options.codec.as_str().to_uppercase();
-        if let Err(e) = fs::remove_file(&temp_output) {
-            log_detail!(&format!(
-                "Cleanup Audit: Failed to remove oversized {codec_name} temporary output at {}. Error: {e}",
+    if is_guard_active {
+        let verification = foundation::verify_strict_pure_media_paths(
+            input,
+            &temp_output,
+            options.allow_size_tolerance(),
+        )
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Strict animated pure-media verification failed for {} -> {}: {err}",
+                input.display(),
                 temp_output.display()
-            ));
-        }
-        if options.allow_size_tolerance() {
+            ))
+        })?;
+        if !verification.pure_media_compressed {
+            let size_increase_pct = verification.pure_media_size_change_percent();
+            let codec_name = options.codec.as_str().to_uppercase();
+            if let Err(e) = fs::remove_file(&temp_output) {
+                log_detail!(&format!(
+                    "Cleanup Audit: Failed to remove pure-media-oversized {codec_name} temporary output at {}. Error: {e}",
+                    temp_output.display()
+                ));
+            }
+            if options.allow_size_tolerance() {
+                log_detail!(
+                    "   Skipping: {} pure media larger than input by {:.1}% (allowed growth: {} bytes)",
+                    codec_name,
+                    size_increase_pct,
+                    foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+                );
+            } else {
+                log_detail!(
+                    "   Skipping: {} pure media larger than input by {:.1}% (strict mode: no tolerance)",
+                    codec_name,
+                    size_increase_pct
+                );
+            }
             log_detail!(
-                "   Skipping: {} output larger than input by {:.1}% (allowed growth: {:.1}%)",
-                codec_name,
-                size_increase_pct,
-                foundation::constants::DEFAULT_SIZE_TOLERANCE_RATIO * 100.0
-            );
-        } else {
-            log_detail!(
-                "   Skipping: {} output larger than input by {:.1}% (strict mode: no tolerance)",
-                codec_name,
+                "   Pure-media comparison: {} → {} bytes ({:+.1}%)",
+                verification.input_pure_media_size,
+                verification.output_pure_media_size,
                 size_increase_pct
             );
+            return skipped_with_fallback_owned(
+                input,
+                options,
+                format!(
+                    "Skipped: {codec_name} pure media larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
+                ),
+                "size_increase_beyond_tolerance".to_string(),
+            );
         }
-        log_detail!(
-            "   Size comparison: {} → {} bytes (+{:.1}%)",
-            input_size,
-            explore_result.output_size,
-            size_increase_pct
-        );
-        return skipped_with_fallback_owned(
-            input,
-            options,
-            format!(
-                "Skipped: {codec_name} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
-            ),
-            "size_increase_beyond_tolerance".to_string(),
-        );
     }
 
     // apple_compat: if exploration gates failed only because the file couldn't be compressed
@@ -2242,15 +2240,24 @@ pub fn convert_to_mp4_matched(
                 .is_some_and(|s| s >= foundation::constants::ACCEPTABLE_MIN_SSIM));
 
     if !quality_or_compat_ok {
-        let decision = AnimatedQualityFailureDecision::inspect_and_log(input, &explore_result);
+        let decision = AnimatedGateRejectionDecision::inspect_and_log(input, &explore_result);
         decision.emit_summary();
 
-        return failed_with_fallback_owned(
-            input,
-            options,
-            decision.skip_message,
-            decision.skip_code.to_string(),
-        );
+        return if decision.failed {
+            failed_with_fallback_owned(
+                input,
+                options,
+                decision.message,
+                decision.reason_code.to_string(),
+            )
+        } else {
+            skipped_with_fallback_owned(
+                input,
+                options,
+                decision.message,
+                decision.reason_code.to_string(),
+            )
+        };
     }
 
     let final_gate_block = if options.match_quality() {
@@ -2265,8 +2272,8 @@ pub fn convert_to_mp4_matched(
         return failed_with_fallback_owned(
             input,
             options,
-            decision.skip_message,
-            decision.skip_code.to_string(),
+            decision.message,
+            decision.reason_code.to_string(),
         );
     }
 
@@ -2410,7 +2417,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         .arg("+faststart")
         .output(&temp_output);
 
-    let result = builder.build().output();
+    let result = run_animated_process(builder.build());
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -2718,10 +2725,26 @@ pub fn convert_to_avif_meme(input: &Path, options: &ConvertOptions) -> Result<Ta
                 &temp_output,
                 &output,
                 options.force(),
-                Some(input),
+                None,
             )? {
                 return skipped_output_exists(input, &output, input_size);
             }
+
+            foundation::metadata::verify_output_embedded_metadata(
+                input,
+                &output,
+                foundation::metadata::MetadataOutputPolicy::Clear,
+            )
+            .map_err(|error| {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "animated meme cleared-metadata mismatch output cleanup",
+                    &output,
+                );
+                VidQualityError::ConversionError(format!(
+                    "Animated Meme Mode cleared-metadata verification failed for {}: {error}",
+                    output.display()
+                ))
+            })?;
 
             mark_as_processed(input);
 
@@ -2963,7 +2986,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
             gifski_builder.input(frame);
         }
 
-        let res = gifski_builder.build().output();
+        let res = run_animated_process(gifski_builder.build());
 
         drop(gifski_frames_dir);
         match res {
@@ -3040,47 +3063,53 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
         );
     }
 
-    let tolerance_ratio = if options.allow_size_tolerance() {
-        1.0 + foundation::constants::DEFAULT_SIZE_TOLERANCE_RATIO
-    } else {
-        1.0_f64
-    };
-    let max_allowed_size =
-        { size_guard_limit(input_size, tolerance_ratio, "animated_gif_max_allowed_size")? };
-
     // apple_compat: compatibility takes priority — a playable GIF is always
     // better than a non-playable original (e.g. animated AVIF).
     // But if the source is already playable (like APNG or GIF), size guard stays active.
     let is_guard_active = foundation::is_size_guard_active(&input_ext, options.apple_compat());
 
-    if is_guard_active && output_size > max_allowed_size {
-        let size_increase_pct = {
-            let ratio = Rational::from((output_size, input_size.max(1)));
-            (ratio.to_f64() - 1.0_f64) * 100.0_f64
-        };
-        if let Err(e) = fs::remove_file(&temp_output) {
-            log_detail!("[cleanup] Failed to remove oversized GIF output: {e}");
-        }
-        if options.allow_size_tolerance() {
-            log_detail!(
-                "   Skipping: GIF output larger than input by {size_increase_pct:.1}% (allowed growth: 1.0%)",
-            );
-        } else {
-            log_detail!(
-                "   Skipping: GIF output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)",
-            );
-        }
-        log_detail!(
-            "   Size comparison: {input_size} → {output_size} bytes (+{size_increase_pct:.1}%)",
-        );
-        return skipped_with_fallback_owned(
+    if is_guard_active {
+        let verification = foundation::verify_strict_pure_media_paths(
             input,
-            options,
-            format!(
-                "Skipped: GIF output larger than input by {size_increase_pct:.1}% (tolerance exceeded)"
-            ),
-            "size_increase_beyond_tolerance".to_string(),
-        );
+            &temp_output,
+            options.allow_size_tolerance(),
+        )
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Strict GIF pure-media verification failed for {} -> {}: {err}",
+                input.display(),
+                temp_output.display()
+            ))
+        })?;
+        if !verification.pure_media_compressed {
+            let size_increase_pct = verification.pure_media_size_change_percent();
+            if let Err(e) = fs::remove_file(&temp_output) {
+                log_detail!("[cleanup] Failed to remove pure-media-oversized GIF output: {e}");
+            }
+            if options.allow_size_tolerance() {
+                log_detail!(
+                    "   Skipping: GIF pure media larger than input by {size_increase_pct:.1}% (allowed growth: {} bytes)",
+                    foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+                );
+            } else {
+                log_detail!(
+                    "   Skipping: GIF pure media larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)",
+                );
+            }
+            log_detail!(
+                "   Pure-media comparison: {} → {} bytes ({size_increase_pct:+.1}%)",
+                verification.input_pure_media_size,
+                verification.output_pure_media_size,
+            );
+            return skipped_with_fallback_owned(
+                input,
+                options,
+                format!(
+                    "Skipped: GIF pure media larger than input by {size_increase_pct:.1}% (tolerance exceeded)"
+                ),
+                "size_increase_beyond_tolerance".to_string(),
+            );
+        }
     }
 
     if !foundation::conversion::commit_temp_to_output_with_metadata(
@@ -3122,9 +3151,7 @@ pub fn convert_to_gif_apple_compat(input: &Path, options: &ConvertOptions) -> Re
 fn parse_webpmux_info(input: &Path) -> Result<(u32, Vec<u32>)> {
     let mut builder = foundation::WebpmuxBuilder::new();
     builder.input(input).info(true);
-    let webpmux_info = builder
-        .build()
-        .output()
+    let webpmux_info = run_animated_process(builder.build())
         .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {e}")))?;
 
     if !webpmux_info.status.success() {
@@ -3348,37 +3375,51 @@ mod tests {
     }
 
     #[test]
-    fn test_animated_quality_failure_prefers_total_size_reason_over_stream_growth() {
-        let decision = AnimatedQualityFailureDecision::inspect_and_log(
+    fn test_animated_quality_failure_reports_pure_media_reason() {
+        let explore_result = foundation::ExploreResult {
+            quality_passed: foundation::types::CheckResult::Failed(
+                "Pure media not smaller than input".to_string(),
+            ),
+            ssim: Some(0.99_f64),
+            actual_min_ssim: 0.95,
+            input_pure_media_size: 1_000_000,
+            output_pure_media_size: 1_100_000,
+            ..Default::default()
+        };
+        let decision = AnimatedGateRejectionDecision::inspect_and_log(
             Path::new("/tmp/test.gif"),
-            &foundation::ExploreResult {
-                quality_passed: foundation::types::CheckResult::Failed(
-                    "Total file not smaller than input".to_string(),
-                ),
-                ssim: Some(0.99_f64),
-                actual_min_ssim: 0.95,
-                input_video_stream_size: 1_000_000,
-                output_video_stream_size: 1_100_000,
-                ..Default::default()
-            },
+            &explore_result,
         );
 
         assert_eq!(
-            decision.skip_message,
-            "Skipped: Total file not smaller than input"
+            decision.message,
+            "Skipped: Pure media not smaller than input"
         );
         assert_eq!(
             decision.label,
             foundation::infra::static_logs::messages::LABEL_QUALITY_FAIL
         );
-        assert!(!decision.skip_message.contains("video stream"));
+        assert!(!decision.failed);
+        assert!(!decision.message.contains("total file"));
     }
 
     #[test]
-    fn size_guard_invalid_ratio_returns_error() {
-        let err = size_guard_limit(100, f64::NAN, "test_size_guard").unwrap_err();
+    fn animated_quality_verification_rejection_is_failed_not_skipped() {
+        let decision = AnimatedGateRejectionDecision::inspect_and_log(
+            Path::new("/tmp/test.gif"),
+            &foundation::ExploreResult {
+                quality_passed: foundation::types::CheckResult::Failed(
+                    "SSIM below threshold".to_string(),
+                ),
+                ssim: Some(0.80),
+                actual_min_ssim: 0.95,
+                ..Default::default()
+            },
+        );
 
-        assert!(err.to_string().contains("Invalid size tolerance ratio"));
+        assert!(decision.failed);
+        assert!(decision.message.starts_with("Failed:"));
+        assert_eq!(decision.reason_code, "quality_failed");
     }
 
     #[test]
@@ -3512,7 +3553,7 @@ mod tests {
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {
-                // Verify the task is a proper fallback result, not skipped_custom
+                assert_eq!(task.outcome(), foundation::conversion::Outcome::Failed);
                 assert!(!task.message.contains("original copy failed"));
                 assert!(task.message.contains("Test fallback message"));
             }
@@ -3538,7 +3579,7 @@ mod tests {
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {
-                // Should handle missing file gracefully with skipped_custom
+                assert_eq!(task.outcome(), foundation::conversion::Outcome::Failed);
                 assert!(task.message.contains("original copy failed"));
             }
             PrepareAnimatedRasterOutcome::Ready(_) => {

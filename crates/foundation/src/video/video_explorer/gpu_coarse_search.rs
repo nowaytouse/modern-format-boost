@@ -421,7 +421,7 @@ struct TrackingState {
 }
 
 /// Format the `QualityCheck` log line from result; used for logging and unit
-/// tests (regression: enhanced failure shows reason, not "total file not
+/// tests (regression: enhanced failure shows reason, not "pure media not
 /// smaller").
 ///
 /// Diagnostic only — exploration accept/reject uses
@@ -440,7 +440,7 @@ pub(crate) fn format_quality_check_line(
             );
         }
         if result.ultimate_quality_passed.is_passed() && result.quality_passed.is_passed() {
-            return "   QualityCheck: PASSED (3D gate + total file size target met)".to_string();
+            return "   QualityCheck: PASSED (3D gate + pure media size target met)".to_string();
         }
         if result.quality_passed.is_failed() {
             return crate::media_conversion_gate::explore_quality_check_failed_line(
@@ -459,7 +459,7 @@ pub(crate) fn format_quality_check_line(
         );
     }
     if result.quality_passed.is_passed() {
-        return "   QualityCheck: PASSED (quality + total file size target met)".to_string();
+        return "   QualityCheck: PASSED (quality + pure media size target met)".to_string();
     }
     if result.size_target_met.is_passed() && result.quality_passed.is_skipped() {
         return "   QualityCheck: PASSED (size target met; quality gate not required)".to_string();
@@ -474,7 +474,7 @@ pub(crate) fn format_quality_check_line(
                 ),
                 None => crate::media_conversion_gate::explore_quality_check_failed_line(
                     None,
-                    "quality met but total file not smaller",
+                    "quality met but pure media not smaller",
                     "quality_passed_enhanced",
                 ),
             },
@@ -516,6 +516,7 @@ struct ExploreSession<'a> {
     preset: EncoderPreset,
     final_output_preset: EncoderPreset,
     input_size: u64,
+    input_pure_media_size: u64,
     gpu: crate::gpu_accel::GpuAccel,
     encoder_name: &'static str,
     has_gpu_encoder: bool,
@@ -545,6 +546,14 @@ impl<'a> ExploreSession<'a> {
         let input_size = fs::metadata(input)
             .context("Failed to read input file metadata")?
             .len();
+        let input_pure_media_size = crate::stream_size::measure_strict_pure_media(input)
+            .with_context(|| {
+                format!(
+                    "Strict pure-media input measurement failed for {}",
+                    input.display()
+                )
+            })?
+            .pure_media_size();
         let gpu = crate::gpu_accel::GpuAccel::detect_with_retry();
         let encoder_name = match encoder {
             VideoEncoder::Hevc => "hevc",
@@ -608,6 +617,7 @@ impl<'a> ExploreSession<'a> {
             preset,
             final_output_preset,
             input_size,
+            input_pure_media_size,
             gpu,
             encoder_name,
             has_gpu_encoder,
@@ -721,7 +731,8 @@ impl<'a> ExploreSession<'a> {
 
     fn bitrate_bps(&self) -> f64 {
         if self.duration > 0.0 {
-            (crate::numeric_cast::u64_to_f64(self.input_size) * 8.0_f64) / f64::from(self.duration)
+            (crate::numeric_cast::u64_to_f64(self.input_pure_media_size) * 8.0_f64)
+                / f64::from(self.duration)
         } else {
             0.0_f64
         }
@@ -794,11 +805,11 @@ impl<'a> ExploreSession<'a> {
             crate::constants::GPU_SAMPLE_DURATION
         };
         let gpu_sample_input_size = if self.duration <= sample_dur {
-            self.input_size
+            self.input_pure_media_size
         } else {
             let ratio = sample_dur / self.duration;
             crate::numeric_cast::f64_to_u64_strict(
-                crate::numeric_cast::u64_to_f64(self.input_size) * f64::from(ratio),
+                crate::numeric_cast::u64_to_f64(self.input_pure_media_size) * f64::from(ratio),
                 "gpu_sample_input_size",
             )
             .ok_or_else(|| anyhow::anyhow!("GPU sample input size calculation overflowed u64"))?
@@ -832,7 +843,7 @@ impl<'a> ExploreSession<'a> {
             self.input,
             &temp_output,
             self.encoder_name,
-            self.input_size,
+            self.input_pure_media_size,
             &gpu_config,
             &self.vf_args,
             Some(&progress_callback),
@@ -847,7 +858,7 @@ impl<'a> ExploreSession<'a> {
             })?;
             (crf, size)
         } else {
-            (gpu_config.max_crf, self.input_size)
+            (gpu_config.max_crf, self.input_pure_media_size)
         };
         gpu_progress.finish_iteration(final_crf, final_size, None);
         Ok(gpu_result)
@@ -930,7 +941,7 @@ impl<'a> ExploreSession<'a> {
         };
         let dynamic_mapper = dynamic_mapping::quick_calibrate(
             self.input,
-            self.input_size,
+            self.input_pure_media_size,
             self.encoder,
             &self.vf_args,
             gpu_encoder,
@@ -961,7 +972,7 @@ impl<'a> ExploreSession<'a> {
             let calibration = calibration::Point::from_gpu_result(
                 gpu_crf,
                 gpu_size,
-                self.input_size,
+                self.input_pure_media_size,
                 if self.flags.features.ultimate_mode {
                     None
                 } else {
@@ -969,7 +980,7 @@ impl<'a> ExploreSession<'a> {
                 },
                 mapping.offset,
             );
-            calibration.print_report(self.input_size);
+            calibration.print_report(self.input_pure_media_size);
             calibration.predicted_cpu_crf
         };
 
@@ -1252,15 +1263,20 @@ impl<'a> ExploreSession<'a> {
                 )
             })?
             .len();
-        let size_change_line = if self.input_size == 0 {
-            "   SizeChange: N/A (zero input size)".to_string()
+        let size_change_line = if result.input_pure_media_size == 0 {
+            "   PureMediaChange: N/A (zero input payload)".to_string()
         } else {
-            let ratio = crate::numeric_cast::u64_to_f64(output_size_actual)
-                / crate::numeric_cast::u64_to_f64(self.input_size);
+            let ratio = crate::numeric_cast::u64_to_f64(result.output_pure_media_size)
+                / crate::numeric_cast::u64_to_f64(result.input_pure_media_size);
             let pct = (ratio - 1.0_f64) * 100.0_f64;
-            format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
+            format!("   PureMediaChange: {ratio:.2}x ({pct:+.1}%) vs original payload")
         };
         result.log.push(size_change_line);
+        result.log.push(format!(
+            "   TotalFile: {} → {}",
+            crate::format_bytes(self.input_size),
+            crate::format_bytes(output_size_actual)
+        ));
 
         let quality_line = if let Some(summary) = result.ultimate_quality_summary() {
             format!("   Quality: {summary}")
@@ -2773,16 +2789,15 @@ impl FineTuneEncoder<'_> {
 
     fn wait_for_output_size(&self) -> Result<u64> {
         let mut metadata_retry = 0_i32;
-        let mut final_size = 0_u64;
+        let mut output_ready = false;
         let mut last_metadata_err = None;
         while metadata_retry < 5_i32 {
             match fs::metadata(self.output) {
-                Ok(metadata) => {
-                    final_size = metadata.len();
-                    if final_size > 0 {
-                        break;
-                    }
+                Ok(metadata) if metadata.len() > 0 => {
+                    output_ready = true;
+                    break;
                 }
+                Ok(_) => {}
                 Err(err) => {
                     last_metadata_err = Some(err);
                 }
@@ -2793,9 +2808,9 @@ impl FineTuneEncoder<'_> {
             }
         }
 
-        if final_size == 0 && !self.output.exists() {
+        if !output_ready {
             anyhow::bail!(
-                "{} FFmpeg reported success but output file is missing: {}. metadata error: {}",
+                "{} FFmpeg reported success but output is missing or empty: {}. metadata error: {}",
                 crf_fail_tag(),
                 self.output.display(),
                 last_metadata_err
@@ -2804,7 +2819,14 @@ impl FineTuneEncoder<'_> {
             );
         }
 
-        Ok(final_size)
+        Ok(crate::stream_size::measure_strict_pure_media(self.output)
+            .with_context(|| {
+                format!(
+                    "Strict pure-media output measurement failed for {}",
+                    self.output.display()
+                )
+            })?
+            .pure_media_size())
     }
 }
 
@@ -2899,8 +2921,7 @@ struct CpuFineTuneSession<'a> {
     gpu_executed: bool,
 
     // ---- Derived from inputs (immutable) ---------------------------
-    input_size: u64,
-    input_video_stream_size: u64,
+    input_pure_media_size: u64,
     input_is_animated_image_like: bool,
     use_animated_exploration_sampling: bool,
     exploration_mode: AnimatedExplorationEncodeMode,
@@ -2966,8 +2987,14 @@ impl<'a> CpuFineTuneSession<'a> {
         let input_is_image = is_image_container(input);
         let input_is_animated_image_like = is_animated_image_like_input(input, probe_info);
 
-        let input_stream_info = crate::stream_size::extract_stream_sizes(input);
-        let input_video_stream_size = input_stream_info.video_stream_size;
+        let input_measurement =
+            crate::stream_size::measure_strict_pure_media(input).with_context(|| {
+                format!(
+                    "Strict pure-media input measurement failed for {}",
+                    input.display()
+                )
+            })?;
+        let input_pure_media_size = input_measurement.pure_media_size();
         let pts_integrity = crate::ffprobe_json::check_pts_integrity(input)?;
         if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
             let msg = if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
@@ -2998,11 +3025,11 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "Input video stream: {stream_size} (total file: {total_size}, overhead: \
-                 {overhead:.1}%)",
-                stream_size = crate::modern_ui::format_size(input_video_stream_size),
+                "Input pure media: {pure_size} (total file: {total_size}, container/metadata: {overhead})",
+                pure_size = crate::modern_ui::format_size(input_pure_media_size),
                 total_size = crate::modern_ui::format_size(input_size),
-                overhead = input_stream_info.container_overhead_percent()
+                overhead =
+                    crate::modern_ui::format_size(input_size.saturating_sub(input_pure_media_size))
             )
         );
 
@@ -3015,7 +3042,7 @@ impl<'a> CpuFineTuneSession<'a> {
         };
         let cpu_progress = crate::UnifiedProgressBar::new_iteration(
             "[CPU] Fine-Tune",
-            input_size,
+            input_pure_media_size,
             estimated_iterations,
         );
 
@@ -3112,8 +3139,7 @@ impl<'a> CpuFineTuneSession<'a> {
             is_gif_magic,
             allow_size_tolerance,
             gpu_executed,
-            input_size,
-            input_video_stream_size,
+            input_pure_media_size,
             input_is_animated_image_like,
             use_animated_exploration_sampling,
             exploration_mode,
@@ -3211,8 +3237,8 @@ impl<'a> CpuFineTuneSession<'a> {
         Ok(size)
     }
 
-    fn total_size_pct(&self, size: u64) -> f64 {
-        super::calc_change_pct_for_input_size(self.input_size, size)
+    fn pure_media_size_pct(&self, size: u64) -> f64 {
+        super::calc_change_pct_for_input_size(self.input_pure_media_size, size)
     }
 
     fn calculate_ssim_quick(&mut self) -> anyhow::Result<Option<f64>> {
@@ -3294,10 +3320,10 @@ impl<'a> CpuFineTuneSession<'a> {
         }
 
         self.run_phase4_refinement()?;
-        let (final_crf, final_full_size, run_phase5) = self.prepare_final_settlement()?;
-        let (final_crf, final_full_size) =
-            self.run_phase5(final_crf, final_full_size, run_phase5)?;
-        self.build_result(final_crf, final_full_size)
+        let (final_crf, final_pure_media_size, run_phase5) = self.prepare_final_settlement()?;
+        let (final_crf, final_pure_media_size) =
+            self.run_phase5(final_crf, final_pure_media_size, run_phase5)?;
+        self.build_result(final_crf, final_pure_media_size)
     }
 
     fn verify_boundary(&mut self) -> Result<BoundaryOutcome> {
@@ -3320,14 +3346,14 @@ impl<'a> CpuFineTuneSession<'a> {
             e
         })?;
         self.iterations += 1;
-        let gpu_pct = self.total_size_pct(gpu_size);
+        let gpu_pct = self.pure_media_size_pct(gpu_size);
         let gpu_ssim = if self.ultimate_mode {
             None
         } else {
             self.calculate_ssim_quick()?
         };
 
-        if gpu_size >= self.input_size {
+        if gpu_size >= self.input_pure_media_size {
             crate::media_conversion_gate::explore_gpu_coarse_audit(
                 "explore_gpu_crf",
                 self.input,
@@ -3575,14 +3601,14 @@ impl<'a> CpuFineTuneSession<'a> {
 
             let size = self.encode_cached(test_crf)?;
             self.iterations += 1;
-            let total_size_pct = self.total_size_pct(size);
+            let pure_media_size_pct = self.pure_media_size_pct(size);
             let current_ssim_opt = if self.ultimate_mode {
                 None
             } else {
                 self.calculate_ssim_quick()?
             };
 
-            let is_effectively_compressed = size < self.input_size;
+            let is_effectively_compressed = size < self.input_pure_media_size;
 
             if is_effectively_compressed {
                 let prev_ssim_opt = last_good_ssim;
@@ -3714,7 +3740,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% \
+                            "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% \
                              {metrics_display}{sat_status}",
                             crf_pass_prefix(),
                             metrics_display = if ultimate_metrics_str.is_empty() {
@@ -3767,7 +3793,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ \
+                            "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ \
                              SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}{sat_status}",
                             crf_pass_prefix(),
                             sat_status = if consecutive_zero_gains > 0
@@ -3788,7 +3814,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ \
+                            "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ \
                              SSIM:{current_ssim:.4}",
                             crf_pass_prefix()
                         )
@@ -3798,7 +3824,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%",
+                            "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}%",
                             crf_pass_prefix()
                         )
                     );
@@ -3832,7 +3858,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "Final: CRF {test_crf:.2}, compression {total_size_pct:+.1}%, \
+                            "Final: CRF {test_crf:.2}, compression {pure_media_size_pct:+.1}%, \
                              iterations {iter}",
                             iter = self.iterations
                         )
@@ -3857,7 +3883,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_2,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ {} WALL HIT \
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ {} WALL HIT \
                          #{wall_hits} (Backtrack: {current_step:.2} → {new_step:.2} {phase_info})",
                         crf_fail_prefix(),
                         crf_fail_tag(),
@@ -3981,7 +4007,7 @@ impl<'a> CpuFineTuneSession<'a> {
 
             let ceiling_size = self.encode_cached(max_crf)?;
             self.iterations += 1;
-            let ceiling_pct = self.total_size_pct(ceiling_size);
+            let ceiling_pct = self.pure_media_size_pct(ceiling_size);
 
             if ceiling_pct >= 0.0_f64 {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
@@ -4024,9 +4050,9 @@ impl<'a> CpuFineTuneSession<'a> {
             self.iterations += 1;
             feedback.upward_iteration_count += 1;
 
-            let total_size_pct = self.total_size_pct(size);
+            let pure_media_size_pct = self.pure_media_size_pct(size);
 
-            if total_size_pct < 0.0_f64 {
+            if pure_media_size_pct < 0.0_f64 {
                 found_compress_point = true;
                 best_tested_crf = test_crf;
                 best_tested_size = size;
@@ -4035,7 +4061,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 break;
             }
 
-            let size_delta = (total_size_pct - last_size_pct).abs();
+            let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
             // Unified Direction Switch Logic: size stagnation past the lossless deadzone or
             // sustained upward iteration without finding compression flips us to a downward
@@ -4073,7 +4099,7 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             if search_cadence == UpwardSearchCadence::Adaptive {
-                if size_delta < 0.1_f64 && total_size_pct > 100.0_f64 {
+                if size_delta < 0.1_f64 && pure_media_size_pct > 100.0_f64 {
                     stagnation_count += 1;
 
                     if test_crf < 15.0 && size_delta < 0.02_f64 && stagnation_count >= 2 {
@@ -4100,7 +4126,7 @@ impl<'a> CpuFineTuneSession<'a> {
                         }
                     }
 
-                    if stagnation_count >= 6 && total_size_pct > 110.0_f64 && test_crf > 30.0 {
+                    if stagnation_count >= 6 && pure_media_size_pct > 110.0_f64 && test_crf > 30.0 {
                         crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                             "explore_gpu_size",
                             "Quality/Size Plateau detected: bailing out early.",
@@ -4112,7 +4138,7 @@ impl<'a> CpuFineTuneSession<'a> {
                         self.early_insight_triggered = true;
                         break;
                     }
-                } else if size_delta > 2.5_f64 && total_size_pct < 110.0_f64 {
+                } else if size_delta > 2.5_f64 && pure_media_size_pct < 110.0_f64 {
                     if current_step > Self::STEP_UPWARD {
                         let jog_step = crate::constants::EXPLORATION_UPWARD_JOG_MIN_STEP
                             .max(Self::STEP_UPWARD);
@@ -4150,14 +4176,14 @@ impl<'a> CpuFineTuneSession<'a> {
                 best_tested_size = size;
             }
 
-            let is_effectively_compressed = size < self.input_size;
+            let is_effectively_compressed = size < self.input_pure_media_size;
 
             // Ultimate Mode: Insight-Based Credibility Check (Sticky). Only run expensive
             // VMAF/PSNR when we are somewhat close to compression to avoid process
             // exhaustion.
             if self.ultimate_mode
                 && !is_effectively_compressed
-                && (total_size_pct < 120.0_f64 || self.iterations < 2)
+                && (pure_media_size_pct < 120.0_f64 || self.iterations < 2)
             {
                 let vmaf = super::ssim_calculator::calculate_vmaf_y(self.input, self.output, 6)?;
                 let psnr_uv =
@@ -4182,7 +4208,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_2,
                         &format!(
-                            "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ VMAF:{v:.2} \
+                            "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ VMAF:{v:.2} \
                              UV:{chroma_avg:.2} ({failure_credibility:.1}/3.0 \
                              {improvement_indicator})",
                             crf_fail_prefix(),
@@ -4220,14 +4246,14 @@ impl<'a> CpuFineTuneSession<'a> {
             if is_effectively_compressed {
                 // Backtrack-on-Overshoot: if we jumped from >105% to <95%, seek precision
                 if last_size_pct > 105.0_f64
-                    && total_size_pct < 95.0_f64
+                    && pure_media_size_pct < 95.0_f64
                     && current_step > 0.5
                     && backtrack_count < 2
                 {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_STRATEGY,
                         &format!(
-                            "Overshot boundary ({total_size_pct:.1}%): backtracking for \
+                            "Overshot boundary ({pure_media_size_pct:.1}%): backtracking for \
                              precision... (retry {retry}/2)",
                             retry = backtrack_count + 1
                         )
@@ -4246,7 +4272,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_2,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ FOUND! {}",
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ FOUND! {}",
                         crf_pass_prefix(),
                         crf_pass_tag()
                     )
@@ -4256,7 +4282,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_2,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% {}",
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% {}",
                         crf_fail_prefix(),
                         crf_fail_tag()
                     )
@@ -4289,7 +4315,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 UpwardSearchCadence::Adaptive | UpwardSearchCadence::Normal => {}
             }
 
-            last_size_pct = total_size_pct;
+            last_size_pct = pure_media_size_pct;
             test_crf += current_step;
         }
 
@@ -4335,7 +4361,7 @@ impl<'a> CpuFineTuneSession<'a> {
         })?;
 
         let mut current_step = crate::constants::EXPLORATION_PHASE3_DOWNWARD_STEP;
-        let mut last_size_pct = self.total_size_pct(compress_size);
+        let mut last_size_pct = self.pure_media_size_pct(compress_size);
         let mut backtrack_count = 0u32;
         let mut failure_credibility = 0.0_f64;
         let mut consecutive_failures = 0u32;
@@ -4361,7 +4387,7 @@ impl<'a> CpuFineTuneSession<'a> {
 
             let size = self.encode_cached(test_crf)?;
             self.iterations += 1;
-            let total_size_pct = self.total_size_pct(size);
+            let pure_media_size_pct = self.pure_media_size_pct(size);
 
             let current_ssim_opt = if self.ultimate_mode {
                 None
@@ -4394,8 +4420,8 @@ impl<'a> CpuFineTuneSession<'a> {
                 }
             }
 
-            let is_effectively_compressed = size < self.input_size;
-            let size_delta = (total_size_pct - last_size_pct).abs();
+            let is_effectively_compressed = size < self.input_pure_media_size;
+            let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
             if is_effectively_compressed {
                 consecutive_failures = 0;
@@ -4445,7 +4471,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} (step \
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}%{metrics_str} (step \
                          {current_step:.2}) {}",
                         crf_pass_prefix(),
                         crf_pass_tag(),
@@ -4533,7 +4559,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     }
                 }
 
-                last_size_pct = total_size_pct;
+                last_size_pct = pure_media_size_pct;
                 test_crf -= current_step;
             } else {
                 consecutive_failures += 1;
@@ -4554,7 +4580,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_str} {} (fail \
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}%{metrics_str} {} (fail \
                          {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})",
                         crf_fail_prefix(),
                         crf_fail_tag(),
@@ -4622,7 +4648,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     );
                     break;
                 }
-                last_size_pct = total_size_pct;
+                last_size_pct = pure_media_size_pct;
             }
         }
 
@@ -4639,7 +4665,7 @@ impl<'a> CpuFineTuneSession<'a> {
 
         let current_ratio = self.best_size.map(|sz| {
             crate::numeric_cast::u64_to_f64(sz)
-                / crate::numeric_cast::u64_to_f64(self.input_size.max(1))
+                / crate::numeric_cast::u64_to_f64(self.input_pure_media_size.max(1))
         });
         if current_ratio.is_none() {
             crate::media_conversion_gate::explore_gpu_coarse_audit(
@@ -4684,7 +4710,7 @@ impl<'a> CpuFineTuneSession<'a> {
         let mut current_best = best;
         let mut test_crf = best - current_step;
         let mut fine_failures = 0_i32;
-        let mut last_size_pct = self.total_size_pct(current_best_size);
+        let mut last_size_pct = self.pure_media_size_pct(current_best_size);
         let mut backtrack_count = 0u32;
         let search_floor = 0.0_f32;
         let mut consecutive_successes = 0_i32;
@@ -4715,9 +4741,9 @@ impl<'a> CpuFineTuneSession<'a> {
             let size = self.encode_cached(test_crf)?;
             self.iterations += 1;
 
-            let is_effectively_compressed = size < self.input_size;
-            let total_size_pct = self.total_size_pct(size);
-            let size_delta = (total_size_pct - last_size_pct).abs();
+            let is_effectively_compressed = size < self.input_pure_media_size;
+            let pure_media_size_pct = self.pure_media_size_pct(size);
+            let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
             if is_effectively_compressed {
                 current_best = test_crf;
@@ -4737,7 +4763,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_4,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}%{metrics_info} │ \
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}%{metrics_info} │ \
                          {step_info}",
                         crf_pass_prefix(),
                         step_info = if current_step > base_step + 0.001 {
@@ -4791,7 +4817,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     );
                 }
 
-                last_size_pct = total_size_pct;
+                last_size_pct = pure_media_size_pct;
                 test_crf -= current_step;
             } else {
                 fine_failures += 1_i32;
@@ -4800,7 +4826,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_4,
                     &format!(
-                        "{} [CPU] CRF {test_crf:<5.2} {total_size_pct:6.1}% │ CAPACITY EXCEEDED \
+                        "{} [CPU] CRF {test_crf:<5.2} {pure_media_size_pct:6.1}% │ CAPACITY EXCEEDED \
                          ({fine_failures}/{max_fine_failures})",
                         crf_fail_prefix(),
                     )
@@ -4867,12 +4893,12 @@ impl<'a> CpuFineTuneSession<'a> {
                 );
                 let size = self.encode_cached(0.0)?;
                 self.iterations += 1;
-                let total_size_pct = self.total_size_pct(size);
-                if size < self.input_size {
+                let pure_media_size_pct = self.pure_media_size_pct(size);
+                if size < self.input_pure_media_size {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_4,
                         &format!(
-                            "{} [CPU] CRF 0.00 {total_size_pct:6.1}% │ 0.01-GRANULARITY GAIN",
+                            "{} [CPU] CRF 0.00 {pure_media_size_pct:6.1}% │ 0.01-GRANULARITY GAIN",
                             crf_pass_prefix(),
                         )
                     );
@@ -4882,13 +4908,13 @@ impl<'a> CpuFineTuneSession<'a> {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_4,
                         &format!(
-                            "{} [CPU] CRF 0.00 {total_size_pct:6.1}% │ CAPACITY EXCEEDED at floor",
+                            "{} [CPU] CRF 0.00 {pure_media_size_pct:6.1}% │ CAPACITY EXCEEDED at floor",
                             crf_fail_prefix(),
                         )
                     );
                 }
             } else if let Some(&cached_size) = self.size_cache.get(0.0_f32)
-                && cached_size < self.input_size
+                && cached_size < self.input_pure_media_size
                 && current_best > 0.0
             {
                 current_best = 0.0;
@@ -4924,9 +4950,9 @@ impl<'a> CpuFineTuneSession<'a> {
             0
         };
 
-        let (final_crf, mut final_full_size) = match (self.best_crf, self.best_size) {
+        let (final_crf, mut final_pure_media_size) = match (self.best_crf, self.best_size) {
             (Some(crf), Some(size)) if crf < self.max_crf => {
-                if size < self.input_size + size_tolerance {
+                if size < self.input_pure_media_size + size_tolerance {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
                         &format!("Best CRF {crf:.2} settled from search (output on disk)")
@@ -4937,7 +4963,7 @@ impl<'a> CpuFineTuneSession<'a> {
                         self.input,
                         format!(
                             "Best tested CRF {crf:.2} yielded larger file (+{pct:+.1}%)",
-                            pct = self.total_size_pct(size)
+                            pct = self.pure_media_size_pct(size)
                         ),
                     );
                 }
@@ -4951,7 +4977,7 @@ impl<'a> CpuFineTuneSession<'a> {
                          compression is futile."
                     );
                     let fallback_crf = self.max_crf;
-                    let size = self.input_size + 1;
+                    let size = self.input_pure_media_size + 1;
                     (fallback_crf, size)
                 } else {
                     crate::log_info!(
@@ -4962,16 +4988,24 @@ impl<'a> CpuFineTuneSession<'a> {
                         )
                     );
 
-                    let last_output_video = crate::stream_size::get_output_video(self.output);
+                    let last_output_pure_media =
+                        crate::stream_size::measure_strict_pure_media(self.output)
+                            .with_context(|| {
+                                format!(
+                                    "Strict pure-media output measurement failed for {}",
+                                    self.output.display()
+                                )
+                            })?
+                            .pure_media_size();
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
                         &format!(
-                            "Video stream: input {in_b} vs output {out_b} ({pct:+.1}%)",
-                            in_b = crate::format_bytes(self.input_video_stream_size),
-                            out_b = crate::format_bytes(last_output_video),
+                            "Pure media: input {in_b} vs output {out_b} ({pct:+.1}%)",
+                            in_b = crate::format_bytes(self.input_pure_media_size),
+                            out_b = crate::format_bytes(last_output_pure_media),
                             pct = stream_size_change_pct(
-                                last_output_video,
-                                self.input_video_stream_size
+                                last_output_pure_media,
+                                self.input_pure_media_size
                             )
                         )
                     );
@@ -5000,7 +5034,7 @@ impl<'a> CpuFineTuneSession<'a> {
                         .hevc_name_for_archive(self.archive_mode)
                 )
             );
-            final_full_size = self.fine_tune_encoder.encode_full(
+            final_pure_media_size = self.fine_tune_encoder.encode_full(
                 final_crf,
                 AnimatedExplorationEncodeMode::FullTimeline,
                 self.final_output_preset,
@@ -5025,7 +5059,7 @@ impl<'a> CpuFineTuneSession<'a> {
                         .hevc_name_for_archive(self.archive_mode)
                 )
             );
-            final_full_size = self.fine_tune_encoder.encode_full(
+            final_pure_media_size = self.fine_tune_encoder.encode_full(
                 final_crf,
                 AnimatedExplorationEncodeMode::FullTimeline,
                 self.final_output_preset,
@@ -5034,17 +5068,17 @@ impl<'a> CpuFineTuneSession<'a> {
             run_phase5 = true;
         }
 
-        Ok((final_crf, final_full_size, run_phase5))
+        Ok((final_crf, final_pure_media_size, run_phase5))
     }
 
     fn run_phase5(
         &mut self,
         mut final_crf: f32,
-        mut final_full_size: u64,
+        mut final_pure_media_size: u64,
         run_phase5: bool,
     ) -> Result<(f32, u64)> {
         if !run_phase5 {
-            return Ok((final_crf, final_full_size));
+            return Ok((final_crf, final_pure_media_size));
         }
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_5,
@@ -5139,10 +5173,10 @@ impl<'a> CpuFineTuneSession<'a> {
             ) {
                 Ok(test_size) => {
                     self.iterations += 1;
-                    if test_size < final_full_size {
+                    if test_size < final_pure_media_size {
                         let pct_gain = (1.0_f64
                             - (crate::numeric_cast::u64_to_f64(test_size)
-                                / crate::numeric_cast::u64_to_f64(final_full_size.max(1))))
+                                / crate::numeric_cast::u64_to_f64(final_pure_media_size.max(1))))
                             * 100.0_f64;
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_PHASE_5,
@@ -5153,7 +5187,7 @@ impl<'a> CpuFineTuneSession<'a> {
                             )
                         );
                         final_crf = test_crf;
-                        final_full_size = test_size;
+                        final_pure_media_size = test_size;
                         crate::media_conversion_gate::delivery_remove_file_or_audit(
                             "gpu_coarse_phase5_backup_discard",
                             &backup_path,
@@ -5167,7 +5201,7 @@ impl<'a> CpuFineTuneSession<'a> {
                             crate::infra::static_logs::messages::LABEL_PHASE_5,
                             &format!(
                                 "{} CRF {test_crf:.2} -> {test_size} bytes (increased past \
-                                 {final_full_size}, discarding)",
+                                 {final_pure_media_size}, discarding)",
                                 crf_fail_prefix(),
                             )
                         );
@@ -5234,17 +5268,20 @@ impl<'a> CpuFineTuneSession<'a> {
             &format!("Phase 5 completed. Final CRF: {final_crf:.2}")
         );
 
-        Ok((final_crf, final_full_size))
+        Ok((final_crf, final_pure_media_size))
     }
 
     /// Run quality verification, package the explore result, and emit the
     /// closing logs.
-    fn build_result(self, final_crf: f32, final_full_size: u64) -> anyhow::Result<ExploreResult> {
+    fn build_result(
+        self,
+        final_crf: f32,
+        final_pure_media_size: u64,
+    ) -> anyhow::Result<ExploreResult> {
         let CpuFineTuneSession {
             input,
             output,
-            input_size,
-            input_video_stream_size,
+            input_pure_media_size,
             input_is_animated_image_like,
             ultimate_mode,
             duration,
@@ -5266,33 +5303,35 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "Final: CRF {final_crf:.2} | Size: {final_full_size} bytes ({mb:.2} MB)",
-                mb = crate::numeric_cast::u64_to_f64(final_full_size) / 1_024.0_f64 / 1_024.0_f64
+                "Final: CRF {final_crf:.2} | Pure media: {final_pure_media_size} bytes ({mb:.2} MB)",
+                mb = crate::numeric_cast::u64_to_f64(final_pure_media_size)
+                    / 1_024.0_f64
+                    / 1_024.0_f64
             )
         );
 
         let (ssim, lossless_integrity_ok) = Self::evaluate_metrics_and_integrity(
             input,
             output,
-            final_full_size,
+            final_pure_media_size,
             ultimate_mode,
             input_is_animated_image_like,
             final_crf,
         )?;
 
-        let size_change_pct = super::calc_change_pct_for_input_size(input_size, final_full_size);
+        let size_change_pct =
+            super::calc_change_pct_for_input_size(input_pure_media_size, final_pure_media_size);
 
-        let total_file_compressed = final_full_size < input_size + size_tolerance;
-        let _video_stream_compressed =
-            crate::stream_size::can_compress_pure_video(output, input_video_stream_size, true);
+        let pure_media_compressed =
+            final_pure_media_size < input_pure_media_size.saturating_add(size_tolerance);
         let ssim_ok = ssim.is_some_and(|s| s >= min_ssim);
         let integrity_gate_ok = lossless_integrity_ok == Some(true);
         let mut quality_passed = if ultimate_mode {
-            total_file_compressed
+            pure_media_compressed
         } else if lossless_integrity_ok.is_some() {
-            total_file_compressed && integrity_gate_ok
+            pure_media_compressed && integrity_gate_ok
         } else {
-            total_file_compressed && ssim_ok
+            pure_media_compressed && ssim_ok
         };
 
         let (confidence, confidence_detail) = Self::calculate_exploration_confidence(
@@ -5301,8 +5340,8 @@ impl<'a> CpuFineTuneSession<'a> {
             iterations,
             ssim,
             min_ssim,
-            input_size,
-            final_full_size,
+            input_pure_media_size,
+            final_pure_media_size,
             tracking,
             &mut quality_passed,
             lossless_integrity_ok,
@@ -5310,7 +5349,7 @@ impl<'a> CpuFineTuneSession<'a> {
 
         let _result_color = if quality_passed {
             BRIGHT_GREEN
-        } else if total_file_compressed {
+        } else if pure_media_compressed {
             BRIGHT_YELLOW
         } else {
             BRIGHT_RED
@@ -5341,29 +5380,47 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "Total file smaller than input: {}",
-                if total_file_compressed { "YES" } else { "NO" }
+                "Pure media smaller than input: {}",
+                if pure_media_compressed { "YES" } else { "NO" }
             )
         );
 
-        let output_stream_info = crate::stream_size::extract_stream_sizes(output);
-        let input_stream_info = crate::stream_size::extract_stream_sizes(input);
-        let video_stream_pct = if input_stream_info.video_stream_size > 0 {
-            (crate::numeric_cast::u64_to_f64(output_stream_info.video_stream_size)
-                / crate::numeric_cast::u64_to_f64(input_stream_info.video_stream_size.max(1))
-                - 1.0_f64)
-                * 100.0_f64
-        } else {
-            0.0_f64
-        };
+        let input_measurement =
+            crate::stream_size::measure_strict_pure_media(input).with_context(|| {
+                format!(
+                    "Strict pure-media verification failed for {}",
+                    input.display()
+                )
+            })?;
+        let output_measurement = crate::stream_size::measure_strict_pure_media(output)
+            .with_context(|| {
+                format!(
+                    "Strict pure-media verification failed for {}",
+                    output.display()
+                )
+            })?;
+        if input_measurement.pure_media_size() != input_pure_media_size
+            || output_measurement.pure_media_size() != final_pure_media_size
+        {
+            anyhow::bail!(
+                "Pure-media size changed during exploration settlement: input {} -> {}, output {} -> {}",
+                input_pure_media_size,
+                input_measurement.pure_media_size(),
+                final_pure_media_size,
+                output_measurement.pure_media_size()
+            );
+        }
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
             &format!(
-                "Video stream: {in_b} → {out_b} ({video_stream_pct:+.1}%)",
-                in_b = crate::format_bytes(input_stream_info.video_stream_size),
-                out_b = crate::format_bytes(output_stream_info.video_stream_size)
+                "Pure media: {in_b} → {out_b} ({size_change_pct:+.1}%)",
+                in_b = crate::format_bytes(input_pure_media_size),
+                out_b = crate::format_bytes(final_pure_media_size)
             )
         );
+        let output_container_overhead = output_measurement
+            .total_file_size
+            .saturating_sub(final_pure_media_size);
 
         let is_animated_image = input_is_animated_image_like;
 
@@ -5396,8 +5453,8 @@ impl<'a> CpuFineTuneSession<'a> {
         let mut enhanced_verify_fail_reason = (!enhanced_ok).then_some(enhanced.message);
         let quality_passed = quality_passed && enhanced_ok;
         let quality_passed_check = if ultimate_mode {
-            if !total_file_compressed {
-                CheckResult::Failed("Total file not smaller than input".into())
+            if !pure_media_compressed {
+                CheckResult::Failed("Pure media not smaller than input".into())
             } else if let Some(reason) = enhanced_verify_fail_reason.take() {
                 CheckResult::Failed(reason)
             } else {
@@ -5406,8 +5463,8 @@ impl<'a> CpuFineTuneSession<'a> {
             }
         } else if quality_passed {
             CheckResult::Passed
-        } else if !total_file_compressed {
-            CheckResult::Failed("Total file not smaller than input".into())
+        } else if !pure_media_compressed {
+            CheckResult::Failed("Pure media not smaller than input".into())
         } else if let Some(reason) = enhanced_verify_fail_reason.take() {
             CheckResult::Failed(reason)
         } else if lossless_integrity_ok == Some(false) {
@@ -5420,41 +5477,46 @@ impl<'a> CpuFineTuneSession<'a> {
             CheckResult::Failed("Quality gate failed".into())
         };
 
-        let total_file_pct = super::calc_change_pct_for_input_size(input_size, final_full_size);
-        if output_stream_info.is_overhead_excessive() {
+        let total_file_pct = super::calc_change_pct_for_input_size(
+            input_measurement.total_file_size,
+            output_measurement.total_file_size,
+        );
+        let output_overhead_pct = if output_measurement.total_file_size == 0 {
+            0.0
+        } else {
+            crate::numeric_cast::u64_to_f64(output_container_overhead)
+                / crate::numeric_cast::u64_to_f64(output_measurement.total_file_size)
+                * 100.0
+        };
+        if output_overhead_pct > 10.0 {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "explore_gpu_coarse",
-                format!(
-                    "Container overhead: {pct:.1}% (> 10%)",
-                    pct = output_stream_info.container_overhead_percent()
-                ),
+                format!("Container/metadata overhead: {output_overhead_pct:.1}%"),
             );
         }
-        if video_stream_pct < 0.0_f64 && total_file_pct > 0.0_f64 {
+        if size_change_pct < 0.0_f64 && total_file_pct > 0.0_f64 {
             crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                 "explore_gpu_coarse",
                 format!(
-                    "Video stream compressed ({video_stream_pct:+.1}%) but total file larger \
-                     ({total_file_pct:+.1}%)"
+                    "Pure media compressed ({size_change_pct:+.1}%) while total file grew ({total_file_pct:+.1}%)"
                 ),
             );
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_DETECTION,
                 &format!(
-                    "Container overhead: {overhead} ({pct:.1}% of output)",
-                    overhead = crate::format_bytes(output_stream_info.container_overhead),
-                    pct = output_stream_info.container_overhead_percent()
+                    "Container/metadata overhead: {overhead} ({output_overhead_pct:.1}% of output)",
+                    overhead = crate::format_bytes(output_container_overhead)
                 )
             );
         }
 
         confidence_detail.print_report();
 
-        cpu_progress.finish_iteration(final_crf, final_full_size, ssim);
+        cpu_progress.finish_iteration(final_crf, final_pure_media_size, ssim);
 
         Ok(ExploreResult {
             optimal_crf: final_crf,
-            output_size: final_full_size,
+            output_size: output_measurement.total_file_size,
             size_change_pct,
             ssim,
             psnr: None,
@@ -5468,10 +5530,10 @@ impl<'a> CpuFineTuneSession<'a> {
             ms_ssim_score: None,
             used_fallback: false,
             iterations,
-            size_target_met: if total_file_compressed {
+            size_target_met: if pure_media_compressed {
                 CheckResult::Passed
             } else {
-                CheckResult::Failed("Total file not smaller than input".into())
+                CheckResult::Failed("Pure media not smaller than input".into())
             },
             quality_passed: quality_passed_check,
             enhanced_verify_fail_reason,
@@ -5479,9 +5541,9 @@ impl<'a> CpuFineTuneSession<'a> {
             confidence,
             confidence_detail,
             actual_min_ssim: min_ssim,
-            input_video_stream_size: input_stream_info.video_stream_size,
-            output_video_stream_size: output_stream_info.video_stream_size,
-            container_overhead: output_stream_info.container_overhead,
+            input_pure_media_size,
+            output_pure_media_size: final_pure_media_size,
+            container_overhead: output_container_overhead,
             vmaf_y_score: tracking.best_vmaf,
             cambi_score: None,
             psnr_uv_score: tracking.best_psnr_uv,
@@ -5493,7 +5555,7 @@ impl<'a> CpuFineTuneSession<'a> {
     fn evaluate_metrics_and_integrity(
         input: &std::path::Path,
         output: &std::path::Path,
-        final_full_size: u64,
+        final_pure_media_size: u64,
         ultimate_mode: bool,
         input_is_animated_image_like: bool,
         final_crf: f32,
@@ -5515,7 +5577,7 @@ impl<'a> CpuFineTuneSession<'a> {
             let integrity_ok = match super::stream_analysis::check_lossless_integrity(
                 input,
                 output,
-                final_full_size,
+                final_pure_media_size,
                 true,
             ) {
                 Ok(v) => v,
@@ -5596,7 +5658,7 @@ impl<'a> CpuFineTuneSession<'a> {
         ssim: Option<f64>,
         min_ssim: f64,
         input_size: u64,
-        final_full_size: u64,
+        final_pure_media_size: u64,
         tracking: &TrackingState,
         quality_passed: &mut bool,
         lossless_integrity_ok: Option<bool>,
@@ -5632,7 +5694,7 @@ impl<'a> CpuFineTuneSession<'a> {
             let (mut overall_confidence, mut confidence_detail) =
                 super::measured_exploration_confidence(ssim, min_ssim, iterations, max_iter);
             if let Some(size_margin) =
-                super::exploration_size_margin_from_output(input_size, final_full_size)
+                super::exploration_size_margin_from_output(input_size, final_pure_media_size)
             {
                 confidence_detail.margin_safety = Some(
                     confidence_detail

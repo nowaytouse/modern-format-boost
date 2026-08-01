@@ -15,7 +15,7 @@
   "ignores": [
     "target/",
     ".gemini/",
-    "crates/.modern_format_boost/.venv/",
+    "**/.modern_format_boost/",
     ".venv_training/",
     "docs/README_AR.md",
   ],

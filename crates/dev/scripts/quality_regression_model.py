@@ -14,6 +14,7 @@ from typing import Any
 
 import lightgbm as lgb
 import numpy as np
+from fastmode_paths import default_mfb_state_root
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import NearestNeighbors
@@ -118,9 +119,9 @@ def discover_root(script_path: Path) -> Path:
 ROOT = discover_root(Path(__file__).resolve())
 
 
-def append_workspace_venv_site_packages() -> None:
+def append_state_venv_site_packages() -> None:
     site_packages = (
-        ROOT
+        default_mfb_state_root()
         / ".venv"
         / "lib"
         / f"python{sys.version_info.major}.{sys.version_info.minor}"
@@ -135,7 +136,7 @@ def append_workspace_venv_site_packages() -> None:
 try:
     import psycopg2  # pyright: ignore[reportMissingModuleSource]
 except ModuleNotFoundError:
-    append_workspace_venv_site_packages()
+    append_state_venv_site_packages()
     try:
         import psycopg2  # pyright: ignore[reportMissingModuleSource]
     except ModuleNotFoundError:
@@ -143,16 +144,7 @@ except ModuleNotFoundError:
 
 
 def cache_base_dir() -> Path:
-    base = (
-        os.environ.get("MFB_HOME_ROOT")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or str(Path.cwd())
-    )
-    path = Path(base)
-    if path.name != ".modern_format_boost":
-        path = path / ".modern_format_boost"
-    return path / "cache"
+    return default_mfb_state_root() / "cache"
 
 
 def default_model_dir() -> Path:

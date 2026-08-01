@@ -591,7 +591,19 @@ impl<'a> CalibrationContext<'a> {
     }
 
     fn read_probe_output_size(path: &Path, label: &str) -> Option<u64> {
-        crate::media_conversion_gate::explore_calibration_probe_size_optional(path, label)
+        match crate::stream_size::measure_strict_pure_media(path) {
+            Ok(measurement) => Some(measurement.pure_media_size()),
+            Err(err) => {
+                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                    "dynamic_mapping_pure_media_probe",
+                    format!(
+                        "{label}: strict pure-media measurement failed for {}: {err}",
+                        path.display()
+                    ),
+                );
+                None
+            }
+        }
     }
 }
 

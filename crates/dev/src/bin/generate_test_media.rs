@@ -328,7 +328,7 @@ fn summary_lines(
 
 fn main() -> Result<()> {
     let root = project_root()?;
-    let test_dir = root.join("crates/dev/src/tests/edge");
+    let test_dir = root.join("crates/dev/tests/edge");
     let images_dir = test_dir.join("images");
     let videos_dir = test_dir.join("videos");
     let gifs_dir = test_dir.join("gifs");

@@ -1,58 +1,62 @@
 # Python to Rust Migration Contract
 
-Production and CI orchestration are Rust-first. Python remains only where its
-ecosystem is part of the implementation or where a compatibility bridge is
-still covered by tests.
+Production and CI orchestration are Rust-first; documentation and packaged
+operational entry points follow the same contract. Python remains only where
+its ecosystem is part of the implementation or where a tested compatibility
+bridge is still required.
 
-## Completion status (2026-07-28)
+## Completion status (2026-08-01)
 
-Operational migration is complete for production and CI entry points:
+Operational migration is complete for production and CI, documentation, and
+release packaging:
 
-- Repository documentation, workflows, production hints, and release automation
-  select the Rust binaries.
-- The canonical Rust `run_training` binary owns orchestration and loads the
-  shared `training_rules.json` directly.
-- A repository-wide caller audit found no production or CI invocation of a
-  migrated Python entry point.
+- Active workflows and production hints invoke Rust binaries.
+- Release archives build and package the migrated Rust tools instead of the
+  legacy Python entry points.
+- Release archives contain only the Python-native ML workers and their shared
+  path helper: `quality_regression_model.py`, `loop_intent_clustering.py`, and
+  `fastmode_paths.py`.
+- The canonical Rust `run_training` binary owns orchestration and loads
+  `training_rules.json` directly.
 
-Physical removal is intentionally separate from operational completion. Python
-files in the retained categories below remain only while their ecosystem,
-compatibility, or test role is still required.
+Physical removal remains deliberately separate. A Python compatibility file in
+the source tree is not a production entry point and may remain while a direct
+caller or parity test still depends on it.
 
 ## Canonical commands
 
-| Task                          | Source-tree command                                          | Release command                          |
-| ----------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
-| Training orchestration        | `cargo run --locked -p dev --bin run_training -- <options>`  | `target/release/run_training <options>`  |
-| Full repository checks        | `cargo run --locked -p dev --bin check_all -- <options>`     | `target/release/check_all <options>`     |
-| Dependency installation       | `cargo run --locked -p dev --bin install_deps -- <options>`  | `target/release/install_deps <options>`  |
-| iCloud Photos import          | `cargo run --locked -p dev --bin icloud_import -- <options>` | `target/release/icloud_import <options>` |
-| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>`   | `target/release/smart_build <options>`   |
+| Task                          | Source-tree command                                          | Release command           |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------- |
+| Training orchestration        | `cargo run --locked -p dev --bin run_training -- <options>`  | `run_training <options>`  |
+| Full repository checks        | `cargo run --locked -p dev --bin check_all -- <options>`     | `check_all <options>`     |
+| Dependency installation       | `cargo run --locked -p dev --bin install_deps -- <options>`  | `install_deps <options>`  |
+| iCloud Photos import          | `cargo run --locked -p dev --bin icloud_import -- <options>` | `icloud_import <options>` |
+| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>`   | `smart_build <options>`   |
 
 The Rust training orchestrator may invoke Python ML workers when a model step
-depends on Python-native libraries. That delegation does not make the legacy
-Python orchestrator the public entry point.
+depends on Python-native libraries. That delegation does not make a legacy
+Python orchestrator a public entry point.
 
 ## Intentional operational boundaries
 
 - CI media dependency bootstrap is a standalone Rust binary compiled directly
-  with `rustc`, so it has no Cargo or native-library bootstrap cycle.
+  with `rustc`, avoiding a Cargo/native-library bootstrap cycle.
 - Active GitHub workflows do not invoke `.py`, `.sh`, or `.bash` script files.
-- `check_all --fix` owns source formatting. `kondo` cache cleanup belongs to
-  `smart_build --clean`; formatting no longer deletes build caches as a side
-  effect.
-- Packaged Python bridges prefer the App bundle foundation library only when it
-  is at least as new as source-tree artifacts. A newer release library is synced
-  instead of silently loading a stale bundle copy.
-- `smart_build --sync` treats a foundation library update as an App bundle
-  mutation, verifies nested signing, and reseals the outer bundle.
+- `check_all --fix` owns source formatting; `kondo` cache cleanup belongs to
+  `smart_build --clean`.
+- Packaged ML workers are an explicit allowlist, not a recursive copy of
+  `crates/dev/scripts`.
+- Packaged Rust training tools resolve sibling binaries and allowlisted Python
+  workers relative to the release directory.
+- `smart_build --sync` verifies nested signing and reseals the outer App bundle
+  after foundation-library updates.
 
 ## Migrated operational entry points
 
-The following Python script names have same-purpose Rust binaries under
-`crates/dev/src/bin/`. Callers must use the Rust binary for production and CI.
+The following source-tree Python names have Rust operational replacements.
+Production, CI, documentation, and release archives use the Rust binary.
 
-| Rust binary                               | Non-canonical Python reference               |
+| Rust binary                               | Compatibility Python source                  |
 | ----------------------------------------- | -------------------------------------------- |
 | `backfill_directory_scores`               | `backfill_directory_scores.py`               |
 | `cache_cleaner`                           | `cache_cleaner.py`                           |
@@ -73,29 +77,31 @@ The following Python script names have same-purpose Rust binaries under
 | `start_training_four`                     | `start_training_four.py`                     |
 | `training_pipeline`                       | `training_pipeline.py`                       |
 
-Additional Rust-native replacements use clearer names: `delivery_heatmap`
-replaces the operational role of `media_conversion_delivery_heatmap.py`, and
-`corpus_thresholds` replaces `mfb_corpus_thresholds.py` for Rust callers.
+`delivery_heatmap` replaces `media_conversion_delivery_heatmap.py`;
+`corpus_thresholds` replaces `mfb_corpus_thresholds.py`.
 
 ## Intentionally retained Python
 
-- ML implementation: clustering, regression-model training, and Python API
-  workers that depend on NumPy, scikit-learn, or LightGBM.
-- Tests and fixtures: Python contract tests, media fixture helpers, workflow
-  validation, and test-only compatibility coverage.
+- ML implementation: clustering and regression-model training that depends on
+  NumPy, scikit-learn, HDBSCAN, or LightGBM.
+- Tests and fixtures: Python contract tests and test-only media helpers.
 - Fuzzing: OSS-Fuzz and Python harness integration.
-- Compatibility bridges: shared configuration/logging helpers and legacy
-  entry points that still have an in-repository caller or parity test.
+- Compatibility bridges: shared helpers and legacy source-tree entry points
+  that still have a direct caller or parity test.
+
+Only the ML implementation allowlist is included in release archives.
+Compatibility bridges remain source-only.
 
 ## Removal gate
 
-A Python file may be archived or removed only when all of these are true:
+A Python file may be removed only when all of these are true:
 
-1. A Rust implementation covers every supported option, exit code, side
+1. The Rust implementation covers every supported option, exit code, side
    effect, and log contract.
-2. Repository-wide reference search finds no production or CI caller.
-3. Rust unit/integration tests and the Python compatibility contract tests pass.
+2. Repository-wide reference search finds no production, CI, compatibility, or
+   test caller.
+3. Rust unit/integration tests and relevant Python compatibility tests pass.
 4. Documentation and packaged automation point to the Rust binary.
 
-This policy deliberately avoids deleting model code or compatibility helpers
-solely because a similarly named Rust file exists.
+This gate forbids deleting model code or a compatibility helper solely because
+a similarly named Rust file exists.

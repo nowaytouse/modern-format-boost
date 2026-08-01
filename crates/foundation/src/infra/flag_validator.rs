@@ -243,5 +243,5 @@ mod tests {
 
 #[cfg(test)]
 mod advanced_tests {
-    include!("../tests/flag_contract.rs");
+    include!("../../tests/internal/flag_contract.rs");
 }

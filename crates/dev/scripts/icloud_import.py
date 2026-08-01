@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+from fastmode_paths import default_mfb_state_root
 from mfb_ui_tokens import pick_symbol
 
 # Add ANSI colors for terminal output
@@ -32,7 +33,7 @@ else:
 
 def get_import_lock_path():
     """Get the path to the import lock file."""
-    root = Path(os.environ.get("MFB_HOME_ROOT", Path.home() / ".modern_format_boost"))
+    root = default_mfb_state_root()
     lock_dir = root / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / "photos_import.lock"

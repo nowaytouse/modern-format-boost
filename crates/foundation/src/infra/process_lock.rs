@@ -123,7 +123,8 @@ fn ensure_tool_path() {
 /// (~/.`modern_format_boost`).
 ///
 /// # Errors
-/// Returns an error if the home directory cannot be determined.
+/// Returns an error if neither the configured/user root nor the system-temp
+/// fallback can be created.
 pub fn get_mfb_root() -> Result<PathBuf> {
     match std::env::var(crate::constants::ENV_MFB_HOME_ROOT) {
         Ok(root) => {
@@ -148,8 +149,8 @@ pub fn get_mfb_root() -> Result<PathBuf> {
     let home_root = std::env::var(crate::constants::ENV_HOME)
         .map(PathBuf::from)
         .or_else(|_| std::env::var(crate::constants::ENV_USERPROFILE).map(PathBuf::from))
-        .map_err(|e| anyhow!("Could not find home directory environment variable: {e}"))
-        .map(|h| h.join(".modern_format_boost"))?;
+        .map(|h| h.join(".modern_format_boost"))
+        .unwrap_or_else(|_| crate::media_conversion_gate::delivery_temp_mfb_root_ssot());
     usable_mfb_root_or_fallback(home_root, "home", "Failed to create MFB home directory")
 }
 
@@ -317,6 +318,40 @@ mod tests {
         assert_eq!(root, temp.path());
         unsafe {
             std::env::remove_var("MFB_HOME_ROOT");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_uses_system_temp_without_home() {
+        let saved_root = std::env::var_os("MFB_HOME_ROOT");
+        let saved_home = std::env::var_os("HOME");
+        let saved_profile = std::env::var_os("USERPROFILE");
+        unsafe {
+            std::env::remove_var("MFB_HOME_ROOT");
+            std::env::remove_var("HOME");
+            std::env::remove_var("USERPROFILE");
+        }
+
+        let root = get_mfb_root().unwrap();
+        assert_eq!(
+            root,
+            crate::media_conversion_gate::delivery_temp_mfb_root_ssot()
+        );
+
+        unsafe {
+            match saved_root {
+                Some(value) => std::env::set_var("MFB_HOME_ROOT", value),
+                None => std::env::remove_var("MFB_HOME_ROOT"),
+            }
+            match saved_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_profile {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
         }
     }
 

@@ -233,7 +233,11 @@ fn run_ffprobe_command(
         .map_err(|e| {
             FFprobeError::ExecutionFailed(contextual_ffprobe_error(path, query, &e.to_string()))
         })?
-        .wait_timeout(ffprobe_timeout(), &context)
+        .wait_liveness_timeout(
+            ffprobe_timeout(),
+            crate::process_runner::video_process_hard_timeout(),
+            &context,
+        )
         .map_err(|e| {
             FFprobeError::ExecutionFailed(contextual_ffprobe_error(path, query, &e.to_string()))
         })

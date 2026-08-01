@@ -28,7 +28,7 @@ def run_ffmpeg(args: list[str], output_file: str) -> bool:
 def main() -> int:
     """Generate all test media files."""
     script_dir = Path(__file__).parent.resolve()
-    # SSOT for integration tests: crates/dev/src/tests/edge (not scripts/).
+    # SSOT for integration tests: crates/dev/tests/edge (not scripts/).
     test_dir = script_dir.parent / "tests" / "edge"
     images_dir = test_dir / "images"
     videos_dir = test_dir / "videos"

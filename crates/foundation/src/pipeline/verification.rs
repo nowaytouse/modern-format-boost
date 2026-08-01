@@ -462,6 +462,8 @@ fn check_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
 fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     let mut failures = Vec::new();
     let mut adopted = 0usize;
+    let mut cleared = 0usize;
+    let mut first_mismatch = None;
     for (rel_path, entry) in &ctx.blake3_log {
         let src = ctx.src_dir.join(rel_path);
         let out_rel = entry.out_rel.as_deref().map_or_else(
@@ -476,7 +478,26 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
                     failures.push(out);
                 }
             }
-            Ok(_) => {}
+            Ok(_) => match crate::metadata::verify_output_embedded_metadata(
+                &src,
+                &out,
+                crate::metadata::MetadataOutputPolicy::Clear,
+            ) {
+                Ok(_) => cleared = cleared.saturating_add(1),
+                Err(err) => {
+                    if first_mismatch.is_none() {
+                        first_mismatch = Some(err.to_string());
+                    }
+                    crate::media_conversion_gate::delivery_pipeline_path_audit(
+                        "fast_img_gate1_meme_cleared_metadata",
+                        &out,
+                        format!(
+                            "Meme Mode cleared-metadata verification failed during Gate 1: {err}"
+                        ),
+                    );
+                    failures.push(out);
+                }
+            },
             Err(err) => {
                 crate::media_conversion_gate::delivery_pipeline_path_audit(
                     "fast_img_gate1_meme_source_format",
@@ -488,18 +509,30 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
         }
     }
     let passed = failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count;
+    let actual = first_mismatch.map_or_else(
+        || {
+            format!(
+                "{} checked, {adopted} adopted AVIF, {cleared} cleared, {} failed",
+                ctx.blake3_log.len(),
+                failures.len()
+            )
+        },
+        |detail| {
+            format!(
+                "{} checked, {adopted} adopted AVIF, {cleared} cleared, {} failed; first {detail}",
+                ctx.blake3_log.len(),
+                failures.len()
+            )
+        },
+    );
     detail(
         "metadata",
         passed,
         format!(
-            "{} Meme Mode metadata-optional outputs; adopted AVIF sources byte-identical",
+            "{} Meme Mode cleared-metadata outputs; adopted AVIF sources byte-identical",
             ctx.expected_count
         ),
-        format!(
-            "{} checked, {adopted} adopted AVIF, {} failed",
-            ctx.blake3_log.len(),
-            failures.len()
-        ),
+        actual,
         failures,
     )
 }
@@ -515,7 +548,17 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
             PathBuf::from,
         );
         let out = ctx.working_copy.join(out_rel);
-        match crate::metadata::verify_exact_metadata_copy(&src, &out) {
+        match crate::metadata::verify_exact_metadata_copy(&src, &out).and_then(|check| {
+            if !check.passed {
+                return Ok(check);
+            }
+            crate::metadata::verify_output_embedded_metadata(
+                &src,
+                &out,
+                crate::metadata::MetadataOutputPolicy::Preserve,
+            )
+            .map(|_| check)
+        }) {
             Ok(check) if check.passed => {}
             Ok(check) => {
                 mismatch_count = mismatch_count.saturating_add(1);
@@ -532,7 +575,7 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
                 crate::media_conversion_gate::delivery_pipeline_path_audit(
                     "fast_img_gate1_metadata",
                     &out,
-                    format!("metadata exact-copy verification failed during Gate 1: {err}"),
+                    format!("metadata verification failed during Gate 1: {err}"),
                 );
                 failures.push(out);
             }
@@ -547,7 +590,10 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
     detail(
         "metadata",
         failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
-        format!("{} exact source/output metadata copies", ctx.expected_count),
+        format!(
+            "{} exact filesystem and embedded source/output metadata copies",
+            ctx.expected_count
+        ),
         actual,
         failures,
     )
@@ -991,6 +1037,7 @@ mod tests {
         Blake3Entry, Blake3Log, Gate1Local, Gate2Import, Gate3Deep, GateResult, LibraryAssetRecord,
         LibraryHandle, PipelineCtx, VerificationGate, ensure_exiftool_success,
     };
+    use crate::builder_base::ToolBuilder;
     use crate::common_utils::calculate_blake3_hash;
     use std::collections::BTreeMap;
     #[cfg(unix)]
@@ -1244,7 +1291,67 @@ mod tests {
     }
 
     #[test]
-    fn gate1_meme_metadata_allows_non_avif_source_metadata_changes() {
+    fn gate1_metadata_rejects_wrong_source_embedded_metadata() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.jpg");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&out, image::ImageFormat::Jpeg)
+            .unwrap();
+        for (path, description) in [(&src, "source product"), (&out, "other product")] {
+            let result = crate::ExiftoolBuilder::new()
+                .arg(format!("-XMP-dc:Description={description}"))
+                .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+                .build()
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "write test metadata failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let shared_mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        filetime::set_file_mtime(&src, shared_mtime).unwrap();
+        filetime::set_file_mtime(&out, shared_mtime).unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.jpg".to_string()),
+                src: calculate_blake3_hash(&src).unwrap(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+
+        let result = super::check_exact_metadata_copies(&ctx);
+
+        assert!(!result.passed);
+        assert_eq!(result.affected_files, vec![out]);
+        assert!(
+            result.actual.contains("Description"),
+            "Gate 1 must expose embedded wrong-source metadata: {}",
+            result.actual
+        );
+    }
+
+    #[test]
+    fn gate1_meme_metadata_requires_non_avif_outputs_cleared() {
         let root = tempfile::TempDir::new().unwrap();
         let src_dir = root.path().join("src");
         let wc = root.path().join("src_optimized");
@@ -1254,6 +1361,10 @@ mod tests {
         image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3]))
             .save(&src)
             .unwrap();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF");
+        let out = wc.join("a.avif");
+        std::fs::copy(&fixture, &out).expect("copy cleared AVIF fixture");
         let mut ctx = PipelineCtx {
             working_copy: wc,
             src_dir,
@@ -1275,6 +1386,11 @@ mod tests {
         let result = super::check_metadata_policy(&ctx);
 
         assert!(result.passed, "{result:?}");
+        assert!(
+            result.expected.contains("cleared-metadata"),
+            "meme gate must require cleared metadata: {}",
+            result.expected
+        );
     }
 
     #[test]

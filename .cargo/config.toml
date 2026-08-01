@@ -27,11 +27,11 @@ rustflags = [
   "overflow-checks=on",
   # Fix libstdc++ linking issue on macOS (use libc++ instead)
   "-L",
-  "crates/.modern_format_boost/.tmp_lib",
+  "target/.tmp_lib",
   "-C",
   "link-arg=-lc++",
 ]
-rustdocflags = ["-L", "crates/.modern_format_boost/.tmp_lib"]
+rustdocflags = ["-L", "target/.tmp_lib"]
 
 # macOS x86_64 (Intel) optimizations
 [target.x86_64-apple-darwin]
@@ -40,14 +40,14 @@ rustflags = [
   "overflow-checks=on",
   # Fix libstdc++ linking issue on macOS (use libc++ instead)
   "-L",
-  "crates/.modern_format_boost/.tmp_lib",
+  "target/.tmp_lib",
   # Homebrew paths for x86_64 (Intel) - Standard and specific overrides
   "-L",
   "/usr/local/lib",
   "-C",
   "link-arg=-lc++",
 ]
-rustdocflags = ["-L", "crates/.modern_format_boost/.tmp_lib"]
+rustdocflags = ["-L", "target/.tmp_lib"]
 
 # -----------------------------------------------------------------------------
 # Incremental Compilation Optimizations

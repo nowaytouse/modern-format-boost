@@ -2496,7 +2496,7 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AppleOutcomeFlags {
-    pub total_file_compressed: bool,
+    pub pure_media_compressed: bool,
     pub allow_size_tolerance: bool,
 }
 
@@ -2519,7 +2519,7 @@ pub struct AppleFallbackFlags {
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {
     pub codec_str: &'a str,
-    pub total_size_ratio: f64,
+    pub pure_media_size_ratio: f64,
     pub flags: AppleFallbackFlags,
 }
 
@@ -2529,7 +2529,7 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
         return false;
     }
     // If the source is already Apple-native (like GIF), we never allow fallback to
-    // a larger file.
+    // a larger pure-media payload.
     if request.flags.context.source_is_gif || is_apple_native_format(request.codec_str) {
         return false;
     }
@@ -2537,9 +2537,9 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
     {
         return false;
     }
-    request.flags.outcome.total_file_compressed
+    request.flags.outcome.pure_media_compressed
         || (request.flags.outcome.allow_size_tolerance
-            && request.total_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
+            && request.pure_media_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
 }
 
 #[must_use]

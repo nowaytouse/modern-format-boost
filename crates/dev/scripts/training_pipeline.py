@@ -32,6 +32,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, cast
 
+from fastmode_paths import default_mfb_state_root
 from mfb_corpus_thresholds import (
     loop_corpus_is_mature,
     loop_corpus_samples_shortfall,
@@ -274,10 +275,7 @@ QUALITY_REGRESSION_MODEL_SCRIPT = (
 )
 NORMALIZE_STALE_EMBED_BIN = "normalize_stale_embed_measurement_slots"
 MULTI_SCENARIO_MIGRATION_SQL = ROOT / "migrations" / "001_multi_scenario_embedding.sql"
-WORKSPACE_VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
-CRATES_WORKSPACE_VENV_PYTHON = (
-    ROOT / "crates" / ".modern_format_boost" / ".venv" / "bin" / "python"
-)
+STATE_VENV_PYTHON = default_mfb_state_root() / ".venv" / "bin" / "python"
 QUALITY_MODEL_PYTHON_ENV = "MFB_QUALITY_MODEL_PYTHON"
 IMAGE_QUALITY_MODEL_NAME = "lightgbm_model.txt"
 IMAGE_QUALITY_METADATA_NAME = "lightgbm_model.metadata.json"
@@ -311,14 +309,13 @@ def preferred_training_python() -> str:
     if explicit and explicit.strip():
         return explicit.strip()
     for candidate in (
-        WORKSPACE_VENV_PYTHON,
-        CRATES_WORKSPACE_VENV_PYTHON,
+        STATE_VENV_PYTHON,
         Path(sys.executable),
     ):
         if candidate.exists() and python_has_quality_model_deps(candidate):
             return str(candidate)
-    if WORKSPACE_VENV_PYTHON.exists():
-        return str(WORKSPACE_VENV_PYTHON)
+    if STATE_VENV_PYTHON.exists():
+        return str(STATE_VENV_PYTHON)
     return sys.executable
 
 
@@ -403,16 +400,7 @@ SCENARIOS: tuple[ScenarioSpec, ...] = (
 
 
 def cache_base_dir() -> Path:
-    base = (
-        os.environ.get("MFB_HOME_ROOT")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or str(Path.cwd())
-    )
-    path = Path(base)
-    if path.name != ".modern_format_boost":
-        path = path / ".modern_format_boost"
-    return path / "cache"
+    return default_mfb_state_root() / "cache"
 
 
 def default_image_quality_model_path() -> Path:

@@ -47,3 +47,5 @@ pub mod modern_lossy_static;
 pub mod png_validation;
 
 pub mod orientation;
+
+pub mod static_payload;

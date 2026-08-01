@@ -7,6 +7,7 @@ source-adjacent ``*_optimized`` folder, never a copy of the source tree.
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def default_mfb_state_root() -> Path:
         return Path(env_root).expanduser()
     if home := os.environ.get("HOME"):
         return Path(home).expanduser() / MFB_DEFAULT_HOME_DIRNAME
-    return Path.home() / MFB_DEFAULT_HOME_DIRNAME
+    return Path(tempfile.gettempdir()) / MFB_DEFAULT_HOME_DIRNAME
 
 
 def fast_img_output_dir_for_target(

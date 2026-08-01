@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from fastmode_paths import default_mfb_state_root
+
 
 def discover_root(script_path: Path) -> Path:
     expected_relative = Path("crates") / "dev" / "scripts" / script_path.name
@@ -52,7 +54,7 @@ def candidate_library_paths() -> list[Path]:
     else:
         lib_name = "libfoundation.so"
 
-    artifact = ROOT / "crates" / ".modern_format_boost" / "artifacts" / lib_name
+    artifact = default_mfb_state_root() / "artifacts" / lib_name
     built = LIB_DIR / lib_name
     release = RELEASE_LIB_DIR / lib_name
     candidates = []
@@ -285,7 +287,7 @@ if __name__ == "__main__":
     )
 
     test_file = (
-        ROOT / "crates/dev/src/tests/edge/gifs/test.gif"
+        ROOT / "crates/dev/tests/edge/gifs/test.gif"
     )  # Replace with actual test file path if needed
 
     if test_file.exists():

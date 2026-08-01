@@ -504,6 +504,20 @@ fn resolve_script_path() -> PathBuf {
         return path;
     }
 
+    if let Some(packaged) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .map(|root| {
+            root.join("crates")
+                .join("dev")
+                .join("scripts")
+                .join("quality_regression_model.py")
+        })
+        .filter(|path| path.is_file())
+    {
+        return packaged;
+    }
+
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     if let Some(root) = crate_dir.parent().and_then(Path::parent) {
         return root

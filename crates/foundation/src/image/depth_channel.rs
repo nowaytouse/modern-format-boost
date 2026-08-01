@@ -226,12 +226,24 @@ fn parse_depth_metadata_from_xmp(xmp_data: &[u8]) -> Result<(Option<f32>, Option
                     let attr = attr.map_err(|e| anyhow!("Failed to parse depth XMP attr: {e}"))?;
                     let local_name = attr.key.local_name();
                     let attr_name = local_name.as_ref();
-                    let target = if attr_name.windows(12).any(|w| w == b"NearDistance")
-                        || attr_name.windows(13).any(|w| w == b"near_distance")
+                    let target = if attr_name
+                        .as_bytes()
+                        .windows(12)
+                        .any(|w| w == b"NearDistance")
+                        || attr_name
+                            .as_bytes()
+                            .windows(13)
+                            .any(|w| w == b"near_distance")
                     {
                         Some("NearDistance")
-                    } else if attr_name.windows(11).any(|w| w == b"FarDistance")
-                        || attr_name.windows(12).any(|w| w == b"far_distance")
+                    } else if attr_name
+                        .as_bytes()
+                        .windows(11)
+                        .any(|w| w == b"FarDistance")
+                        || attr_name
+                            .as_bytes()
+                            .windows(12)
+                            .any(|w| w == b"far_distance")
                     {
                         Some("FarDistance")
                     } else {

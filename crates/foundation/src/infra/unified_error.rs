@@ -15,6 +15,88 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+/// Batch error handling shared by drag/drop, image, video, and Photos import.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BatchErrorMode {
+    #[default]
+    LogAndContinue,
+    FailFast,
+}
+
+impl BatchErrorMode {
+    #[must_use]
+    pub fn current() -> Self {
+        let legacy_fail_fast = std::env::var(crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST)
+            .is_ok_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
+        if legacy_fail_fast {
+            return Self::FailFast;
+        }
+
+        for name in [
+            crate::constants::ENV_MFB_ERROR_MODE,
+            crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
+        ] {
+            match std::env::var(name) {
+                Ok(value) => return Self::parse(&value),
+                Err(std::env::VarError::NotPresent) => {}
+                Err(error) => {
+                    crate::media_conversion_gate::delivery_runtime_batch_audit(
+                        "batch_error_mode_env",
+                        format!("failed to read {name}: {error}; using fail-fast"),
+                    );
+                    return Self::FailFast;
+                }
+            }
+        }
+        Self::LogAndContinue
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        let normalized = value.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+        match normalized.as_str() {
+            "debug" | "fail-fast" | "failfast" | "abort" | "strict" => Self::FailFast,
+            "" | "continue" | "log-and-continue" | "batch-report" | "report" | "normal" => {
+                Self::LogAndContinue
+            }
+            _ => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "batch_error_mode_invalid",
+                    format!("unknown batch error mode {value:?}; using fail-fast"),
+                );
+                Self::FailFast
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn is_fail_fast(self) -> bool {
+        matches!(self, Self::FailFast)
+    }
+
+    /// Fatal system errors always stop; ordinary per-file errors stop only in
+    /// fail-fast mode. Optional outcomes remain skips in both modes.
+    #[must_use]
+    pub fn should_abort_error(self, error: &anyhow::Error) -> bool {
+        let unified = error.downcast_ref::<UnifiedError>().or_else(|| {
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<UnifiedError>())
+        });
+        match unified.map(UnifiedError::category) {
+            Some(ErrorCategory::Fatal) => true,
+            Some(ErrorCategory::Optional) => false,
+            Some(ErrorCategory::Recoverable) => self.is_fail_fast(),
+            None => true,
+        }
+    }
+}
+
 #[inline]
 fn append_operation_line(msg: &mut String, operation: &str) {
     let _ = write!(msg, "\n   Operation: {operation}");
@@ -129,7 +211,7 @@ impl UnifiedError {
     /// Check if error is recoverable
     #[must_use]
     pub const fn is_recoverable(&self) -> bool {
-        true
+        matches!(self.category(), ErrorCategory::Recoverable)
     }
 
     /// Get error category.
@@ -150,15 +232,15 @@ impl UnifiedError {
             | Self::FileWriteError { .. }
             | Self::IoError(_)
             | Self::ToolNotFound { .. }
-            | Self::NotImplemented(_) => ErrorCategory::Fatal,
+            | Self::NotImplemented(_)
+            | Self::Other(_) => ErrorCategory::Fatal,
 
             // Priority 2: Optional (Optimization failures -> Skips)
             // These should trigger an automatic copy of the original file to the output.
             Self::OutputExists { .. }
             | Self::SkipFile(_)
             | Self::CompressionFailed { .. }
-            | Self::IterationLimitExceeded(_)
-            | Self::QualityValidationFailed { .. } => ErrorCategory::Optional,
+            | Self::IterationLimitExceeded(_) => ErrorCategory::Optional,
 
             // Priority 3: Recoverable (Hard failures in processing -> Errors)
             // These should NOT trigger a copy.
@@ -305,7 +387,7 @@ impl UnifiedError {
                     / crate::numeric_cast::u64_to_f64(*input_size)
                     * 100.0;
                 let mut msg = user_err(format!(
-                    "Compression failed: output ({output_size} bytes) >= input ({input_size} \
+                    "Compression target not met: output ({output_size} bytes) >= input ({input_size} \
                      bytes), ratio {ratio:.1}%"
                 ));
                 if let Some(path) = file_path {
@@ -632,7 +714,7 @@ impl UnifiedError {
                 } => {
                     write!(
                         f,
-                        "Compression failed: output ({output_size}) >= input ({input_size})"
+                        "Compression target not met: output ({output_size}) >= input ({input_size})"
                     )?;
                     if let Some(path) = file_path {
                         write!(f, "\n  File: {}", path.display())?;
@@ -857,6 +939,7 @@ mod tests {
     fn test_unified_error_category() {
         let err = UnifiedError::file_not_found("/test");
         assert_eq!(err.category(), ErrorCategory::Fatal);
+        assert!(!err.is_recoverable());
 
         let err = UnifiedError::CompressionFailed {
             input_size: 1000,
@@ -864,12 +947,51 @@ mod tests {
             file_path: None,
         };
         assert_eq!(err.category(), ErrorCategory::Optional);
+        assert!(!err.is_recoverable());
 
         let err = UnifiedError::OutputExists {
             path: PathBuf::from("/test"),
             operation: None,
         };
         assert_eq!(err.category(), ErrorCategory::Optional);
+        assert!(!err.is_recoverable());
+
+        let err = UnifiedError::analysis_error("bad media");
+        assert_eq!(err.category(), ErrorCategory::Recoverable);
+        assert!(err.is_recoverable());
+    }
+
+    #[test]
+    fn batch_error_mode_preserves_normal_batches_and_fails_fast_when_requested() {
+        assert_eq!(
+            BatchErrorMode::parse("log_and_continue"),
+            BatchErrorMode::LogAndContinue
+        );
+        assert_eq!(BatchErrorMode::parse("debug"), BatchErrorMode::FailFast);
+        assert_eq!(
+            BatchErrorMode::parse("unknown-mode"),
+            BatchErrorMode::FailFast
+        );
+
+        let recoverable: anyhow::Error = UnifiedError::analysis_error("bad media").into();
+        assert!(!BatchErrorMode::LogAndContinue.should_abort_error(&recoverable));
+        assert!(BatchErrorMode::FailFast.should_abort_error(&recoverable));
+
+        let fatal: anyhow::Error = UnifiedError::tool_not_found("ffmpeg").into();
+        assert!(BatchErrorMode::LogAndContinue.should_abort_error(&fatal));
+
+        let unknown = anyhow::anyhow!("unclassified failure");
+        assert!(BatchErrorMode::LogAndContinue.should_abort_error(&unknown));
+
+        let other: anyhow::Error = UnifiedError::Other(anyhow::anyhow!("unknown risk")).into();
+        assert_eq!(
+            other
+                .downcast_ref::<UnifiedError>()
+                .expect("unified error")
+                .category(),
+            ErrorCategory::Fatal
+        );
+        assert!(BatchErrorMode::LogAndContinue.should_abort_error(&other));
     }
 
     #[test]
@@ -891,8 +1013,7 @@ mod tests {
 
     #[test]
     fn test_optimization_failure_semantics() {
-        // Optimization failures (Iteration limit / Quality threshold) MUST be Optional
-        // Skips
+        // An exhausted optimization search is a policy skip.
         let iter_err = UnifiedError::IterationLimitExceeded(crate::IterationError {
             current: 100,
             max: 100,
@@ -915,12 +1036,12 @@ mod tests {
         };
         assert_eq!(
             quality_err.category(),
-            ErrorCategory::Optional,
-            "Quality failure should be Optional category"
+            ErrorCategory::Recoverable,
+            "Quality verification failure must be reported as a failed file"
         );
         assert!(
-            quality_err.is_skip(),
-            "Quality failure should trigger is_skip=true"
+            !quality_err.is_skip(),
+            "Quality verification failure must not be hidden as a skip"
         );
 
         // Hard system failures MUST NOT be Optional Skips

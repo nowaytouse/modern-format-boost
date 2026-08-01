@@ -28,9 +28,11 @@ fn is_exiftool_available() -> bool {
 // Use crate::path_safety::magick_safe_path instead.
 
 fn is_video_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        let ext = e.to_lowercase();
+        crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&ext.as_str())
+            && !crate::SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str())
+    })
 }
 
 fn get_best_date_from_source(src: &Path) -> io::Result<Option<String>> {
@@ -1302,9 +1304,31 @@ mod tests {
         let best_date = get_best_date_from_source(&src_path).expect("date probe should succeed");
         assert_eq!(best_date.as_deref(), Some(test_date));
     }
+
+    #[test]
+    fn quicktime_date_sync_excludes_image_containers() {
+        for image in [
+            "image.jxl",
+            "image.avif",
+            "image.heic",
+            "image.png",
+            "image.webp",
+        ] {
+            assert!(
+                !is_video_file(Path::new(image)),
+                "image container must not receive fabricated QuickTime/EXIF dates: {image}"
+            );
+        }
+        for video in ["video.mp4", "video.mov", "video.mkv"] {
+            assert!(
+                is_video_file(Path::new(video)),
+                "video must remain classified: {video}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod structural_repair_contract {
-    include!("../tests/exif_structural_repair_contract.rs");
+    include!("../../tests/internal/exif_structural_repair_contract.rs");
 }

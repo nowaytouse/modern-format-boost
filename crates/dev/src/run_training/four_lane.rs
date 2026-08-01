@@ -193,10 +193,8 @@ fn ensure_reset_db_before_training(reset_db: bool, dry_run: bool) -> Result<()> 
 }
 
 fn purge_image_quality_model_artifacts(dry_run: bool) -> Result<()> {
-    let workspace_root =
-        find_mfb_workspace_root(None).context("could not locate MFB workspace root")?;
-    let model_dir = workspace_root
-        .join(".modern_format_boost")
+    let model_dir = foundation::process_lock::get_mfb_root()
+        .context("could not resolve MFB state root")?
         .join("cache")
         .join("models")
         .join("image_quality");
@@ -289,11 +287,8 @@ pub fn run_four_lane_launcher(args: &Args) -> Result<()> {
     let log_root = if let Some(ref p) = args.log_root {
         PathBuf::from(p)
     } else {
-        let home = crate::infra::hardening::optional_env("MFB_HOME_ROOT")
-            .or_else(|| crate::infra::hardening::optional_env("HOME"))
-            .unwrap_or_else(|| ".".to_string());
-        PathBuf::from(home)
-            .join(".modern_format_boost")
+        foundation::process_lock::get_mfb_root()
+            .context("could not resolve MFB state root")?
             .join("logs")
     };
     fs::create_dir_all(&log_root)?;

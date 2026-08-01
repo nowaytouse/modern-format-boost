@@ -5,7 +5,7 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
-fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
+fn truncated_jpeg_is_failed_with_delivery_required() -> anyhow::Result<()> {
     // Setup isolated temp home for logs/ghost mode
     let tmp_dir = tempdir()?;
     let mfb_home = tmp_dir.path().join("mfb_home");
@@ -17,7 +17,7 @@ fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
     let input = tmp_dir.path().join("truncated.jpg");
     fs::write(&input, [0xFFu8, 0xD8u8, 0xFFu8, 0xE0u8])?;
 
-    // Require delivery so the irreversible encode path emits a skipped result
+    // Require delivery so the irreversible encode path returns a structured failure.
     let options = ConvertOptions {
         flags: ConvertFlags::REQUIRE_OUTPUT_DELIVERY,
         ..Default::default()
@@ -25,16 +25,20 @@ fn truncated_jpeg_is_skipped_with_delivery_required() -> anyhow::Result<()> {
 
     let result = convert_jpeg_to_jxl(&input, &options, None)?;
 
-    // Expect the task to be marked as skipped and message to indicate irreversible encode
-    assert!(result.skipped, "expected skipped result for truncated JPEG");
-    assert!(result.success, "skipped TaskResult should be success=true");
-    assert!(result.skip_reason.is_some(), "skip_reason should be set");
+    assert!(!result.skipped, "corrupt media must not be marked skipped");
+    assert!(!result.success, "corrupt media must be marked failed");
+    assert_eq!(result.outcome(), foundation::conversion::Outcome::Failed);
+    assert!(input.exists(), "failed conversion must retain its source");
+    assert!(
+        result.skip_reason.is_some(),
+        "failure reason id should be set"
+    );
     assert!(
         result
             .message
             .contains("JPEG cannot be reversibly transcoded")
             || result.message.contains("encode preflight rejected"),
-        "unexpected skip message: {}",
+        "unexpected failure message: {}",
         result.message
     );
     Ok(())

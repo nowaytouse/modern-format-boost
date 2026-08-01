@@ -84,7 +84,9 @@ fn default_user_log_dir() -> PathBuf {
         Ok(home) => PathBuf::from(home)
             .join(MFB_DEFAULT_HOME_DIRNAME)
             .join("logs"),
-        Err(_err) => std::env::temp_dir().join("modern_format_boost_logs"),
+        Err(_err) => std::env::temp_dir()
+            .join(MFB_DEFAULT_HOME_DIRNAME)
+            .join("logs"),
     }
 }
 
@@ -121,7 +123,9 @@ pub fn coerce_log_dir(candidate: &Path) -> PathBuf {
         fallback = default_user_log_dir();
     }
     if is_forbidden_log_path(&fallback) {
-        fallback = std::env::temp_dir().join("modern_format_boost_logs");
+        fallback = std::env::temp_dir()
+            .join(MFB_DEFAULT_HOME_DIRNAME)
+            .join("logs");
     }
     eprintln!(
         "[MFB] Refusing workspace log dir {} — using {}",

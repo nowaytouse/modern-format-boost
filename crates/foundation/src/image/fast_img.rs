@@ -22,7 +22,7 @@
 use crate::pipeline::verification::{
     Blake3Entry, LibraryAssetRecord, LibraryHandle, WorkingCopyMarker, write_marker_atomic,
 };
-use crate::unified_error::{ImgQualityError, Result};
+use crate::unified_error::{BatchErrorMode, ImgQualityError, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
@@ -1081,15 +1081,7 @@ impl PhotosImportStrategy {
 }
 
 fn photos_import_fail_fast_enabled() -> bool {
-    let mode = std::env::var(crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE)
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['_', ' '], "-");
-    matches!(
-        mode.as_str(),
-        "debug" | "fail-fast" | "failfast" | "abort" | "strict"
-    )
+    BatchErrorMode::current().is_fail_fast()
 }
 
 /// Import JXL outputs into Photos and return a concrete verifier handle.
@@ -1233,14 +1225,15 @@ pub fn import_modern_lossy_static_tier(
 
 const FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT: &str = r#"
 on run argv
-    if (count of argv) is not 5 then
-        error "Photos import expected manifest path, batch size, batch delay, digest pause interval, and digest pause seconds arguments"
+    if (count of argv) is not 6 then
+        error "Photos import expected manifest path, batch size, batch delay, digest pause interval, digest pause seconds, and hard timeout arguments"
     end if
     set manifestPath to item 1 of argv
     set batchSize to (item 2 of argv) as integer
     set batchDelayMs to (item 3 of argv) as integer
     set digestPauseInterval to (item 4 of argv) as integer
     set digestPauseSecs to (item 5 of argv) as integer
+    set hardTimeoutSecs to (item 6 of argv) as integer
     if batchSize < 1 then
         error "Photos import batch size must be at least 1"
     end if
@@ -1259,7 +1252,7 @@ on run argv
     end if
     set importedIds to {}
     set batchNumber to 0
-    with timeout of 86400 seconds
+    with timeout of hardTimeoutSecs seconds
         tell application "Photos" to launch
         set currentAlbumName to ""
         set fileList to {}
@@ -2105,6 +2098,7 @@ fn run_photos_import_applescript_session(
                 ImgQualityError::AnalysisError(format!("Photos import manifest write failed: {e}"))
             })?;
 
+        let timeout = photos_import_session_timeout(batch_count)?;
         let osascript = resolve_osascript_command();
         let mut command = std::process::Command::new(&osascript);
         command
@@ -2114,12 +2108,13 @@ fn run_photos_import_applescript_session(
             .arg(FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE.to_string())
             .arg(FAST_IMG_PHOTOS_IMPORT_BATCH_DELAY_MS.to_string())
             .arg(FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL.to_string())
-            .arg(FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_SECS.to_string());
-
-        let timeout = photos_import_session_timeout(batch_count)?;
+            .arg(FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_SECS.to_string())
+            .arg(timeout.as_secs().to_string());
 
         let output = crate::process_runner::ManagedProcess::spawn(&mut command)
-            .and_then(|process| process.wait_timeout(timeout, "Photos AppleScript import chunk"))
+            .and_then(|process| {
+                process.wait_liveness_timeout(timeout, timeout, "Photos AppleScript import chunk")
+            })
             .map_err(|e| {
                 ImgQualityError::AnalysisError(format!(
                     "Photos AppleScript {media_kind} import chunk {chunk_number}/{} failed via \
@@ -2359,6 +2354,7 @@ fn photos_import_poison_reason(detail: &str) -> Option<&'static str> {
     {
         Some("invalid_connection")
     } else if lower.contains("(-1712)")
+        || lower.contains("timed out at hard timeout")
         || detail.contains("超时")
         || detail.contains("AppleEvent已超时")
     {
@@ -3433,66 +3429,7 @@ fn library_handle_from_marker_import_proof_with(
 }
 
 fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
-    const MAX_RETRIES: usize = 3;
-    const BASE_RETRY_DELAY_SECS: u64 = 10; // Faster initial retry
-    const MAX_RETRY_DELAY_SECS: u64 = 60; // Lower max delay
-    if uuids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut last_error: Option<String> = None;
-    for attempt in 1..=MAX_RETRIES {
-        match query_osxphotos_asset_probes_once(uuids) {
-            Ok(probes) => return Ok(probes),
-            Err(e) => {
-                let err_str = e.to_string();
-                let is_timeout =
-                    err_str.contains("timed out") || err_str.contains("subprocess killed");
-                let is_fatal_auth = err_str.contains("OperationalError")
-                    || err_str.contains("unable to open database file")
-                    || err_str.contains("TCC")
-                    || err_str.contains("Operation not permitted");
-                if is_fatal_auth {
-                    return Err(e);
-                }
-                if !is_timeout || attempt == MAX_RETRIES {
-                    return Err(e);
-                }
-                last_error = Some(err_str);
-
-                // Cleanup: try to kill any lingering osxphotos processes
-                tracing::warn!(
-                    target: "photos_import",
-                    attempt,
-                    "osxphotos query timeout; attempting cleanup of stale processes"
-                );
-                let _ = std::process::Command::new("pkill")
-                    .args(["-9", "osxphotos"])
-                    .status();
-                std::thread::sleep(Duration::from_secs(1));
-
-                // Extend timeout for next attempt (adaptive)
-                extend_osxphotos_query_timeout();
-
-                // Faster exponential backoff: 10s, 20s, 40s
-                let delay_secs =
-                    (BASE_RETRY_DELAY_SECS * (1 << (attempt - 1))).min(MAX_RETRY_DELAY_SECS);
-                tracing::warn!(
-                    target: "photos_import",
-                    attempt,
-                    max_retries = MAX_RETRIES,
-                    delay_secs,
-                    "osxphotos query timeout, extending timeout and retrying"
-                );
-                std::thread::sleep(Duration::from_secs(delay_secs));
-            }
-        }
-    }
-    Err(ImgQualityError::AnalysisError(format!(
-        "osxphotos query failed after {} retries: {}",
-        MAX_RETRIES,
-        last_error.unwrap_or_else(|| "unknown error".to_string())
-    )))
+    query_osxphotos_asset_probes_once(uuids)
 }
 
 fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
@@ -3534,7 +3471,9 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
     );
     let start = std::time::Instant::now();
     let output = crate::process_runner::ManagedProcess::spawn(&mut command)
-        .and_then(|process| process.wait_timeout(timeout, "fast-img osxphotos batch query"))
+        .and_then(|process| {
+            process.wait_liveness_timeout(timeout, timeout, "fast-img osxphotos batch query")
+        })
         .map_err(|e| ImgQualityError::AnalysisError(format!("osxphotos query failed: {e}")))?;
     let elapsed = start.elapsed();
 
@@ -3840,26 +3779,10 @@ fn record_osxphotos_query_startup_time(secs: u64) {
     }
 }
 
-/// Called on timeout to extend the next query's timeout.
-fn extend_osxphotos_query_timeout() {
-    use std::sync::atomic::Ordering;
-
-    let old = OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::Relaxed);
-    // Double the timeout, up to 8 min max
-    let new_base = (old * 2).min(480);
-    OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.store(new_base, Ordering::Relaxed);
-    tracing::warn!(
-        target: "photos_import",
-        old_base_secs = old,
-        new_base_secs = new_base,
-        "osxphotos query timeout, extending adaptive base"
-    );
-}
-
 fn fast_img_photos_import_timeout() -> Duration {
     fast_img_positive_secs_env(
         FAST_IMG_PHOTOS_IMPORT_TIMEOUT_SECS_ENV,
-        Duration::from_mins(30),
+        Duration::from_secs(120),
     )
 }
 
@@ -4893,6 +4816,37 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn photos_import_canonical_error_mode_is_explicit_and_fail_closed() {
+        {
+            let _guard =
+                crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_ERROR_MODE, "debug");
+            assert!(photos_import_fail_fast_enabled());
+        }
+        {
+            let _guard = crate::common_utils::EnvGuard::set(
+                crate::constants::ENV_MFB_ERROR_MODE,
+                "log-and-continue",
+            );
+            assert!(!photos_import_fail_fast_enabled());
+        }
+        {
+            let _guard = crate::common_utils::EnvGuard::set(
+                crate::constants::ENV_MFB_ERROR_MODE,
+                "unknown-mode",
+            );
+            assert!(photos_import_fail_fast_enabled());
+        }
+        {
+            let _guard = crate::common_utils::EnvGuard::set(
+                crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
+                "debug",
+            );
+            assert!(photos_import_fail_fast_enabled());
+        }
+    }
+
+    #[test]
     fn index_photos_probes_by_uuid_fails_when_query_incomplete() {
         let err = index_photos_probes_by_uuid(
             &["UUID-A".to_string(), "UUID-B".to_string()],
@@ -4939,6 +4893,19 @@ mod tests {
             !FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("repeat with candidateAlbum in albums"),
             "per-file imports must not rescan every Photos album"
         );
+        assert!(
+            FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("with timeout of hardTimeoutSecs seconds")
+        );
+        assert!(!FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("86400"));
+    }
+
+    #[test]
+    fn photos_import_soft_estimate_scales_but_stays_below_hard_deadline() {
+        let one_batch = photos_import_session_timeout(1).unwrap();
+        let ten_batches = photos_import_session_timeout(10).unwrap();
+
+        assert!(ten_batches > one_batch);
+        assert!(ten_batches < crate::process_runner::image_process_hard_timeout());
     }
 
     #[test]
@@ -5735,6 +5702,12 @@ mod tests {
             Some("appleevent_timeout")
         );
         assert_eq!(
+            photos_import_poison_reason(
+                "Photos AppleScript import chunk timed out at hard timeout after 120s"
+            ),
+            Some("appleevent_timeout")
+        );
+        assert_eq!(
             photos_import_poison_reason("Photos returned 4 imported items for 10 files"),
             None,
             "a partial import must not retry already imported files"
@@ -5902,7 +5875,7 @@ mod tests {
         assert_eq!(fast_img_icloud_upload_verify_attempts(), 3);
         assert!(fast_img_icloud_upload_verify_batch_size() <= 64);
         assert!(fast_img_icloud_upload_verify_delay() >= Duration::from_secs(2));
-        assert!(fast_img_photos_import_timeout() <= Duration::from_mins(30));
+        assert!(fast_img_photos_import_timeout() <= Duration::from_secs(120));
         assert_eq!(fast_img_photos_import_batch_size(), 50);
         assert!(!fast_img_require_icloud_upload_proof());
     }
@@ -6172,36 +6145,6 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn adaptive_timeout_extends_on_timeout_call() {
-        use std::sync::atomic::Ordering;
-
-        OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.store(120, Ordering::SeqCst);
-        assert_eq!(
-            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
-            120
-        );
-
-        extend_osxphotos_query_timeout();
-        assert_eq!(
-            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
-            240
-        );
-
-        extend_osxphotos_query_timeout();
-        assert_eq!(
-            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
-            480
-        );
-
-        extend_osxphotos_query_timeout();
-        assert_eq!(
-            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
-            480
-        );
-    }
-
-    #[test]
-    #[serial_test::serial]
     fn adaptive_timeout_records_startup_time() {
         use std::sync::atomic::Ordering;
 
@@ -6243,7 +6186,7 @@ mod tests {
         let timeout1 = fast_img_osxphotos_query_timeout(1);
         assert_eq!(timeout1, Duration::from_mins(2));
 
-        extend_osxphotos_query_timeout();
+        OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.store(240, Ordering::SeqCst);
 
         let timeout2 = fast_img_osxphotos_query_timeout(1);
         assert_eq!(timeout2, Duration::from_mins(4));
@@ -6315,45 +6258,5 @@ mod tests {
             OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
             168
         );
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn adaptive_timeout_extreme_library_scenario() {
-        use std::sync::atomic::Ordering;
-
-        // Simulate extreme library: 200k+ assets, osxphotos takes 6min to start
-        OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.store(120, Ordering::SeqCst);
-        OSXPHOTOS_WARMED_UP.store(false, Ordering::SeqCst);
-
-        // First query with cold start buffer: 120 + 180 = 300s (5min)
-        let timeout1 = fast_img_osxphotos_query_timeout(64);
-        assert_eq!(timeout1, Duration::from_mins(5)); // Still not enough
-
-        // First attempt times out, extend
-        extend_osxphotos_query_timeout();
-        // Base now: 240
-
-        // Second query: 240 + 180 = 420s (7min)
-        let timeout2 = fast_img_osxphotos_query_timeout(64);
-        assert_eq!(timeout2, Duration::from_mins(7));
-
-        // Still times out, extend again
-        extend_osxphotos_query_timeout();
-        // Base now: 480 (capped)
-
-        // Third query: 480 + 180 = 660s (11min) - exceeds 8min base but cold buffer
-        // adds more
-        let timeout3 = fast_img_osxphotos_query_timeout(64);
-        assert_eq!(timeout3, Duration::from_mins(11));
-
-        // This succeeds after 6min, record it
-        record_osxphotos_query_startup_time(360); // 6 minutes
-        // new_base = 360+30 = 390, but capped at 480
-        // Warmed up now set to true
-
-        // Subsequent queries are much faster without cold buffer
-        let timeout4 = fast_img_osxphotos_query_timeout(64);
-        assert_eq!(timeout4, Duration::from_mins(8)); // Just base, no cold buffer
     }
 }

@@ -49,9 +49,10 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from fastmode_paths import default_mfb_state_root
 
 # Align with Rust ``chrono::Local::now().format("%Y%m%d_%H%M%S")``.
 MFB_LOG_SESSION_STAMP = "%Y%m%d_%H%M%S"
@@ -100,9 +101,7 @@ def is_forbidden_log_path(path: Path) -> bool:
 
 
 def _default_user_log_dir() -> Path:
-    if home := os.getenv("HOME"):
-        return Path(home) / MFB_DEFAULT_HOME_DIRNAME / "logs"
-    return Path(tempfile.gettempdir()) / "modern_format_boost_logs"
+    return default_mfb_state_root() / "logs"
 
 
 def persistent_log_dir() -> Path:
@@ -129,7 +128,7 @@ def coerce_log_dir(candidate: Path) -> Path:
     if is_forbidden_log_path(fallback):
         fallback = _default_user_log_dir()
     if is_forbidden_log_path(fallback):
-        fallback = Path(tempfile.gettempdir()) / "modern_format_boost_logs"
+        fallback = default_mfb_state_root() / "logs"
     print(
         f"[MFB] Refusing workspace log dir {candidate} — using {fallback}",
         file=sys.stderr,

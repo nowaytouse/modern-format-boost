@@ -8,7 +8,7 @@ use img::lossless_converter::{
     convert_jpeg_to_jxl,
 };
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
@@ -44,7 +44,6 @@ use img::{
 };
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -1033,6 +1032,7 @@ struct AutoConvertConfig {
 
     cache: Option<Arc<AnalysisCache>>,
     static_delivery: foundation::delivery_codec_strategy::ImgStaticDelivery,
+    error_mode: foundation::BatchErrorMode,
 }
 
 impl AutoConvertConfig {
@@ -1201,7 +1201,10 @@ fn conversion_output_ignored(input: &Path, reason: String, original_size: u64) -
     }
 }
 
-fn convert_result_to_output(result: foundation::TaskResult) -> ConversionOutput {
+fn convert_result_to_output(result: foundation::TaskResult) -> anyhow::Result<ConversionOutput> {
+    if !result.success && !result.ignored {
+        anyhow::bail!(result.message);
+    }
     let input_path = result.input_path.clone();
     let output_path = if let Some(v) = result.output_path.clone() {
         v
@@ -1218,7 +1221,7 @@ fn convert_result_to_output(result: foundation::TaskResult) -> ConversionOutput 
         }
         input_path
     };
-    ConversionOutput {
+    Ok(ConversionOutput {
         original_path: result.input_path,
         output_path,
         skipped: result.skipped,
@@ -1230,6 +1233,52 @@ fn convert_result_to_output(result: foundation::TaskResult) -> ConversionOutput 
             .size_reduction
             .map(foundation::numeric_cast::f64_to_f32_lossy),
         blake3: result.blake3,
+    })
+}
+
+fn image_batch_should_abort(mode: foundation::BatchErrorMode, error: &anyhow::Error) -> bool {
+    mode.should_abort_error(error)
+}
+
+#[cfg(test)]
+mod conversion_result_adapter_tests {
+    use super::{convert_result_to_output, image_batch_should_abort};
+
+    #[test]
+    fn failed_task_result_is_not_promoted_to_conversion_success() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("corrupt.jpg");
+        std::fs::write(&input, b"corrupt")?;
+        let result = foundation::TaskResult::failed_with_fallback(
+            &input,
+            &foundation::conversion::ConvertOptions::default(),
+            "decode failed",
+            "decode_failed",
+        )?;
+
+        let error = convert_result_to_output(result).expect_err("failed task must remain failed");
+        assert_eq!(error.to_string(), "decode failed");
+        Ok(())
+    }
+
+    #[test]
+    fn image_batch_continues_only_classified_recoverable_errors() {
+        let recoverable: anyhow::Error =
+            foundation::UnifiedError::analysis_error("bad image").into();
+        assert!(!image_batch_should_abort(
+            foundation::BatchErrorMode::LogAndContinue,
+            &recoverable
+        ));
+        assert!(image_batch_should_abort(
+            foundation::BatchErrorMode::FailFast,
+            &recoverable
+        ));
+
+        let unknown = anyhow::anyhow!("unclassified image failure");
+        assert!(image_batch_should_abort(
+            foundation::BatchErrorMode::LogAndContinue,
+            &unknown
+        ));
     }
 }
 
@@ -1378,7 +1427,7 @@ fn auto_convert_single_file(
 
     let result = dispatch_static_conversion(input, &analysis, &options, config)?;
 
-    let output = convert_result_to_output(result);
+    let output = convert_result_to_output(result)?;
 
     if output.skipped {
         if config.verbose() {
@@ -1653,37 +1702,31 @@ fn auto_convert_directory(
 
     // Initialize checkpoint manager for resume/progress tracking
     let checkpoint = if resume {
-        match foundation::checkpoint::Manager::new_resuming_with_context(
+        let cp = foundation::checkpoint::Manager::new_resuming_with_context(
             input,
             config.output_dir.as_deref(),
-        ) {
-            Ok(cp) => {
-                if cp.is_resume_mode() {
-                    if config.verbose() {
-                        log_stat!(
-                            foundation::infra::static_logs::messages::LABEL_METADATA,
-                            format!(
-                                "Batch Audit: Resume detected - skipping {} already completed images",
-                                cp.completed_count()
-                            )
-                        );
-                    }
-                    cp.sync_to_processed_list();
-                } else {
-                    foundation::clear_processed_list();
-                }
-                Some(cp)
+        )
+        .with_context(|| {
+            format!(
+                "failed to initialize resume checkpoint for {}",
+                input.display()
+            )
+        })?;
+        if cp.is_resume_mode() {
+            if config.verbose() {
+                log_stat!(
+                    foundation::infra::static_logs::messages::LABEL_METADATA,
+                    format!(
+                        "Batch Audit: Resume detected - skipping {} already completed images",
+                        cp.completed_count()
+                    )
+                );
             }
-            Err(e) => {
-                if config.verbose() {
-                    foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                        "checkpoint_init_failed",
-                        format!("failed to initialize checkpoint: {e}"),
-                    );
-                }
-                None
-            }
+            cp.sync_to_processed_list();
+        } else {
+            foundation::clear_processed_list();
         }
+        Some(cp)
     } else {
         foundation::clear_processed_list();
         None
@@ -1703,6 +1746,8 @@ fn auto_convert_directory(
     let actual_input_bytes = core::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = core::sync::atomic::AtomicU64::new(0);
     let pause_controller = Arc::new(PauseController::new());
+    let abort_requested = AtomicBool::new(false);
+    let abort_reason = std::sync::Mutex::new(None::<String>);
 
     foundation::progress_mode::enable_quiet_mode();
     let progress_bar = Arc::new(foundation::CoarseProgressBar::new(
@@ -1752,7 +1797,7 @@ rayon::scope(|scope| {
 for _ in 0..max_threads {
 let next_index = &next_index;
                 scope.spawn(|_| loop {
-                    if pause_controller.is_paused() {
+                    if pause_controller.is_paused() || abort_requested.load(Ordering::SeqCst) {
                         break;
                     }
 
@@ -1798,33 +1843,49 @@ let next_index = &next_index;
                             } else if result.skipped {
                                 skipped.fetch_add(1, Ordering::Relaxed);
                             } else {
-                                foundation::infra::static_logs::log_success_at_with_pipeline(
-                                    &format!(
-                                        "{} Convert Audit",
-                                        foundation::modern_ui::symbols::pick(
-                                            foundation::modern_ui::symbols::SUCCESS,
-                                            foundation::modern_ui::symbols::plain::SUCCESS
-                                        )
-                                    ),
-                                    "img",
-                                    Some(path),
-                                    &result.message,
-                                );
-                                success.fetch_add(1, Ordering::Relaxed);
-                                foundation::progress_mode::image_processed_success();
-                                actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
-                                if let Some(out_size) = result.output_size {
-                                    actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
-                                }
-                                // Mark as completed in checkpoint manager on success (thread-safe)
-                                if let Some(cp) = checkpoint.as_ref()
-                                    && let Err(e) = cp.mark_completed(path)
-                                {
+                                let checkpoint_error = checkpoint
+                                    .as_ref()
+                                    .and_then(|cp| cp.mark_completed(path).err());
+                                if let Some(e) = checkpoint_error {
                                     foundation::media_conversion_gate::delivery_api_path_fallback_audit(
                                         "checkpoint_mark_completed",
                                         path,
                                         format!("failed to mark completed: {e}"),
                                     );
+                                    let reason = format!("failed to mark checkpoint complete: {e}");
+                                    failed.fetch_add(1, Ordering::Relaxed);
+                                    foundation::progress_mode::image_processed_failure();
+                                    foundation::media_conversion_gate::mutex_guard_or_recover(
+                                        "failed_paths_acc",
+                                        failed_paths.lock(),
+                                    )
+                                    .push((path.clone(), reason.clone()));
+                                    if !abort_requested.swap(true, Ordering::SeqCst) {
+                                        *foundation::media_conversion_gate::mutex_guard_or_recover(
+                                            "img_batch_abort_reason",
+                                            abort_reason.lock(),
+                                        ) = Some(format!("{}: {reason}", path.display()));
+                                    }
+                                } else {
+                                    foundation::infra::static_logs::log_success_at_with_pipeline(
+                                        &format!(
+                                            "{} Convert Audit",
+                                            foundation::modern_ui::symbols::pick(
+                                                foundation::modern_ui::symbols::SUCCESS,
+                                                foundation::modern_ui::symbols::plain::SUCCESS
+                                            )
+                                        ),
+                                        "img",
+                                        Some(path),
+                                        &result.message,
+                                    );
+                                    success.fetch_add(1, Ordering::Relaxed);
+                                    foundation::progress_mode::image_processed_success();
+                                    actual_input_bytes
+                                        .fetch_add(result.original_size, Ordering::Relaxed);
+                                    if let Some(out_size) = result.output_size {
+                                        actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
+                                    }
                                 }
                             }
                         }
@@ -1841,9 +1902,10 @@ let next_index = &next_index;
                                 continue;
                             }
 
-                            let is_skip = match e
-                                .downcast_ref::<foundation::unified_error::UnifiedError>()
-                            {
+                            let unified = e.chain().find_map(|cause| {
+                                cause.downcast_ref::<foundation::unified_error::UnifiedError>()
+                            });
+                            let is_skip = match unified {
                                 // String fallback: only the controlled "Skipped:" sentinel prefix
                                 // counts as a skip. Substring matches (e.g. a hard error merely
                                 // containing "Skipped" or "already optimized") are failures.
@@ -1852,19 +1914,17 @@ let next_index = &next_index;
                             };
 
                             if is_skip {
-                                foundation::progress_mode::image_skipped(path, &err_str);
-                                skipped.fetch_add(1, Ordering::Relaxed);
-                                foundation::progress_mode::image_processed_success(); // Skip with copy is a partial success
-
                                 // Copy original file to output directory to prevent data loss for skips
-                                if let Some(ref output_dir) = config.output_dir
-                                    && let Err(copy_err) = foundation::copy_on_skip_or_fail(
+                                let copy_error = config.output_dir.as_ref().and_then(|output_dir| {
+                                    foundation::copy_on_skip_or_fail(
                                         path,
                                         Some(output_dir),
                                         config.base_dir.as_deref(),
                                         config.verbose(),
                                     )
-                                {
+                                    .err()
+                                });
+                                if let Some(copy_err) = copy_error {
                                     log_fatal!(
                                         "Fatal Integrity Violation",
                                         &format!(
@@ -1873,6 +1933,25 @@ let next_index = &next_index;
                                             copy_err
                                         )
                                     );
+                                    let reason =
+                                        format!("failed to preserve skipped source: {copy_err}");
+                                    failed.fetch_add(1, Ordering::Relaxed);
+                                    foundation::progress_mode::image_processed_failure();
+                                    foundation::media_conversion_gate::mutex_guard_or_recover(
+                                        "failed_paths_acc",
+                                        failed_paths.lock(),
+                                    )
+                                    .push((path.clone(), reason.clone()));
+                                    if !abort_requested.swap(true, Ordering::SeqCst) {
+                                        *foundation::media_conversion_gate::mutex_guard_or_recover(
+                                            "img_batch_abort_reason",
+                                            abort_reason.lock(),
+                                        ) = Some(format!("{}: {reason}", path.display()));
+                                    }
+                                } else {
+                                    foundation::progress_mode::image_skipped(path, &err_str);
+                                    skipped.fetch_add(1, Ordering::Relaxed);
+                                    foundation::progress_mode::image_processed_success();
                                 }
                             } else {
                                 // Classify as read/analysis failure only on unambiguous sentinel types
@@ -1907,6 +1986,14 @@ let next_index = &next_index;
                                 {
                                     let mut v = foundation::media_conversion_gate::mutex_guard_or_recover("failed_paths_acc", failed_paths.lock());
                                     v.push((path.clone(), err_str.clone()));
+                                }
+                                if image_batch_should_abort(config.error_mode, &e)
+                                    && !abort_requested.swap(true, Ordering::SeqCst)
+                                {
+                                    *foundation::media_conversion_gate::mutex_guard_or_recover(
+                                        "img_batch_abort_reason",
+                                        abort_reason.lock(),
+                                    ) = Some(format!("{}: {err_str}", path.display()));
                                 }
                             }
                         }
@@ -1949,8 +2036,14 @@ let next_index = &next_index;
             total.saturating_sub(processed_count),
         );
     }
+    let abort_reason = foundation::media_conversion_gate::mutex_guard_or_recover(
+        "img_batch_abort_reason",
+        abort_reason.lock(),
+    )
+    .clone();
 
     if !result.paused
+        && abort_reason.is_none()
         && let Some(ref output_dir) = config.output_dir
     {
         log_detail!("");
@@ -1993,6 +2086,7 @@ let next_index = &next_index;
     }
 
     if !result.paused
+        && abort_reason.is_none()
         && let Some(ref output_dir) = config.output_dir
         && let Some(ref base_dir) = config.base_dir
     {
@@ -2017,6 +2111,7 @@ let next_index = &next_index;
 
     if let Some(ref saved) = saved_dir_timestamps {
         if !result.paused
+            && abort_reason.is_none()
             && let Some(ref output_dir) = config.output_dir
             && let Some(ref base_dir) = config.base_dir
             && let Err(e) = foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
@@ -2064,7 +2159,7 @@ let next_index = &next_index;
                 );
                 post_run_errors.push(format!("Checkpoint lock release failed: {e}"));
             }
-        } else if failed_count == 0 {
+        } else if failed_count == 0 && abort_reason.is_none() {
             if let Err(e) = cp.cleanup() {
                 foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
                     "checkpoint_cleanup_failed",
@@ -2096,6 +2191,9 @@ let next_index = &next_index;
             for (p, reason) in paths.iter() {
                 foundation::log_auto_error!("Failed file", "{}: {}", p.display(), reason);
             }
+        }
+        if let Some(reason) = abort_reason {
+            anyhow::bail!("Batch aborted by error policy after {reason}");
         }
         anyhow::bail!("Batch completed with {failed_count} failed file(s)");
     }
@@ -3128,7 +3226,11 @@ fn run_avif_input_decoder(
         identify.format("%n\n").input(source);
         let process_res = foundation::process_runner::ManagedProcess::spawn(&mut identify.build())
             .and_then(|proc| {
-                proc.wait_timeout(std::time::Duration::from_secs(10), "identify frame count")
+                proc.wait_liveness_timeout(
+                    std::time::Duration::from_secs(10),
+                    foundation::process_runner::image_process_hard_timeout(),
+                    "identify frame count",
+                )
             });
         let output = process_res.with_context(|| {
             format!(
@@ -3163,8 +3265,9 @@ fn run_avif_input_decoder(
     let (mut command, tool_name) = avif_input_decoder_command(decoder, source, temp_path)?;
     let output = foundation::process_runner::ManagedProcess::spawn(&mut command)
         .and_then(|process| {
-            process.wait_timeout(
+            process.wait_liveness_timeout(
                 std::time::Duration::from_secs(120),
+                foundation::process_runner::image_process_hard_timeout(),
                 &format!("{tool_name} static decode"),
             )
         })
@@ -3254,17 +3357,14 @@ fn prepare_fast_img_avif_encoder_input(
 
 fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
     message.contains("pixel-diff: cannot open source image")
+        || (message.contains("official avifenc") && message.contains("timed out"))
         || (message.contains("avifenc failed at q=")
             && (message.contains("Unrecognized file format")
                 || message.contains("Unsupported file format")))
 }
 
 const AVIF_MEME_SPEED: u8 = 0;
-pub(crate) use foundation::infra::constants::{
-    AVIF_MEME_MIN_QUALITY, ISOBMFF_BOX_MDAT, JPEG_SOI_MAGIC, JXL_BOX_JXLC, JXL_BOX_JXLP,
-    JXL_CODESTREAM_MAGIC, JXL_CONTAINER_MAGIC, PNG_CHUNK_IDAT, PNG_CHUNK_IEND, PNG_CHUNK_IHDR,
-    PNG_CHUNK_PLTE, PNG_CHUNK_TRNS, PNG_SIGNATURE_MAGIC,
-};
+pub(crate) use foundation::infra::constants::AVIF_MEME_MIN_QUALITY;
 
 #[derive(Clone, Debug)]
 struct AvifMemeCandidate {
@@ -3274,356 +3374,92 @@ struct AvifMemeCandidate {
     pure_media_size: u64,
 }
 
-pub(crate) fn jpeg_pure_media_size(path: &Path) -> anyhow::Result<u64> {
-    let total_size = std::fs::metadata(path)?.len();
-    let mut file = std::fs::File::open(path)?;
-    let mut signature = [0_u8; 2];
-    file.read_exact(&mut signature)?;
-    anyhow::ensure!(
-        signature == *JPEG_SOI_MAGIC,
-        "JPEG pure-media probe found an invalid SOI marker"
-    );
-
-    let mut metadata_size = 0_u64;
-    let mut in_scan = false;
-    loop {
-        let mut byte = [0_u8; 1];
-        let (marker, marker_size) = if in_scan {
-            loop {
-                file.read_exact(&mut byte)?;
-                if byte[0] != 0xFF {
-                    continue;
-                }
-                let mut marker_size = 1_u64;
-                let marker = loop {
-                    file.read_exact(&mut byte)?;
-                    marker_size += 1;
-                    if byte[0] != 0xFF {
-                        break byte[0];
-                    }
-                };
-                if marker == 0x00 || (0xD0..=0xD7).contains(&marker) {
-                    continue;
-                }
-                break (marker, marker_size);
-            }
-        } else {
-            file.read_exact(&mut byte)?;
-            anyhow::ensure!(
-                byte[0] == 0xFF,
-                "JPEG pure-media probe found data outside a scan"
-            );
-            let mut marker_size = 1_u64;
-            let marker = loop {
-                file.read_exact(&mut byte)?;
-                marker_size += 1;
-                if byte[0] != 0xFF {
-                    break byte[0];
-                }
-            };
-            (marker, marker_size)
-        };
-
-        if marker == 0xD9 {
-            return file
-                .stream_position()?
-                .checked_sub(metadata_size)
-                .ok_or_else(|| anyhow::anyhow!("JPEG metadata size exceeds file size"));
-        }
-        anyhow::ensure!(
-            marker != 0x00 && marker != 0xD8,
-            "JPEG pure-media probe reached an invalid marker"
-        );
-        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            // Standalone/restart markers carry no length field and do not leave entropy scan.
-            continue;
-        }
-
-        let mut length_bytes = [0_u8; 2];
-        file.read_exact(&mut length_bytes)?;
-        let segment_length = u16::from_be_bytes(length_bytes);
-        anyhow::ensure!(
-            segment_length >= 2,
-            "JPEG pure-media probe found an invalid segment length"
-        );
-        let payload_size = u64::from(segment_length - 2);
-        let payload_start = file.stream_position()?;
-        anyhow::ensure!(
-            payload_start
-                .checked_add(payload_size)
-                .is_some_and(|end| end <= total_size),
-            "JPEG pure-media probe found a truncated segment"
-        );
-        if (0xE0..=0xEF).contains(&marker) || marker == 0xFE {
-            metadata_size = metadata_size
-                .checked_add(marker_size + u64::from(segment_length))
-                .ok_or_else(|| anyhow::anyhow!("JPEG metadata size overflow"))?;
-        }
-        file.seek(SeekFrom::Current(i64::from(segment_length) - 2))?;
-        in_scan = marker == 0xDA;
+fn finish_avif_meme_after_terminal_probe_error(
+    reason: &str,
+    fitting_candidate: &mut Option<AvifMemeCandidate>,
+    fallback_candidate: &mut Option<AvifMemeCandidate>,
+) -> Option<AvifQualityExploreResult> {
+    if !avif_quality_probe_error_is_source_invariant(reason) {
+        return None;
     }
+    let (candidate, selection) = if let Some(candidate) = fitting_candidate.take() {
+        if let Some(cleanup) = fallback_candidate
+            .take()
+            .map(|candidate| candidate.temp_path)
+        {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "fast_img_probe_cleanup",
+                &cleanup,
+            );
+        }
+        (candidate, "terminal_probe_fitting_fallback")
+    } else if let Some(candidate) = fallback_candidate.take() {
+        (candidate, "terminal_probe_fallback")
+    } else {
+        return Some(AvifQualityExploreResult::SourceUnavailable {
+            reason: reason.to_string(),
+        });
+    };
+    Some(AvifQualityExploreResult::Found {
+        quality: candidate.quality,
+        temp_path: candidate.temp_path,
+        output_size: candidate.output_size,
+        pure_media_size: candidate.pure_media_size,
+        selection,
+    })
 }
 
+#[cfg(test)]
+pub(crate) fn jpeg_pure_media_size(path: &Path) -> anyhow::Result<u64> {
+    foundation::image::static_payload::jpeg(path)
+}
+
+#[cfg(test)]
 pub(crate) fn png_pure_media_size(path: &Path) -> anyhow::Result<u64> {
-    let total_size = std::fs::metadata(path)?.len();
-    let mut file = std::fs::File::open(path)?;
-    let mut signature = [0_u8; 8];
-    file.read_exact(&mut signature)?;
-    anyhow::ensure!(
-        signature == *PNG_SIGNATURE_MAGIC,
-        "PNG pure-media probe found an invalid signature"
-    );
-
-    let mut pure_media_size = 0_u64;
-    let mut saw_ihdr = false;
-    let mut saw_idat = false;
-    let mut saw_iend = false;
-    while file.stream_position()? < total_size {
-        let mut header = [0_u8; 8];
-        file.read_exact(&mut header)?;
-        let payload_size = u64::from(u32::from_be_bytes([
-            header[0], header[1], header[2], header[3],
-        ]));
-        let chunk_type = &header[4..8];
-        let payload_start = file.stream_position()?;
-        anyhow::ensure!(
-            payload_start
-                .checked_add(payload_size)
-                .and_then(|end| end.checked_add(4))
-                .is_some_and(|end| end <= total_size),
-            "PNG pure-media probe found a truncated chunk"
-        );
-
-        if chunk_type == PNG_CHUNK_IHDR
-            || chunk_type == PNG_CHUNK_PLTE
-            || chunk_type == PNG_CHUNK_TRNS
-            || chunk_type == PNG_CHUNK_IDAT
-        {
-            pure_media_size = pure_media_size
-                .checked_add(payload_size)
-                .ok_or_else(|| anyhow::anyhow!("PNG pure-media size overflow"))?;
-        }
-        saw_ihdr |= chunk_type == PNG_CHUNK_IHDR;
-        saw_idat |= chunk_type == PNG_CHUNK_IDAT;
-        saw_iend |= chunk_type == PNG_CHUNK_IEND;
-        file.seek(SeekFrom::Current(
-            i64::try_from(payload_size + 4)
-                .map_err(|_| anyhow::anyhow!("PNG chunk is too large to seek"))?,
-        ))?;
-        if saw_iend {
-            break;
-        }
-    }
-
-    anyhow::ensure!(
-        saw_ihdr && saw_idat && saw_iend,
-        "PNG pure-media probe found an incomplete image"
-    );
-    Ok(pure_media_size)
+    foundation::image::static_payload::png(path)
 }
 
 pub(crate) fn avif_mdat_payload_size(path: &Path) -> anyhow::Result<u64> {
-    let total_size = std::fs::metadata(path)?.len();
-    let mut file = std::fs::File::open(path)?;
-    let mut offset = 0_u64;
-    let mut pure_media_size = 0_u64;
-    let mut box_count = 0_u32;
-    use foundation::infra::constants::MAX_AVIF_BOXES;
-
-    while offset < total_size {
-        box_count = box_count.saturating_add(1);
-        anyhow::ensure!(
-            box_count <= MAX_AVIF_BOXES,
-            "AVIF pure-media probe: exceeded maximum allowed box count limit"
-        );
-        anyhow::ensure!(
-            total_size - offset >= 8,
-            "AVIF pure-media probe found a truncated box header"
-        );
-        let mut header = [0_u8; 8];
-        file.read_exact(&mut header)?;
-        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-        let mut header_size = 8_u64;
-        let box_size = match size32 {
-            0 => total_size - offset,
-            1 => {
-                let mut extended = [0_u8; 8];
-                file.read_exact(&mut extended)?;
-                header_size = 16;
-                u64::from_be_bytes(extended)
-            }
-            size => u64::from(size),
-        };
-        anyhow::ensure!(
-            box_size >= header_size && box_size <= total_size - offset,
-            "AVIF pure-media probe found an invalid box size"
-        );
-        if &header[4..8] == ISOBMFF_BOX_MDAT {
-            pure_media_size = pure_media_size
-                .checked_add(box_size - header_size)
-                .ok_or_else(|| anyhow::anyhow!("AVIF pure-media size overflow"))?;
-        }
-        offset += box_size;
-        file.seek(SeekFrom::Start(offset))?;
-    }
-
-    anyhow::ensure!(
-        pure_media_size > 0,
-        "AVIF pure-media probe found no mdat payload"
-    );
-    Ok(pure_media_size)
+    foundation::image::static_payload::isobmff_mdat(path)
 }
 
-pub(crate) fn source_pure_media_size(
-    path: &Path,
-    format: FormatKind,
-) -> anyhow::Result<Option<u64>> {
-    match format {
-        FormatKind::Jpeg => jpeg_pure_media_size(path).map(Some),
-        FormatKind::Png => png_pure_media_size(path).map(Some),
-        FormatKind::Avif => Ok(None),
-        FormatKind::Jxl => jxl_pure_bitstream_size(path).map(Some),
-        _ => Ok(None),
-    }
+pub(crate) fn source_pure_media_size(path: &Path, format: FormatKind) -> anyhow::Result<u64> {
+    foundation::image::static_payload::measure_as(path, format)
 }
 
-/// Parse a JXL container file and return the total codestream payload bytes
-/// (sum of all `jxlp`/`jxlc` box payloads). For naked JXL codestreams (no
-/// container, identified by the `FF 0A` magic), returns the whole file size.
-/// Metadata boxes (`Exif`, `xml `, `jbrd`, `jxll`) are excluded.
-///
-/// # Errors
-/// Returns an error if the file is not a recognized JXL format or is truncated.
+#[cfg(test)]
 pub(crate) fn jxl_pure_bitstream_size(path: &Path) -> anyhow::Result<u64> {
-    use std::io::{Read, Seek, SeekFrom};
-    let total_size = std::fs::metadata(path)?.len();
-    let mut file = std::fs::File::open(path)?;
-
-    // Naked JXL codestream: starts with FF 0A
-    let mut magic2 = [0u8; 2];
-    file.read_exact(&mut magic2)?;
-    if magic2 == *JXL_CODESTREAM_MAGIC {
-        return Ok(total_size);
-    }
-
-    // JXL container magic
-    file.seek(SeekFrom::Start(0))?;
-    let mut container_magic = [0u8; 12];
-    file.read_exact(&mut container_magic)?;
-    anyhow::ensure!(
-        container_magic == *JXL_CONTAINER_MAGIC,
-        "JXL pure-bitstream probe: not a recognized JXL file"
-    );
-
-    file.seek(SeekFrom::Start(0))?;
-    let mut offset = 0u64;
-    let mut bitstream_size = 0u64;
-
-    while offset < total_size {
-        anyhow::ensure!(
-            total_size - offset >= 8,
-            "JXL pure-bitstream probe: truncated box header"
-        );
-        let mut hdr = [0u8; 8];
-        file.read_exact(&mut hdr)?;
-        let size32 = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
-        let box_type = &hdr[4..8];
-        let mut header_size = 8u64;
-        let box_size = match size32 {
-            0 => total_size - offset,
-            1 => {
-                let mut ext = [0u8; 8];
-                file.read_exact(&mut ext)?;
-                header_size = 16;
-                u64::from_be_bytes(ext)
-            }
-            n => u64::from(n),
-        };
-        anyhow::ensure!(
-            box_size >= header_size && box_size <= total_size - offset,
-            "JXL pure-bitstream probe: invalid box size"
-        );
-        let payload = box_size - header_size;
-        if box_type == JXL_BOX_JXLP {
-            anyhow::ensure!(
-                payload >= 4,
-                "JXL pure-bitstream probe: jxlp box payload shorter than 4-byte sequence header"
-            );
-            // jxlp: 4-byte sequence index + codestream fragment
-            bitstream_size = bitstream_size
-                .checked_add(payload - 4)
-                .ok_or_else(|| anyhow::anyhow!("JXL bitstream size overflow"))?;
-        } else if box_type == JXL_BOX_JXLC {
-            // jxlc: full codestream in a single box (no index prefix)
-            bitstream_size = bitstream_size
-                .checked_add(payload)
-                .ok_or_else(|| anyhow::anyhow!("JXL bitstream size overflow"))?;
-        }
-        // ftyp, Exif, xml , jbrd, jxll, etc. are metadata — excluded.
-        offset += box_size;
-        file.seek(SeekFrom::Start(offset))?;
-    }
-
-    anyhow::ensure!(
-        bitstream_size > 0,
-        "JXL pure-bitstream probe: no jxlp/jxlc payload found"
-    );
-    Ok(bitstream_size)
+    foundation::image::static_payload::jxl(path)
 }
-
-fn avif_meme_candidate_fits_source(
+const fn avif_meme_candidate_fits_source(
     candidate: &AvifMemeCandidate,
-    source_size: u64,
-    source_pure_media_size: Option<u64>,
+    source_pure_media_size: u64,
 ) -> bool {
-    source_pure_media_size.map_or(
-        candidate.output_size <= source_size,
-        |source_pure_media_size| candidate.pure_media_size <= source_pure_media_size,
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SizeBudgetBasis {
-    PureMedia,
-    CompleteFile,
+    candidate.pure_media_size <= source_pure_media_size
 }
 
 fn retain_smallest_avif_meme_candidate(
     best: &mut Option<AvifMemeCandidate>,
     candidate: AvifMemeCandidate,
-    basis: SizeBudgetBasis,
 ) -> Option<PathBuf> {
+    if candidate.quality == AVIF_MEME_MIN_QUALITY {
+        return best.replace(candidate).map(|candidate| candidate.temp_path);
+    }
     let is_better_than = |curr: &AvifMemeCandidate, cand: &AvifMemeCandidate| -> bool {
-        match basis {
-            SizeBudgetBasis::PureMedia => {
-                (
-                    curr.pure_media_size,
-                    curr.output_size,
-                    std::cmp::Reverse(curr.quality),
-                ) <= (
-                    cand.pure_media_size,
-                    cand.output_size,
-                    std::cmp::Reverse(cand.quality),
-                )
-            }
-            SizeBudgetBasis::CompleteFile => {
-                (
-                    curr.output_size,
-                    curr.pure_media_size,
-                    std::cmp::Reverse(curr.quality),
-                ) <= (
-                    cand.output_size,
-                    cand.pure_media_size,
-                    std::cmp::Reverse(cand.quality),
-                )
-            }
-        }
+        (
+            curr.pure_media_size,
+            curr.output_size,
+            std::cmp::Reverse(curr.quality),
+        ) <= (
+            cand.pure_media_size,
+            cand.output_size,
+            std::cmp::Reverse(cand.quality),
+        )
     };
 
-    if best
-        .as_ref()
-        .is_some_and(|current| is_better_than(current, &candidate))
-    {
+    if best.as_ref().is_some_and(|current| {
+        current.quality == AVIF_MEME_MIN_QUALITY || is_better_than(current, &candidate)
+    }) {
         return Some(candidate.temp_path);
     }
     best.replace(candidate).map(|candidate| candidate.temp_path)
@@ -3638,8 +3474,7 @@ fn probe_single_avif_quality(
     source: &Path,
     encoder_input: &Path,
     quality: u8,
-    source_size: u64,
-    source_pure_media_size: Option<u64>,
+    source_pure_media_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> Result<SingleProbeResult, String> {
@@ -3678,8 +3513,7 @@ fn probe_single_avif_quality(
         output_size,
         pure_media_size,
     };
-    let fits_source =
-        avif_meme_candidate_fits_source(&candidate, source_size, source_pure_media_size);
+    let fits_source = avif_meme_candidate_fits_source(&candidate, source_pure_media_size);
     Ok(SingleProbeResult {
         candidate,
         fits_source,
@@ -3694,25 +3528,14 @@ fn explore_avif_meme_quality(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> AvifQualityExploreResult {
     const COARSE_STEP: u8 = 10;
-    let source_size = match std::fs::metadata(source) {
-        Ok(metadata) => metadata.len(),
-        Err(error) => {
-            return AvifQualityExploreResult::SourceUnavailable {
-                reason: format!("cannot read source size for pure-media comparison: {error}"),
-            };
-        }
-    };
-
-    // Fail-open: If pure media sizing fails or is unsupported for format, fall back to complete file size budget
     let source_pure_media_size = match source_pure_media_size(source, format) {
         Ok(size) => size,
         Err(error) => {
-            tracing::warn!(
-                target: "fast_img",
-                source = %source.display(),
-                "cannot measure source pure-media payload ({error}); falling back to complete file size budget"
-            );
-            None
+            return AvifQualityExploreResult::SourceUnavailable {
+                reason: format!(
+                    "cannot measure source pure-media payload; preserving source without complete-file fallback: {error}"
+                ),
+            };
         }
     };
 
@@ -3729,7 +3552,6 @@ fn explore_avif_meme_quality(
             source,
             encoder_input,
             coarse_quality,
-            source_size,
             source_pure_media_size,
             convert_options,
             metadata_retry,
@@ -3743,39 +3565,30 @@ fn explore_avif_meme_quality(
                             temp_path: res.candidate.temp_path,
                             output_size: res.candidate.output_size,
                             pure_media_size: res.candidate.pure_media_size,
-                            selection: if source_pure_media_size.is_some() {
-                                "pure_media_budget"
-                            } else {
-                                "complete_file_budget"
-                            },
+                            selection: "pure_media_budget",
                         };
                     }
                     first_fit_quality = Some(coarse_quality);
                     current_passed_candidate = Some(res.candidate);
                     break;
-                } else {
-                    high_fail_quality = Some(coarse_quality);
-                    let budget_basis = if source_pure_media_size.is_some() {
-                        SizeBudgetBasis::PureMedia
-                    } else {
-                        SizeBudgetBasis::CompleteFile
-                    };
-                    if let Some(cleanup) = retain_smallest_avif_meme_candidate(
-                        &mut best_fallback,
-                        res.candidate,
-                        budget_basis,
-                    ) {
-                        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                            "fast_img_probe_cleanup",
-                            &cleanup,
-                        );
-                    }
+                }
+                high_fail_quality = Some(coarse_quality);
+                if let Some(cleanup) =
+                    retain_smallest_avif_meme_candidate(&mut best_fallback, res.candidate)
+                {
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img_probe_cleanup",
+                        &cleanup,
+                    );
                 }
             }
             Err(reason) => {
-                if avif_quality_probe_error_is_source_invariant(&reason) && best_fallback.is_none()
-                {
-                    return AvifQualityExploreResult::SourceUnavailable { reason };
+                if let Some(result) = finish_avif_meme_after_terminal_probe_error(
+                    &reason,
+                    &mut current_passed_candidate,
+                    &mut best_fallback,
+                ) {
+                    return result;
                 }
                 last_probe_error = Some(reason);
             }
@@ -3798,7 +3611,6 @@ fn explore_avif_meme_quality(
                 source,
                 encoder_input,
                 mid,
-                source_size,
                 source_pure_media_size,
                 convert_options,
                 metadata_retry,
@@ -3823,6 +3635,13 @@ fn explore_avif_meme_quality(
                     }
                 }
                 Err(reason) => {
+                    if let Some(result) = finish_avif_meme_after_terminal_probe_error(
+                        &reason,
+                        &mut current_passed_candidate,
+                        &mut best_fallback,
+                    ) {
+                        return result;
+                    }
                     last_probe_error = Some(reason);
                     high = mid;
                 }
@@ -3841,27 +3660,37 @@ fn explore_avif_meme_quality(
                 temp_path: final_candidate.temp_path,
                 output_size: final_candidate.output_size,
                 pure_media_size: final_candidate.pure_media_size,
-                selection: if source_pure_media_size.is_some() {
-                    "pure_media_budget"
-                } else {
-                    "complete_file_budget"
-                },
+                selection: "pure_media_budget",
             };
         }
     }
 
     match best_fallback {
-        Some(candidate) => AvifQualityExploreResult::Found {
-            quality: candidate.quality,
-            temp_path: candidate.temp_path,
-            output_size: candidate.output_size,
-            pure_media_size: candidate.pure_media_size,
-            selection: if source_pure_media_size.is_some() {
-                "smallest_pure_media_fallback"
-            } else {
-                "smallest_complete_file_fallback"
-            },
-        },
+        Some(candidate) if candidate.quality == AVIF_MEME_MIN_QUALITY => {
+            AvifQualityExploreResult::Found {
+                quality: candidate.quality,
+                temp_path: candidate.temp_path,
+                output_size: candidate.output_size,
+                pure_media_size: candidate.pure_media_size,
+                selection: "q0_pure_media_fallback",
+            }
+        }
+        Some(candidate) => {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "fast_img_probe_cleanup",
+                &candidate.temp_path,
+            );
+            AvifQualityExploreResult::SourceUnavailable {
+                reason: format!(
+                    "AVIF Meme Mode exhausted q=100..={AVIF_MEME_MIN_QUALITY} without a verified q=0 fallback{}",
+                    last_probe_error
+                        .as_deref()
+                        .map_or_else(String::new, |reason| {
+                            format!("; last probe error: {reason}")
+                        })
+                ),
+            }
+        }
         None => AvifQualityExploreResult::SourceUnavailable {
             reason: format!(
                 "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
@@ -5426,12 +5255,25 @@ fn restore_jpeg_remove_temp(temp: &Path, context: &str) -> anyhow::Result<()> {
     })
 }
 
+fn run_restore_image_command(
+    mut command: std::process::Command,
+    context: &str,
+) -> anyhow::Result<std::process::Output> {
+    foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        foundation::process_runner::image_process_hard_timeout(),
+        context,
+    )
+    .with_context(|| format!("{context} failed to run"))
+}
+
 fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
-    let decode = foundation::DjxlBuilder::new()
+    let command = foundation::DjxlBuilder::new()
         .input(input)
         .output(temp_output)
-        .build()
-        .output()
+        .build();
+    let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
     if !decode.status.success() {
         let stderr = String::from_utf8_lossy(&decode.stderr);
@@ -5640,11 +5482,11 @@ fn restore_single_jpeg(
 
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
-    let decode = foundation::DjxlBuilder::new()
+    let command = foundation::DjxlBuilder::new()
         .input(input)
         .output(&temp_output)
-        .build()
-        .output()
+        .build();
+    let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
     if !decode.status.success() {
         let stderr = String::from_utf8_lossy(&decode.stderr);
@@ -6055,10 +5897,9 @@ fn restore_jpeg_preflight(
     let verified = std::sync::atomic::AtomicUsize::new(0);
     pool.install(|| {
         files.par_iter().try_for_each(|source| {
-            let probe = std::process::Command::new(&jxlinfo)
-                .arg("-v")
-                .arg(source)
-                .output()
+            let mut command = std::process::Command::new(&jxlinfo);
+            command.arg("-v").arg(source);
+            let probe = run_restore_image_command(command, "restore-jpeg jxlinfo preflight")
                 .with_context(|| {
                     format!(
                         "restore-jpeg preflight failed to launch jxlinfo for {}",
@@ -7733,6 +7574,7 @@ fn build_auto_convert_config(
         child_threads: 0,
         cache,
         static_delivery,
+        error_mode: foundation::BatchErrorMode::current(),
     }
 }
 
@@ -8617,6 +8459,18 @@ mod fast_img_hardening_tests {
             "encode source JXL failed: stdout={} stderr={}",
             String::from_utf8_lossy(&cjxl.stdout),
             String::from_utf8_lossy(&cjxl.stderr)
+        );
+        let metadata = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
+            .arg("-overwrite_original")
+            .arg("-EXIF:UserComment=marker refresh")
+            .arg(&src)
+            .output()
+            .context("add source metadata after JXL encode")?;
+        assert!(
+            metadata.status.success(),
+            "add source metadata failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&metadata.stdout),
+            String::from_utf8_lossy(&metadata.stderr)
         );
         let old_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
@@ -10716,30 +10570,18 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn meme_avif_uses_pure_media_budget_and_smallest_pure_fallback() -> anyhow::Result<()> {
+    fn meme_avif_uses_pure_media_budget_and_q0_fallback() -> anyhow::Result<()> {
         let q100 = super::AvifMemeCandidate {
             quality: 100,
             temp_path: std::path::PathBuf::from("q100.avif"),
             output_size: 1_300,
             pure_media_size: 900,
         };
-        assert!(super::avif_meme_candidate_fits_source(
-            &q100,
-            1_000,
-            Some(950)
-        ));
-        assert!(!super::avif_meme_candidate_fits_source(&q100, 1_000, None));
+        assert!(super::avif_meme_candidate_fits_source(&q100, 950));
+        assert!(!super::avif_meme_candidate_fits_source(&q100, 899));
 
         let mut best = None;
         assert!(
-            super::retain_smallest_avif_meme_candidate(
-                &mut best,
-                q100,
-                super::SizeBudgetBasis::PureMedia
-            )
-            .is_none()
-        );
-        assert_eq!(
             super::retain_smallest_avif_meme_candidate(
                 &mut best,
                 super::AvifMemeCandidate {
@@ -10747,31 +10589,29 @@ mod fast_img_hardening_tests {
                     temp_path: std::path::PathBuf::from("q90.avif"),
                     output_size: 1_200,
                     pure_media_size: 850,
-                },
-                super::SizeBudgetBasis::PureMedia,
-            ),
-            Some(std::path::PathBuf::from("q100.avif"))
+                }
+            )
+            .is_none()
         );
         assert_eq!(
             super::retain_smallest_avif_meme_candidate(
                 &mut best,
                 super::AvifMemeCandidate {
-                    quality: 80,
-                    temp_path: std::path::PathBuf::from("q80.avif"),
-                    output_size: 1_150,
-                    pure_media_size: 875,
+                    quality: 0,
+                    temp_path: std::path::PathBuf::from("q0.avif"),
+                    output_size: 1_400,
+                    pure_media_size: 950,
                 },
-                super::SizeBudgetBasis::PureMedia,
             ),
-            Some(std::path::PathBuf::from("q80.avif"))
+            Some(std::path::PathBuf::from("q90.avif"))
         );
 
         let Some(candidate) = best else {
             anyhow::bail!("verified candidate must be retained");
         };
-        assert_eq!(candidate.quality, 90);
-        assert_eq!(candidate.output_size, 1_200);
-        assert_eq!(candidate.pure_media_size, 850);
+        assert_eq!(candidate.quality, 0);
+        assert_eq!(candidate.output_size, 1_400);
+        assert_eq!(candidate.pure_media_size, 950);
         Ok(())
     }
 
@@ -10931,9 +10771,61 @@ mod fast_img_hardening_tests {
         assert!(super::avif_quality_probe_error_is_source_invariant(
             "avifenc failed at q=90: Unsupported file format AVIF"
         ));
+        assert!(super::avif_quality_probe_error_is_source_invariant(
+            "official avifenc encode timed out after 120s"
+        ));
+        assert!(super::avif_quality_probe_error_is_source_invariant(
+            "official avifenc quality probe timed out after 120s"
+        ));
         assert!(!super::avif_quality_probe_error_is_source_invariant(
             "AVIF health check failed at q=90: temporary I/O error"
         ));
+    }
+
+    #[test]
+    fn fast_img_avif_timeout_keeps_last_verified_fitting_candidate() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let fitting_path = root.path().join("q95.AVIF");
+        let oversized_path = root.path().join("q100.AVIF");
+        std::fs::write(&fitting_path, b"fitting")?;
+        std::fs::write(&oversized_path, b"oversized")?;
+        let mut fitting = Some(super::AvifMemeCandidate {
+            quality: 95,
+            temp_path: fitting_path.clone(),
+            output_size: 7,
+            pure_media_size: 7,
+        });
+        let mut oversized = Some(super::AvifMemeCandidate {
+            quality: 100,
+            temp_path: oversized_path.clone(),
+            output_size: 9,
+            pure_media_size: 9,
+        });
+
+        let result = super::finish_avif_meme_after_terminal_probe_error(
+            "official avifenc encode timed out after 120s",
+            &mut fitting,
+            &mut oversized,
+        )
+        .expect("timeout is terminal");
+        let super::AvifQualityExploreResult::Found {
+            quality,
+            temp_path,
+            selection,
+            ..
+        } = result
+        else {
+            anyhow::bail!("timeout must keep the last verified fitting candidate");
+        };
+
+        assert_eq!(quality, 95);
+        assert_eq!(temp_path, fitting_path);
+        assert_eq!(selection, "terminal_probe_fitting_fallback");
+        assert!(
+            !oversized_path.exists(),
+            "superseded oversized probe must be removed"
+        );
+        Ok(())
     }
 
     #[test]
@@ -11032,7 +10924,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn retain_smallest_candidate_respects_budget_basis_conflict() {
+    fn retain_smallest_candidate_uses_pure_payload_not_complete_file() {
         let candidate_a = super::AvifMemeCandidate {
             quality: 70,
             temp_path: std::path::PathBuf::from("a.avif"),
@@ -11046,33 +10938,9 @@ mod fast_img_hardening_tests {
             pure_media_size: 80,
         };
 
-        let mut best_complete = None;
-        super::retain_smallest_avif_meme_candidate(
-            &mut best_complete,
-            candidate_a.clone(),
-            super::SizeBudgetBasis::CompleteFile,
-        );
-        super::retain_smallest_avif_meme_candidate(
-            &mut best_complete,
-            candidate_b.clone(),
-            super::SizeBudgetBasis::CompleteFile,
-        );
-        assert_eq!(
-            best_complete.unwrap().temp_path,
-            std::path::PathBuf::from("a.avif")
-        );
-
         let mut best_pure = None;
-        super::retain_smallest_avif_meme_candidate(
-            &mut best_pure,
-            candidate_a,
-            super::SizeBudgetBasis::PureMedia,
-        );
-        super::retain_smallest_avif_meme_candidate(
-            &mut best_pure,
-            candidate_b,
-            super::SizeBudgetBasis::PureMedia,
-        );
+        super::retain_smallest_avif_meme_candidate(&mut best_pure, candidate_a);
+        super::retain_smallest_avif_meme_candidate(&mut best_pure, candidate_b);
         assert_eq!(
             best_pure.unwrap().temp_path,
             std::path::PathBuf::from("b.avif")

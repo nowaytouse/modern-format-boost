@@ -8,8 +8,6 @@
 	<string>Modern Format Boost</string>
 	<key>CFBundleExecutable</key>
 	<string>Modern Format Boost</string>
-	<key>CFBundleIconFile</key>
-	<string>icon.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.nyamiiko.modern-format-boost</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -26,13 +24,15 @@
 	<true/>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.13</string>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
 	<key>LSRequiresCarbon</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppDataUsageDescription</key>
 	<string>Modern Format Boost reads user-selected media folders and Photos metadata only when processing or importing media.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Modern Format Boost controls Photos during iCloud imports and opens Terminal only when you request an external terminal launch.</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
 </dict>
 </plist>

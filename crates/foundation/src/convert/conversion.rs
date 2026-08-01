@@ -461,7 +461,6 @@ pub struct TaskResult {
 pub enum Outcome {
     Converted,
     Skipped,
-    FallbackPreserved,
     Ignored,
     Failed,
 }
@@ -574,16 +573,12 @@ impl TaskResult {
     pub const fn outcome(&self) -> Outcome {
         if self.ignored {
             Outcome::Ignored
-        } else if self.skipped {
-            if self.success {
-                Outcome::Skipped
-            } else {
-                Outcome::FallbackPreserved
-            }
-        } else if self.success {
-            Outcome::Converted
-        } else {
+        } else if !self.success {
             Outcome::Failed
+        } else if self.skipped {
+            Outcome::Skipped
+        } else {
+            Outcome::Converted
         }
     }
 
@@ -688,6 +683,25 @@ impl TaskResult {
             message: reason.to_string(),
             skipped: false,
             ignored: true,
+            skip_reason: Some(reason_id.to_string()),
+            blake3: None,
+            explore_final_crf: None,
+            explore_iterations: None,
+        }
+    }
+
+    #[must_use]
+    pub fn failed(input: &Path, input_size: u64, reason: &str, reason_id: &str) -> Self {
+        Self {
+            success: false,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: reason.to_string(),
+            skipped: false,
+            ignored: false,
             skip_reason: Some(reason_id.to_string()),
             blake3: None,
             explore_final_crf: None,
@@ -853,7 +867,6 @@ impl TaskResult {
                     .map(|m| m.len())
             })
             .transpose()?;
-        crate::conversion::mark_as_processed(input);
 
         Ok(Self {
             success: false,
@@ -868,7 +881,7 @@ impl TaskResult {
             output_size: copied_size,
             size_reduction: None,
             message: reason,
-            skipped: true,
+            skipped: false,
             ignored: false,
             skip_reason: Some(skip_reason_id),
             blake3: None,
@@ -1799,6 +1812,36 @@ fn commit_temp_to_output_with_metadata_inner(
                     ts_report.timestamps
                 )));
             }
+
+            // CONTRACT: per-file delivery metadata verification — catch source/output
+            // pair misalignment (wrong temp metadata, ordering bugs) before release.
+            crate::metadata::verify_exact_metadata_copy(src, output).map_err(|e| {
+                crate::media_conversion_gate::delivery_remove_file_or_audit(
+                    "exact metadata mismatch output cleanup",
+                    output,
+                );
+                std::io::Error::other(format!(
+                    "Delivery metadata verification failed for {}: {e}",
+                    output.display()
+                ))
+            })?;
+            // CONTRACT: embedded identity tags must match the paired source (not a
+            // wrong temp / other product) after filesystem metadata verification.
+            crate::metadata::verify_output_embedded_metadata(
+                src,
+                output,
+                crate::metadata::MetadataOutputPolicy::Preserve,
+            )
+            .map_err(|e| {
+                crate::media_conversion_gate::delivery_remove_file_or_audit(
+                    "embedded metadata mismatch output cleanup",
+                    output,
+                );
+                std::io::Error::other(format!(
+                    "Delivery embedded metadata verification failed for {}: {e}",
+                    output.display()
+                ))
+            })?;
         }
     }
 
@@ -3147,9 +3190,22 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use proptest::proptest;
+    use proptest::prelude::{ProptestConfig, proptest};
+    use proptest::test_runner::FileFailurePersistence;
     use std::process::Command;
     use tempfile::{NamedTempFile, tempdir_in};
+
+    /// Store proptest regressions under `tests/proptest-regressions/` (external to
+    /// `src/`, gitignored) instead of `src/proptest-regressions/`.
+    fn proptest_regression_config() -> ProptestConfig {
+        ProptestConfig {
+            failure_persistence: Some(Box::new(FileFailurePersistence::Direct(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/proptest-regressions/conversion.txt"
+            )))),
+            ..ProptestConfig::default()
+        }
+    }
 
     fn generated_jxl_toolchain_available_or_skip(contract_label: &str) -> bool {
         crate::test_ci_contract::require_imagemagick_in_ci(contract_label);
@@ -3604,6 +3660,12 @@ mod tests {
         let timestamp_pos = commit_source
             .find("apply_file_timestamps_for_delivery(src, output, &mut ts_report)?;")
             .expect("timestamp restoration call must exist");
+        let verify_pos = commit_source
+            .find("verify_exact_metadata_copy(src, output)")
+            .expect("delivery metadata verification call must exist");
+        let embedded_verify_pos = commit_source
+            .find("verify_output_embedded_metadata(")
+            .expect("delivery embedded metadata verification call must exist");
 
         assert!(
             strip_pos < branding_pos
@@ -3611,9 +3673,16 @@ mod tests {
                 && repair_pos < branding_pos
                 && branding_pos < exact_copy_pos
                 && exact_copy_pos < timestamp_pos
-                && repair_pos < timestamp_pos,
+                && repair_pos < timestamp_pos
+                && timestamp_pos < verify_pos
+                && verify_pos < embedded_verify_pos,
             "JXL corrupt-EXIF repair must run after metadata copy and before final timestamp \
-             restore"
+             restore; filesystem and embedded metadata verification must run last"
+        );
+        assert!(
+            commit_source.contains("exact metadata mismatch output cleanup")
+                && commit_source.contains("embedded metadata mismatch output cleanup"),
+            "failed final metadata audits must remove the invalid committed output"
         );
         let forbidden_downstream_helper =
             ["strip_jxl_exif", "_if_orientation_remains_for_delivery"].concat();
@@ -3921,7 +3990,7 @@ mod tests {
     }
 
     #[test]
-    fn test_conversion_result_outcome_fallback_preserved() {
+    fn test_conversion_result_failed_fallback_is_not_a_skip() {
         let temp = tempfile::tempdir().expect("create temp dir");
         let input = temp.path().join("input.webp");
         fs::write(&input, b"input bytes").expect("write input");
@@ -3934,7 +4003,11 @@ mod tests {
         )
         .expect("fallback result");
 
-        assert_eq!(result.outcome(), Outcome::FallbackPreserved);
+        assert!(!result.success);
+        assert!(!result.skipped);
+        assert_eq!(result.outcome(), Outcome::Failed);
+        assert!(!crate::cli_runner::CliProcessingResult::is_skipped(&result));
+        assert!(input.exists(), "failed conversion must retain its source");
     }
 
     #[test]
@@ -4522,7 +4595,7 @@ mod tests {
         // and parts[4] is a valid u8 depth, the parser should extract depth
         // from parts[4] (the last field).
 
-        proptest!(|(
+        proptest!(proptest_regression_config(), |(
             width in 1u32..=10000u32,
             height in 1u32..=10000u32,
             channel in prop::sample::select(vec!["rgb", "srgb", "rgba", "srgba", "gray"]),
@@ -4654,6 +4727,7 @@ mod tests {
     // ========================================================================
 
     proptest! {
+        #![proptest_config(proptest_regression_config())]
         /// Preserves four-field backward compatibility.
         ///
         /// For all four-field `ImageMagick` output in format `w h ch depth`,

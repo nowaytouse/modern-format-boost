@@ -1,0 +1,58 @@
+[package]
+name = "modern-format-boost-fuzz"
+version = "0.0.0"
+authors = ["Modern Format Boost Contributors"]
+publish = false
+edition = "2021"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = ">= 0.4"
+arbitrary = { features = ["derive"], version = ">= 1.0" }
+image = { workspace = true }
+# Keep default foundation features off here. Vendored libjxl builds its own
+# fuzzers under sanitizer instrumentation, which conflicts with ClusterFuzzLite.
+foundation = { path = "../../foundation", default-features = false, features = [
+  "ci-static-build",
+  "fuzzing",
+] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Individual fuzz targets
+[[bin]]
+name = "jpeg_extractor"
+path = "fuzz_targets/jpeg_extractor.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "hdr_synthesis"
+path = "fuzz_targets/hdr_synthesis.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "heic_parser"
+path = "fuzz_targets/heic_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "jxl_utils"
+path = "fuzz_targets/jxl_utils.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "image_analyzer"
+path = "fuzz_targets/image_analyzer.rs"
+test = false
+doc = false
+
+[lints]
+workspace = true

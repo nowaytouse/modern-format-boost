@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "chrono"
 version = "0.4.45"
-source = "git+https://github.com/chronotope/chrono#7fa24eac9514db65eb8bddf7fadeca71b68e414a"
+source = "git+https://github.com/chronotope/chrono#7b6436f65e0c7ec2f9a7cdea88af1f3851a01f6f"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -460,8 +460,8 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
-source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
+version = "4.6.5"
+source = "git+https://github.com/clap-rs/clap#835a9a5f9688546076d6a843226a0328bd1857a3"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -469,8 +469,8 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
-source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
+version = "4.6.5"
+source = "git+https://github.com/clap-rs/clap#835a9a5f9688546076d6a843226a0328bd1857a3"
 dependencies = [
  "anstream",
  "anstyle",
@@ -481,7 +481,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.4"
-source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
+source = "git+https://github.com/clap-rs/clap#835a9a5f9688546076d6a843226a0328bd1857a3"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -492,7 +492,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#f8ac8c5f1b3554657b557ba2d21279930434b401"
+source = "git+https://github.com/clap-rs/clap#835a9a5f9688546076d6a843226a0328bd1857a3"
 
 [[package]]
 name = "cmake"
@@ -704,11 +704,13 @@ dependencies = [
  "foundation",
  "img",
  "insta",
+ "jxl-oxide",
  "libc",
  "nix",
  "notify",
  "postgres",
  "proptest",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",
@@ -876,7 +878,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#ec636bc37054d33d3390920127ddc064b7e2e1a0"
+source = "git+https://github.com/rust-lang/flate2-rs#611363e277d104dd4e921e03aaef86f0fe563da3"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1126,9 +1128,9 @@ dependencies = [
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "818356c5132c1fede50f837ca96afbe78ff42413047f4abb886217845e1b6c8c"
+checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
 dependencies = [
  "typenum",
 ]
@@ -1542,20 +1544,6 @@ dependencies = [
  "jxl-oxide-common",
  "jxl-threadpool",
  "tracing",
-]
-
-[[package]]
-name = "jxl_import_doctor"
-version = "0.11.3"
-dependencies = [
- "blake3",
- "clap",
- "jxl-oxide",
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
- "walkdir",
 ]
 
 [[package]]
@@ -2323,7 +2311,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.41.0"
-source = "git+https://github.com/tafia/quick-xml#6d0842645b6c67822d5d07037f4e7267b12760ac"
+source = "git+https://github.com/tafia/quick-xml#daa7b91b872a3c78a3a3b6eecb48a44f33911d59"
 dependencies = [
  "memchr",
 ]
@@ -2963,7 +2951,7 @@ dependencies = [
  "cfg-expr 0.20.8",
  "heck",
  "pkg-config",
- "toml 1.1.3+spec-1.1.0",
+ "toml 1.1.4+spec-1.1.0",
  "version-compare",
 ]
 
@@ -3054,9 +3042,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.54"
+version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1d5e639ff6bab73cb6885cc7e7b1de96c3f32c68ec55f3952614bec1092244"
+checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "num-conv",
@@ -3165,9 +3153,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.3+spec-1.1.0"
+version = "1.1.4+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53c96ecdfa941c8fc4fcaed14f99ada8ebed502eef533015095a07e3301d4c3c"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
 dependencies = [
  "indexmap",
  "serde_core",

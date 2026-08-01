@@ -958,5 +958,5 @@ fn calculate_video_confidence(
 
 #[cfg(test)]
 mod tests {
-    include!("../tests/video_quality.rs");
+    include!("../../tests/internal/video_quality.rs");
 }

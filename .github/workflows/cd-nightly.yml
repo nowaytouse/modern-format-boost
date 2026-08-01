@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+  MIGRATED_RUST_BINS: "backfill_directory_scores cache_cleaner check_all collect_optimized create_live_photo database_manager generate_test_media icloud_import install_deps mfb_rust_toolchain normalize_stale_embed_measurement_slots post_training_closure run_training sandbox_validate session_audit setup_private_db start_training_four training_pipeline delivery_heatmap corpus_thresholds smart_build"
 
 jobs:
   build-macos:
@@ -90,19 +91,24 @@ jobs:
       - name: Workaround for stdc++ on macOS
         shell: bash
         run: |
-          mkdir -p crates/.modern_format_boost/.tmp_lib
+          mkdir -p target/.tmp_lib
           SDK_PATH=$(xcrun --show-sdk-path)
-          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" crates/.modern_format_boost/.tmp_lib/libstdc++.tbd
-          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" crates/.modern_format_boost/.tmp_lib/libstdc++.dylib
+          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" target/.tmp_lib/libstdc++.tbd
+          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" target/.tmp_lib/libstdc++.dylib
           {
-            echo "LIBRARY_PATH=$(pwd)/crates/.modern_format_boost/.tmp_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+            echo "LIBRARY_PATH=$(pwd)/target/.tmp_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           } >> "$GITHUB_ENV"
 
       - name: Build release binaries
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p img -p vid \
+          cargo build --locked --release --target ${{ matrix.target }} -p img -p vid \
             --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+          DEV_BIN_ARGS=()
+          for bin in ${MIGRATED_RUST_BINS}; do
+            DEV_BIN_ARGS+=(--bin "${bin}")
+          done
+          cargo build --locked --release --target ${{ matrix.target }} -p dev "${DEV_BIN_ARGS[@]}"
 
       - name: Package binaries
         shell: bash
@@ -110,7 +116,12 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/img" dist/
           cp "target/${{ matrix.target }}/release/vid" dist/
-          cp -r crates/dev/scripts dist/
+          for bin in ${MIGRATED_RUST_BINS}; do
+            cp "target/${{ matrix.target }}/release/${bin}" dist/
+          done
+          mkdir -p dist/crates/dev/scripts
+          cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
+            dist/crates/dev/scripts/
           cp LICENSE README.md docs/CHANGELOG.md dist/
           cd dist
           tar czf "../modern-format-boost-${{ matrix.target }}.tar.gz" ./*
@@ -208,8 +219,13 @@ jobs:
       - name: Build release binaries
         shell: bash
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu -p img -p vid \
+          cargo build --locked --release --target x86_64-unknown-linux-gnu -p img -p vid \
             --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+          DEV_BIN_ARGS=()
+          for bin in ${MIGRATED_RUST_BINS}; do
+            DEV_BIN_ARGS+=(--bin "${bin}")
+          done
+          cargo build --locked --release --target x86_64-unknown-linux-gnu -p dev "${DEV_BIN_ARGS[@]}"
 
       - name: Package binaries
         shell: bash
@@ -217,7 +233,12 @@ jobs:
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/img dist/
           cp target/x86_64-unknown-linux-gnu/release/vid dist/
-          cp -r crates/dev/scripts dist/
+          for bin in ${MIGRATED_RUST_BINS}; do
+            cp "target/x86_64-unknown-linux-gnu/release/${bin}" dist/
+          done
+          mkdir -p dist/crates/dev/scripts
+          cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
+            dist/crates/dev/scripts/
           cp LICENSE README.md docs/CHANGELOG.md dist/
           cd dist
           tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz ./*

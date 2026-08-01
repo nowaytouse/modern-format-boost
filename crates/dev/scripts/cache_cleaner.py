@@ -31,22 +31,14 @@ import sys
 import time
 from pathlib import Path
 
+from fastmode_paths import default_mfb_state_root
 from mfb_ui_tokens import pick_symbol
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
 
 
-def get_mfb_state_root() -> Path:
-    env_root = os.environ.get("MFB_HOME_ROOT")
-    if env_root:
-        return Path(env_root).expanduser()
-    if os.environ.get("FROM_APP"):
-        return PROJECT_ROOT / ".cache" / "mfb_runtime"
-    return Path.home() / ".modern_format_boost"
-
-
-MFB_STATE_ROOT = get_mfb_state_root()
+MFB_STATE_ROOT = default_mfb_state_root()
 MFB_PROGRESS_ROOT = Path.home() / ".mfb_progress"
 
 # ANSI Colors

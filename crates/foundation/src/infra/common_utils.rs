@@ -167,46 +167,15 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
 /// # Errors
 /// Returns an I/O error if the directory cannot be determined or created.
 pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
-    let base_dir = match crate::process_lock::get_mfb_root() {
-        Ok(root) => root,
-        Err(root_err) => {
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "user_project_cache_root",
-                format!("MFB root unavailable for cache ({root_err}); using cwd fallback"),
-            );
-            crate::media_conversion_gate::delivery_cwd_or_audit("user project cache base")
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to determine cache base directory: MFB root unavailable \
-                         ({root_err}) and current_dir unavailable (audited)"
-                    )
-                })?
-        }
-    };
-    let mut path = base_dir;
-
-    if path
-        .file_name()
-        .is_none_or(|name| name != ".modern_format_boost")
-    {
-        path.push(".modern_format_boost");
-    }
+    let mut path =
+        crate::process_lock::get_mfb_root().context("Failed to determine MFB cache root")?;
     path.push("cache");
 
     if let Err(primary_err) = std::fs::create_dir_all(&path) {
-        let mut fallback =
-            crate::media_conversion_gate::delivery_cwd_or_audit("user project cache fallback")
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to determine project-local cache fallback after primary cache \
-                         path {} creation failed: {primary_err}; current_dir unavailable (audited)",
-                        path.display(),
-                    )
-                })?;
-        fallback.push(".cache");
+        let fallback = crate::media_conversion_gate::delivery_temp_mfb_root_ssot().join("cache");
         std::fs::create_dir_all(&fallback).with_context(|| {
             format!(
-                "Failed to create project cache directory at {} after primary cache path {} also \
+                "Failed to create temp cache directory at {} after primary cache path {} also \
                  failed: {}",
                 fallback.display(),
                 path.display(),

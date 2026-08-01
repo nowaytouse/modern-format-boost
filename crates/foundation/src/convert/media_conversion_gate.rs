@@ -2775,8 +2775,7 @@ pub fn explore_quality_gate_audit(branch: &'static str, input: &Path, detail: im
     delivery_strict_path_audit(branch, input, detail);
 }
 
-/// Protect/discard summary after an explore quality skip (strict-gated,
-/// M89/M96).
+/// Protect/discard summary after an explore quality skip (strict-gated, M89/M96).
 pub fn explore_quality_skip_summary_audit(summary_label: &str, protect: &str, discard: &str) {
     delivery_strict_batch_audit(
         "explore_quality_skip_summary",

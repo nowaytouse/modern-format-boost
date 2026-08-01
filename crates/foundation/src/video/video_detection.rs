@@ -1977,5 +1977,5 @@ fn recover_bitstream_on_probe_failure(
 
 #[cfg(test)]
 mod tests {
-    include!("../tests/video_detection.rs");
+    include!("../../tests/internal/video_detection.rs");
 }

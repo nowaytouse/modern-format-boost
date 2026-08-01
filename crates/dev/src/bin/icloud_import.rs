@@ -133,13 +133,11 @@ fn ensure_safe_to_import(target: &Path) -> Result<ImportPreflight> {
 // ── process lock (mirrors fcntl.flock in py) ─────────────────────────────────
 
 fn lock_path() -> PathBuf {
-    let root = std::env::var("MFB_HOME_ROOT")
-        .map_or_else(|_| dirs_home().join(".modern_format_boost"), PathBuf::from);
+    let root = foundation::process_lock::get_mfb_root().unwrap_or_else(|err| {
+        eprintln!("[ICLOUD] MFB state root unavailable: {err}");
+        std::env::temp_dir().join(".modern_format_boost")
+    });
     root.join("locks").join("photos_import.lock")
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME").map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from)
 }
 
 /// Acquire an exclusive non-blocking flock on the import lock file.
@@ -201,8 +199,14 @@ fn find_osxphotos() -> Option<String> {
     if command_succeeded(path_cmd, "osxphotos --version") {
         return Some("osxphotos".to_owned());
     }
-    let home_local = dirs_home().join(".local/bin/osxphotos");
-    let extra = std::iter::once(home_local.to_string_lossy().into_owned());
+    let extra = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| {
+            home.join(".local/bin/osxphotos")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .into_iter();
     let mut candidates = extra.chain(
         OSXPHOTOS_SEARCH_PATHS
             .iter()

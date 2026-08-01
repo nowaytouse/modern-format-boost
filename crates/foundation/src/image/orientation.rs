@@ -352,8 +352,9 @@ fn decode_source_with_official_tool(
         official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
     let mut output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
         .and_then(|process| {
-            process.wait_timeout(
+            process.wait_liveness_timeout(
                 std::time::Duration::from_secs(120),
+                crate::process_runner::image_process_hard_timeout(),
                 &format!("pixel-diff official {tool} source decode"),
             )
         })
@@ -372,8 +373,9 @@ fn decode_source_with_official_tool(
             official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
         output = crate::process_runner::ManagedProcess::spawn_captured(&mut retry)
             .and_then(|process| {
-                process.wait_timeout(
+                process.wait_liveness_timeout(
                     std::time::Duration::from_secs(120),
+                    crate::process_runner::image_process_hard_timeout(),
                     "pixel-diff official djxl JPEG source retry",
                 )
             })

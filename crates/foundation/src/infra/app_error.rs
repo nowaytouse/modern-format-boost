@@ -316,7 +316,7 @@ impl AppError {
                     / crate::numeric_cast::u64_to_f64(*input_size)
                     * 100.0;
                 let mut msg = user_err_msg(format!(
-                    "Compression failed: output ({output_size} bytes) >= input ({input_size} \
+                    "Compression target not met: output ({output_size} bytes) >= input ({input_size} \
                      bytes), ratio {ratio:.1}%"
                 ));
                 if let Some(path) = file_path {
@@ -644,7 +644,7 @@ impl AppError {
                 } => {
                     write!(
                         f,
-                        "Compression failed: output ({output_size}) >= input ({input_size})"
+                        "Compression target not met: output ({output_size}) >= input ({input_size})"
                     )?;
                     if let Some(path) = file_path {
                         write!(f, "\n  File: {}", path.display())?;

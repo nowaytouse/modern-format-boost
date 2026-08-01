@@ -6,7 +6,7 @@ use crate::file_copier::{
 };
 use crate::report::print_summary;
 use crate::smart_file_copier::fix_extension_if_mismatch;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use rayon::prelude::*;
 use std::fmt::Write;
@@ -35,10 +35,7 @@ pub trait CliProcessingResult {
 
 impl CliProcessingResult for crate::conversion::TaskResult {
     fn is_skipped(&self) -> bool {
-        matches!(
-            self.outcome(),
-            crate::conversion::Outcome::Skipped | crate::conversion::Outcome::FallbackPreserved
-        )
+        self.outcome() == crate::conversion::Outcome::Skipped
     }
 
     fn is_ignored(&self) -> bool {
@@ -86,6 +83,7 @@ pub struct Config {
     pub base_dir: Option<PathBuf>,
     pub resume: bool,
     pub protect_destructive_dirs: bool,
+    pub error_mode: crate::BatchErrorMode,
 }
 
 /// Resolve `base_dir` for video `run` command. Shared by `vid_hevc` and
@@ -195,34 +193,29 @@ where
     // has already done the check). Initialize checkpoint manager if resume is
     // enabled
     let checkpoint = if config.resume {
-        match crate::checkpoint::Manager::new_resuming_with_context(input, config.output.as_deref())
-        {
-            Ok(cp) => {
-                // Detect when user deleted the output directory to start fresh:
-                // clear old checkpoint state so all files get reprocessed.
-
-                if cp.is_resume_mode() {
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_CHECKPOINT,
-                        &format!(
-                            "{} Resume: skipping {} already completed files",
-                            crate::media_conversion_gate::ui_icon_pick("📂", "[DIR]"),
-                            cp.completed_count()
-                        )
-                    );
-                } else {
-                    crate::clear_processed_list();
-                }
-                Some(cp)
-            }
-            Err(e) => {
-                crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                    "delivery_pipeline_batch",
-                    format!("Initialization failed (resume mode disabled): {e}"),
-                );
-                None
-            }
+        let cp =
+            crate::checkpoint::Manager::new_resuming_with_context(input, config.output.as_deref())
+                .with_context(|| {
+                    format!(
+                        "failed to initialize resume checkpoint for {}",
+                        input.display()
+                    )
+                })?;
+        // Detect when user deleted the output directory to start fresh:
+        // clear old checkpoint state so all files get reprocessed.
+        if cp.is_resume_mode() {
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_CHECKPOINT,
+                &format!(
+                    "{} Resume: skipping {} already completed files",
+                    crate::media_conversion_gate::ui_icon_pick("📂", "[DIR]"),
+                    cp.completed_count()
+                )
+            );
+        } else {
+            crate::clear_processed_list();
         }
+        Some(cp)
     } else {
         None
     };
@@ -289,7 +282,6 @@ where
     let start_time = Instant::now();
     let total_files = files.len();
     let pause_controller = Arc::new(PauseController::new());
-    let fatal_stop = AtomicBool::new(false);
     let progress_bar = Arc::new(crate::CoarseProgressBar::new(
         crate::numeric_cast::usize_to_u64(total_files),
         &config.label,
@@ -306,6 +298,8 @@ where
     let total_input_bytes = AtomicU64::new(0);
     let total_output_bytes = AtomicU64::new(0);
     let errors: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+    let abort_requested = AtomicBool::new(false);
+    let abort_reason: Mutex<Option<String>> = Mutex::new(None);
 
     // 📡 Optional: Initialize audit log directory
     let debug_dir = Path::new("debug");
@@ -389,10 +383,18 @@ where
 
     let audit_pipeline = crate::infra::static_logs::audit_pipeline_from_label(&config.label);
     crate::infra::static_logs::log_batch_start_audit(audit_pipeline, &config.label, files.len());
+    let request_abort = |file: &Path, reason: &str| {
+        if !abort_requested.swap(true, Ordering::SeqCst) {
+            *crate::media_conversion_gate::mutex_guard_or_recover(
+                "cli_batch_abort_reason",
+                abort_reason.lock(),
+            ) = Some(format!("{}: {reason}", file.display()));
+        }
+    };
 
     pool.install(|| {
         files.par_iter().for_each(|file| {
-            if pause_controller.is_paused() || fatal_stop.load(Ordering::Relaxed) {
+            if pause_controller.is_paused() || abort_requested.load(Ordering::SeqCst) {
                 return;
             }
 
@@ -441,6 +443,9 @@ where
                     )
                     .push((file.clone(), err_msg));
                     crate::progress_mode::video_processed_failure();
+                    if config.error_mode.should_abort_error(&err) {
+                        request_abort(file, &err.to_string());
+                    }
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     progress_bar.set(crate::numeric_cast::usize_to_u64(current));
                     return;
@@ -528,22 +533,6 @@ where
                             "unknown",
                             "cli_runner skip",
                         );
-                        crate::infra::static_logs::log_file_outcome_audit(
-                            audit_pipeline,
-                            "skipped",
-                            &fixed,
-                            skip_reason.as_ref(),
-                        );
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_BATCH,
-                            &format!(
-                                "⏭️ {} → SKIP ({})",
-                                crate::media_conversion_gate::path_file_name_for_log(&fixed),
-                                skip_reason.as_ref()
-                            )
-                        );
-                        skipped.fetch_add(1, Ordering::Relaxed);
-
                         // Copy original file to output directory for skips to ensure a complete
                         // output set.
                         if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
@@ -552,6 +541,12 @@ where
                             config.base_dir.as_deref(),
                             true,
                         ) {
+                            crate::infra::static_logs::log_file_outcome_audit(
+                                audit_pipeline,
+                                "failed",
+                                &fixed,
+                                &format!("failed to preserve skipped source: {copy_err}"),
+                            );
                             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                                 "delivery_pipeline_cli",
                                 format!(
@@ -560,45 +555,42 @@ where
                                     copy_err
                                 ),
                             );
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            crate::media_conversion_gate::mutex_guard_or_recover(
+                                "cli_batch_errors",
+                                errors.lock(),
+                            )
+                            .push((
+                                fixed.clone(),
+                                format!("failed to preserve skipped source: {copy_err}"),
+                            ));
+                            crate::progress_mode::video_processed_failure();
+                            request_abort(
+                                &fixed,
+                                &format!("failed to preserve skipped source: {copy_err}"),
+                            );
+                        } else {
+                            crate::infra::static_logs::log_file_outcome_audit(
+                                audit_pipeline,
+                                "skipped",
+                                &fixed,
+                                skip_reason.as_ref(),
+                            );
+                            crate::log_info!(
+                                crate::infra::static_logs::messages::LABEL_BATCH,
+                                &format!(
+                                    "⏭️ {} → SKIP ({})",
+                                    crate::media_conversion_gate::path_file_name_for_log(&fixed),
+                                    skip_reason.as_ref()
+                                )
+                            );
+                            skipped.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if result.is_success() {
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_BATCH,
-                            &format!(
-                                "{} → {} ({}) ✅",
-                                crate::media_conversion_gate::path_file_name_for_log(&fixed),
-                                crate::media_conversion_gate::trace_label_or_default(
-                                    result.output_path(),
-                                    "?",
-                                ),
-                                result.message()
-                            )
-                        );
-                        succeeded.fetch_add(1, Ordering::Relaxed);
-                        crate::progress_mode::video_processed_success();
-                        total_input_bytes.fetch_add(result.input_size(), Ordering::Relaxed);
-                        total_output_bytes.fetch_add(
-                            crate::media_conversion_gate::delivery_batch_output_bytes_or_input(
-                                result.output_size(),
-                                result.input_size(),
-                                "cli_runner batch success",
-                            ),
-                            Ordering::Relaxed,
-                        );
-
-                        log_live_audit_to_jsonl(
-                            result.blake3(),
-                            &config.label,
-                            crate::media_conversion_gate::trace_label_or_default(
-                                result.output_path(),
-                                "original",
-                            ),
-                            result.message(),
-                        );
-
-                        if let Some(cp) = checkpoint.as_ref()
-                            && let Err(err) = cp.mark_completed(&fixed)
-                        {
+                        let checkpoint_error = checkpoint
+                            .as_ref()
+                            .and_then(|cp| cp.mark_completed(&fixed).err());
+                        if let Some(err) = checkpoint_error {
                             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                                 "delivery_pipeline_batch",
                                 format!(
@@ -606,6 +598,54 @@ where
                                     fixed.display(),
                                     err
                                 ),
+                            );
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            crate::media_conversion_gate::mutex_guard_or_recover(
+                                "cli_batch_errors",
+                                errors.lock(),
+                            )
+                            .push((
+                                fixed.clone(),
+                                format!("failed to mark checkpoint complete: {err}"),
+                            ));
+                            crate::progress_mode::video_processed_failure();
+                            request_abort(
+                                &fixed,
+                                &format!("failed to mark checkpoint complete: {err}"),
+                            );
+                        } else {
+                            crate::log_info!(
+                                crate::infra::static_logs::messages::LABEL_BATCH,
+                                &format!(
+                                    "{} → {} ({}) ✅",
+                                    crate::media_conversion_gate::path_file_name_for_log(&fixed),
+                                    crate::media_conversion_gate::trace_label_or_default(
+                                        result.output_path(),
+                                        "?",
+                                    ),
+                                    result.message()
+                                )
+                            );
+                            succeeded.fetch_add(1, Ordering::Relaxed);
+                            crate::progress_mode::video_processed_success();
+                            total_input_bytes.fetch_add(result.input_size(), Ordering::Relaxed);
+                            total_output_bytes.fetch_add(
+                                crate::media_conversion_gate::delivery_batch_output_bytes_or_input(
+                                    result.output_size(),
+                                    result.input_size(),
+                                    "cli_runner batch success",
+                                ),
+                                Ordering::Relaxed,
+                            );
+
+                            log_live_audit_to_jsonl(
+                                result.blake3(),
+                                &config.label,
+                                crate::media_conversion_gate::trace_label_or_default(
+                                    result.output_path(),
+                                    "original",
+                                ),
+                                result.message(),
                             );
                         }
                     } else {
@@ -641,9 +681,13 @@ where
                         )
                         .push((fixed.clone(), result.message().to_string()));
                         crate::progress_mode::video_processed_failure();
+                        if config.error_mode.is_fail_fast() {
+                            request_abort(&fixed, result.message());
+                        }
                     }
                 }
                 Err(err) => {
+                    let should_abort = config.error_mode.should_abort_error(&err);
                     let error_msg = err.to_string();
                     let maybe_ue = err.downcast_ref::<crate::unified_error::UnifiedError>();
 
@@ -656,46 +700,17 @@ where
                         maybe_ue
                     };
 
-                    let is_skip = ue_from_chain
-                        .is_some_and(crate::unified_error::UnifiedError::is_skip)
-                        || error_msg.contains("Iteration limit exceeded")
-                        || error_msg.contains("Optimization target not met")
-                        || error_msg.contains("Quality validation failed")
-                        || error_msg.contains("Compression failed")
-                        || error_msg.contains("already exists");
+                    let is_skip =
+                        ue_from_chain.is_some_and(crate::unified_error::UnifiedError::is_skip);
 
                     let should_copy = ue_from_chain
                         .is_some_and(crate::unified_error::UnifiedError::should_copy_original)
-                        || (is_skip && !error_msg.contains("already exists")); // Don't copy if it already exists in output
-
-                    let category = match ue_from_chain {
-                        None => {
-                            if is_skip {
-                                crate::unified_error::ErrorCategory::Optional
-                            } else {
-                                crate::unified_error::ErrorCategory::Recoverable
-                            }
-                        }
-                        Some(ue) => ue.category(),
-                    };
+                        && !matches!(
+                            ue_from_chain,
+                            Some(crate::unified_error::UnifiedError::OutputExists { .. })
+                        );
 
                     if is_skip {
-                        crate::infra::static_logs::log_file_outcome_audit(
-                            audit_pipeline,
-                            "skipped",
-                            &fixed,
-                            &error_msg,
-                        );
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_BATCH,
-                            &format!(
-                                "⏭️ {} → SKIP ({})",
-                                crate::media_conversion_gate::path_file_name_for_log(&fixed),
-                                error_msg
-                            )
-                        );
-                        skipped.fetch_add(1, Ordering::Relaxed);
-
                         if should_copy {
                             // Copy original file to output directory for skip errors to ensure a
                             // complete output set.
@@ -705,6 +720,12 @@ where
                                 config.base_dir.as_deref(),
                                 true,
                             ) {
+                                crate::infra::static_logs::log_file_outcome_audit(
+                                    audit_pipeline,
+                                    "failed",
+                                    &fixed,
+                                    &format!("failed to preserve skipped source: {copy_err}"),
+                                );
                                 crate::media_conversion_gate::delivery_pipeline_batch_audit(
                                     "delivery_pipeline_cli",
                                     format!(
@@ -713,7 +734,55 @@ where
                                         copy_err
                                     ),
                                 );
+                                failed.fetch_add(1, Ordering::Relaxed);
+                                crate::media_conversion_gate::mutex_guard_or_recover(
+                                    "cli_batch_errors",
+                                    errors.lock(),
+                                )
+                                .push((
+                                    fixed.clone(),
+                                    format!("failed to preserve skipped source: {copy_err}"),
+                                ));
+                                crate::progress_mode::video_processed_failure();
+                                request_abort(
+                                    &fixed,
+                                    &format!("failed to preserve skipped source: {copy_err}"),
+                                );
+                            } else {
+                                crate::infra::static_logs::log_file_outcome_audit(
+                                    audit_pipeline,
+                                    "skipped",
+                                    &fixed,
+                                    &error_msg,
+                                );
+                                crate::log_info!(
+                                    crate::infra::static_logs::messages::LABEL_BATCH,
+                                    &format!(
+                                        "⏭️ {} → SKIP ({})",
+                                        crate::media_conversion_gate::path_file_name_for_log(
+                                            &fixed
+                                        ),
+                                        error_msg
+                                    )
+                                );
+                                skipped.fetch_add(1, Ordering::Relaxed);
                             }
+                        } else {
+                            crate::infra::static_logs::log_file_outcome_audit(
+                                audit_pipeline,
+                                "skipped",
+                                &fixed,
+                                &error_msg,
+                            );
+                            crate::log_info!(
+                                crate::infra::static_logs::messages::LABEL_BATCH,
+                                &format!(
+                                    "⏭️ {} → SKIP ({})",
+                                    crate::media_conversion_gate::path_file_name_for_log(&fixed),
+                                    error_msg
+                                )
+                            );
+                            skipped.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
                         if pause_controller.request_pause(&fixed, reason.clone()) {
@@ -745,15 +814,10 @@ where
                         )
                         .push((fixed.clone(), error_msg));
 
-                        if category == crate::unified_error::ErrorCategory::Fatal {
-                            fatal_stop.store(true, Ordering::SeqCst);
-                            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                                "delivery_pipeline_batch",
-                                crate::infra::static_logs::messages::MSG_BATCH_FATAL_STOP,
-                            );
-                        }
-
                         crate::progress_mode::video_processed_failure();
+                        if should_abort {
+                            request_abort(&fixed, &err.to_string());
+                        }
                     }
                 }
             }
@@ -785,6 +849,11 @@ where
             total_files.saturating_sub(batch_result.total),
         );
     }
+    let abort_reason = crate::media_conversion_gate::mutex_guard_or_recover(
+        "cli_batch_abort_reason",
+        abort_reason.lock(),
+    )
+    .clone();
 
     if batch_result.paused {
         progress_bar.finish_and_clear();
@@ -792,16 +861,21 @@ where
         progress_bar.finish();
     }
 
-    // Cleanup checkpoint only on 100% success
-    if let Some(cp) = checkpoint {
+    // Cleanup checkpoint only on 100% success.
+    let checkpoint_error = if let Some(cp) = checkpoint {
         if batch_result.paused {
             if let Err(err) = cp.release_lock() {
                 crate::media_conversion_gate::delivery_pipeline_batch_audit(
                     "delivery_pipeline_batch",
                     format!("Failed to release file lock during batch pause: {err}"),
                 );
+                Some(format!(
+                    "failed to release checkpoint lock during batch pause: {err}"
+                ))
+            } else {
+                None
             }
-        } else if batch_result.failed == 0 {
+        } else if batch_result.failed == 0 && abort_reason.is_none() {
             if let Err(err) = cp.cleanup() {
                 crate::media_conversion_gate::delivery_pipeline_batch_audit(
                     "delivery_pipeline_batch",
@@ -809,14 +883,24 @@ where
                         "100% success reached, but failed to purge completed-list state: {err}"
                     ),
                 );
+                Some(format!("failed to purge completed checkpoint state: {err}"))
+            } else {
+                None
             }
         } else if let Err(err) = cp.release_lock() {
             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                 "delivery_pipeline_batch",
                 format!("Failed to release file lock after batch failure: {err}"),
             );
+            Some(format!(
+                "failed to release checkpoint lock after batch failure: {err}"
+            ))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     crate::infra::static_logs::log_batch_complete_audit(
         audit_pipeline,
@@ -835,8 +919,14 @@ where
         &config.label,
     );
 
+    if let Some(error) = checkpoint_error {
+        anyhow::bail!(error);
+    }
     if batch_result.paused {
         return Ok(());
+    }
+    if let Some(reason) = abort_reason {
+        anyhow::bail!("Batch aborted by error policy after {reason}");
     }
 
     if let Some(ref output_dir) = config.output {
@@ -963,10 +1053,6 @@ where
         }
     }
 
-    if fatal_stop.load(Ordering::Relaxed) {
-        anyhow::bail!("Fatal error encountered during batch processing.");
-    }
-
     if batch_result.failed > 0 {
         anyhow::bail!(
             "Batch completed with {} failed file(s)",
@@ -1061,6 +1147,10 @@ where
         result.message(),
     );
 
+    if !result.is_success() && !result.is_skipped() && !result.is_ignored() {
+        anyhow::bail!(result.message().to_string());
+    }
+
     Ok(())
 }
 
@@ -1124,5 +1214,208 @@ fn log_live_audit_to_jsonl(
                 format!("Failed to serialize live audit record: {e}"),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL_MP4: &[u8] = b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2";
+
+    fn test_config(input: PathBuf) -> Config {
+        Config {
+            input,
+            output: None,
+            recursive: false,
+            label: "test".to_string(),
+            base_dir: None,
+            resume: false,
+            protect_destructive_dirs: false,
+            error_mode: crate::BatchErrorMode::LogAndContinue,
+        }
+    }
+
+    #[test]
+    fn failed_task_result_makes_single_file_command_fail() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("broken.mp4");
+        std::fs::write(&input, MINIMAL_MP4)?;
+
+        let error = process_single_file(&test_config(input), |path| {
+            Ok(crate::conversion::TaskResult::failed(
+                path,
+                u64::try_from(MINIMAL_MP4.len()).expect("fixture length fits u64"),
+                "verification failed",
+                "verification_failed",
+            ))
+        })
+        .expect_err("failed task must make the command fail");
+
+        assert_eq!(error.to_string(), "verification failed");
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn one_failed_file_does_not_stop_the_batch() -> anyhow::Result<()> {
+        let _skip_disk_precheck =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
+        let temp = tempfile::tempdir()?;
+        let total = 8;
+        for index in 0..total {
+            std::fs::write(temp.path().join(format!("{index:02}.mp4")), MINIMAL_MP4)?;
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_converter = Arc::clone(&calls);
+
+        let result = process_directory(&test_config(temp.path().to_path_buf()), move |path| {
+            let call = calls_in_converter.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Err(crate::unified_error::UnifiedError::analysis_error("bad media").into())
+            } else {
+                Ok(crate::conversion::TaskResult::skipped_custom(
+                    path,
+                    u64::try_from(MINIMAL_MP4.len()).expect("fixture length fits u64"),
+                    "size gate retained source",
+                    "size_increase",
+                ))
+            }
+        });
+
+        assert!(
+            result.is_err(),
+            "batch must report its failed file; result={result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            total,
+            "a per-file failure must not stop later files; result={result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fail_fast_recoverable_error_stops_before_next_file() -> anyhow::Result<()> {
+        let _low_memory =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
+        let _skip_disk_precheck =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
+        let temp = tempfile::tempdir()?;
+        for index in 0..4 {
+            std::fs::write(temp.path().join(format!("{index:02}.mp4")), MINIMAL_MP4)?;
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_converter = Arc::clone(&calls);
+        let mut config = test_config(temp.path().to_path_buf());
+        config.error_mode = crate::BatchErrorMode::FailFast;
+
+        let result = process_directory(&config, move |path| {
+            let call = calls_in_converter.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Err(crate::UnifiedError::analysis_error("debug fixture failure").into())
+            } else {
+                Ok(crate::conversion::TaskResult::skipped_custom(
+                    path,
+                    u64::try_from(MINIMAL_MP4.len()).expect("fixture length fits u64"),
+                    "must not run",
+                    "unexpected_call",
+                ))
+            }
+        });
+
+        assert!(result.is_err(), "result={result:?}");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "fail-fast must stop before the next file; result={result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn normal_mode_unknown_error_stops_before_next_file() -> anyhow::Result<()> {
+        let _low_memory =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
+        let _skip_disk_precheck =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
+        let temp = tempfile::tempdir()?;
+        for index in 0..4 {
+            std::fs::write(temp.path().join(format!("{index:02}.mp4")), MINIMAL_MP4)?;
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_converter = Arc::clone(&calls);
+
+        let result = process_directory(&test_config(temp.path().to_path_buf()), move |path| {
+            let call = calls_in_converter.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Err(anyhow::anyhow!("unclassified system failure"))
+            } else {
+                Ok(crate::conversion::TaskResult::skipped_custom(
+                    path,
+                    u64::try_from(MINIMAL_MP4.len()).expect("fixture length fits u64"),
+                    "must not run",
+                    "unexpected_call",
+                ))
+            }
+        });
+
+        assert!(result.is_err(), "result={result:?}");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "normal mode must fail closed for unknown errors; result={result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn skipped_source_copy_failure_is_fatal_in_normal_mode() -> anyhow::Result<()> {
+        let _low_memory =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
+        let _skip_disk_precheck =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("input");
+        std::fs::create_dir(&input)?;
+        for index in 0..4 {
+            std::fs::write(input.join(format!("{index:02}.mp4")), MINIMAL_MP4)?;
+        }
+        let input = std::fs::canonicalize(input)?;
+        let output_blocker = temp.path().join("output-is-a-file");
+        std::fs::write(&output_blocker, b"not a directory")?;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_converter = Arc::clone(&calls);
+        let mut config = test_config(input.clone());
+        config.output = Some(output_blocker);
+        config.base_dir = Some(input);
+
+        let result = process_directory(&config, move |path| {
+            calls_in_converter.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::conversion::TaskResult::skipped_custom(
+                path,
+                u64::try_from(MINIMAL_MP4.len()).expect("fixture length fits u64"),
+                "size gate retained source",
+                "size_increase",
+            ))
+        });
+
+        let error = result.expect_err("failed source preservation must fail the batch");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to preserve skipped source"),
+            "error={error:#}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "integrity failure must stop before the next file"
+        );
+        Ok(())
     }
 }

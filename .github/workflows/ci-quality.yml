@@ -103,7 +103,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test dispatch2
-        working-directory: crates/dev/src/dispatch2
+        working-directory: crates/dev/dispatch2
         run: cargo test --no-fail-fast -- --test-threads=1
 
   dispatch2-linux:
@@ -147,7 +147,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test dispatch2 (no objc2; Linux libdispatch)
-        working-directory: crates/dev/src/dispatch2
+        working-directory: crates/dev/dispatch2
         env:
           LIBDISPATCH_PREFIX: /usr/local
           LD_LIBRARY_PATH: /usr/local/lib
@@ -181,7 +181,7 @@ jobs:
         with:
           node-version: 24.13.0
           cache: npm
-          cache-dependency-path: crates/dev/src/vue/package-lock.json
+          cache-dependency-path: crates/gui/package-lock.json
 
       - name: Verify Node.js runtime
         run: node --version && npm --version
@@ -230,7 +230,7 @@ jobs:
         run: '"$RUNNER_TEMP/install_media_dependencies"'
 
       - name: Install Vue quality dependencies
-        run: npm ci --prefix crates/dev/src/vue --ignore-scripts
+        run: npm ci --prefix crates/gui --ignore-scripts
 
       - name: Just read-only quality gate (after MPC/GMP/MPFR for gmp-mpfr-sys)
         id: fix_gate
@@ -348,10 +348,10 @@ jobs:
         with:
           node-version: 24.13.0
           cache: npm
-          cache-dependency-path: crates/dev/src/vue/package-lock.json
+          cache-dependency-path: crates/gui/package-lock.json
 
       - name: Install Vue quality dependencies
-        run: npm ci --prefix crates/dev/src/vue --ignore-scripts
+        run: npm ci --prefix crates/gui --ignore-scripts
 
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@v1

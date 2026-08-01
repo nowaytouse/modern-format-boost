@@ -98,6 +98,7 @@ import shutil
 import subprocess
 import sys
 
+from fastmode_paths import default_mfb_state_root
 from mfb_ui_tokens import pick_symbol
 
 GREEN = "\033[0;32m"
@@ -226,7 +227,7 @@ def main():
             BLUE,
             f"{pick_symbol('🔧', ('[TOOL]'))} Applying macOS linker workaround for libstdc++...",
         )
-        tmp_lib_dir = "crates/.modern_format_boost/.tmp_lib"
+        tmp_lib_dir = os.fspath(default_mfb_state_root() / ".tmp_lib")
         if not os.path.exists(tmp_lib_dir):
             os.makedirs(tmp_lib_dir)
 

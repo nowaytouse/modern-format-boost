@@ -5,7 +5,8 @@
 
 import json
 import sys
-from pathlib import Path
+
+from fastmode_paths import default_mfb_state_root
 
 # Colors
 BLUE = "\033[1;34m"
@@ -14,22 +15,7 @@ YELLOW = "\033[1;33m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
-# Get project root
-try:
-    import subprocess
-
-    project_root_str = (
-        subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
-        )
-        .decode()
-        .strip()
-    )
-    PROJECT_ROOT = Path(project_root_str)
-except Exception:
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-
-CONF_DIR = PROJECT_ROOT / "crates" / ".modern_format_boost"
+CONF_DIR = default_mfb_state_root()
 CONF_FILE_JSON = CONF_DIR / "local_env.json"
 CONF_FILE_SH = CONF_DIR / "local_env.sh"
 

@@ -13,9 +13,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from fastmode_paths import default_mfb_state_root
+
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent.parent.parent
-ARTIFACT_DIR = ROOT / "crates" / ".modern_format_boost" / "artifacts"
+ROOT = SCRIPT_DIR.parents[2]
+HOME_ROOT = default_mfb_state_root()
+ARTIFACT_DIR = HOME_ROOT / "artifacts"
 
 
 def rust_dylib_filename() -> str:

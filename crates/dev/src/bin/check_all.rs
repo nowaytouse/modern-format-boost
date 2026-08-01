@@ -603,7 +603,7 @@ fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Re
 }
 
 fn ensure_edge_test_media(repo_root: &Path) -> Result<()> {
-    let marker = repo_root.join("crates/dev/src/tests/edge/videos/test_h264_10s.mp4");
+    let marker = repo_root.join("crates/dev/tests/edge/videos/test_h264_10s.mp4");
     if marker.is_file() {
         println!("  Skipped: generate edge test media (already present)");
         return Ok(());
@@ -632,7 +632,7 @@ fn vue_quality_script_names() -> &'static [&'static str] {
 }
 
 fn vue_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join("crates").join("dev").join("src").join("vue")
+    repo_root.join("crates").join("gui")
 }
 
 fn run_vue_quality_checks(repo_root: &Path) -> Result<()> {
@@ -1443,7 +1443,7 @@ fn main() -> Result<()> {
                     "fuzz".to_string(),
                     "list".to_string(),
                     "--fuzz-dir".to_string(),
-                    "crates/dev/src/fuzz".to_string(),
+                    "crates/dev/fuzz".to_string(),
                 ])
                 .output()?;
             if !out.status.success() {
@@ -1467,7 +1467,7 @@ fn main() -> Result<()> {
                             "run".to_string(),
                             target.to_string(),
                             "--fuzz-dir".to_string(),
-                            "crates/dev/src/fuzz".to_string(),
+                            "crates/dev/fuzz".to_string(),
                             "--".to_string(),
                             "-runs=1".to_string(),
                         ])
@@ -1727,11 +1727,11 @@ mod tests {
         let root_manifest = include_str!("../../../../Cargo.toml");
         let members = workspace_members_block(root_manifest).expect("workspace members block");
         assert!(
-            !members.contains("crates/dev/src/vue/src-tauri"),
+            !members.contains("crates/gui/src-tauri"),
             "macOS-only Tauri launcher must not be audited by the root workspace"
         );
         assert!(
-            !members.contains("crates/dev/src/dispatch2"),
+            !members.contains("crates/dev/dispatch2"),
             "macOS-only dispatch2 must stay in its dedicated workflow, not the root workspace"
         );
     }

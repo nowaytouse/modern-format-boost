@@ -250,10 +250,7 @@ fn install_gnu_mpc(workdir: &Path, workspace: &Path) -> Result<()> {
         ["--prefix=/usr/local", "--with-gmp=/usr", "--with-mpfr=/usr"],
         Some(&mpc_dir),
     )?;
-    let jobs = format!(
-        "-j{}",
-        std::thread::available_parallelism().map_or(1, |count| count.get())
-    );
+    let jobs = format!("-j{}", std::thread::available_parallelism()?.get());
     run("make", [jobs.as_str()], Some(&mpc_dir))?;
     run("sudo", ["make", "install"], Some(&mpc_dir))?;
     run("sudo", ["ldconfig"], None)?;
@@ -387,10 +384,7 @@ fn main() -> Result<()> {
         ],
         Some(&ffmpeg_dir),
     )?;
-    let jobs = format!(
-        "-j{}",
-        std::thread::available_parallelism().map_or(1, |count| count.get())
-    );
+    let jobs = format!("-j{}", std::thread::available_parallelism()?.get());
     run("make", [jobs.as_str()], Some(&ffmpeg_dir))?;
     run("sudo", ["make", "install"], Some(&ffmpeg_dir))?;
     run("sudo", ["ldconfig"], None)?;

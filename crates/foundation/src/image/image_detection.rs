@@ -390,7 +390,11 @@ fn extract_fps_from_ffprobe(path: &Path) -> Option<f32> {
 
     let output = match crate::process_runner::ManagedProcess::spawn(&mut cmd) {
         Ok(proc) => {
-            match proc.wait_timeout(std::time::Duration::from_secs(30), "ffprobe FPS extraction") {
+            match proc.wait_liveness_timeout(
+                std::time::Duration::from_secs(30),
+                crate::process_runner::animated_image_process_hard_timeout(),
+                "ffprobe FPS extraction",
+            ) {
                 Ok(out) => out,
                 Err(err) => {
                     tracing::debug!("ffprobe process wait timeout error: {err}");
@@ -4730,5 +4734,5 @@ fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
 
 #[cfg(test)]
 mod tests {
-    include!("../tests/image_detection.rs");
+    include!("../../tests/internal/image_detection.rs");
 }

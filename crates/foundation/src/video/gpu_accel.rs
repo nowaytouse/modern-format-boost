@@ -2679,7 +2679,7 @@ fn encode_gpu_warmup(
     warmup_duration: f32,
     crf: f32,
 ) -> anyhow::Result<u64> {
-    use anyhow::{Context, bail};
+    use anyhow::Context;
 
     let crf_args = gpu_encoder.get_crf_args(crf)?;
     let extra_args = gpu_encoder.extra_args();
@@ -2705,20 +2705,20 @@ fn encode_gpu_warmup(
     let mut cmd = builder.build();
     let result = cmd.output().context("Failed to run warmup encode")?;
     let size = if result.status.success() {
-        std::fs::metadata(&warmup_output)
-            .map_err(|e| anyhow::anyhow!("Failed to read warmup metadata: {e}"))?
-            .len()
+        crate::stream_size::measure_strict_pure_media(&warmup_output)
+            .map(|measurement| measurement.pure_media_size())
+            .map_err(|e| anyhow::anyhow!("Failed to measure warmup pure media: {e}"))
     } else {
-        bail!(
+        Err(anyhow::anyhow!(
             "GPU warmup encode failed: {}",
             String::from_utf8_lossy(&result.stderr)
-        );
+        ))
     };
     crate::media_conversion_gate::delivery_remove_file_or_audit(
         "gpu_warmup_output",
         &warmup_output,
     );
-    Ok(size)
+    size
 }
 
 fn encode_gpu_sample(
@@ -2947,7 +2947,7 @@ fn encode_gpu_sample(
     crate::log_detail!(
         &crate::infra::static_logs::messages::MSG_GPU_DONE_TIME.replace("{}", &beijing_time_now())
     );
-    Ok(std::fs::metadata(output)?.len())
+    Ok(crate::stream_size::measure_strict_pure_media(output)?.pure_media_size())
 }
 
 fn encode_gpu_parallel_probe(
@@ -2998,9 +2998,10 @@ fn encode_gpu_parallel_probe(
                 let result = cmd.output();
 
                 let size = match result {
-                    Ok(out) if out.status.success() => std::fs::metadata(&output_path)
-                        .map(|m| m.len())
-                        .map_err(|e| anyhow::anyhow!("{e}")),
+                    Ok(out) if out.status.success() => {
+                        crate::stream_size::measure_strict_pure_media(&output_path)
+                            .map(|measurement| measurement.pure_media_size())
+                    }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         Err(anyhow::anyhow!(
@@ -4622,5 +4623,5 @@ mod prop_tests {
 
 #[cfg(test)]
 mod advanced_tests {
-    include!("../tests/gpu_behavior.rs");
+    include!("../../tests/internal/gpu_behavior.rs");
 }

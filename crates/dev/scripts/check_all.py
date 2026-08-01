@@ -681,8 +681,8 @@ def ci_cargo_feature_argv(*cargo_args: str) -> list[str]:
 
 
 def ensure_edge_test_media(tracker: Tracker, repo_root: Path) -> None:
-    """Generate gitignored synthetic assets under ``crates/dev/src/tests/edge`` when missing."""
-    marker = repo_root / "crates/dev/src/tests/edge/videos/test_h264_10s.mp4"
+    """Generate gitignored synthetic assets under ``crates/dev/tests/edge`` when missing."""
+    marker = repo_root / "crates/dev/tests/edge/videos/test_h264_10s.mp4"
     if marker.is_file():
         skip_step(tracker, "generate edge test media", "already present")
         return
@@ -1641,7 +1641,7 @@ def main() -> None:
                     "fuzz",
                     "list",
                     "--fuzz-dir",
-                    "crates/dev/src/fuzz",
+                    "crates/dev/fuzz",
                 )
                 run_step(
                     tracker,
@@ -1653,15 +1653,15 @@ def main() -> None:
                 if args.fuzz_smoke:
                     fuzz_targets = sorted(
                         path.stem
-                        for path in (
-                            repo_root / "crates/dev/src/fuzz/fuzz_targets"
-                        ).glob("*.rs")
+                        for path in (repo_root / "crates/dev/fuzz/fuzz_targets").glob(
+                            "*.rs"
+                        )
                     )
                     if not fuzz_targets:
                         fail_required_step(
                             tracker,
                             "cargo fuzz smoke",
-                            "no fuzz targets found under crates/dev/src/fuzz/fuzz_targets",
+                            "no fuzz targets found under crates/dev/fuzz/fuzz_targets",
                         )
                     for target in fuzz_targets:
                         run_step(
@@ -1674,7 +1674,7 @@ def main() -> None:
                                 "run",
                                 target,
                                 "--fuzz-dir",
-                                "crates/dev/src/fuzz",
+                                "crates/dev/fuzz",
                                 "--",
                                 "-runs=1",
                             ),

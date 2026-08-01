@@ -2,14 +2,12 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 const DEFAULT_CONNSTR: &str = "postgresql:///modern_format_boost";
 
 fn main() -> Result<()> {
-    let project_root = project_root();
-    let conf_dir = project_root.join("crates/.modern_format_boost");
+    let conf_dir = foundation::process_lock::get_mfb_root().context("resolve MFB state root")?;
     let conf_json = conf_dir.join("local_env.json");
     let conf_sh = conf_dir.join("local_env.sh");
     fs::create_dir_all(&conf_dir).with_context(|| format!("create {}", conf_dir.display()))?;
@@ -47,30 +45,6 @@ fn main() -> Result<()> {
     println!("The drag-and-drop processor will now load this file automatically.");
 
     Ok(())
-}
-
-fn project_root() -> PathBuf {
-    match Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if !text.is_empty() {
-                return PathBuf::from(text);
-            }
-        }
-        Ok(output) => eprintln!(
-            "[SETUP-DB] git rev-parse failed with status {:?}",
-            output.status.code()
-        ),
-        Err(err) => eprintln!("[SETUP-DB] git rev-parse failed: {err}"),
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 fn load_existing_connstr(json_path: &Path, sh_path: &Path) -> Option<String> {

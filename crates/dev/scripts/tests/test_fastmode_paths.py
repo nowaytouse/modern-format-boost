@@ -55,6 +55,13 @@ class TestFastModePaths(unittest.TestCase):
                     Path(home) / ".modern_format_boost",
                 )
 
+    def test_fastmode_state_root_uses_system_temp_without_home(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                fastmode_paths.default_mfb_state_root(),
+                Path(tempfile.gettempdir()) / ".modern_format_boost",
+            )
+
     def test_fastmode_uses_smart_build_without_force(self):
         self.assertIs(fastmode_paths.FAST_IMG_FORCE_SMART_BUILD, False)
 

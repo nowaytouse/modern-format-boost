@@ -44,16 +44,40 @@ def test_migration_contract_documents_retained_python_categories() -> None:
 
 
 def test_github_workflows_do_not_invoke_script_files() -> None:
-    script_file = re.compile(r"\.(?:py|sh|bash)\b")
+    script_invocation = re.compile(r"(?:python3?|bash|sh)\s+[^\n]*\.(?:py|sh|bash)\b")
     violations = []
     for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml")):
         for line_number, line in enumerate(
             workflow.read_text(encoding="utf-8").splitlines(), start=1
         ):
-            if not line.lstrip().startswith("#") and script_file.search(line):
+            if not line.lstrip().startswith("#") and script_invocation.search(line):
                 violations.append(f"{workflow.name}:{line_number}: {line.strip()}")
 
     assert violations == []
+
+
+def test_release_packages_rust_tools_and_only_allowlisted_python_workers() -> None:
+    workflows = [
+        (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        for name in ("cd-nightly.yml", "cd-stable.yml")
+    ]
+    allowlisted_workers = {
+        "quality_regression_model.py",
+        "loop_intent_clustering.py",
+        "fastmode_paths.py",
+    }
+    for workflow in workflows:
+        assert "cp -r crates/dev/scripts" not in workflow
+        assert "MIGRATED_RUST_BINS:" in workflow
+        for worker in allowlisted_workers:
+            assert worker in workflow
+
+        bins = re.search(r'MIGRATED_RUST_BINS: "([^"]+)"', workflow)
+        assert bins is not None
+        for binary in bins.group(1).split():
+            assert (
+                REPO_ROOT / "crates" / "dev" / "src" / "bin" / f"{binary}.rs"
+            ).is_file()
 
 
 def test_media_dependency_installer_compiles_without_cargo(tmp_path: Path) -> None:

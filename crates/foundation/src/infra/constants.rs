@@ -177,12 +177,19 @@ pub const QUALITY_MODEL_PROBABILITY_SLACK: f64 = 1e-3;
 /// Hard wall-clock cap for one `LightGBM` Python inference (process is killed
 /// on expiry).
 pub const IMAGE_QUALITY_MODEL_INFERENCE_TIMEOUT_SECS: u64 = 40;
-/// Hard wall-clock cap for one `ffprobe` analysis subprocess (process is killed
-/// on expiry).
+/// Soft wall-clock estimate for one `ffprobe` analysis subprocess.
 pub const FFPROBE_TIMEOUT_SECS: u64 = 45;
-/// Hard wall-clock cap for one `ffmpeg` conversion subprocess (process is
-/// killed on expiry).
+/// Soft wall-clock estimate for one `ffmpeg` conversion subprocess.
 pub const FFMPEG_TIMEOUT_SECS: u64 = 2 * 60 * 60;
+// Deadlines are per media object (or bounded Photos chunk), so a directory's
+// total allowance grows naturally with its object count instead of sharing one
+// fixed batch wall clock.
+/// Hard deadman deadline for one image conversion subprocess.
+pub const IMAGE_PROCESS_HARD_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
+/// Hard deadman deadline for one animated-image conversion subprocess.
+pub const ANIMATED_IMAGE_PROCESS_HARD_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
+/// Hard deadman deadline for one video conversion subprocess.
+pub const VIDEO_PROCESS_HARD_TIMEOUT_SECS: u64 = 14 * 24 * 60 * 60;
 /// Max bytes accepted from the model child `stdout` / `stderr`
 /// (defense-in-depth).
 pub const IMAGE_QUALITY_MODEL_MAX_IO_BYTES: usize = 512 * 1024;
@@ -3549,7 +3556,9 @@ pub const ENV_ENABLE_BRANDING: &str = "MODERN_FORMAT_BOOST_ENABLE_BRANDING";
 pub const ENV_HOME: &str = "HOME";
 pub const ENV_USERPROFILE: &str = "USERPROFILE";
 pub const ENV_JXL_INTENSITY_TARGET: &str = "MFB_JXL_INTENSITY_TARGET";
+pub const ENV_MFB_ERROR_MODE: &str = "MFB_ERROR_MODE";
 pub const ENV_MFB_DRAG_DROP_ERROR_MODE: &str = "MFB_DRAG_DROP_ERROR_MODE";
+pub const ENV_MFB_DRAG_DROP_FAIL_FAST: &str = "MFB_DRAG_DROP_FAIL_FAST";
 
 // --- Dolby Vision Constants ---
 /// Default compatibility ID for Dolby Vision Profile 8 (8.1).

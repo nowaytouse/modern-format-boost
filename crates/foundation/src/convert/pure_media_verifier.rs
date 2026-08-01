@@ -1,16 +1,16 @@
 //! Pure Media Compression Verifier
 //!
-//! Verification of compression using pure video stream size,
+//! Verification of compression using exact video + audio packet payload size,
 //! completely excluding the impact of container format and metadata.
 //!
 //! ## Core Logic
-//! - Main Criterion: `output_video_stream_size < input_video_stream_size +
+//! - Main Criterion: `output_pure_media_size < input_pure_media_size +
 //!   DEFAULT_SIZE_TOLERANCE_BYTES`
-//! - As long as the pure video stream shrinks or increases slightly (less than
+//! - As long as the pure media payload shrinks or increases slightly (less than
 //!   the standard tolerance), it's considered a success, regardless of total
 //!   file size.
 
-use crate::stream_size::Info;
+use crate::stream_size::{Info, StrictPureMediaMeasurement, measure_strict_pure_media};
 #[cfg(feature = "high-precision")]
 use rug::Rational;
 
@@ -50,13 +50,26 @@ fn size_ratio_or_one(numerator: u64, denominator: u64) -> f64 {
 
 #[derive(Debug, Clone)]
 pub struct PureMediaVerifyResult {
+    /// Backward-compatible alias for [`Self::pure_media_compressed`].
+    ///
+    /// This is deliberately computed from video + audio payload, never video
+    /// alone. New callers should use `pure_media_compressed`.
     pub video_compressed: bool,
+    pub pure_media_compressed: bool,
     pub input_video_size: u64,
     pub output_video_size: u64,
+    pub input_audio_size: u64,
+    pub output_audio_size: u64,
+    pub input_pure_media_size: u64,
+    pub output_pure_media_size: u64,
     #[cfg(feature = "high-precision")]
     pub video_compression_ratio: Rational,
     #[cfg(not(feature = "high-precision"))]
     pub video_compression_ratio: f64,
+    #[cfg(feature = "high-precision")]
+    pub pure_media_compression_ratio: Rational,
+    #[cfg(not(feature = "high-precision"))]
+    pub pure_media_compression_ratio: f64,
     #[cfg(feature = "high-precision")]
     pub total_compression_ratio: Rational,
     #[cfg(not(feature = "high-precision"))]
@@ -67,6 +80,18 @@ pub struct PureMediaVerifyResult {
 }
 
 impl PureMediaVerifyResult {
+    #[must_use]
+    pub fn pure_media_size_change_percent(&self) -> f64 {
+        #[cfg(feature = "high-precision")]
+        {
+            (self.pure_media_compression_ratio.to_f64() - 1.0) * 100.0
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            (self.pure_media_compression_ratio - 1.0) * 100.0
+        }
+    }
+
     #[must_use]
     pub fn video_size_change_percent(&self) -> f64 {
         #[cfg(feature = "high-precision")]
@@ -95,35 +120,35 @@ impl PureMediaVerifyResult {
     pub fn is_container_overhead_issue(&self) -> bool {
         #[cfg(feature = "high-precision")]
         {
-            self.video_compressed && self.total_compression_ratio >= 1
+            self.pure_media_compressed && self.total_compression_ratio >= 1
         }
         #[cfg(not(feature = "high-precision"))]
         {
-            self.video_compressed && self.total_compression_ratio >= 1.0
+            self.pure_media_compressed && self.total_compression_ratio >= 1.0
         }
     }
 
     #[must_use]
     pub fn description(&self) -> String {
-        if self.video_compressed {
+        if self.pure_media_compressed {
             if self.is_container_overhead_issue() {
                 format!(
-                    "✅ Video compressed ({:+.1}%), but container overhead increased total size \
+                    "✅ Pure media compressed ({:+.1}%), but container overhead increased total size \
                      ({:+.1}%)",
-                    self.video_size_change_percent(),
+                    self.pure_media_size_change_percent(),
                     self.total_size_change_percent()
                 )
             } else {
                 format!(
-                    "✅ Compression success: Video {:+.1}%, Total {:+.1}%",
-                    self.video_size_change_percent(),
+                    "✅ Compression success: Pure media {:+.1}%, Total {:+.1}%",
+                    self.pure_media_size_change_percent(),
                     self.total_size_change_percent()
                 )
             }
         } else {
             crate::media_conversion_gate::ui_user_facing_error(format!(
-                "Compression failed: Video {:+.1}% (Not smaller)",
-                self.video_size_change_percent()
+                "Compression target not met: Pure media {:+.1}% (not smaller)",
+                self.pure_media_size_change_percent()
             ))
         }
     }
@@ -135,32 +160,99 @@ pub fn verify_pure_media_compression(
     output_info: &Info,
     allow_size_tolerance: bool,
 ) -> PureMediaVerifyResult {
-    let input_video = input_info.video_stream_size;
-    let output_video = output_info.video_stream_size;
+    verify_pure_media_sizes(
+        input_info.video_stream_size,
+        input_info.audio_stream_size,
+        input_info.total_file_size,
+        input_info.container_overhead,
+        output_info.video_stream_size,
+        output_info.audio_stream_size,
+        output_info.total_file_size,
+        output_info.container_overhead,
+        allow_size_tolerance,
+    )
+}
 
-    let video_compressed = if allow_size_tolerance {
-        output_video < input_video.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
+pub fn verify_strict_pure_media_paths(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    allow_size_tolerance: bool,
+) -> anyhow::Result<PureMediaVerifyResult> {
+    let input_measurement = measure_strict_pure_media(input)?;
+    let output_measurement = measure_strict_pure_media(output)?;
+    Ok(verify_strict_pure_media_measurements(
+        input_measurement,
+        output_measurement,
+        allow_size_tolerance,
+    ))
+}
+
+#[must_use]
+pub fn verify_strict_pure_media_measurements(
+    input: StrictPureMediaMeasurement,
+    output: StrictPureMediaMeasurement,
+    allow_size_tolerance: bool,
+) -> PureMediaVerifyResult {
+    verify_pure_media_sizes(
+        input.video_packet_bytes,
+        input.audio_packet_bytes,
+        input.total_file_size,
+        input
+            .total_file_size
+            .saturating_sub(input.pure_media_size()),
+        output.video_packet_bytes,
+        output.audio_packet_bytes,
+        output.total_file_size,
+        output
+            .total_file_size
+            .saturating_sub(output.pure_media_size()),
+        allow_size_tolerance,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_pure_media_sizes(
+    input_video: u64,
+    input_audio: u64,
+    input_total: u64,
+    input_overhead: u64,
+    output_video: u64,
+    output_audio: u64,
+    output_total: u64,
+    output_overhead: u64,
+    allow_size_tolerance: bool,
+) -> PureMediaVerifyResult {
+    let input_pure_media = input_video.saturating_add(input_audio);
+    let output_pure_media = output_video.saturating_add(output_audio);
+    let pure_media_compressed = if allow_size_tolerance {
+        output_pure_media
+            < input_pure_media.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
-        output_video < input_video
+        output_pure_media < input_pure_media
     };
 
     let video_compression_ratio = size_ratio_or_one(output_video, input_video);
-    let total_compression_ratio =
-        size_ratio_or_one(output_info.total_file_size, input_info.total_file_size);
+    let pure_media_compression_ratio = size_ratio_or_one(output_pure_media, input_pure_media);
+    let total_compression_ratio = size_ratio_or_one(output_total, input_total);
 
-    let container_overhead_diff =
-        crate::numeric_cast::u64_to_i64_sat(output_info.container_overhead)
-            - crate::numeric_cast::u64_to_i64_sat(input_info.container_overhead);
+    let container_overhead_diff = crate::numeric_cast::u64_to_i64_sat(output_overhead)
+        - crate::numeric_cast::u64_to_i64_sat(input_overhead);
 
     PureMediaVerifyResult {
-        video_compressed,
+        video_compressed: pure_media_compressed,
+        pure_media_compressed,
         input_video_size: input_video,
         output_video_size: output_video,
+        input_audio_size: input_audio,
+        output_audio_size: output_audio,
+        input_pure_media_size: input_pure_media,
+        output_pure_media_size: output_pure_media,
         video_compression_ratio,
+        pure_media_compression_ratio,
         total_compression_ratio,
         container_overhead_diff,
-        input_container_overhead: input_info.container_overhead,
-        output_container_overhead: output_info.container_overhead,
+        input_container_overhead: input_overhead,
+        output_container_overhead: output_overhead,
     }
 }
 
@@ -251,6 +343,13 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(!result.video_compressed);
+        assert_eq!(
+            result.description(),
+            crate::media_conversion_gate::ui_user_facing_error(format!(
+                "Compression target not met: Pure media {:+.1}% (not smaller)",
+                result.pure_media_size_change_percent()
+            ))
+        );
         #[cfg(feature = "high-precision")]
         assert!(result.video_compression_ratio > 1_i32);
         #[cfg(not(feature = "high-precision"))]
@@ -265,6 +364,37 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
+        assert!(result.is_container_overhead_issue());
+        #[cfg(feature = "high-precision")]
+        assert!(result.total_compression_ratio > 1_i32);
+        #[cfg(not(feature = "high-precision"))]
+        assert!(result.total_compression_ratio > 1.0);
+    }
+
+    #[test]
+    fn pure_media_rejects_audio_growth_that_erases_video_savings() {
+        let input = make_stream_info(1_000, 100, 50);
+        let output = make_stream_info(900, 300, 50);
+
+        let result = verify_pure_media_compression(&input, &output, false);
+
+        assert!(!result.pure_media_compressed);
+        assert!(
+            !result.video_compressed,
+            "compatibility alias must use pure media"
+        );
+        assert_eq!(result.input_pure_media_size, 1_100);
+        assert_eq!(result.output_pure_media_size, 1_200);
+    }
+
+    #[test]
+    fn pure_media_accepts_when_total_grows_but_payload_shrinks() {
+        let input = make_stream_info(1_000, 100, 50);
+        let output = make_stream_info(800, 100, 1_000);
+
+        let result = verify_pure_media_compression(&input, &output, false);
+
+        assert!(result.pure_media_compressed);
         assert!(result.is_container_overhead_issue());
         #[cfg(feature = "high-precision")]
         assert!(result.total_compression_ratio > 1_i32);

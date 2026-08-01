@@ -668,18 +668,26 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
                     let name_bytes = local_name.as_ref();
-                    let target = if name_bytes.windows(10).any(|w| w == b"GainMapMax") {
+                    let target = if name_bytes
+                        .as_bytes()
+                        .windows(10)
+                        .any(|w| w == b"GainMapMax")
+                    {
                         Some("GainMapMax")
-                    } else if name_bytes.windows(10).any(|w| w == b"GainMapMin") {
+                    } else if name_bytes
+                        .as_bytes()
+                        .windows(10)
+                        .any(|w| w == b"GainMapMin")
+                    {
                         Some("GainMapMin")
-                    } else if name_bytes.windows(5).any(|w| w == b"Gamma") {
+                    } else if name_bytes.as_bytes().windows(5).any(|w| w == b"Gamma") {
                         Some("Gamma")
-                    } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR")
-                        || name_bytes.windows(9).any(|w| w == b"OffsetSdr")
+                    } else if name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetSDR")
+                        || name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetSdr")
                     {
                         Some("OffsetSDR")
-                    } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR")
-                        || name_bytes.windows(9).any(|w| w == b"OffsetHdr")
+                    } else if name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetHDR")
+                        || name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetHdr")
                     {
                         Some("OffsetHDR")
                     } else {
@@ -711,23 +719,23 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
                 }
                 let name = e.name();
                 let name_ref = name.as_ref();
-                if name_ref.windows(10).any(|w| w == b"GainMapMax") {
+                if name_ref.as_bytes().windows(10).any(|w| w == b"GainMapMax") {
                     let val = reader.read_text(name)?;
-                    let raw = String::from_utf8_lossy(val.as_ref());
+                    let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
                     params.gain_map_max = raw.parse::<f32>().map_err(|e| {
                         anyhow!("Failed to parse GainMapMax text value {raw:?}: {e}")
                     })?;
                     found_any = true;
-                } else if name_ref.windows(10).any(|w| w == b"GainMapMin") {
+                } else if name_ref.as_bytes().windows(10).any(|w| w == b"GainMapMin") {
                     let val = reader.read_text(name)?;
-                    let raw = String::from_utf8_lossy(val.as_ref());
+                    let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
                     params.gain_map_min = raw.parse::<f32>().map_err(|e| {
                         anyhow!("Failed to parse GainMapMin text value {raw:?}: {e}")
                     })?;
                     found_any = true;
-                } else if name_ref.windows(5).any(|w| w == b"Gamma") {
+                } else if name_ref.as_bytes().windows(5).any(|w| w == b"Gamma") {
                     let val = reader.read_text(name)?;
-                    let raw = String::from_utf8_lossy(val.as_ref());
+                    let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
                     params.gamma = raw
                         .parse::<f32>()
                         .map_err(|e| anyhow!("Failed to parse Gamma text value {raw:?}: {e}"))?;

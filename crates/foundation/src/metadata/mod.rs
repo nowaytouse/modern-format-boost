@@ -25,6 +25,7 @@ mod linux;
 mod macos;
 #[cfg(target_os = "macos")]
 mod network;
+mod output_audit;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -33,6 +34,17 @@ pub use delivery_policy::{
     preserve_for_delivery,
 };
 pub use exif::preserve_internal;
+pub use output_audit::{
+    MetadataOutputPolicy, OutputMetadataAudit, verify_output_embedded_metadata,
+};
+
+/// Measure the file emitted by `ExifTool` after removing all embedded metadata.
+///
+/// # Errors
+/// Returns an error when `ExifTool` cannot produce a non-empty stripped image.
+pub fn stripped_embedded_metadata_size(path: &Path) -> io::Result<u64> {
+    output_audit::stripped_embedded_metadata_size(path)
+}
 #[cfg(target_os = "macos")]
 pub use macos::append_mfb_branding;
 
@@ -532,6 +544,11 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                                  diff={diff_str})"
                             ),
                         );
+                        failures.push(format!(
+                            "creation time mismatch on {}: expected={expected_created:?} \
+                             actual={actual_created:?}",
+                            dst.display()
+                        ));
                     }
                 }
                 Err(e) => {
@@ -540,6 +557,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                         crate::infra::static_logs::messages::MSG_METADATA_READ_CREATION_FAIL
                             .replace("{}", &e.to_string()),
                     );
+                    failures.push(format!(
+                        "failed to verify creation time on {}: {e}",
+                        dst.display()
+                    ));
                 }
             },
             (Err(e), _) => {
@@ -548,6 +569,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                     crate::infra::static_logs::messages::MSG_METADATA_READ_CREATION_FAIL
                         .replace("{}", &e.to_string()),
                 );
+                failures.push(format!(
+                    "failed to read source creation time from {}: {e}",
+                    src.display()
+                ));
             }
             (_, Err(e)) => {
                 crate::media_conversion_gate::delivery_metadata_path_audit(
@@ -555,9 +580,13 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                     dst,
                     format!(
                         "Metadata Audit: Failed to read destination metadata for creation-time \
-                         verification: {e}"
+                        verification: {e}"
                     ),
                 );
+                failures.push(format!(
+                    "failed to read destination creation time from {}: {e}",
+                    dst.display()
+                ));
             }
         }
         if let Some(expected_added) = source_added_time {
@@ -2421,5 +2450,5 @@ pub(crate) const fn preserve_pro_delivery_layer_order() -> &'static [&'static st
 
 #[cfg(test)]
 mod metadata_preservation_contract {
-    include!("../tests/metadata_preservation_contract.rs");
+    include!("../../tests/internal/metadata_preservation_contract.rs");
 }
