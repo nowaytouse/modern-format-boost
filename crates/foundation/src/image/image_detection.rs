@@ -474,7 +474,21 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data)?;
+            let frame_count = match crate::image_formats::gif::count_frames_from_bytes(&data) {
+                Ok(frame_count) => frame_count,
+                Err(error) => {
+                    if crate::image_formats::gif::is_animated_from_bytes(&data)? {
+                        tracing::warn!(
+                            target: "gif_animation_probe",
+                            path = %path.display(),
+                            error = %error,
+                            "GIF has at least two decoded frames despite later corruption; exact frame count and timing are unavailable"
+                        );
+                        return Ok((true, None, None));
+                    }
+                    return Err(error);
+                }
+            };
             let fps = if frame_count > 1 {
                 crate::image_formats::gif::timing_stats_from_bytes(&data)?
                     .filter(|stats| stats.fps.is_finite() && stats.fps > 0.0_f64)

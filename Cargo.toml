@@ -6,7 +6,7 @@ members = [
   "crates/dev",
   "crates/dev/fuzz",
 ]
-exclude = ["crates/dev/dispatch2", "crates/gui/src-tauri"]
+exclude = ["crates/dev/dispatch2"]
 resolver = "2"
 
 [workspace.lints.rust]

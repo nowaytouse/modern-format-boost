@@ -51,8 +51,8 @@ pub fn calculate_ms_ssim_yuv(
     use chrono::Local;
     use std::thread;
 
-    if let Some(ext) = input.extension().and_then(|e| e.to_str())
-        && matches!(ext.to_lowercase().as_str(), "gif")
+    if crate::image::format_detect::detect_true_format(input)?
+        == crate::image::format_detect::FormatKind::Gif
     {
         crate::log_hint!(
             crate::infra::static_logs::messages::LABEL_MS_SSIM,
@@ -218,15 +218,6 @@ fn calculate_ms_ssim_channel_sampled(
     target_width: u32,
     target_height: u32,
 ) -> Option<f64> {
-    if let Some(ext) = input.extension().and_then(|e| e.to_str())
-        && matches!(ext.to_lowercase().as_str(), "gif")
-    {
-        crate::log_detail!(
-            "      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)"
-        );
-        return None;
-    }
-
     // For chroma channels (U/V) in YUV 4:2:0, the extracted plane is half the
     // luma resolution. libvmaf MS-SSIM performs multi-scale downsampling and
     // fails with "scale below 1x1" when the plane is too small.
@@ -1022,6 +1013,17 @@ mod tests {
 
     fn metric_value(result: anyhow::Result<Option<f64>>) -> f64 {
         ok_metric(result).unwrap_or_else(|| panic!("missing value"))
+    }
+
+    #[test]
+    fn ms_ssim_gif_skip_uses_content_not_suffix() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let input = temp.path().join("animation.mp4");
+        std::fs::write(&input, b"GIF89a\x01\x00\x01\x00").expect("write GIF signature");
+
+        let result = calculate_ms_ssim_yuv(&input, &temp.path().join("missing.mp4"), 5.0)
+            .expect("GIF policy skip should not invoke video probes");
+        assert!(result.is_none());
     }
 
     #[test]

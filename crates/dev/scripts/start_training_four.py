@@ -32,9 +32,7 @@ from run_training import (
 from run_training import (
     RUN_TRAINING_SCRIPT as RUN_TRAINING,
 )
-from run_training import (
-    WORKSPACE_VENV_PYTHON as VENV_PYTHON,
-)
+from run_training import STATE_VENV_PYTHON as VENV_PYTHON
 from run_training import (
     four_lane_python_exe as _python_exe,
 )

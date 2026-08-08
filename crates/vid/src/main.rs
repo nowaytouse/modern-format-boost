@@ -832,7 +832,12 @@ fn main() -> anyhow::Result<()> {
 
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
-            let resume = resume && !no_resume;
+            let resume = foundation::checkpoint::resolve_resume_choice(
+                &input,
+                output.as_deref(),
+                resume,
+                no_resume,
+            )?;
             let selected_codec = match SelectedCodec::resolve_cli_delivery_codec(
                 DeliveryProduct::Vid,
                 &codec,

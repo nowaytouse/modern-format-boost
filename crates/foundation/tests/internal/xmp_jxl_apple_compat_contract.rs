@@ -5,12 +5,17 @@ use crate::builder_base::ToolBuilder;
 use std::path::Path;
 
 #[test]
-fn contract_jxl_xmp_nuclear_strip_gate_locked() {
-    let jxl = Path::new("photo.jxl");
-    let jpg = Path::new("photo.jpg");
-    assert!(should_jxl_xmp_apple_nuclear_strip(jxl, true));
-    assert!(!should_jxl_xmp_apple_nuclear_strip(jxl, false));
-    assert!(!should_jxl_xmp_apple_nuclear_strip(jpg, true));
+fn contract_jxl_xmp_nuclear_strip_gate_locked() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let jxl = temp.path().join("photo.jpg");
+    let jpg = temp.path().join("photo.jxl");
+    std::fs::write(&jxl, [0xFF, 0x0A, 0x00])?;
+    std::fs::write(&jpg, [0xFF, 0xD8, 0xFF])?;
+
+    assert!(should_jxl_xmp_apple_nuclear_strip(&jxl, true));
+    assert!(!should_jxl_xmp_apple_nuclear_strip(&jxl, false));
+    assert!(!should_jxl_xmp_apple_nuclear_strip(&jpg, true));
+    Ok(())
 }
 
 #[test]

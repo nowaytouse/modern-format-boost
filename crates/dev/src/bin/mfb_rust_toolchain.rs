@@ -1,6 +1,6 @@
 //! Rust toolchain resolver and inspector.
 //!
-//! Port of `crates/dev/scripts/mfb_rust_toolchain.py`.
+//! Canonical Rust toolchain resolver for developer commands.
 //!
 //! Locates the active rustup toolchain, resolves cargo/clippy/rustfmt paths,
 //! and prints toolchain info. Prepends the toolchain bin-dir when rustup shims
@@ -20,7 +20,7 @@ use std::process::Command;
 #[derive(Parser, Debug)]
 #[command(
     name = "mfb_rust_toolchain",
-    about = "Resolve and inspect the active rustup toolchain (port of mfb_rust_toolchain.py)"
+    about = "Resolve and inspect the active rustup toolchain"
 )]
 struct Args {
     /// Prefer this channel when scanning toolchain dirs (nightly|stable)

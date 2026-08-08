@@ -3,8 +3,8 @@
 //! **Tightened defaults:** HNSW quorum ≥2; loop/quality/exploration unit
 //! probabilities always clamp/reject non-finite in [`crate::algorithm_seal`];
 //! structural sealing default **on** (disable via `MODERN_FORMAT_DISABLE_*
-//! _ALGORITHM_SEAL`); Layer 6 KNN default **on** unless disabled; loop
-//! `feature_stats` fail-closed (fail-open opt-in only); loop `inference_log` +
+//! _ALGORITHM_SEAL`); Layer 6 KNN default **off** unless explicitly enabled;
+//! loop `feature_stats` fail-closed (fail-open opt-in only); loop `inference_log` +
 //! audit-only default **on**; exploration SSIM-presence/threshold/size-target +
 //! confidence gates default **on**; strict corpus maturity default **on**;
 //! quality DB lookup/fusion and HDBSCAN fusion default **on** (disable via
@@ -389,10 +389,11 @@ pub(crate) fn exploration_algorithm_seal_enabled() -> bool {
     }
 }
 
-/// Layer 6 HNSW when the tree is uncertain (default on).
+/// Layer 6 HNSW when the tree is uncertain (explicit opt-in).
 #[must_use]
 pub(crate) fn loop_intent_layer6_knn_enabled() -> bool {
-    algorithm_gate_enabled(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN)
+    env_truthy(crate::constants::LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY)
+        && algorithm_gate_enabled(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN)
 }
 
 /// Strict exploration delivery (default on). Disable via
@@ -701,7 +702,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn loop_intent_layer6_knn_on_by_default() {
+    fn loop_intent_layer6_knn_off_by_default() {
+        let _opt_in = EnvGuard::set(crate::constants::LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY, "0");
+        let _disable = EnvGuard::set(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN, "0");
+        assert!(!loop_intent_layer6_knn_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn loop_intent_layer6_knn_requires_explicit_opt_in() {
+        let _opt_in = EnvGuard::set(crate::constants::LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY, "1");
         let _disable = EnvGuard::set(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN, "0");
         assert!(loop_intent_layer6_knn_enabled());
     }
@@ -709,6 +719,7 @@ mod tests {
     #[test]
     #[serial]
     fn loop_intent_layer6_knn_disable_kill_switch() {
+        let _opt_in = EnvGuard::set(crate::constants::LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY, "1");
         let _disable = EnvGuard::set(crate::constants::ENV_DISABLE_LOOP_INTENT_LAYER6_KNN, "1");
         assert!(!loop_intent_layer6_knn_enabled());
     }

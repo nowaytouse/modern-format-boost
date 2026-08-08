@@ -1140,15 +1140,14 @@ pub fn auto_convert_with_cache(
     // Internal judgment reconciliation:
     // If vid sees single-frame on a format that can be animated, re-check with image_detection
     // (which includes structural + penetration animation verification) before static isolation.
-    let content_codec_can_be_animated =
-        foundation::quality_matcher::SourceCodec::identify_by_content(input)
-            .map_err(|err| {
-                VidQualityError::ConversionError(format!(
-                    "Failed to identify source codec for {} during animation reconciliation: {err}",
-                    input.display()
-                ))
-            })?
-            .is_some_and(|codec| codec.can_be_animated());
+    let content_codec = foundation::quality_matcher::SourceCodec::identify_by_content(input)
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Failed to identify source codec for {} during animation reconciliation: {err}",
+                input.display()
+            ))
+        })?;
+    let content_codec_can_be_animated = content_codec.is_some_and(|codec| codec.can_be_animated());
     if !static_image_forced
         && detection.frame_count.is_none_or(|fc| fc <= 1)
         && content_codec_can_be_animated
@@ -1404,8 +1403,8 @@ ignored: false,
     let stem = foundation::media_conversion_gate::output_stem_for_delivery(input);
     let target_ext = strategy.target.extension();
     let input_ext = foundation::media_conversion_gate::path_extension_label(input);
-    // GIF as source has no Apple compatibility issue; do not show "APPLE COMPAT FALLBACK" for GIF→video.
-    let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
+    // GIF as source has no Apple compatibility issue; use the already-sniffed codec, not its suffix.
+    let source_is_gif = content_codec == Some(foundation::quality_matcher::SourceCodec::Gif);
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext)
         || (config.apple_compat() && input_ext.eq_ignore_ascii_case("mov"))
@@ -1514,22 +1513,10 @@ ignored: false,
                 &convert_options_from_config(config),
             )?;
 
-            // Early exit for skipped results
-            if result.skipped {
-                return Ok(ConversionOutput {
-                    input_path: input.display().to_string(),
-                    output_path: String::new(),
-                    strategy,
-                    input_size: detection.file_size,
-                    output_size: 0,
-                    size_ratio: 1.0,
-                    success: result.success,
-                    message: result.message,
-                    final_crf: 0.0,
-                    exploration_attempts: 0,
-                    blake3: None,
-                    ignored: false,
-                });
+            if result.outcome() != foundation::conversion::Outcome::Converted {
+                return task_result_to_conversion_output(
+                    input, &detection, strategy, result, 0.0, 0, cache,
+                );
             }
 
             let output_size = result.output_size.ok_or_else(|| {
@@ -2536,7 +2523,6 @@ fn execute_lossless(
     let input_arg = foundation::safe_path_arg(Path::new(&detection.file_path))
         .as_ref()
         .to_string();
-    let output_arg = foundation::safe_path_arg(output).as_ref().to_string();
     let ultimate =
         encoder_modes.contains(foundation::delivery_codec_strategy::EncoderModeFlags::ULTIMATE);
     let archive =
@@ -2593,12 +2579,9 @@ fn execute_lossless(
         "mkv",
     ));
 
-    args.push(output_arg);
-
-    let (status, stderr) = foundation::FfmpegBuilder::new()
-        .args(args)
-        .spawn()?
-        .wait_with_output()?;
+    let mut builder = foundation::FfmpegBuilder::new();
+    builder.args(args).output(output);
+    let (status, stderr) = builder.spawn()?.wait_with_output()?;
 
     if !status.success() {
         return Err(VidQualityError::FFmpegError {

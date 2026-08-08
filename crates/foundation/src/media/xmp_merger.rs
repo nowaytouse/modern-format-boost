@@ -108,9 +108,8 @@ pub struct XmpMerger {
 #[must_use]
 fn should_jxl_xmp_apple_nuclear_strip(media_path: &Path, apple_compat: bool) -> bool {
     apple_compat
-        && media_path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
+        && crate::image::format_detect::detect_true_format(media_path)
+            .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Jxl)
 }
 
 fn append_jxl_apple_nuclear_xmp_merge(builder: &mut ExiftoolBuilder) {

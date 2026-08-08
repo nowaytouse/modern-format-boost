@@ -31,7 +31,7 @@ export default tseslint.config(
       // Core Vue rules
       "vue/multi-word-component-names": "off",
 
-      // Unicorn is extremely opinionated, we relax a few that clash with standard Vue/Tauri practices
+      // Unicorn is extremely opinionated; relax rules that clash with established Vue practices.
       "unicorn/filename-case": [
         "error",
         {
@@ -62,7 +62,7 @@ export default tseslint.config(
   {
     ignores: [
       "dist/",
-      "src-tauri/",
+            "src-macos/",
       "node_modules/",
       "*.cjs",
       "*.config.ts",

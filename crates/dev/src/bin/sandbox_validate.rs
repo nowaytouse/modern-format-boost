@@ -78,7 +78,6 @@ fn run_cmd(
     program: &OsStr,
     args: &[OsString],
     log_path: Option<&Path>,
-    check: bool,
 ) -> Result<Output> {
     let rendered = render_command(program, args);
     println!("+ {rendered}");
@@ -95,9 +94,7 @@ fn run_cmd(
         let err_text = String::from_utf8_lossy(&output.stderr);
         let out_text = String::from_utf8_lossy(&output.stdout);
         eprintln!("Command failed. Stderr:\n{err_text}\nStdout:\n{out_text}");
-        if check {
-            bail!("command failed with status {}: {rendered}", output.status);
-        }
+        bail!("command failed with status {}: {rendered}", output.status);
     }
     Ok(output)
 }
@@ -189,7 +186,6 @@ fn main() -> Result<()> {
             path_arg(&src.join("video9.mp4")),
         ],
         None,
-        true,
     )?;
 
     run_cmd(
@@ -208,12 +204,11 @@ fn main() -> Result<()> {
             path_arg(&src.join("static.webp")),
         ],
         None,
-        true,
     )?;
 
     // Anim webp
     let anim_path = src.join("anim.webp");
-    let _ = run_cmd(
+    run_cmd(
         OsStr::new("ffmpeg"),
         &[
             string_arg("-hide_banner"),
@@ -227,8 +222,7 @@ fn main() -> Result<()> {
             path_arg(&anim_path),
         ],
         None,
-        false,
-    );
+    )?;
 
     // Run tests
     let vlog = logs.join("video9.txt");
@@ -250,7 +244,6 @@ fn main() -> Result<()> {
             path_arg(&src.join("video9.mp4")),
         ],
         Some(&vlog),
-        false,
     )?;
     let v_text = fs::read_to_string(&vlog)?;
     let vchecks = grep_checks(&v_text);
@@ -267,7 +260,6 @@ fn main() -> Result<()> {
             path_arg(&src.join("static.webp")),
         ],
         Some(&slog),
-        false,
     )?;
     let s_text = fs::read_to_string(&slog)?;
     let schecks = grep_checks(&s_text);
@@ -284,7 +276,6 @@ fn main() -> Result<()> {
             path_arg(&src.join("anim.webp")),
         ],
         Some(&alog),
-        false,
     )?;
     let anim_text = fs::read_to_string(&alog)?;
     let anim_not_static_ignore = !anim_text.contains("ignore_class=vid_static_unknown_frames")
@@ -302,7 +293,6 @@ fn main() -> Result<()> {
             path_arg(&src.join("anim.webp")),
         ],
         Some(&ilog),
-        false,
     )?;
     let i_text = fs::read_to_string(&ilog)?;
     let ichecks = grep_checks(&i_text);
@@ -327,7 +317,6 @@ fn main() -> Result<()> {
         verify_program.as_os_str(),
         &verify_prefix_args,
         Some(&verify_out),
-        false,
     )?;
 
     println!("\n── Sandbox checks ──");
@@ -420,5 +409,17 @@ mod tests {
                 OsString::from("--"),
             ]
         );
+    }
+
+    #[test]
+    fn test_run_cmd_propagates_nonzero_status() {
+        let error = run_cmd(
+            OsStr::new("sh"),
+            &[OsString::from("-c"), OsString::from("exit 7")],
+            None,
+        )
+        .expect_err("sandbox validation commands must not ignore failure");
+
+        assert!(error.to_string().contains("status"));
     }
 }

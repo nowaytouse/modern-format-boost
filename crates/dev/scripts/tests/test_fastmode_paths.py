@@ -235,7 +235,7 @@ class TestFastModePaths(unittest.TestCase):
 
         self.assertIn("pub fn choose_fast_img_action", source)
         self.assertIn("Enter = Shortest Path", source)
-        self.assertIn('"3" => FastImgAction::RestoreJpeg', source)
+        self.assertIn('"3" if strategy != "avif" => FastImgAction::RestoreJpeg', source)
         self.assertIn("_ => FastImgAction::ShortestPath", source)
 
     def test_drag_processor_archives_session_logs(self):

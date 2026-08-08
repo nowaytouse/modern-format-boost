@@ -80,9 +80,9 @@ pub fn wait_child_with_liveness_timeout(
             anyhow::bail!(
                 "{context} timed out at hard timeout after {elapsed:?} / {hard_timeout:?} \
                  (soft timeout {soft_timeout:?}; subprocess killed, \
-                 exit_code={exit_code})",
-                exit_code = crate::media_conversion_gate::process_exit_code_for_context(
-                    status.code(),
+                 termination={termination})",
+                termination = crate::media_conversion_gate::process_termination_label_for_context(
+                    &status,
                     "process_runner_wait_child_timeout",
                     context,
                 ),
@@ -281,7 +281,7 @@ impl ManagedProcess {
             crate::media_conversion_gate::delivery_tool_process_failed_audit(
                 "process_runner",
                 &self.command_line,
-                status.code(),
+                &status,
             );
         }
 
@@ -373,11 +373,12 @@ impl ManagedProcess {
                             .find(|line| !line.trim().is_empty()),
                     );
 
-                let exit_code_label = crate::media_conversion_gate::process_exit_code_for_context(
-                    output.status.code(),
-                    "process_runner_wait_timeout",
-                    &command_line,
-                );
+                let termination_label =
+                    crate::media_conversion_gate::process_termination_label_for_context(
+                        &output.status,
+                        "process_runner_wait_timeout",
+                        &command_line,
+                    );
                 let stderr_summary = if stderr_len <= 2000 {
                     output.stderr.trim().to_string()
                 } else {
@@ -396,7 +397,7 @@ impl ManagedProcess {
                 anyhow::bail!(
                     "{context} timed out at hard timeout after {elapsed:?} / {hard_timeout:?} \
                      (soft timeout {soft_timeout:?}; subprocess killed, \
-                     exit_code={exit_code_label})\n   Command: {command_line}\n   Pid: \
+                     termination={termination_label})\n   Command: {command_line}\n   Pid: \
                      {child_id}\n   Stdout bytes: {stdout_len}, stderr bytes: {stderr_len}\n   \
                      Stdout tail: {stdout_tail}\n   Stderr:\n{stderr_summary}\n",
                 );
@@ -411,16 +412,16 @@ fn external_kill_status_result(pid: u32, status: ExitStatus) -> anyhow::Result<(
         return Ok(());
     }
 
-    let code = crate::media_conversion_gate::process_exit_code_for_context(
-        status.code(),
+    let termination = crate::media_conversion_gate::process_termination_label_for_context(
+        &status,
         "process_runner_kill",
         format!("pid={pid}"),
     );
     crate::media_conversion_gate::delivery_runtime_batch_audit(
         "process_kill_status",
-        format!("external kill command for pid {pid} failed with exit code {code}"),
+        format!("external kill command for pid {pid} failed with {termination}"),
     );
-    anyhow::bail!("Failed to kill process {pid}: kill command exited with code {code}");
+    anyhow::bail!("Failed to kill process {pid}: kill command ended with {termination}");
 }
 
 fn should_stream_verbose_stderr_line(command_line: &str, line: &str) -> bool {
@@ -446,10 +447,10 @@ impl ProcessOutput {
             Ok(self)
         } else {
             let err_msg = format!(
-                "{} failed (exit code: {})\n   Command: {}\n   Error: {}",
+                "{} failed ({})\n   Command: {}\n   Error: {}",
                 context,
-                crate::media_conversion_gate::process_exit_code_for_context(
-                    self.status.code(),
+                crate::media_conversion_gate::process_termination_label_for_context(
+                    &self.status,
                     "process_runner",
                     &self.command_line,
                 ),
@@ -569,21 +570,24 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn liveness_timeout_kills_process_at_hard_deadline() {
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg("sleep 2")
-            .spawn()
-            .unwrap_or_else(|e| panic!("spawn sleep fixture: {e:?}"));
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 2");
+        let result = ManagedProcess::spawn_captured(&mut command).and_then(|process| {
+            process.wait_liveness_timeout(
+                Duration::from_millis(10),
+                Duration::from_millis(40),
+                "unit hard deadline fixture",
+            )
+        });
+        let err = match result {
+            Ok(_) => panic!("managed process must fail at the hard deadline"),
+            Err(err) => err,
+        };
 
-        let err = wait_child_with_liveness_timeout(
-            &mut child,
-            Duration::from_millis(10),
-            Duration::from_millis(40),
-            "unit hard deadline fixture",
-        )
-        .unwrap_err();
-
-        assert!(err.to_string().contains("hard timeout"));
+        let message = err.to_string();
+        assert!(message.contains("hard timeout"), "{message}");
+        assert!(message.contains("termination=signal("), "{message}");
+        assert!(!message.contains("exit_code=-1"), "{message}");
     }
 
     #[cfg(unix)]

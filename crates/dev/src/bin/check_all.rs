@@ -1711,25 +1711,16 @@ mod tests {
     }
 
     #[test]
-    fn ci_cargo_check_does_not_reference_non_workspace_tauri_launcher() {
+    fn ci_cargo_check_targets_the_root_workspace() {
         let args = cargo_check_args(true);
         let rendered = args.join(" ");
         assert!(rendered.contains("--workspace"));
-        assert!(
-            !rendered.contains("mfb_launcher"),
-            "mfb_launcher is not a root workspace member, so CI cargo check must not reference \
-             it: {rendered}"
-        );
     }
 
     #[test]
     fn root_workspace_members_do_not_include_macos_only_crates() {
         let root_manifest = include_str!("../../../../Cargo.toml");
         let members = workspace_members_block(root_manifest).expect("workspace members block");
-        assert!(
-            !members.contains("crates/gui/src-tauri"),
-            "macOS-only Tauri launcher must not be audited by the root workspace"
-        );
         assert!(
             !members.contains("crates/dev/dispatch2"),
             "macOS-only dispatch2 must stay in its dedicated workflow, not the root workspace"

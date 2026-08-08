@@ -164,14 +164,6 @@ where
             event.record(&mut visitor);
         }
 
-        // 3. Milestone Stats: Only append to WARN and ERROR for context (skip info for
-        //    clean output)
-        if level <= tracing::Level::WARN {
-            let stats = crate::progress_mode::get_current_stats_string();
-            // Align stats for tracing logs
-            write!(writer, "  {stats}")?;
-        }
-
         writeln!(writer)?;
 
         if let Some(progress_line) = progress_line {
@@ -1465,11 +1457,36 @@ pub fn log_operation_end(operation: &str, duration: std::time::Duration, success
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     /// Env vars are process-global; serialize tests that mutate them.
     static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Clone, Default)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CaptureWriter {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
 
     fn saved_env_var(key: &str) -> Option<String> {
         match std::env::var(key) {
@@ -1531,6 +1548,34 @@ mod tests {
         assert_eq!(config.max_file_size, 50 * 1024 * 1024);
         assert_eq!(config.max_files, 3);
         assert_eq!(config.level, Level::DEBUG);
+    }
+
+    #[test]
+    fn generic_warning_and_error_lines_do_not_append_progress_stats() {
+        crate::progress_mode::reset_session_stats();
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .event_format(ModernFormatter)
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!("ordinary warning");
+            tracing::error!("ordinary error");
+        });
+
+        let output = String::from_utf8(
+            writer
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )
+        .expect("formatter output must be UTF-8");
+        assert!(
+            !output.contains("📊") && !output.contains("X:0"),
+            "generic tracing lines must not carry progress statistics: {output:?}"
+        );
     }
 
     #[test]

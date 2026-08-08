@@ -43,7 +43,8 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
 const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
 const GUI_SOURCE_EXTENSIONS: &[&str] = &[
-    "css", "html", "ico", "js", "json", "lock", "png", "svg", "toml", "ts", "tsx", "vue",
+    "css", "html", "icns", "ico", "js", "json", "lock", "plist", "png", "sh", "svg", "swift",
+    "toml", "ts", "tsx", "vue",
 ];
 const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
     ".git",
@@ -101,12 +102,12 @@ impl Style {
 }
 
 /// Smart Build — builds img / vid plus the packaged terminal launcher and
-/// verification tool, and optionally the Tauri GUI.
+/// verification tool, and optionally the native macOS GUI.
 ///
 /// Default (no flags): build img + vid + verify + drag_and_drop_processor if
 /// sources are newer than binaries.
 #[derive(Parser, Debug)]
-#[command(about = "Smart Build System — incremental Rust + Tauri builder")]
+#[command(about = "Smart Build System — incremental Rust + native macOS builder")]
 struct Args {
     /// Force rebuild even when binaries are up-to-date
     #[arg(long, short = 'f')]
@@ -120,7 +121,7 @@ struct Args {
     #[arg(long, short = 'v')]
     verbose: bool,
 
-    /// Build every Rust binary packaged inside the app, then refresh the Tauri GUI only when its inputs changed
+    /// Build every Rust binary packaged inside the app, then refresh the native GUI only when its inputs changed
     #[arg(long, short = 'a')]
     all: bool,
 
@@ -140,11 +141,11 @@ struct Args {
     #[arg(long, short = 'u')]
     update: bool,
 
-    /// Build the Tauri Vue GUI and sync the .app bundle
+    /// Build the native Vue GUI and sync the .app bundle
     #[arg(long)]
     gui: bool,
 
-    /// Build Rust binaries only — skip Tauri/Vue GUI step
+    /// Build Rust binaries only — skip the native Vue GUI step
     #[arg(long, short = 'r')]
     rust_only: bool,
 
@@ -184,13 +185,11 @@ fn vue_dir(project_root: &Path) -> PathBuf {
     project_root.join("crates").join("gui")
 }
 
-fn tauri_dir(project_root: &Path) -> PathBuf {
-    project_root.join("crates").join("gui").join("src-tauri")
+fn native_gui_dir(project_root: &Path) -> PathBuf {
+    project_root.join("crates").join("gui").join("src-macos")
 }
 
-fn tauri_app_bundle_path(project_root: &Path) -> PathBuf {
-    // Tauri build output is redirected to the workspace root target via
-    // tauri/.cargo/config.toml (target-dir = "../../../target").
+fn native_app_bundle_path(project_root: &Path) -> PathBuf {
     project_root
         .join("target")
         .join("release")
@@ -555,14 +554,8 @@ fn get_newest_binary_source_mtime(
 
 fn gui_needs_rebuild(project_root: &Path) -> bool {
     let vue_root = vue_dir(project_root);
-    let mut newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
-    // Tauri's Rust entry points belong to the GUI bundle, but ordinary dev-bin
-    // changes are copied into an existing app bundle after their own incremental build.
-    newest_input = newest_input.max(newest_source_mtime_in_dir(
-        &tauri_dir(project_root),
-        RUST_SOURCE_EXTENSIONS,
-    ));
-    let bundle_binary = tauri_app_bundle_path(project_root)
+    let newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
+    let bundle_binary = native_app_bundle_path(project_root)
         .join("Contents")
         .join("MacOS")
         .join("Modern Format Boost");
@@ -1372,7 +1365,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
         anyhow::bail!("codesign not found; cannot seal Modern Format Boost.app");
     }
 
-    let entitlements = tauri_dir(project_root).join("entitlements.plist");
+    let entitlements = native_gui_dir(project_root).join("entitlements.plist");
     let app_resources = app_bundle.join("Contents").join("Resources");
     for bin in changed_bins {
         let bundled = app_resources.join(bin);
@@ -1421,27 +1414,23 @@ fn app_bundle_codesign_identity() -> &'static str {
 
 fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     println!(
-        "\n{}{} Building Tauri GUI...{}",
+        "\n{}{} Building native macOS GUI...{}",
         style.bold, style.cyan, style.reset
     );
     let vue_dir = vue_dir(project_root);
 
     let status = Command::new("npm")
         .arg("run")
-        .arg("tauri")
-        .arg("build")
-        .arg("--")
-        .arg("--bundles")
-        .arg("app")
+        .arg("native:build")
         .current_dir(&vue_dir)
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("Tauri build failed");
+        anyhow::bail!("Native macOS GUI build failed");
     }
 
     println!("{}Syncing App bundle...{}", style.dim, style.reset);
-    let src_bundle = tauri_app_bundle_path(project_root);
+    let src_bundle = native_app_bundle_path(project_root);
     let dest_bundle = project_root.join("Modern Format Boost.app");
 
     if src_bundle.exists() {
@@ -1544,8 +1533,7 @@ fn process_name_matches_project_tool(name: &str, cmd_joined: &str) -> bool {
         "drag_and_drop_processor",
     ];
     let name_lower = name.to_lowercase();
-    let is_project_vite_node =
-        name == "node" && (cmd_joined.contains("vite") || cmd_joined.contains("tauri"));
+    let is_project_vite_node = name == "node" && cmd_joined.contains("vite");
     target_names.contains(&name) || name_lower.contains("vite") || is_project_vite_node
 }
 
@@ -1554,10 +1542,7 @@ fn should_terminate_process_identity(
     cmd_joined: &str,
     belongs_to_project: bool,
 ) -> bool {
-    if name == "Modern Format Boost"
-        || name.contains("Modern Format Boost")
-        || name == "mfb_launcher"
-    {
+    if name == "Modern Format Boost" || name.contains("Modern Format Boost") {
         return true;
     }
     belongs_to_project && process_name_matches_project_tool(name, cmd_joined)
@@ -1843,7 +1828,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Build the GUI only when its own Vue/Tauri inputs changed. Running it after
+    // Build the GUI only when its own Vue/native-host inputs changed. Running it after
     // native compilation ensures the generated app receives the current bundled
     // binaries during the following sync step.
     if (args.gui || args.all) && !args.rust_only {
@@ -2050,10 +2035,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tauri_app_bundle_path_matches_workspace_root_target() {
+    fn test_native_app_bundle_path_matches_workspace_root_target() {
         let project_root = Path::new("/tmp/mfb");
         assert_eq!(
-            tauri_app_bundle_path(project_root),
+            native_app_bundle_path(project_root),
             Path::new("/tmp/mfb")
                 .join("target")
                 .join("release")
@@ -2077,7 +2062,7 @@ mod tests {
         fs::write(&vue_source, "<template><main /></template>")?;
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let bundle_binary = tauri_app_bundle_path(root)
+        let bundle_binary = native_app_bundle_path(root)
             .join("Contents")
             .join("MacOS")
             .join("Modern Format Boost");

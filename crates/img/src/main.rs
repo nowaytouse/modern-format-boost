@@ -14,8 +14,9 @@ use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::{
     IntegrityResult, PhotosImportCandidate, apply_library_assets_to_marker,
-    build_fast_img_output_import_candidates, import_media_outputs_with_library_verifier,
-    is_true_jpeg, library_handle_from_marker_import_proof, safe_delete_jpeg_source,
+    build_fast_img_output_import_candidates,
+    import_media_outputs_with_checkpointed_library_verifier, is_true_jpeg,
+    reverify_media_outputs_with_library_verifier, safe_delete_jpeg_source,
     safe_delete_matching_xmp_sidecar, verify_final_avif_delivery_integrity,
     verify_final_jxl_delivery_integrity,
 };
@@ -227,6 +228,10 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         retry: bool,
 
+        /// Start in a new adjacent output directory without consuming prior state.
+        #[arg(long, default_value_t = false, conflicts_with = "retry")]
+        no_resume: bool,
+
         /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
@@ -427,7 +432,12 @@ fn main_inner() -> anyhow::Result<()> {
         } => {
             use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 
-            let resume = resume_flag && !no_resume;
+            let resume = foundation::checkpoint::resolve_resume_choice(
+                &input,
+                output.as_deref(),
+                resume_flag,
+                no_resume,
+            )?;
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let should_delete = delete_original || in_place;
@@ -871,6 +881,7 @@ fn main_inner() -> anyhow::Result<()> {
             shortest_path,
             archive,
             retry,
+            no_resume,
             allow_expert_options,
             strategy,
             extreme_precision,
@@ -884,6 +895,7 @@ fn main_inner() -> anyhow::Result<()> {
                 auto_import: AutoImportFlag(auto_import),
                 shortest_path: ShortestPathFlag(shortest_path),
                 retry: RetryFlag(retry),
+                fresh: no_resume,
                 archive,
                 allow_expert_options,
                 strategy: &strategy,
@@ -1077,6 +1089,25 @@ impl AutoConvertConfig {
     }
 }
 
+fn fast_static_modern_compression(
+    input: &Path,
+    detected_format: &foundation::image_detection::DetectedFormat,
+) -> anyhow::Result<foundation::image_detection::CompressionType> {
+    foundation::image_detection::detect_compression(detected_format, input).map_err(|err| {
+        foundation::media_conversion_gate::probe_image_format_audit(
+            "fast_static_skip_compression_detect_failed",
+            input,
+            format!(
+                "fast static preflight refused re-encode after compression detection error: {err}"
+            ),
+        );
+        anyhow::anyhow!(
+            "Failed to determine modern input compression for {}: {err}",
+            input.display()
+        )
+    })
+}
+
 fn fast_static_skip_or_ignore(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1147,10 +1178,7 @@ fn fast_static_skip_or_ignore(
         }));
     }
 
-    let Ok(compression) = foundation::image_detection::detect_compression(&detected_format, input)
-    else {
-        return Ok(None);
-    };
+    let compression = fast_static_modern_compression(input, &detected_format)?;
 
     let skip = foundation::should_skip_image_format(
         detected_format.as_str(),
@@ -2237,6 +2265,7 @@ struct FastImgRunOptions<'a> {
     auto_import: AutoImportFlag,
     shortest_path: ShortestPathFlag,
     retry: RetryFlag,
+    fresh: bool,
     archive: bool,
     allow_expert_options: bool,
     strategy: &'a str,
@@ -2294,6 +2323,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         auto_import,
         shortest_path,
         retry,
+        fresh,
         archive,
         allow_expert_options,
         strategy,
@@ -2342,7 +2372,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         )
     })?;
-    let working_copy = fast_img_resolve_working_copy_for_run(&src_dir, dry_run)?;
+    let working_copy = if fresh {
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src_dir)
+    } else {
+        fast_img_resolve_working_copy_for_run(&src_dir, dry_run)?
+    };
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
     if strategy == "avif" {
@@ -2357,6 +2391,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         );
     }
     let mut source_jpegs = Vec::new();
+    let mut scan_failures = BTreeMap::new();
     for path in input_plan.candidates {
         if strategy == "avif" {
             let format = foundation::image::format_detect::detect_true_format(&path)?;
@@ -2381,8 +2416,20 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                             e
                         );
                         // Keep unreadable supported media in the source accounting.
-                        // The encode preflight fails closed and records its explicit
-                        // retained-source disposition instead of silently losing it.
+                        // Record the scan failure before encode so this source is
+                        // retained explicitly without reaching a decoder fallback.
+                        let rel_key = path
+                            .strip_prefix(&src_dir)
+                            .with_context(|| {
+                                format!(
+                                    "fast-img scan failure path escaped source root: source={} root={}",
+                                    path.display(),
+                                    src_dir.display()
+                                )
+                            })?
+                            .to_string_lossy()
+                            .to_string();
+                        scan_failures.insert(rel_key, e.to_string());
                         source_jpegs.push(path);
                     }
                 }
@@ -2392,10 +2439,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         }
     }
     let current_source_hashes = fast_img_source_hash_set(&src_dir, &source_jpegs)?;
+    let planned_encode_count = source_jpegs.len().saturating_sub(scan_failures.len());
     if strategy == "avif" {
         println!(
             "[FASTIMG ] selected {} static images in {}",
-            source_jpegs.len(),
+            planned_encode_count,
             src_dir.display()
         );
         println!(
@@ -2519,6 +2567,16 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         }
     }
 
+    if let Some(marker) = &existing_marker
+        && !retry.0
+        && fast_img_requires_resume_decision(marker, shortest_path)
+    {
+        anyhow::bail!(
+            "MFB_RESUME_DECISION_REQUIRED: fast-img stopped at {}; rerun with --retry to continue or --no-resume to start in a new output directory",
+            marker.stage.as_str()
+        );
+    }
+
     let retry_failed_sources_from_cleanup = if let Some(marker) = existing_marker.as_mut()
         && marker.stage == FastImgStageName::CleanupComplete
         && !marker.failed_sources.is_empty()
@@ -2594,7 +2652,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     if let Some(marker) = &existing_marker
         && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
         && !retry.0
-        && !fast_img_auto_retry_failed_marker(marker)
     {
         anyhow::bail!(
             "fast-img previous run stopped at {}; inspect {} or rerun with --retry",
@@ -2602,27 +2659,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             working_copy.display()
         );
     }
-    if let Some(marker) = &existing_marker
-        && fast_img_auto_retry_failed_marker(marker)
-        && !retry.0
-    {
-        tracing::info!(
-            target: "fast_img",
-            stage = %marker.stage.as_str(),
-            working_copy = %working_copy.display(),
-            "fast-img auto-retrying failed marker after source-state validation"
-        );
-        println!(
-            "[RESUME  ] previous {} marker will be retried after source-state validation",
-            marker.stage.as_str()
-        );
-    }
-
     if dry_run.0 {
         if strategy == "avif" {
             println!(
                 "[DRY-RUN ] would encode {} static images from {} into AVIF-only output {}",
-                source_jpegs.len(),
+                planned_encode_count,
                 src_dir.display(),
                 working_copy.display()
             );
@@ -2672,10 +2713,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let mut resume_stage = if resume_local_delivery_for_shortest_path {
         FastImgStageName::Gate1Passed
     } else {
-        retry_resume_stage(
-            &marker.stage,
-            retry.0 || fast_img_auto_retry_failed_marker(&marker),
-        )
+        retry_resume_stage(&marker.stage, retry.0)
     };
     let refresh_jxl_metadata =
         encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
@@ -2705,7 +2743,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     write_marker_atomic(&marker)?;
 
     if marker.stage == FastImgStageName::ScanComplete {
-        let msg = fast_img_delete_notice_message(source_jpegs.len(), &src_dir, strategy);
+        let msg = fast_img_delete_notice_message(planned_encode_count, &src_dir, strategy);
         println!("{msg}");
         tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
     }
@@ -2737,6 +2775,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             &mut marker,
             &source_jpegs,
             &current_source_hashes,
+            &scan_failures,
             &src_dir,
             &working_copy,
             RetryFlag(retry_failed_sources_from_cleanup),
@@ -2781,28 +2820,41 @@ const fn fast_img_post_gate1_policy(shortest_path: ShortestPathFlag) -> FastImgP
     }
 }
 
-const fn fast_img_auto_retry_failed_stage(stage: &FastImgStageName) -> bool {
-    matches!(stage, FastImgStageName::Gate1Failed)
-}
-
-fn fast_img_auto_retry_failed_marker(marker: &WorkingCopyMarker) -> bool {
-    fast_img_auto_retry_failed_stage(&marker.stage)
-        || (marker.stage == FastImgStageName::Gate3Failed
-            && fast_img_marker_has_complete_import_proof(marker))
-}
-
 fn fast_img_reuses_marker_import_proof_on_resume(marker: &WorkingCopyMarker) -> bool {
-    marker.stage == FastImgStageName::Gate3Failed
-        && fast_img_marker_has_complete_import_proof(marker)
+    matches!(
+        marker.stage,
+        FastImgStageName::Gate2Failed | FastImgStageName::Gate3Failed
+    ) && fast_img_marker_has_complete_import_proof(marker)
+}
+
+fn fast_img_requires_resume_decision(
+    marker: &WorkingCopyMarker,
+    shortest_path: ShortestPathFlag,
+) -> bool {
+    marker.stage != FastImgStageName::CleanupComplete
+        || !marker.failed_sources.is_empty()
+        || fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path)
 }
 
 fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool {
     marker.blake3_log.len() == marker.expected_output_count()
-        && marker.blake3_log.values().all(|entry| {
+        && marker.photos_imported_assets.len() == marker.expected_output_count()
+        && marker.blake3_log.iter().all(|(_source_rel, entry)| {
+            let Some(out_rel) = entry.out_rel.as_deref() else {
+                return false;
+            };
             entry
                 .library_asset
                 .as_ref()
                 .is_some_and(|hash| *hash == entry.out)
+                && marker.photos_imported_assets.iter().any(|asset| {
+                    asset.rel_path == out_rel
+                        && asset.blake3 == entry.out
+                        && asset
+                            .photos_uuid
+                            .as_deref()
+                            .is_some_and(|uuid| !uuid.is_empty())
+                })
         })
 }
 
@@ -3100,8 +3152,7 @@ fn fast_img_effective_encode_parallelism(
 
 /// Quality exploration result for AVIF Meme Mode.
 enum AvifQualityExploreResult {
-    /// Highest-quality candidate within the source's pure-media budget, or the
-    /// smallest verified pure-media fallback when none fit.
+    /// Highest-quality candidate within the source's pure-media budget.
     Found {
         quality: u8,
         temp_path: PathBuf,
@@ -3128,6 +3179,13 @@ enum AvifInputDecoder {
     ImageMagick,
 }
 
+fn avif_decoder_allows_imagemagick_fallback(
+    decoder: AvifInputDecoder,
+    allow_expert_options: bool,
+) -> bool {
+    decoder != AvifInputDecoder::ImageMagick && allow_expert_options
+}
+
 const fn avif_input_decoder(format: FormatKind) -> Option<AvifInputDecoder> {
     match format {
         FormatKind::WebP => Some(AvifInputDecoder::WebP),
@@ -3135,9 +3193,8 @@ const fn avif_input_decoder(format: FormatKind) -> Option<AvifInputDecoder> {
         FormatKind::Heic | FormatKind::Heif => Some(AvifInputDecoder::Heif),
         FormatKind::Jxl => Some(AvifInputDecoder::Jxl),
         FormatKind::Jp2 => Some(AvifInputDecoder::Jp2),
-        FormatKind::Jpeg
-        | FormatKind::Png
-        | FormatKind::Gif
+        FormatKind::Jpeg | FormatKind::Png => None,
+        FormatKind::Gif
         | FormatKind::Bmp
         | FormatKind::Tiff
         | FormatKind::Qoi
@@ -3303,17 +3360,27 @@ fn run_avif_input_decoder(
     Ok(tool_name)
 }
 
-/// Normalize every supported static source to a single decoded PNG before
-/// encoding. This prevents source Exif/XMP/ICC and auxiliary gain-map items from
-/// bypassing Meme Mode's clean-output policy; the original remains the delivery
-/// and verification identity.
+/// Use avifenc-supported JPEG/PNG inputs directly. Other static formats use an
+/// authoritative decoder; ImageMagick adapters/fallbacks require explicit expert mode.
 fn prepare_fast_img_avif_encoder_input(
     source: &Path,
     format: FormatKind,
+    allow_expert_options: bool,
 ) -> anyhow::Result<FastImgAvifEncoderInput> {
+    if matches!(format, FormatKind::Jpeg | FormatKind::Png) {
+        return Ok(FastImgAvifEncoderInput {
+            path: source.to_path_buf(),
+            _temp: None,
+        });
+    }
     let Some(decoder) = avif_input_decoder(format) else {
         anyhow::bail!("FastImg has no static decoder from {format:?} to an avifenc input");
     };
+    if decoder == AvifInputDecoder::ImageMagick && !allow_expert_options {
+        anyhow::bail!(
+            "FastImg {format:?} to AVIF requires an ImageMagick adapter; pass --allow-expert-options to enable this explicit fallback"
+        );
+    }
 
     let temp = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "fast_img_official_avif_input",
@@ -3324,7 +3391,9 @@ fn prepare_fast_img_avif_encoder_input(
     let temp_path = temp.path().to_path_buf();
     let tool_name = match run_avif_input_decoder(decoder, source, &temp_path) {
         Ok(tool_name) => tool_name,
-        Err(primary_error) if decoder != AvifInputDecoder::ImageMagick => {
+        Err(primary_error)
+            if avif_decoder_allows_imagemagick_fallback(decoder, allow_expert_options) =>
+        {
             std::fs::write(&temp_path, []).with_context(|| {
                 format!(
                     "FastImg could not reset temporary decoder output {}",
@@ -3341,6 +3410,11 @@ fn prepare_fast_img_avif_encoder_input(
                     )
                 },
             )?
+        }
+        Err(error) if decoder != AvifInputDecoder::ImageMagick => {
+            return Err(error).context(
+                "authoritative decoder failed; ImageMagick fallback is disabled unless --allow-expert-options is set",
+            );
         }
         Err(error) => return Err(error),
     };
@@ -3378,6 +3452,7 @@ fn finish_avif_meme_after_terminal_probe_error(
     reason: &str,
     fitting_candidate: &mut Option<AvifMemeCandidate>,
     fallback_candidate: &mut Option<AvifMemeCandidate>,
+    source_pure_media_size: u64,
 ) -> Option<AvifQualityExploreResult> {
     if !avif_quality_probe_error_is_source_invariant(reason) {
         return None;
@@ -3394,7 +3469,17 @@ fn finish_avif_meme_after_terminal_probe_error(
         }
         (candidate, "terminal_probe_fitting_fallback")
     } else if let Some(candidate) = fallback_candidate.take() {
-        (candidate, "terminal_probe_fallback")
+        if avif_meme_candidate_fits_source(&candidate, source_pure_media_size) {
+            (candidate, "terminal_probe_fallback")
+        } else {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "fast_img_probe_cleanup",
+                &candidate.temp_path,
+            );
+            return Some(AvifQualityExploreResult::SourceUnavailable {
+                reason: format!("{reason}; no AVIF candidate fit the source pure-media budget"),
+            });
+        }
     } else {
         return Some(AvifQualityExploreResult::SourceUnavailable {
             reason: reason.to_string(),
@@ -3587,6 +3672,7 @@ fn explore_avif_meme_quality(
                     &reason,
                     &mut current_passed_candidate,
                     &mut best_fallback,
+                    source_pure_media_size,
                 ) {
                     return result;
                 }
@@ -3605,7 +3691,10 @@ fn explore_avif_meme_quality(
         let mut low = low_pass;
         let mut high = high_fail;
 
-        while high.saturating_sub(low) > 1 {
+        for _ in 0..img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET {
+            if high.saturating_sub(low) <= 1 {
+                break;
+            }
             let mid = low + (high - low) / 2;
             match probe_single_avif_quality(
                 source,
@@ -3639,6 +3728,7 @@ fn explore_avif_meme_quality(
                         &reason,
                         &mut current_passed_candidate,
                         &mut best_fallback,
+                        source_pure_media_size,
                     ) {
                         return result;
                     }
@@ -3666,7 +3756,10 @@ fn explore_avif_meme_quality(
     }
 
     match best_fallback {
-        Some(candidate) if candidate.quality == AVIF_MEME_MIN_QUALITY => {
+        Some(candidate)
+            if candidate.quality == AVIF_MEME_MIN_QUALITY
+                && avif_meme_candidate_fits_source(&candidate, source_pure_media_size) =>
+        {
             AvifQualityExploreResult::Found {
                 quality: candidate.quality,
                 temp_path: candidate.temp_path,
@@ -3707,7 +3800,7 @@ fn explore_avif_meme_quality(
 fn fast_img_adopt_static_avif(
     source: &Path,
     output: &Path,
-) -> anyhow::Result<foundation::TaskResult> {
+) -> anyhow::Result<Option<foundation::TaskResult>> {
     foundation::ensure_parent_dir_exists(output)?;
     let temp_output = foundation::conversion::temp_path_for_output(output);
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
@@ -3725,6 +3818,19 @@ fn fast_img_adopt_static_avif(
         copied == input_size,
         "Meme Mode source AVIF copy length mismatch: expected={input_size} copied={copied}"
     );
+    if let Err(err) = foundation::metadata::verify_output_embedded_metadata(
+        source,
+        &temp_output,
+        foundation::metadata::MetadataOutputPolicy::Clear,
+    ) {
+        tracing::info!(
+            target: "fast_img",
+            source = %source.display(),
+            error = %err,
+            "Existing AVIF is not eligible for byte-exact adoption; re-encoding with clear metadata policy"
+        );
+        return Ok(None);
+    }
     foundation::io_utils::robust_move(&temp_output, output).with_context(|| {
         format!(
             "commit adopted Meme Mode AVIF {} -> {}",
@@ -3732,13 +3838,13 @@ fn fast_img_adopt_static_avif(
             output.display()
         )
     })?;
-    Ok(foundation::TaskResult::converted_with_message(
+    Ok(Some(foundation::TaskResult::converted_with_message(
         source,
         output,
         input_size,
         copied,
-        "Meme Mode adopted an existing static AVIF without re-encoding",
-    ))
+        "Meme Mode adopted a metadata-clean static AVIF without re-encoding",
+    )))
 }
 
 fn fast_img_run_encode_job_inner(
@@ -3752,8 +3858,13 @@ fn fast_img_run_encode_job_inner(
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
-        if format == FormatKind::Avif {
+        let adopted = if format == FormatKind::Avif {
             fast_img_adopt_static_avif(&job.source, &working_copy.join(&job.out_rel_key))?
+        } else {
+            None
+        };
+        if let Some(result) = adopted {
+            result
         } else {
             let convert_options = foundation::ConvertOptions {
                 output_dir: Some(working_copy.to_path_buf()),
@@ -3762,13 +3873,14 @@ fn fast_img_run_encode_job_inner(
                 ..Default::default()
             };
 
-            let encoder_input = prepare_fast_img_avif_encoder_input(&job.source, format)
-                .with_context(|| {
-                    format!(
-                        "AVIF target encoding unavailable after official decode for {}",
-                        job.source.display()
-                    )
-                })?;
+            let encoder_input =
+                prepare_fast_img_avif_encoder_input(&job.source, format, allow_expert_options)
+                    .with_context(|| {
+                        format!(
+                            "AVIF target encoding unavailable after official decode for {}",
+                            job.source.display()
+                        )
+                    })?;
             let mut metadata_retry =
                 img::lossless_converter::AvifencMetadataRetryState::strip_all();
             match explore_avif_meme_quality(
@@ -3845,10 +3957,7 @@ fn fast_img_run_encode_job_inner(
         )
     })?;
 
-    let is_avif_output = strategy == "avif"
-        || out_path
-            .extension()
-            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"));
+    let is_avif_output = strategy == "avif";
     let orientation_tolerance = if is_avif_output {
         orientation_diff_tolerance_for_format(FormatKind::Avif).ok_or_else(|| {
             anyhow::anyhow!("missing shared orientation tolerance for AVIF output")
@@ -3943,10 +4052,18 @@ fn fast_img_remove_failed_encode_output(
 ) -> anyhow::Result<()> {
     let out_rel = fast_img_checked_rel_path(&err.out_rel_key)?;
     let primary_output = working_copy.join(&out_rel);
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "fast_img remove failed encode output",
-        &primary_output,
-    );
+    match std::fs::remove_file(&primary_output) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "remove failed fast-img output before Gate 1: {}",
+                    primary_output.display()
+                )
+            });
+        }
+    }
 
     tracing::warn!(
         target: "fast_img",
@@ -3991,7 +4108,7 @@ fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow:
     );
     Ok(refreshed_hash)
 }
-pub const FAST_IMG_AVIF_CLEAN_POLICY_VERSION: u32 = 2;
+pub const FAST_IMG_AVIF_CLEAN_POLICY_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReuseDecision {
@@ -4012,6 +4129,7 @@ fn fast_img_reset_delivery_gate_proofs(marker: &mut WorkingCopyMarker, stage: Fa
     marker.gate2_checks = Gate2Checks::default();
     marker.gate3_checks = Gate3Checks::default();
     marker.tier2_imported_assets.clear();
+    marker.photos_imported_assets.clear();
     for entry in marker.blake3_log.values_mut() {
         entry.library_asset = None;
     }
@@ -4428,6 +4546,19 @@ fn fast_img_marker_outputs_current(marker: &WorkingCopyMarker) -> anyhow::Result
     Ok(true)
 }
 
+fn fast_img_verified_output_format(output: &Path, strategy: &str) -> anyhow::Result<FormatKind> {
+    let expected = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy)
+        .ok_or_else(|| anyhow::anyhow!("unsupported fast-img strategy {strategy:?}"))?;
+    let actual = foundation::image::format_detect::detect_true_format(output)
+        .with_context(|| format!("detect fast-img output format {}", output.display()))?;
+    anyhow::ensure!(
+        actual == expected,
+        "fast-img output content format mismatch for {}: expected {expected:?}, detected {actual:?}",
+        output.display()
+    );
+    Ok(actual)
+}
+
 fn fast_img_delete_verified_source_jpegs(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
@@ -4453,27 +4584,13 @@ fn fast_img_delete_verified_source_jpegs(
         );
         let parallelism =
             fast_img_effective_verify_parallelism(existing.len(), thread_config.parallel_tasks);
-        let has_avif = existing.iter().any(|candidate| {
-            candidate
-                .output
-                .extension()
-                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"))
-        });
-        let has_jxl = existing.iter().any(|candidate| {
-            candidate
-                .output
-                .extension()
-                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("jxl"))
-        });
-        let format_label = match (has_jxl, has_avif) {
-            (true, true) => "JXL/AVIF",
-            (false, true) => "AVIF",
-            _ => "JXL",
-        };
-        let tool_label = match (has_jxl, has_avif) {
-            (true, true) => "djxl/avifdec",
-            (false, true) => "avifdec",
-            _ => "djxl",
+        let expected_format =
+            foundation::delivery_codec_strategy::strategy_to_format_kind(strategy)
+                .ok_or_else(|| anyhow::anyhow!("unsupported fast-img strategy {strategy:?}"))?;
+        let (format_label, tool_label) = match expected_format {
+            FormatKind::Avif => ("AVIF", "avifdec"),
+            FormatKind::Jxl => ("JXL", "djxl"),
+            _ => anyhow::bail!("unsupported fast-img output format {expected_format:?}"),
         };
         println!(
             "[VERIFY  ] final {} delete proofs pending {} · parallel {} {} checks",
@@ -4497,28 +4614,32 @@ fn fast_img_delete_verified_source_jpegs(
             existing
                 .par_iter()
                 .map(|candidate| {
-                    let is_avif = strategy == "avif"
-                        || candidate.output
-                            .extension()
-                            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("avif"));
-                    let integrity = if is_avif {
-                        verify_final_avif_delivery_integrity(&candidate.source, &candidate.output)
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "fast-img source delete gate final AVIF proof failed for {} -> {}: {err}",
-                                    candidate.source.display(),
-                                    candidate.output.display()
-                                )
-                            })?
-                    } else {
-                        verify_final_jxl_delivery_integrity(&candidate.source, &candidate.output)
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "fast-img source delete gate final JXL proof failed for {} -> {}: {err}",
-                                    candidate.source.display(),
-                                    candidate.output.display()
-                                )
-                            })?
+                    let integrity = match fast_img_verified_output_format(&candidate.output, strategy)? {
+                        FormatKind::Avif => verify_final_avif_delivery_integrity(
+                            &candidate.source,
+                            &candidate.output,
+                        )
+                        .map_err(|err| {
+                            anyhow::anyhow!(
+                                "fast-img source delete gate final AVIF proof failed for {} -> {}: {err}",
+                                candidate.source.display(),
+                                candidate.output.display()
+                            )
+                        })?,
+                        FormatKind::Jxl => verify_final_jxl_delivery_integrity(
+                            &candidate.source,
+                            &candidate.output,
+                        )
+                        .map_err(|err| {
+                            anyhow::anyhow!(
+                                "fast-img source delete gate final JXL proof failed for {} -> {}: {err}",
+                                candidate.source.display(),
+                                candidate.output.display()
+                            )
+                        })?,
+                        format => anyhow::bail!(
+                            "unsupported fast-img verified output format {format:?}"
+                        ),
                     };
                     Ok(FastImgVerifiedSourceDelete {
                         source: candidate.source.clone(),
@@ -4923,7 +5044,11 @@ fn fast_img_resolve_working_copy_for_run(
 fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyhow::Result<()> {
     let mut pending_dirs = vec![working_copy.to_path_buf()];
     let mut files_to_delete = Vec::new();
-    let target_ext = if strategy == "avif" { "avif" } else { "jxl" };
+    let target_format = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy)
+        .ok_or_else(|| anyhow::anyhow!("unsupported fast-img strategy {strategy:?}"))?;
+    let target_ext = target_format
+        .canonical_extension()
+        .ok_or_else(|| anyhow::anyhow!("fast-img target format has no canonical extension"))?;
     while let Some(dir) = pending_dirs.pop() {
         for entry in std::fs::read_dir(&dir)
             .with_context(|| format!("read fast-img working-copy dir {}", dir.display()))?
@@ -4946,10 +5071,13 @@ fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyho
             if is_marker {
                 continue;
             }
-            let is_target = path
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| extension.eq_ignore_ascii_case(target_ext));
+            let is_target =
+                foundation::image::format_detect::detect_true_format(&path).with_context(|| {
+                    format!(
+                        "detect true format before fast-img working-copy cleanup {}",
+                        path.display()
+                    )
+                })? == target_format;
             if is_target {
                 continue;
             }
@@ -6590,12 +6718,12 @@ fn fast_img_record_controllable_media_import_failures(
             SkippedSourceEntry {
                 src: entry.src,
                 reason: format!(
-                    "Photos rejected this media item during normal-mode isolated import: {output_rel}"
+                    "Photos returned no verified result for this media item during normal-mode batch import: {output_rel}"
                 ),
             },
         );
         println!(
-            "[FAIL    ] {source_rel}: Photos rejected isolated import; source retained and remaining media continue"
+            "[FAIL    ] {source_rel}: Photos batch import returned no proof; source retained and remaining media continue"
         );
     }
 
@@ -6619,6 +6747,7 @@ fn fast_img_run_encode_phase(
     marker: &mut WorkingCopyMarker,
     source_jpegs: &[std::path::PathBuf],
     current_source_hashes: &std::collections::BTreeMap<String, String>,
+    scan_failures: &std::collections::BTreeMap<String, String>,
     src_dir: &std::path::Path,
     working_copy: &std::path::Path,
     retry_failed_sources_from_cleanup: RetryFlag,
@@ -6649,6 +6778,30 @@ fn fast_img_run_encode_phase(
             )
         })?;
         let rel_key = rel.to_string_lossy().to_string();
+
+        if let Some(reason) = scan_failures.get(&rel_key) {
+            let src_hash = current_source_hashes
+                .get(&rel_key)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing scanned source hash for {rel_key}"))?;
+            marker.blake3_log.remove(&rel_key);
+            marker.skipped_sources.remove(&rel_key);
+            marker.failed_sources.insert(
+                rel_key.clone(),
+                SkippedSourceEntry {
+                    src: src_hash,
+                    reason: reason.clone(),
+                },
+            );
+            println!("[FAIL    ] {rel_key} {reason}");
+            tracing::error!(
+                target: "fast_img_failures",
+                file = %rel_key,
+                reason = %reason,
+                "fast-img scan failure retained before encode"
+            );
+            continue;
+        }
 
         if let Some(entry) = marker.skipped_sources.get(&rel_key) {
             fast_img_emit_explicit_skip(&rel_key, &entry.reason);
@@ -7109,31 +7262,45 @@ fn fast_img_run_verification_and_delivery_pipeline(
 
     let import_candidates = build_fast_img_output_import_candidates(marker);
     let mut library_handle = if import_complete_or_later(&marker.stage) {
-        let library_handle = if reuse_marker_import_proof
-            && let Some(library_handle) = library_handle_from_marker_import_proof(marker)
-                .map_err(|err| anyhow::anyhow!("fast-img marker import proof invalid: {err}"))?
-        {
+        let library_handle = if fast_img_marker_has_complete_import_proof(marker) {
+            let library_handle = reverify_media_outputs_with_library_verifier(
+                &import_candidates,
+                &marker.photos_imported_assets,
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "fast-img resume Photos UUID re-verification failed; source files retained: {err}"
+                )
+            })?;
             tracing::info!(
                 target: "fast_img",
                 imported = library_handle.imported_assets.len(),
-                "fast-img reusing marker Photos import proof for retry/resume"
+                gate3_retry = reuse_marker_import_proof,
+                "fast-img refreshed persisted Photos UUID proof for retry/resume"
             );
             library_handle
         } else {
-            import_media_outputs_with_library_verifier(&import_candidates).map_err(|err| {
-                anyhow::anyhow!(
-                    "fast-img shortest-path AVIF resume requires fresh Photos/iCloud verification: {err}"
-                )
-            })?
+            anyhow::bail!(
+                "fast-img resume marker has no complete Photos UUID proof; refusing automatic re-import or source deletion"
+            )
         };
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
         library_handle
     } else {
-        let library_handle = import_media_outputs_with_library_verifier(&import_candidates)
-            .map_err(|err| {
-                anyhow::anyhow!("fast-img shortest-path AVIF import verifier failed: {err}")
-            })?;
+        let reconcile_interrupted_import = marker.stage == FastImgStageName::Importing;
+        if !reconcile_interrupted_import {
+            marker.stage = FastImgStageName::Importing;
+            marker.error = None;
+            write_marker_atomic(marker)?;
+        }
+        let library_handle = import_media_outputs_with_checkpointed_library_verifier(
+            marker,
+            reconcile_interrupted_import,
+        )
+        .map_err(|err| {
+            anyhow::anyhow!("fast-img shortest-path AVIF import verifier failed: {err}")
+        })?;
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
         marker.stage = FastImgStageName::ImportComplete;
@@ -7232,7 +7399,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     write_marker_atomic(marker)?;
     println!(
         "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
-        ctx.expected_count,
+        expected_count,
         source_deleted,
         source_dirs_pruned,
         working_copy.display()
@@ -7585,7 +7752,6 @@ mod fast_img_hardening_tests {
         ExpertOptionsFlag, FastImgCleanupCompleteSourceState, FastImgInputPlan,
         FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, RecursiveFlag, RetryFlag,
         ShortestPathFlag, command_requires_database, fast_img_archive_stale_working_copy,
-        fast_img_auto_retry_failed_marker, fast_img_auto_retry_failed_stage,
         fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_container_is_static,
@@ -7596,10 +7762,12 @@ mod fast_img_hardening_tests {
         fast_img_pipeline_ctx, fast_img_planned_output_rel, fast_img_post_gate1_policy,
         fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
         fast_img_recover_non_directory_working_copy, fast_img_refresh_reused_jxl_delivery,
-        fast_img_remove_failed_encode_output, fast_img_resolve_working_copy_for_run,
+        fast_img_remove_failed_encode_output, fast_img_requires_resume_decision,
+        fast_img_resolve_working_copy_for_run, fast_img_reuses_marker_import_proof_on_resume,
         fast_img_run_encode_phase, fast_img_skip_hashes_match, fast_img_source_hash_set,
         fast_img_strip_non_target_files, fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
-        fast_img_validate_jxl_only_delivery_exit, restore_jpeg_build_current_proof_with_decoder,
+        fast_img_validate_jxl_only_delivery_exit, fast_img_verified_output_format,
+        fast_static_modern_compression, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
         restore_jpeg_jxlinfo_has_jpeg_reconstruction, restore_jpeg_output_path_for,
         restore_jpeg_prune_empty_source_dirs, restore_jpeg_validate_disjoint_roots, run_fast_img,
@@ -7608,6 +7776,7 @@ mod fast_img_hardening_tests {
     use anyhow::Context;
     use clap::Parser;
     use clap::error::ErrorKind;
+    use foundation::ToolBuilder;
     use foundation::fast_img::{
         FastImgLibraryAssetProbe, IntegrityResult, apply_library_assets_to_marker, is_true_jpeg,
         library_handle_from_probes,
@@ -7615,7 +7784,8 @@ mod fast_img_hardening_tests {
     use foundation::image::format_detect::FormatKind;
     use foundation::pipeline::verification::{
         Blake3Entry, FastImgStageName, Gate1Checks, Gate2Checks, Gate2Import, Gate3Checks,
-        Gate3Deep, PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
+        Gate3Deep, LibraryAssetRecord, PipelineCtx, SkippedSourceEntry, VerificationGate,
+        WorkingCopyMarker,
     };
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -7623,6 +7793,7 @@ mod fast_img_hardening_tests {
     use tempfile::TempDir;
 
     static FAST_IMG_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+    const MINIMAL_JXL_BYTES: &[u8] = &[0xFF, 0x0A, 0x00];
 
     struct TestEnvGuard {
         key: &'static str,
@@ -7710,6 +7881,20 @@ mod fast_img_hardening_tests {
         bytes.extend_from_slice(payload);
         std::fs::write(path, bytes)?;
         Ok(())
+    }
+
+    #[test]
+    fn fast_static_preflight_fails_closed_when_modern_compression_is_unknown() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("truncated.jpg");
+        std::fs::write(&path, b"\x00\x00\x00\x0cftypavif").unwrap();
+        let detected = foundation::image_detection::detect_format_from_bytes(&path).unwrap();
+        let err = fast_static_modern_compression(&path, &detected)
+            .expect_err("unknown modern compression must not fall through to re-encoding");
+        assert!(
+            err.to_string().contains("compression"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -8172,6 +8357,7 @@ mod fast_img_hardening_tests {
             auto_import: AutoImportFlag(false),
             shortest_path: ShortestPathFlag(false),
             retry: RetryFlag(false),
+            fresh: false,
             archive: false,
             allow_expert_options: false,
             strategy: "jxl",
@@ -8232,6 +8418,27 @@ mod fast_img_hardening_tests {
         fast_img_remove_failed_encode_output(&wc, &err)?;
 
         assert!(!out.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_fast_img_job_propagates_output_cleanup_failure() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let wc = root.path().join("Photos_optimized");
+        let out = wc.join("bad.JXL");
+        std::fs::create_dir_all(&out)?;
+        let err = FastImgTranscodeError {
+            rel_key: "bad.jpg".to_string(),
+            out_rel_key: "bad.JXL".to_string(),
+            src_hash: "source-hash".to_string(),
+            reason: "pixel-diff: djxl exited non-zero decoding bad.JXL".to_string(),
+        };
+
+        let cleanup_error = fast_img_remove_failed_encode_output(&wc, &err)
+            .expect_err("an undeletable failed output must stop before Gate 1");
+
+        assert!(cleanup_error.to_string().contains("bad.JXL"));
+        assert!(out.is_dir(), "failed cleanup target must remain observable");
         Ok(())
     }
 
@@ -8315,6 +8522,7 @@ mod fast_img_hardening_tests {
             auto_import: AutoImportFlag(false),
             shortest_path: ShortestPathFlag(false),
             retry: RetryFlag(false),
+            fresh: false,
             archive: false,
             allow_expert_options: false,
             strategy: "jxl",
@@ -8561,6 +8769,7 @@ mod fast_img_hardening_tests {
             &mut marker,
             std::slice::from_ref(&src),
             &current_source_hashes,
+            &BTreeMap::new(),
             &src_root,
             &wc,
             RetryFlag(false),
@@ -8646,6 +8855,7 @@ mod fast_img_hardening_tests {
             &mut marker,
             std::slice::from_ref(&src),
             &current_source_hashes,
+            &BTreeMap::new(),
             &src_root,
             &wc,
             RetryFlag(false),
@@ -9371,50 +9581,44 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn only_gate1_failed_is_auto_retried_without_explicit_retry() {
+    fn unfinished_fast_img_marker_requires_explicit_resume_decision() {
         let mut marker = WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("wc"), 1);
-        marker.stage = FastImgStageName::Gate1Failed;
-        assert!(fast_img_auto_retry_failed_stage(
-            &FastImgStageName::Gate1Failed
+        assert!(fast_img_requires_resume_decision(
+            &marker,
+            ShortestPathFlag(false)
         ));
-        assert!(fast_img_auto_retry_failed_marker(&marker));
-        assert!(!fast_img_auto_retry_failed_stage(
-            &FastImgStageName::Gate2Failed
-        ));
-        assert!(!fast_img_auto_retry_failed_stage(
-            &FastImgStageName::Gate3Failed
+        marker.stage = FastImgStageName::CleanupComplete;
+        assert!(!fast_img_requires_resume_decision(
+            &marker,
+            ShortestPathFlag(false)
         ));
     }
 
     #[test]
-    fn gate3_failed_auto_retry_requires_complete_import_proof() -> anyhow::Result<()> {
+    fn gate2_or_gate3_retry_reuses_complete_photos_uuid_proof() {
         let mut marker = WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("wc"), 1);
-        marker.stage = FastImgStageName::Gate3Failed;
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
-                out_rel: Some("a.JXL".to_string()),
+                out_rel: Some("a.AVIF".to_string()),
                 src: "src".to_string(),
                 out: "out".to_string(),
-                library_asset: None,
+                library_asset: Some("out".to_string()),
             },
         );
-        assert!(!fast_img_auto_retry_failed_marker(&marker));
+        marker.photos_imported_assets.push(LibraryAssetRecord {
+            rel_path: "a.AVIF".to_string(),
+            blake3: "out".to_string(),
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: Some("UUID-A/L0/001".to_string()),
+            library_blake3: None,
+        });
 
-        marker
-            .blake3_log
-            .get_mut("a.jpg")
-            .ok_or_else(|| anyhow::anyhow!("missing test marker entry"))?
-            .library_asset = Some("out".to_string());
-        assert!(fast_img_auto_retry_failed_marker(&marker));
-
-        marker
-            .blake3_log
-            .get_mut("a.jpg")
-            .ok_or_else(|| anyhow::anyhow!("missing test marker entry"))?
-            .library_asset = Some("drift".to_string());
-        assert!(!fast_img_auto_retry_failed_marker(&marker));
-        Ok(())
+        marker.stage = FastImgStageName::Gate2Failed;
+        assert!(fast_img_reuses_marker_import_proof_on_resume(&marker));
+        marker.stage = FastImgStageName::Gate3Failed;
+        assert!(fast_img_reuses_marker_import_proof_on_resume(&marker));
     }
 
     #[test]
@@ -9429,6 +9633,7 @@ mod fast_img_hardening_tests {
             shortest_path: false,
             archive: false,
             retry: false,
+            no_resume: false,
             allow_expert_options: false,
             strategy: "jxl".to_string(),
             extreme_precision: false,
@@ -10095,10 +10300,10 @@ mod fast_img_hardening_tests {
         let root = TempDir::new()?;
         let wc = root.path().join("Photos_");
         std::fs::create_dir_all(&wc)?;
-        let jpeg = wc.join("a.jpg");
-        let jxl = wc.join("a.JXL");
+        let jpeg = wc.join("spoof.JXL");
+        let jxl = wc.join("actual.bin");
         write_jpeg(&jpeg, b"source")?;
-        std::fs::write(&jxl, b"jxl")?;
+        std::fs::write(&jxl, b"\xff\x0a")?;
 
         fast_img_strip_non_target_files(&wc, "jxl")?;
 
@@ -10107,7 +10312,7 @@ mod fast_img_hardening_tests {
         let remaining = std::fs::read_dir(&wc)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(remaining, vec![std::ffi::OsString::from("a.JXL")]);
+        assert_eq!(remaining, vec![std::ffi::OsString::from("actual.bin")]);
         Ok(())
     }
 
@@ -10116,10 +10321,10 @@ mod fast_img_hardening_tests {
         let root = TempDir::new()?;
         let wc = root.path().join("Photos_");
         std::fs::create_dir_all(&wc)?;
-        let jpeg = wc.join("a.jpg");
-        let avif = wc.join("a.AVIF");
+        let jpeg = wc.join("spoof.AVIF");
+        let avif = wc.join("actual.bin");
         write_jpeg(&jpeg, b"source")?;
-        std::fs::write(&avif, b"avif")?;
+        std::fs::write(&avif, b"\x00\x00\x00\x0cftypavif")?;
 
         fast_img_strip_non_target_files(&wc, "avif")?;
 
@@ -10128,7 +10333,25 @@ mod fast_img_hardening_tests {
         let remaining = std::fs::read_dir(&wc)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(remaining, vec![std::ffi::OsString::from("a.AVIF")]);
+        assert_eq!(remaining, vec![std::ffi::OsString::from("actual.bin")]);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_delete_verifier_uses_content_format_not_extension() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let avif = root.path().join("actual.jxl");
+        let spoof = root.path().join("spoof.avif");
+        std::fs::write(&avif, b"\x00\x00\x00\x0cftypavif")?;
+        write_jpeg(&spoof, b"not avif")?;
+
+        assert_eq!(
+            fast_img_verified_output_format(&avif, "avif")?,
+            FormatKind::Avif
+        );
+        let err = fast_img_verified_output_format(&spoof, "avif")
+            .expect_err("extension-spoofed AVIF must fail before source deletion");
+        assert!(err.to_string().contains("content format mismatch"));
         Ok(())
     }
 
@@ -10251,8 +10474,8 @@ mod fast_img_hardening_tests {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("test library asset path has no parent"))?;
         std::fs::create_dir_all(library_asset_parent)?;
-        std::fs::write(&out, b"jxl-bytes")?;
-        std::fs::write(&library_asset, b"jxl-bytes")?;
+        std::fs::write(&out, MINIMAL_JXL_BYTES)?;
+        std::fs::write(&library_asset, MINIMAL_JXL_BYTES)?;
 
         let src_hash = foundation::common_utils::calculate_blake3_hash(&src)?;
         let out_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
@@ -10311,8 +10534,8 @@ mod fast_img_hardening_tests {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("test library asset path has no parent"))?;
         std::fs::create_dir_all(library_asset_parent)?;
-        std::fs::write(wc.join("a.JXL"), b"jxl-bytes")?;
-        std::fs::write(&library_asset, b"jxl-bytes")?;
+        std::fs::write(wc.join("a.JXL"), MINIMAL_JXL_BYTES)?;
+        std::fs::write(&library_asset, MINIMAL_JXL_BYTES)?;
         let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
@@ -10357,8 +10580,8 @@ mod fast_img_hardening_tests {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("test library asset path has no parent"))?;
         std::fs::create_dir_all(library_asset_parent)?;
-        std::fs::write(wc.join("a.JXL"), b"jxl-bytes")?;
-        std::fs::write(&library_asset, b"jxl-bytes")?;
+        std::fs::write(wc.join("a.JXL"), MINIMAL_JXL_BYTES)?;
+        std::fs::write(&library_asset, MINIMAL_JXL_BYTES)?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), wc.clone(), 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
@@ -10418,8 +10641,8 @@ mod fast_img_hardening_tests {
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("test library asset path has no parent"))?,
         )?;
-        std::fs::write(&out, b"jxl-bytes")?;
-        std::fs::write(&library_asset, b"jxl-bytes")?;
+        std::fs::write(&out, MINIMAL_JXL_BYTES)?;
+        std::fs::write(&library_asset, MINIMAL_JXL_BYTES)?;
         let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
@@ -10465,8 +10688,8 @@ mod fast_img_hardening_tests {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("test library asset path has no parent"))?;
         std::fs::create_dir_all(library_asset_parent)?;
-        std::fs::write(wc.join("a.JXL"), b"jxl-bytes")?;
-        std::fs::write(&library_asset, b"jxl-bytes")?;
+        std::fs::write(wc.join("a.JXL"), MINIMAL_JXL_BYTES)?;
+        std::fs::write(&library_asset, MINIMAL_JXL_BYTES)?;
         let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
@@ -10503,6 +10726,7 @@ mod fast_img_hardening_tests {
     fn fast_img_avif_meme_quality_uses_normal_precision_and_speed_zero() {
         assert_eq!(super::AVIF_MEME_SPEED, 0);
         assert_eq!(super::AVIF_MEME_MIN_QUALITY, 0);
+        assert!(img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7);
     }
 
     #[test]
@@ -10533,7 +10757,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn fast_img_avif_normalizes_supported_inputs_before_clean_encode() -> anyhow::Result<()> {
+    fn fast_img_avif_uses_direct_inputs_before_explicit_magick_adapters() -> anyhow::Result<()> {
         use super::AvifInputDecoder;
 
         for (format, decoder) in [
@@ -10544,12 +10768,38 @@ mod fast_img_hardening_tests {
             (FormatKind::Jxl, AvifInputDecoder::Jxl),
             (FormatKind::Jp2, AvifInputDecoder::Jp2),
             (FormatKind::Gif, AvifInputDecoder::ImageMagick),
-            (FormatKind::Jpeg, AvifInputDecoder::ImageMagick),
-            (FormatKind::Png, AvifInputDecoder::ImageMagick),
         ] {
             assert_eq!(super::avif_input_decoder(format), Some(decoder));
         }
+        assert_eq!(super::avif_input_decoder(FormatKind::Jpeg), None);
+        assert_eq!(super::avif_input_decoder(FormatKind::Png), None);
         assert_eq!(super::avif_input_decoder(FormatKind::Mp4), None);
+        assert!(!super::avif_decoder_allows_imagemagick_fallback(
+            AvifInputDecoder::WebP,
+            false,
+        ));
+        assert!(super::avif_decoder_allows_imagemagick_fallback(
+            AvifInputDecoder::WebP,
+            true,
+        ));
+
+        let direct = super::prepare_fast_img_avif_encoder_input(
+            Path::new("direct.jpg"),
+            FormatKind::Jpeg,
+            false,
+        )?;
+        assert_eq!(direct.path, Path::new("direct.jpg"));
+        assert!(direct._temp.is_none());
+
+        let adapter_error = match super::prepare_fast_img_avif_encoder_input(
+            Path::new("static.bmp"),
+            FormatKind::Bmp,
+            false,
+        ) {
+            Ok(_) => anyhow::bail!("ImageMagick adapter must require explicit expert mode"),
+            Err(err) => err,
+        };
+        assert!(adapter_error.to_string().contains("--allow-expert-options"));
 
         let (command, tool) = super::avif_input_decoder_command(
             AvifInputDecoder::ImageMagick,
@@ -10732,6 +10982,57 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn malformed_gif_is_recorded_failed_before_fast_img_encode() -> anyhow::Result<()> {
+        foundation::tools::require(&["avifenc", "avifdec"]).map_err(anyhow::Error::msg)?;
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let src_root = root.path().join("input");
+        std::fs::create_dir_all(&src_root)?;
+        let corrupt_gif = src_root.join("corrupt.gif");
+        std::fs::write(&corrupt_gif, b"GIF89a")?;
+
+        let run_error = run_fast_img(FastImgRunOptions {
+            input: &src_root,
+            output_dir: None,
+            delete_source: DeleteSourceFlag(false),
+            dry_run: DryRunFlag(false),
+            recursive: RecursiveFlag(true),
+            auto_import: AutoImportFlag(false),
+            shortest_path: ShortestPathFlag(false),
+            retry: RetryFlag(false),
+            fresh: false,
+            archive: false,
+            allow_expert_options: false,
+            strategy: "avif",
+            extreme_precision: false,
+        })
+        .expect_err("malformed GIF must remain an explicit failed source");
+
+        assert!(
+            run_error
+                .to_string()
+                .contains("All 1 static image(s) failed")
+        );
+        let working_copy = foundation::pipeline::verification::working_copy_dir(&src_root);
+        let marker_dir = root.path().join("fast_img/markers");
+        let marker_files = std::fs::read_dir(&marker_dir)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(marker_files.len(), 1, "failed scan must leave one marker");
+        let marker_json = std::fs::read_to_string(&marker_files[0])?;
+        assert!(
+            marker_json.contains("static-container metadata"),
+            "scan failure must be recorded before any encoder fallback: {marker_json}"
+        );
+        assert!(corrupt_gif.is_file(), "malformed source must be retained");
+        assert!(
+            !working_copy.join("corrupt.AVIF").exists(),
+            "malformed GIF must not produce an AVIF candidate"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mislabeled_png_completes_local_avif_encode_and_pixel_verification() -> anyhow::Result<()> {
         if foundation::tools::require(&["avifenc", "avifdec"]).is_err() {
             return Ok(());
@@ -10806,6 +11107,7 @@ mod fast_img_hardening_tests {
             "official avifenc encode timed out after 120s",
             &mut fitting,
             &mut oversized,
+            8,
         )
         .expect("timeout is terminal");
         let super::AvifQualityExploreResult::Found {
@@ -10829,19 +11131,82 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn fast_img_avif_terminal_fallback_rejects_q0_over_pure_media_budget() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let q0_path = root.path().join("q0.AVIF");
+        std::fs::write(&q0_path, b"oversized-q0")?;
+        let mut fitting = None;
+        let mut fallback = Some(super::AvifMemeCandidate {
+            quality: super::AVIF_MEME_MIN_QUALITY,
+            temp_path: q0_path.clone(),
+            output_size: 11,
+            pure_media_size: 11,
+        });
+
+        let result = super::finish_avif_meme_after_terminal_probe_error(
+            "official avifenc encode timed out after 120s",
+            &mut fitting,
+            &mut fallback,
+            10,
+        )
+        .expect("timeout is terminal");
+        let super::AvifQualityExploreResult::SourceUnavailable { reason } = result else {
+            anyhow::bail!("oversized q0 fallback must not be accepted");
+        };
+
+        assert!(reason.contains("no AVIF candidate fit the source pure-media budget"));
+        assert!(
+            !q0_path.exists(),
+            "oversized q0 fallback must be cleaned up"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn fast_img_avif_source_is_adopted_byte_exactly() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let source = root.path().join("source.AVIF");
         let output = root.path().join("working/nested/source.AVIF");
-        let bytes = b"byte-exact static AVIF fixture";
-        std::fs::write(&source, bytes)?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&fixture, &source)?;
+        let bytes = std::fs::read(&source)?;
 
-        let result = super::fast_img_adopt_static_avif(&source, &output)?;
+        let result = super::fast_img_adopt_static_avif(&source, &output)?
+            .expect("metadata-clean AVIF should be adopted");
 
         assert!(result.success);
         let output_display = output.display().to_string();
         assert_eq!(result.output_path.as_deref(), Some(output_display.as_str()));
         assert_eq!(std::fs::read(&output)?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_avif_source_with_metadata_is_reencoded_instead_of_adopted() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("source.AVIF");
+        let output = root.path().join("working/source.AVIF");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&fixture, &source)?;
+        let metadata = foundation::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Description=private source metadata")
+            .arg(foundation::path_safety::exiftool_path_arg(&source).as_ref())
+            .build()
+            .output()?;
+        anyhow::ensure!(
+            metadata.status.success(),
+            "failed to write AVIF test metadata"
+        );
+
+        let result = super::fast_img_adopt_static_avif(&source, &output)?;
+
+        assert!(result.is_none(), "metadata-bearing AVIF must be re-encoded");
+        assert!(
+            !output.exists(),
+            "noncompliant AVIF must not be committed unchanged"
+        );
         Ok(())
     }
 

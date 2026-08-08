@@ -43,7 +43,7 @@ use crate::{HostnameBuilder, ToolBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
@@ -602,6 +602,25 @@ impl Manager {
         Self::new_with_context_inner(target_dir, output_root, true)
     }
 
+    /// Return the number of still-valid saved entries without consuming or
+    /// deleting the checkpoint.
+    pub fn saved_entry_count(target_dir: &Path, output_root: Option<&Path>) -> io::Result<usize> {
+        let canonical_target = Self::normalize_path_to_buf(target_dir);
+        let checkpoint_key = Self::hash_path(&canonical_target);
+        let header = CheckpointHeader::new(&canonical_target, output_root)?;
+        let loaded = Self::load_progress(&checkpoint_key)?;
+        let (valid, _, _) = Self::validate_loaded_state(&loaded, &header, output_root);
+        Ok(valid.len())
+    }
+
+    /// Explicitly discard the saved checkpoint for a user-requested fresh run.
+    pub fn discard_saved_progress(target_dir: &Path) -> io::Result<()> {
+        let canonical_target = Self::normalize_path_to_buf(target_dir);
+        Self::discard_progress_for_fresh_run(&Self::hash_path(&canonical_target))?;
+        crate::conversion::clear_processed_list();
+        Ok(())
+    }
+
     /// # Errors
     ///
     /// Returns an error if the progress directory cannot be created or if
@@ -679,16 +698,15 @@ impl Manager {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     format!(
-                        "Resume disabled by default; discarded {rows} saved checkpoint row(s) for \
-                         fresh media conversion run."
+                        "Fresh run explicitly selected; discarded {rows} saved checkpoint row(s)."
                     ),
                 );
             }
             Ok(_) => {}
             Err(err) => {
                 let message = format!(
-                    "Resume disabled by default, but failed to discard checkpoint blob for key \
-                     {checkpoint_key}: {err}"
+                    "Fresh run was explicitly selected, but failed to discard checkpoint blob for \
+                     key {checkpoint_key}: {err}"
                 );
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
@@ -1290,6 +1308,65 @@ impl Manager {
     }
 }
 
+/// Resolve a resume decision before any media work begins.
+///
+/// Explicit flags win. With saved state and no flags, terminal users are
+/// prompted; GUI/non-interactive callers receive a stable error marker and
+/// must resubmit with `--resume` or `--no-resume`.
+pub fn resolve_resume_choice(
+    target_dir: &Path,
+    output_root: Option<&Path>,
+    resume: bool,
+    no_resume: bool,
+) -> io::Result<bool> {
+    if resume && no_resume {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--resume and --no-resume cannot be used together",
+        ));
+    }
+    if resume {
+        return Ok(true);
+    }
+    if no_resume {
+        Manager::discard_saved_progress(target_dir)?;
+        return Ok(false);
+    }
+
+    let saved = Manager::saved_entry_count(target_dir, output_root)?;
+    if saved == 0 {
+        return Ok(false);
+    }
+    if !io::stdin().is_terminal() {
+        return Err(io::Error::other(format!(
+            "MFB_RESUME_DECISION_REQUIRED: detected {saved} valid saved checkpoint entries; rerun with --resume to continue or --no-resume to restart"
+        )));
+    }
+
+    loop {
+        print!(
+            "Detected {saved} completed item(s) from an unfinished task. Continue [r], restart [f], or cancel [c]? "
+        );
+        io::stdout().flush()?;
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        match choice.trim().to_ascii_lowercase().as_str() {
+            "r" | "resume" => return Ok(true),
+            "f" | "fresh" => {
+                Manager::discard_saved_progress(target_dir)?;
+                return Ok(false);
+            }
+            "c" | "cancel" | "" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "resume decision cancelled; saved checkpoint was preserved",
+                ));
+            }
+            _ => eprintln!("Choose r (resume), f (fresh), or c (cancel)."),
+        }
+    }
+}
+
 impl Drop for Manager {
     fn drop(&mut self) {
         if let Err(err) = self.release_lock() {
@@ -1562,6 +1639,33 @@ mod tests {
             assert!(checkpoint.is_completed(&target.join("file2.mp4")));
             assert!(!checkpoint.is_completed(&target.join("file3.mp4")));
         }
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn saved_progress_is_inspected_without_consuming_it() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
+        let target = temp.path();
+        let input = target.join("file1.mp4");
+        create_test_file(&input)?;
+        {
+            let checkpoint = Manager::new(target)?;
+            checkpoint.mark_completed(&input)?;
+        }
+
+        assert_eq!(Manager::saved_entry_count(target, None)?, 1);
+        assert_eq!(Manager::saved_entry_count(target, None)?, 1);
+        let decision_error = resolve_resume_choice(target, None, false, false)
+            .expect_err("non-interactive caller must choose explicitly");
+        assert!(
+            decision_error
+                .to_string()
+                .contains("MFB_RESUME_DECISION_REQUIRED")
+        );
+        assert_eq!(Manager::saved_entry_count(target, None)?, 1);
+        Manager::discard_saved_progress(target)?;
+        assert_eq!(Manager::saved_entry_count(target, None)?, 0);
         teardown_test_env(guard);
         Ok(())
     }

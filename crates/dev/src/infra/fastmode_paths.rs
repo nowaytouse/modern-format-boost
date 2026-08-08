@@ -66,6 +66,7 @@ pub fn build_fast_img_command(
     shortest_path: bool,
     archive: bool,
     retry: bool,
+    fresh: bool,
     strategy: Option<&str>,
     extreme_precision: bool,
 ) -> Vec<String> {
@@ -77,6 +78,8 @@ pub fn build_fast_img_command(
     ];
     if retry {
         command.push("--retry".to_string());
+    } else if fresh {
+        command.push("--no-resume".to_string());
     }
     if archive {
         command.push("--archive".to_string());
@@ -219,6 +222,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
             false,
         );
@@ -240,6 +244,7 @@ mod tests {
             Path::new("/Users/example/Pictures/Album"),
             false,
             true,
+            false,
             false,
             None,
             false,
@@ -263,6 +268,7 @@ mod tests {
             Path::new("/Users/example/Pictures/Album"),
             true,
             true,
+            false,
             false,
             None,
             false,
@@ -289,6 +295,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             None,
             false,
         );
@@ -296,10 +303,27 @@ mod tests {
     }
 
     #[test]
+    fn test_fastmode_fresh_flag_does_not_consume_resume_state() {
+        let command = build_fast_img_command(
+            Path::new("/opt/mfb/img"),
+            Path::new("/Users/example/Pictures/Album"),
+            false,
+            false,
+            false,
+            true,
+            None,
+            false,
+        );
+        assert!(command.contains(&"--no-resume".to_string()));
+        assert!(!command.contains(&"--retry".to_string()));
+    }
+
+    #[test]
     fn test_fastmode_extreme_precision_flag_is_passed() {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            false,
             false,
             false,
             false,

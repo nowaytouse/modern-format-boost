@@ -2176,9 +2176,8 @@ pub fn probe_bitstream_media_info_or_webp_canvas(
     if let Some(info) = media_info? {
         return Ok(Some(info));
     }
-    if path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("webp"))
+    if crate::image::format_detect::detect_true_format(path)?
+        == crate::image::format_detect::FormatKind::WebP
     {
         return Ok(
             crate::image_formats::webp::canvas_dimensions_from_path(path)?.map(
@@ -3411,12 +3410,16 @@ pub fn process_exit_code_label(code: Option<i32>, tool: &str, path: &Path) -> i3
 }
 
 /// Loud audit when an external tool process exits non-zero (process runner).
-pub fn delivery_tool_process_failed_audit(tool: &str, command_line: &str, code: Option<i32>) {
-    let code_label = process_exit_code_for_context(code, tool, command_line);
+pub fn delivery_tool_process_failed_audit(
+    tool: &str,
+    command_line: &str,
+    status: &std::process::ExitStatus,
+) {
+    let status_label = process_termination_label_for_context(status, tool, command_line);
     delivery_substrate_batch_audit(
         "tool_process_failed",
         crate::infra::static_logs::messages::MSG_PROCESS_FAIL
-            .replacen("{}", &code_label.to_string(), 1)
+            .replacen("{}", &status_label, 1)
             .replacen("{}", command_line, 1),
     );
 }
@@ -3924,7 +3927,34 @@ pub fn delivery_ffmpeg_io_audit(branch: &'static str, detail: impl AsRef<str>) {
     delivery_substrate_batch_audit(branch, detail);
 }
 
-/// Process exit code when no file path is available (command-line context).
+/// Process termination label when the complete exit status is available.
+#[must_use]
+pub fn process_termination_label_for_context(
+    status: &std::process::ExitStatus,
+    tool: &str,
+    context: impl AsRef<str>,
+) -> String {
+    if let Some(code) = status.code() {
+        return format!("exit_code({code})");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("signal({signal})");
+        }
+    }
+
+    let context = context.as_ref();
+    delivery_strict_batch_audit(
+        "process_termination_status",
+        format!("{tool} ({context}): termination status has no exit code or platform signal"),
+    );
+    "unknown".to_string()
+}
+
+/// Process exit code when only a numeric code is available (legacy callers).
 #[must_use]
 pub fn process_exit_code_for_context(
     code: Option<i32>,
@@ -3936,8 +3966,8 @@ pub fn process_exit_code_for_context(
         delivery_strict_batch_audit(
             "process_exit_code",
             format!(
-                "{tool} ({context}): exit code unavailable (subprocess reap/killing failure); \
-                 reporting -1"
+                "{tool} ({context}): numeric exit code unavailable; reporting explicit legacy \
+                 sentinel -1"
             ),
         );
         -1

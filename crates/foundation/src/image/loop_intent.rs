@@ -4417,16 +4417,21 @@ impl<'a> LoopAssessmentSession<'a> {
             }
             Verdict::Uncertain(reason) => {
                 self.set_resolution_path("tree_uncertain");
+                let knn_enabled = crate::algorithm_runtime::loop_intent_layer6_knn_enabled();
                 ui_stderr::line(
                     "🔭",
                     symbols::plain::TREE_UNCERTAIN,
                     format!(
-                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — falling back \
-                         to Layer 6 KNN..."
+                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — {}",
+                        if knn_enabled {
+                            "falling back to explicitly enabled Layer 6 KNN..."
+                        } else {
+                            "using deterministic arbitration (Layer 6 KNN disabled)"
+                        }
                     ),
                 );
 
-                if !crate::algorithm_runtime::loop_intent_layer6_knn_enabled() {
+                if !knn_enabled {
                     self.tracking.knn_lookup_succeeded = Some(false);
                     self.tracking.hnsw_lookup_branch =
                         Some("layer6_knn_disabled_by_runtime_gate".to_string());
@@ -5723,12 +5728,8 @@ fn sampled_webp_compression_ratio_from_image(
 /// instead of `ffprobe`.
 #[must_use]
 pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase),
-        Some(ext) if ext == "gif"
-    )
+    crate::image::format_detect::detect_true_format(path)
+        .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Gif)
 }
 
 /// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
@@ -6136,6 +6137,18 @@ mod tests {
             filename_loop_intent_score: 0.5,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn gif_fast_path_uses_content_not_suffix() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let disguised_gif = temp.path().join("animation.mp4");
+        std::fs::write(&disguised_gif, b"GIF89a\x01\x00\x01\x00").expect("write GIF signature");
+        assert!(should_use_gif_fast_path(&disguised_gif));
+
+        let spoofed_gif = temp.path().join("still.gif");
+        std::fs::write(&spoofed_gif, b"\x89PNG\r\n\x1a\n").expect("write PNG signature");
+        assert!(!should_use_gif_fast_path(&spoofed_gif));
     }
 
     #[test]

@@ -1052,7 +1052,32 @@ pub mod gif {
     /// # Errors
     /// Returns an error if the animation detection fails due to invalid data.
     pub fn is_animated_from_bytes(data: &[u8]) -> crate::unified_error::Result<bool> {
-        Ok(count_frames_from_bytes(data)? > 1)
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::Indexed);
+        let mut decoder = options.read_info(data).map_err(|err| {
+            ImgQualityError::ResultAnomaly(format!("Failed to decode GIF animation stream: {err}"))
+        })?;
+
+        let has_first_frame = decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some();
+        if !has_first_frame {
+            return Ok(false);
+        }
+
+        Ok(decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some())
     }
 
     /// # Errors

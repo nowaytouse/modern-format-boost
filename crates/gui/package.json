@@ -1,5 +1,5 @@
 {
-  "name": "mfb_launcher",
+  "name": "modern-format-boost-gui",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build --config vite.config.ts",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "native:build": "npm run build && bash src-macos/build.sh",
     "lint:oxlint": "oxlint",
     "lint:eslint": "eslint --max-warnings 0 .",
     "lint:tsc": "vue-tsc --noEmit --strict",
@@ -18,15 +18,11 @@
     "deps:update": "npm update --package-lock-only"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-opener": "^2",
     "vue": "^3.5.38",
     "vue-i18n": "^11.4.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.7",
     "esbuild": "^0.28.1",
     "eslint": "^10.5.0",

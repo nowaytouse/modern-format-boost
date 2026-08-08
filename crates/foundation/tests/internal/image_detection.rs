@@ -334,6 +334,36 @@ fn apng_timing_stats_from_fctl_delays() {
 }
 
 #[test]
+fn gif_two_decoded_frames_remain_animation_evidence_after_later_corruption() {
+    let mut data = Vec::new();
+    {
+        let mut encoder =
+            ::gif::Encoder::new(&mut data, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+        for pixel in [0_u8, 1] {
+            let frame = ::gif::Frame {
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Owned(vec![pixel]),
+                ..Default::default()
+            };
+            encoder.write_frame(&frame).unwrap();
+        }
+    }
+    assert_eq!(data.pop(), Some(0x3B), "generated GIF must end in a trailer");
+    data.push(0x2C); // Start a third image descriptor, then truncate it.
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("two-frames-then-truncated.gif");
+    std::fs::write(&path, data).expect("write GIF fixture");
+
+    let (animated, frame_count, fps) = detect_animation(&path, &DetectedFormat::GIF)
+        .expect("two fully decoded frames already prove animation");
+    assert!(animated);
+    assert_eq!(frame_count, None, "corrupt tail prevents an exact frame count");
+    assert_eq!(fps, None, "corrupt tail prevents exact timing statistics");
+}
+
+#[test]
 fn detect_animation_png_apng_fps_from_fctl_delays_in_tempdir() {
     use std::io::Write;
 

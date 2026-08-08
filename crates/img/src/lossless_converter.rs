@@ -634,6 +634,15 @@ fn try_pipeline_recovery_fallbacks(
     original_result: std::result::Result<std::process::Output, JxlDirectEncodeError>,
 ) -> FallbackResult {
     use std::process::Stdio;
+    if !options.allow_expert_options() {
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "cjxl_external_recovery_disabled",
+            input,
+            "cjxl failed; ImageMagick/FFmpeg recovery requires --allow_expert_options",
+        );
+        return FallbackResult::Exhausted(original_result);
+    }
+
     // Check if this is a grayscale ICC profile mismatch error
     // If so, use ImageMagick fallback which has proper retry logic with -strip
     if foundation::jxl_utils::is_grayscale_icc_cjxl_error(stderr) {
@@ -643,13 +652,13 @@ fn try_pipeline_recovery_fallbacks(
             "grayscale ICC mismatch; using ImageMagick fallback",
         );
 
-        if try_imagemagick_fallback_with_effort(
+        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
             input,
             temp_output,
             actual_dist,
+            actual_eff,
             max_threads,
             options.apple_compat(),
-            actual_eff,
         )
         .is_ok()
         {
@@ -947,13 +956,13 @@ fn try_pipeline_recovery_fallbacks(
                         );
                         log_detail!(&line);
                         log_detail!(" SECONDARY FALLBACK: Trying ImageMagick pipeline...",);
-                        if try_imagemagick_fallback_with_effort(
+                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                             input,
                             temp_output,
                             actual_dist,
+                            actual_eff,
                             max_threads,
                             options.apple_compat(),
-                            actual_eff,
                         )
                         .is_ok()
                         {
@@ -974,13 +983,13 @@ fn try_pipeline_recovery_fallbacks(
                         log_detail!(
                             "Pipeline Recovery: FFmpeg fallback exhausted; engaging ImageMagick secondary pre-decode stage",
                         );
-                        if try_imagemagick_fallback_with_effort(
+                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                             input,
                             temp_output,
                             actual_dist,
+                            actual_eff,
                             max_threads,
                             options.apple_compat(),
-                            actual_eff,
                         )
                         .is_ok()
                         {
@@ -1004,13 +1013,13 @@ fn try_pipeline_recovery_fallbacks(
                     log_detail!(&line);
                 }
                 log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-                if try_imagemagick_fallback_with_effort(
+                if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                     input,
                     temp_output,
                     actual_dist,
+                    actual_eff,
                     max_threads,
                     options.apple_compat(),
-                    actual_eff,
                 )
                 .is_ok()
                 {
@@ -1035,13 +1044,13 @@ fn try_pipeline_recovery_fallbacks(
             log_detail!("  Recommended Action: Install via Homebrew: 'brew install ffmpeg'");
 
             log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-            if try_imagemagick_fallback_with_effort(
+            if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                 input,
                 temp_output,
                 actual_dist,
+                actual_eff,
                 max_threads,
                 options.apple_compat(),
-                actual_eff,
             )
             .is_ok()
             {
@@ -1085,13 +1094,7 @@ pub fn convert_to_jxl(
     let input_size = fs::metadata(input)?.len();
     let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
 
-    if !options.force()
-        && !is_genuine_png
-        && input
-            .extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("png"))
-        && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
-    {
+    if should_skip_small_png(options.force(), is_genuine_png, input_size) {
         if options.verbose() {
             log_skip!(
                 &foundation::media_conversion_gate::path_file_name_for_log(input),
@@ -1405,6 +1408,10 @@ pub fn convert_to_jxl(
             Err(ImgQualityError::ConversionError(e))
         }
     }
+}
+
+const fn should_skip_small_png(force: bool, is_genuine_png: bool, input_size: u64) -> bool {
+    !force && is_genuine_png && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
 }
 
 /// Returns `(temp_output_path, output_size_bytes)` on success.
@@ -2953,6 +2960,26 @@ impl AvifencMetadataRetryState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AvifencInputColorModel {
+    Grayscale,
+    Color,
+    Unknown,
+}
+
+fn detect_avif_input_color_model(input: &Path) -> AvifencInputColorModel {
+    let Ok(file) = std::fs::File::open(input) else {
+        return AvifencInputColorModel::Unknown;
+    };
+    match foundation::image_detection::parse_png_structure(file) {
+        Ok(info) if info.color_type == 0 || info.color_type == 4 => {
+            AvifencInputColorModel::Grayscale
+        }
+        Ok(_) => AvifencInputColorModel::Color,
+        Err(_) => AvifencInputColorModel::Unknown,
+    }
+}
+
 #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn build_avifenc_command(
     input: &Path,
@@ -2967,11 +2994,18 @@ fn build_avifenc_command(
         Some(configured_speed) => configured_speed,
         None => 0,
     };
-    builder
-        .speed(effective_speed)
-        .jobs("all")
-        .yuv("444")
-        .cicp("1/13/0");
+    builder.speed(effective_speed).jobs("all");
+    match detect_avif_input_color_model(input) {
+        AvifencInputColorModel::Grayscale => {
+            // For grayscale PNGs (color_type 0 or 4), let avifenc auto-select YUV400.
+            // libavif >= 1.3.0 prohibits YUV400 + Identity matrix (1/13/0) as non-conformant
+            // to AV1 spec, and forcing 444 + Identity on 1-channel grayscale PNG causes G-only
+            // decoding (R=0, B=0), producing a bright fluorescent-green artifact.
+        }
+        AvifencInputColorModel::Color | AvifencInputColorModel::Unknown => {
+            builder.yuv("444");
+        }
+    }
 
     if lossless {
         builder.lossless(true);
@@ -3598,7 +3632,7 @@ pub fn finalize_meme_avif_probe(
 
 const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
 const JXL_TO_AVIF_MIN_QUALITY: u8 = 0;
-const JXL_TO_AVIF_BINARY_PROBE_BUDGET: usize = 7;
+pub const AVIF_QUALITY_BINARY_PROBE_BUDGET: usize = 7;
 const JXL_AVIF_HANDOFF_QUALITY_FLOOR: u8 = 75;
 const JXL_AVIF_HANDOFF_EXHAUSTED_REASON: &str = "jxl_avif_handoff_exhausted";
 
@@ -3657,7 +3691,7 @@ where
 
     let mut low = best_quality + 1;
     let mut high = upper_failure.saturating_sub(1).min(100);
-    for _ in 0..JXL_TO_AVIF_BINARY_PROBE_BUDGET {
+    for _ in 0..AVIF_QUALITY_BINARY_PROBE_BUDGET {
         if low > high {
             break;
         }
@@ -3851,6 +3885,7 @@ fn try_jxl_pre_avif_fallback(
             effort,
             max_threads,
             options.apple_compat(),
+            options.allow_expert_options(),
             icc_path,
             color_info,
             "Pre-AVIF fallback probe",
@@ -4210,24 +4245,6 @@ const fn jxl_screening_effort(archive: bool, ultimate: bool, explore: bool) -> u
     foundation::jxl_effort_policy::screening_effort(ultimate, explore)
 }
 
-fn try_imagemagick_fallback_with_effort(
-    input: &Path,
-    output: &Path,
-    distance: f32,
-    max_threads: usize,
-    apple_compat: bool,
-    effort: u8,
-) -> std::result::Result<(), std::io::Error> {
-    foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-        input,
-        output,
-        distance,
-        effort,
-        max_threads,
-        apple_compat,
-    )
-}
-
 fn cjxl_std_failure_summary(stage: &str, output: &Output) -> String {
     let stderr_text = String::from_utf8_lossy(&output.stderr);
     let stderr_tail = stderr_text
@@ -4487,6 +4504,7 @@ fn encode_jxl_probe_to_output(
     effort: u8,
     max_threads: usize,
     apple_compat: bool,
+    allow_expert_options: bool,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
     stage_label: &str,
@@ -4524,13 +4542,13 @@ fn encode_jxl_probe_to_output(
             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
             effort
         ));
-        try_imagemagick_fallback_with_effort(
+        foundation::jxl_utils::try_imagemagick_fallback_with_effort(
             input,
             output,
             candidate_distance,
+            effort,
             max_threads,
             apple_compat,
-            effort,
         )
         .map_err(|e| e.to_string())?;
         verify_jxl_health(output).map_err(|err| {
@@ -4539,11 +4557,17 @@ fn encode_jxl_probe_to_output(
         foundation::image::static_payload::jxl(output).map_err(|error| error.to_string())
     };
 
-    run_jxl_exploration_probe_with(distance, &mut direct_encode, &mut fallback_encode)
+    run_jxl_exploration_probe_with(
+        distance,
+        allow_expert_options,
+        &mut direct_encode,
+        &mut fallback_encode,
+    )
 }
 
 fn run_jxl_exploration_probe_with<Direct, Fallback>(
     distance: f32,
+    allow_expert_options: bool,
     direct_encode: &mut Direct,
     fallback_encode: &mut Fallback,
 ) -> std::result::Result<u64, String>
@@ -4553,7 +4577,11 @@ where
 {
     match direct_encode(distance) {
 Ok(size) => Ok(size),
-Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
+        Err(direct_err) if !allow_expert_options => Err(format!(
+            "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled (requires --allow_expert_options)",
+            foundation::jxl_explorer::format_distance_for_log(distance)
+        )),
+        Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
 format!(
 "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}",
 foundation::jxl_explorer::format_distance_for_log(distance)
@@ -4645,6 +4673,7 @@ fn try_explore_ultimate_jxl_distance(
                 screening_effort,
                 max_threads,
                 options.apple_compat(),
+                options.allow_expert_options(),
                 icc_path,
                 color_info,
                 "Screening probe",
@@ -4702,6 +4731,7 @@ fn try_explore_ultimate_jxl_distance(
             final_effort,
             max_threads,
             options.apple_compat(),
+            options.allow_expert_options(),
             icc_path,
             color_info,
             "Finalist encode",
@@ -4837,6 +4867,7 @@ fn try_explore_ultimate_jxl_distance(
                 final_effort,
                 max_threads,
                 options.apple_compat(),
+                options.allow_expert_options(),
                 icc_path,
                 color_info,
                 "Continued exploration",
@@ -5649,6 +5680,14 @@ mod tests {
     }
 
     #[test]
+    fn small_png_skip_uses_detected_content_not_suffix() {
+        let small = crate::constants::SMALL_PNG_THRESHOLD_BYTES - 1;
+        assert!(should_skip_small_png(false, true, small));
+        assert!(!should_skip_small_png(false, false, small));
+        assert!(!should_skip_small_png(true, true, small));
+    }
+
+    #[test]
     fn malformed_xmp_retry_keeps_avifenc_at_speed_zero() {
         assert!(avifenc_rejects_malformed_xmp(
             b"XMP extraction failed: invalid multiple standard XMP segments"
@@ -5734,8 +5773,8 @@ mod tests {
                 args.windows(2)
                     .find(|pair| pair[0] == "--cicp")
                     .map(|pair| pair[1].as_str()),
-                Some("1/13/0"),
-                "RGB encoder input must use Identity CICP to avoid matrix color drift"
+                None,
+                "avifenc must infer CICP from the input instead of forcing sRGB/Identity"
             );
         }
     }
@@ -5768,11 +5807,31 @@ mod tests {
         let source = root.path().join("source.png");
         let candidate = root.path().join("verified-candidate.avif");
         image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3])).save(&source)?;
-        std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF"),
-            &candidate,
-        )?;
+        let sample_avif = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        if sample_avif.exists() {
+            std::fs::copy(&sample_avif, &candidate)?;
+        } else if test_tool_available("avifenc") {
+            // If the repository sample is missing, try to produce a candidate
+            // using the local `avifenc` tool so the test can run in CI/local.
+            let status = Command::new("avifenc")
+                .arg("-s")
+                .arg("0")
+                .arg("-j")
+                .arg("all")
+                .arg(&source)
+                .arg(&candidate)
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "avifenc failed to generate candidate AVIF"
+            );
+        } else {
+            panic!(
+                "Required AVIF sample missing at {} and avifenc not available; test requires one",
+                sample_avif.display()
+            );
+        }
         let options = ConvertOptions {
             output_dir: Some(output_dir),
             flags: ConvertFlags::FORCE,
@@ -6574,7 +6633,7 @@ mod tests {
             Ok(88)
         };
 
-        let size = run_jxl_exploration_probe_with(0.2, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.2, true, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("fallback should recover the exploration probe: {e:?}"));
 
         assert_eq!(size, 88);
@@ -6596,11 +6655,27 @@ mod tests {
             Ok(55)
         };
 
-        let size = run_jxl_exploration_probe_with(0.1, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("direct cjxl probe should win: {e:?}"));
 
         assert_eq!(size, 77);
         assert_eq!(direct_calls.get(), 1);
+        assert_eq!(fallback_calls.get(), 0);
+    }
+
+    #[test]
+    fn smoke_jxl_exploration_probe_requires_explicit_fallback_opt_in() {
+        let fallback_calls = Cell::new(0);
+        let mut direct = |_distance: f32| Err("direct cjxl failed".to_string());
+        let mut fallback = |_distance: f32| {
+            fallback_calls.set(fallback_calls.get() + 1);
+            Ok(55)
+        };
+
+        let error = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
+            .expect_err("default exploration must not invoke ImageMagick");
+
+        assert!(error.contains("--allow_expert_options"));
         assert_eq!(fallback_calls.get(), 0);
     }
 
@@ -6731,7 +6806,7 @@ mod tests {
         assert_eq!(quality, Some(89));
         assert_eq!(probe_count, 7);
         assert_eq!(probes, vec![100, 90, 80, 85, 87, 88, 89]);
-        const { assert!(JXL_TO_AVIF_BINARY_PROBE_BUDGET >= 7) };
+        const { assert!(AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7) };
     }
 
     #[test]
@@ -6993,5 +7068,201 @@ mod tests {
             source_bytes_before, source_bytes_after,
             "source JPEG must be byte-identical after fast-img skip"
         );
+    }
+
+    #[test]
+    fn unknown_input_keeps_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let non_png = root.path().join("input.jpg");
+        std::fs::write(&non_png, [0u8; 16]).expect("write");
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &non_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--yuv")
+                .map(|w| w[1].as_str()),
+            Some("444"),
+            "Unknown input must keep --yuv 444"
+        );
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--cicp")
+                .map(|w| w[1].as_str()),
+            None,
+            "Unknown input must not force --cicp"
+        );
+    }
+
+    #[test]
+    fn color_png_inputs_keep_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let color_png = root.path().join("color.png");
+        image::RgbImage::from_pixel(10, 10, image::Rgb([10, 20, 30]))
+            .save(&color_png)
+            .expect("save rgb png");
+        assert_eq!(
+            super::detect_avif_input_color_model(&color_png),
+            super::AvifencInputColorModel::Color
+        );
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &color_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--yuv")
+                .map(|w| w[1].as_str()),
+            Some("444"),
+            "Color PNG must keep --yuv 444"
+        );
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--cicp")
+                .map(|w| w[1].as_str()),
+            None,
+            "Color PNG must not force --cicp"
+        );
+    }
+
+    #[test]
+    fn grayscale_png_inputs_skip_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let gray_png = root.path().join("gray.jpg");
+        image::GrayImage::from_pixel(10, 10, image::Luma([128]))
+            .save_with_format(&gray_png, image::ImageFormat::Png)
+            .expect("save gray png");
+        assert_eq!(
+            super::detect_avif_input_color_model(&gray_png),
+            super::AvifencInputColorModel::Grayscale
+        );
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &gray_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !args.iter().any(|arg| arg == "--yuv"),
+            "Grayscale PNG must omit --yuv so avifenc auto-selects YUV400"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--cicp"),
+            "Grayscale PNG must omit --cicp so avifenc does not force Identity matrix (GBR)"
+        );
+    }
+
+    #[test]
+    fn synthetic_gray_and_single_channel_avif_roundtrips_preserve_color() {
+        assert!(
+            test_tool_available("avifenc") && test_tool_available("avifdec"),
+            "avifenc and avifdec must be available"
+        );
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let round_trip = |input: &Path, stem: &str| {
+            let encoded = root.path().join(format!("{stem}.avif"));
+            let decoded = root.path().join(format!("{stem}.png"));
+            let mut retry_state = super::AvifencMetadataRetryState::default();
+            let output = super::run_avifenc_with_malformed_xmp_retry(
+                input,
+                &encoded,
+                Some(100),
+                false,
+                Some(0),
+                Duration::from_secs(30),
+                "synthetic_channel_regression",
+                &mut retry_state,
+            )
+            .expect("run avifenc");
+            assert!(
+                output.status.success(),
+                "avifenc pipeline failed: {}",
+                output.stderr
+            );
+            let output = Command::new("avifdec")
+                .arg(&encoded)
+                .arg(&decoded)
+                .output()
+                .expect("run avifdec");
+            assert!(
+                output.status.success(),
+                "avifdec failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            image::open(decoded).expect("open decoded png").to_rgb8()
+        };
+
+        let gray_jpeg = root.path().join("synthetic_gray.jpg");
+        image::GrayImage::from_fn(192, 128, |x, y| image::Luma([((x + y * 3) % 256) as u8]))
+            .save(&gray_jpeg)
+            .expect("save synthetic grayscale JPEG");
+        assert_eq!(
+            super::detect_avif_input_color_model(&gray_jpeg),
+            super::AvifencInputColorModel::Unknown,
+            "JPEG clone must exercise the non-PNG production path"
+        );
+        let decoded_gray = round_trip(&gray_jpeg, "gray");
+        let max_channel_delta = decoded_gray.pixels().iter().fold(0u8, |max_delta, pixel| {
+            max_delta.max(
+                pixel[0]
+                    .abs_diff(pixel[1])
+                    .max(pixel[1].abs_diff(pixel[2]))
+                    .max(pixel[0].abs_diff(pixel[2])),
+            )
+        });
+        assert!(
+            max_channel_delta <= 2,
+            "grayscale AVIF gained a color cast: max RGB delta {max_channel_delta}"
+        );
+
+        let channels_png = root.path().join("synthetic_rgb_channels.png");
+        image::RgbImage::from_fn(300, 100, |x, _| {
+            if x < 100 {
+                image::Rgb([255, 0, 0])
+            } else if x < 200 {
+                image::Rgb([0, 255, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        })
+        .save(&channels_png)
+        .expect("save synthetic single-channel PNG");
+        let decoded_channels = round_trip(&channels_png, "channels");
+        for (x, expected_channel) in [(50, 0usize), (150, 1), (250, 2)] {
+            let pixel = decoded_channels.get_pixel(x, 50);
+            assert!(
+                pixel[expected_channel] >= 220
+                    && pixel[(expected_channel + 1) % 3] <= 35
+                    && pixel[(expected_channel + 2) % 3] <= 35,
+                "single-channel patch {expected_channel} was remapped: {pixel:?}"
+            );
+        }
     }
 }

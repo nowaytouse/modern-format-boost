@@ -988,13 +988,9 @@ impl TaskResult {
         // Determine technically accurate verb:
         // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
         // - "encoding" for all other conversions from source pixels
-        let is_jpeg = input.extension().is_some_and(|e| {
-            let ext = e.to_string_lossy().to_lowercase();
-            matches!(
-                ext.as_str(),
-                "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" | "jxr"
-            )
-        }) || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
+        let is_jpeg = crate::image::format_detect::detect_true_format(input)
+            .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Jpeg)
+            || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
 
         let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
             "transcoding"
@@ -1979,11 +1975,24 @@ fn strip_residual_orientation_tag_for_delivery(output: &Path) -> std::io::Result
             output.display()
         ))
     })?;
+    if matches!(format, FormatKind::Mkv | FormatKind::Webm) {
+        tracing::debug!(
+            target: "orientation_cleanup",
+            output = %output.display(),
+            format = ?format,
+            "Skipping ExifTool Orientation mutation for non-writable Matroska container"
+        );
+        return Ok(());
+    }
     if !matches!(
         format,
-        FormatKind::Jpeg | FormatKind::Avif | FormatKind::Heif | FormatKind::WebP
-    ) && !video_extension_needs_orientation_cleanup(output)
-    {
+        FormatKind::Jpeg
+            | FormatKind::Avif
+            | FormatKind::Heif
+            | FormatKind::WebP
+            | FormatKind::Mp4
+            | FormatKind::Mov
+    ) {
         return Ok(());
     }
 
@@ -2072,18 +2081,6 @@ fn delivery_orientation_diff_policy_for_output(
         crate::image::orientation::orientation_diff_tolerance_for_format(format)
             .map(|tolerance| (format, tolerance)),
     )
-}
-
-fn video_extension_needs_orientation_cleanup(output: &Path) -> bool {
-    output
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "mp4" | "m4v" | "mov" | "mkv" | "webm"
-            )
-        })
 }
 
 fn validate_temp_output_commit_paths(temp: &Path, output: &Path) -> std::io::Result<()> {

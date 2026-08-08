@@ -394,12 +394,11 @@ pub fn analyze_image_with_cache(
     // Fast-path for JPEGs: Bypass the SQLite cache entirely because:
     // 1. JPEG analysis (DQT markers only) is faster than SQLite/Hashing overhead.
     // 2. We don't need pixel-level features for JPEG->JXL lossless transcoding.
-    let is_jpeg_hint = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .is_some_and(|e| e == "jpg" || e == "jpeg");
+    let is_jpeg = cache.is_some()
+        && crate::image::format_detect::detect_true_format(path)?
+            == crate::image::format_detect::FormatKind::Jpeg;
 
-    if is_jpeg_hint && cache.is_some() {
+    if is_jpeg {
         match analyze_image_internal(path) {
             Ok(mut analysis) => {
                 crate::media_conversion_gate::reconcile_analysis_animation_flag(
@@ -1760,10 +1759,9 @@ pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
 }
 
 fn get_animation_duration(path: &Path) -> Option<f32> {
-    let ext_lower = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-    let ext = ext_lower.as_deref();
+    let format = crate::image::format_detect::detect_true_format(path).ok()?;
 
-    if ext == Some("gif") {
+    if format == crate::image::format_detect::FormatKind::Gif {
         match crate::image_formats::gif::get_timing_stats(path) {
             Ok(Some(stats)) => {
                 return Some(crate::numeric_cast::f64_to_f32_lossy(stats.duration_secs));
@@ -1780,7 +1778,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if matches!(ext, Some("png" | "apng")) {
+    if format == crate::image::format_detect::FormatKind::Png {
         match std::fs::read(path) {
             Ok(data) => {
                 if let Some(stats) = crate::image_detection::apng_timing_stats_from_bytes(&data) {
@@ -1798,7 +1796,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if ext == Some("webp") {
+    if format == crate::image::format_detect::FormatKind::WebP {
         match std::fs::read(path) {
             Ok(data) => match crate::image_formats::webp::timing_stats_from_bytes(&data) {
                 Ok(Some(stats)) => {
@@ -1829,7 +1827,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 
     // Special handling for JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // Convert to temporary APNG first, then probe duration
-    if ext == Some("jxl") {
+    if format == crate::image::format_detect::FormatKind::Jxl {
         match try_jxl_via_apng(path) {
             Ok(duration) => final_duration = duration,
             Err(err) => {
@@ -1870,14 +1868,14 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if ext != Some("jxl")
+    if format != crate::image::format_detect::FormatKind::Jxl
         && final_duration.is_none()
         && let Some(duration) = try_imagemagick_identify(path)
     {
         final_duration = Some(duration);
     }
 
-    if ext == Some("webp") && final_duration.is_none() {
+    if format == crate::image::format_detect::FormatKind::WebP && final_duration.is_none() {
         match std::fs::read(path) {
             Ok(data) => {
                 if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
@@ -1923,7 +1921,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         return Some(d);
     }
 
-    if ext == Some("gif") {
+    if format == crate::image::format_detect::FormatKind::Gif {
         match try_get_frame_count(path) {
             Ok(Some(frame_count)) => {
                 if frame_count <= 1 {

@@ -153,10 +153,8 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         }
     }
 
-    let is_webp = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("webp"));
+    let is_webp = crate::image::format_detect::detect_true_format(path)
+        .is_ok_and(|format| format == crate::image::format_detect::FormatKind::WebP);
     if is_webp {
         let data = match std::fs::read(path) {
             Ok(d) => d,

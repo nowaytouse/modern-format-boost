@@ -127,6 +127,25 @@ enum PacketStreamKind {
     Audio,
 }
 
+fn parse_packet_payload_row(line: &str) -> Result<(u32, u64), String> {
+    let mut fields = line.split(',');
+    let stream_index = fields
+        .next()
+        .ok_or_else(|| format!("malformed packet row {line:?}"))?;
+    let size = fields
+        .next()
+        .ok_or_else(|| format!("malformed packet row {line:?}"))?;
+    let stream_index = stream_index
+        .trim()
+        .parse::<u32>()
+        .map_err(|err| format!("invalid packet row {line:?}: {err}"))?;
+    let size = size
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("invalid packet row {line:?}: {err}"))?;
+    Ok((stream_index, size))
+}
+
 /// Measure video and audio packet payload bytes without using container ratios,
 /// metadata margins, or bitrate-duration estimates.
 ///
@@ -218,9 +237,9 @@ fn scan_packet_payload_bytes(
         .args([
             "-v",
             "error",
-            "-show_entries",
-            "packet=stream_index,size",
             "-show_packets",
+            "-show_entries",
+            "packet=stream_index,size:packet_side_data=",
             "-of",
             "csv=p=0",
         ])
@@ -252,18 +271,10 @@ fn scan_packet_payload_bytes(
             if line.trim().is_empty() {
                 continue;
             }
-            let Some((stream_index, size)) = line.split_once(',') else {
-                first_error.get_or_insert_with(|| format!("malformed packet row {line:?}"));
-                continue;
-            };
-            let parsed = stream_index.trim().parse::<u32>().and_then(|stream_index| {
-                size.trim().parse::<u64>().map(|size| (stream_index, size))
-            });
-            let (stream_index, size) = match parsed {
+            let (stream_index, size) = match parse_packet_payload_row(&line) {
                 Ok(parsed) => parsed,
                 Err(err) => {
-                    first_error
-                        .get_or_insert_with(|| format!("invalid packet row {line:?}: {err}"));
+                    first_error.get_or_insert(err);
                     continue;
                 }
             };
@@ -342,15 +353,13 @@ pub const DEFAULT_OVERHEAD_PERCENT: f64 = crate::constants::DEFAULT_OVERHEAD_PER
 
 #[must_use]
 pub fn get_container_overhead_percent(path: &Path) -> f64 {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase);
-
-    match ext.as_deref() {
-        Some("mov") => MOV_OVERHEAD_PERCENT,
-        Some("mp4" | "m4v") => MP4_OVERHEAD_PERCENT,
-        Some("mkv" | "webm") => MKV_OVERHEAD_PERCENT,
+    match crate::image::format_detect::detect_true_format(path).ok() {
+        Some(crate::image::format_detect::FormatKind::Mov) => MOV_OVERHEAD_PERCENT,
+        Some(crate::image::format_detect::FormatKind::Mp4) => MP4_OVERHEAD_PERCENT,
+        Some(
+            crate::image::format_detect::FormatKind::Mkv
+            | crate::image::format_detect::FormatKind::Webm,
+        ) => MKV_OVERHEAD_PERCENT,
         _ => DEFAULT_OVERHEAD_PERCENT,
     }
 }
@@ -670,7 +679,6 @@ fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> Info {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_extraction_method_confidence() {
@@ -681,20 +689,30 @@ mod tests {
 
     #[test]
     fn test_container_overhead_percent() {
+        let temp = tempfile::tempdir().expect("create container fixtures");
+        let mov = temp.path().join("misleading.mp4");
+        std::fs::write(&mov, b"\0\0\0\x18ftypqt  \0\0\0\0").expect("write MOV brand");
+        let mp4 = temp.path().join("misleading.mov");
+        std::fs::write(&mp4, b"\0\0\0\x18ftypisom\0\0\0\0").expect("write MP4 brand");
+        let mkv = temp.path().join("misleading.avi");
+        std::fs::write(&mkv, [0x1A, 0x45, 0xDF, 0xA3]).expect("write MKV signature");
+        let unknown = temp.path().join("unknown.mkv");
+        std::fs::write(&unknown, b"not media").expect("write unknown content");
+
         assert!(crate::float_compare::approx_eq_f64(
-            get_container_overhead_percent(&PathBuf::from("test.mov")),
+            get_container_overhead_percent(&mov),
             MOV_OVERHEAD_PERCENT
         ));
         assert!(crate::float_compare::approx_eq_f64(
-            get_container_overhead_percent(&PathBuf::from("test.mp4")),
+            get_container_overhead_percent(&mp4),
             MP4_OVERHEAD_PERCENT
         ));
         assert!(crate::float_compare::approx_eq_f64(
-            get_container_overhead_percent(&PathBuf::from("test.mkv")),
+            get_container_overhead_percent(&mkv),
             MKV_OVERHEAD_PERCENT
         ));
         assert!(crate::float_compare::approx_eq_f64(
-            get_container_overhead_percent(&PathBuf::from("test.avi")),
+            get_container_overhead_percent(&unknown),
             DEFAULT_OVERHEAD_PERCENT
         ));
     }
@@ -741,6 +759,14 @@ mod tests {
                     .contains("requires ffprobe packet payloads")
             );
         }
+    }
+
+    #[test]
+    fn packet_payload_row_ignores_ffprobe_side_data_columns() {
+        assert_eq!(
+            parse_packet_payload_row("1,493,Skip Samples,1024,0,0,0"),
+            Ok((1, 493))
+        );
     }
 
     #[test]

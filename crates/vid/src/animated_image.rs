@@ -698,8 +698,8 @@ fn extract_frames_for_gifski(
         builder.arg("-map").arg(format!("0:{stream_index}"));
     }
     builder
-        .arg("-vsync")
-        .arg("0")
+        .arg("-fps_mode")
+        .arg("passthrough")
         .pix_fmt(foundation::PixFmt::Rgba)
         .output(&frame_pattern);
 
@@ -747,23 +747,11 @@ fn extract_frames_for_gifski(
     Ok((frame_dir, frame_dir_path, frame_count))
 }
 
-/// Extract frames from animated WebP using webpmux and create APNG with correct timing
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Read authoritative WebP timing with `webpmux`, then let FFmpeg 9 coalesce the
+/// animation canvas and encode APNG. Extracting individual WebP frame rectangles
+/// loses their x/y offsets plus blend/dispose semantics.
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
-    use std::fmt::Write;
-    // Create temporary directory for frames
-    let temp_dir = foundation::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
-        "webp_frame_extract",
-        "webp_frames_",
-    )
-    .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp dir: {e}")))?;
-    let temp_dir_path = temp_dir.path();
-
     let (frame_count, mut frame_durations_ms) = parse_webpmux_info(input)?;
-
-    // Fallback if mismatch: pad missing frames with the last parsed delay so
-    // the animation keeps local continuity near the tail, rather than copying
-    // the first frame's delay across every unparsed frame.
     let parsed_duration_count = foundation::numeric_cast::usize_to_u32_strict(
         frame_durations_ms.len(),
         "webp_frame_duration_count",
@@ -799,13 +787,60 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         );
     }
 
-    // Guard against degenerate 0-duration WebPs: replace any zero delays with a
-    // sane 100ms default so ffmpeg's concat demuxer doesn't produce a 0-length clip.
-    for d in &mut frame_durations_ms {
-        if *d == 0 {
-            *d = crate::constants::DEFAULT_ANIMATION_DELAY_MS;
+    let zero_duration_frames = frame_durations_ms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, duration)| (*duration == 0).then_some(index + 1))
+        .collect::<Vec<_>>();
+    for duration in &mut frame_durations_ms {
+        if *duration == 0 {
+            *duration = crate::constants::DEFAULT_ANIMATION_DELAY_MS;
         }
     }
+    let final_duration_ms = frame_durations_ms.last().copied().ok_or_else(|| {
+        VidQualityError::ConversionError(format!(
+            "webpmux reported no WebP frame duration for {}",
+            input.display()
+        ))
+    })?;
+
+    let normalized_input = if zero_duration_frames.is_empty() {
+        None
+    } else {
+        let temp = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "webp_zero_duration_normalized",
+            None,
+            Some(".webp"),
+        )?;
+        let tool = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_WEBPMUX)
+            .ok_or_else(|| {
+                VidQualityError::ConversionError(
+                    "webpmux is required to normalize zero-duration WebP frames".to_string(),
+                )
+            })?;
+        let mut command = Command::new(tool);
+        for frame in zero_duration_frames {
+            command.arg("-duration").arg(format!(
+                "{},{frame}",
+                crate::constants::DEFAULT_ANIMATION_DELAY_MS
+            ));
+        }
+        command.arg(input).arg("-o").arg(temp.path());
+        let output = run_animated_process(command).map_err(|error| {
+            VidQualityError::ConversionError(format!(
+                "webpmux zero-duration normalization failed to start: {error}"
+            ))
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VidQualityError::ConversionError(format!(
+                "webpmux zero-duration normalization failed: {}",
+                foundation::io_utils::tail_error_lines(&stderr, 5)
+            )));
+        }
+        Some(temp)
+    };
+    let ffmpeg_input = normalized_input.as_ref().map_or(input, |file| file.path());
 
     if verbose {
         let avg_dur = f64::from(frame_durations_ms.iter().sum::<u32>())
@@ -813,121 +848,41 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         log_detail!("Stats: WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
 
-    let concat_list_path = temp_dir_path.join("concat.txt");
-    let mut concat_content = String::new();
-
-    // Extract each frame using webpmux and convert to PNG
-    for i in 1..=frame_count {
-        let frame_webp_path = temp_dir_path.join(format!("frame_{i:04}.webp"));
-        let frame_png_path = temp_dir_path.join(format!("frame_{i:04}.png"));
-
-        // Extract frame as WebP
-        let mut builder = foundation::WebpmuxBuilder::new();
-        builder.get_frame(i).input(input).output(&frame_webp_path);
-
-        let extract_result = run_animated_process(builder.build()).map_err(|e| {
-            VidQualityError::ConversionError(format!("webpmux extract failed: {e}"))
-        })?;
-
-        if !extract_result.status.success() {
-            return Err(VidQualityError::ConversionError(format!(
-                "Failed to extract frame {i}"
-            )));
-        }
-
-        // Convert WebP frame to PNG using FFmpeg
-        let mut builder = foundation::FfmpegBuilder::new();
-        builder
-            .overwrite()
-            .with_odd_dim_correction()
-            .input(&frame_webp_path)
-            .pix_fmt(foundation::PixFmt::Rgba)
-            .output(&frame_png_path);
-
-        let convert_result = run_animated_process(builder.build()).map_err(|e| {
-            VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {e}"))
-        })?;
-
-        if !convert_result.status.success() {
-            let stderr = String::from_utf8_lossy(&convert_result.stderr);
-            return Err(VidQualityError::ConversionError(format!(
-                "Failed to convert frame {i} to PNG: {stderr}"
-            )));
-        }
-
-        // Add to concat list — missing duration is Err (never fabricate a default ms value).
-        let frame_idx = foundation::numeric_cast::u64_to_usize_strict(
-            u64::from(i - 1),
-            "animated_concat_frame_idx",
-        )
-        .ok_or_else(|| {
-            VidQualityError::ConversionError(format!(
-                "frame index {i} does not fit in usize for concat demuxer"
-            ))
-        })?;
-        let duration_ms = frame_durations_ms.get(frame_idx).copied().ok_or_else(|| {
-            VidQualityError::ConversionError(format!(
-                "frame_durations_ms missing index {frame_idx} (frame_count={frame_count})"
-            ))
-        })?;
-        let duration_sec = f64::from(duration_ms) / crate::constants::MS_PER_SEC_F64;
-        let _ = writeln!(
-            concat_content,
-            "file '{}'",
-            foundation::media_conversion_gate::path_file_name_for_log(&frame_png_path)
-        );
-        let _ = writeln!(concat_content, "duration {duration_sec}");
-    }
-
-    // Concat demuxer quirk: the last `duration` directive is ignored, so we repeat
-    // the final `file 'X.png'` entry (without a new duration) to force ffmpeg to
-    // honour the final frame's delay. Skip this for single-frame WebPs, where adding
-    // a duplicate line would create a spurious second frame.
-    if frame_durations_ms.len() >= 2
-        && let Some(last_i) = frame_durations_ms.len().checked_sub(1)
-    {
-        use std::fmt::Write;
-        let _ = writeln!(concat_content, "file 'frame_{:04}.png'", last_i + 1);
-    }
-
-    if let Err(e) = std::fs::write(&concat_list_path, concat_content) {
-        return Err(VidQualityError::ConversionError(format!(
-            "Failed to write FFmpeg concat list: {e}"
-        )));
-    }
-
-    // Create APNG from PNG sequence using FFmpeg concat demuxer
     let mut builder = foundation::FfmpegBuilder::new();
     builder
         .overwrite()
-        .with_odd_dim_correction()
         .input_arg("-f")
-        .input_arg("concat")
-        .input_arg("-safe")
-        .input_arg("0")
-        .input(&concat_list_path)
+        .input_arg("webp_anim")
+        .input(ffmpeg_input)
+        .arg("-fps_mode")
+        .arg("passthrough")
         .pix_fmt(foundation::PixFmt::Rgba)
         .vcodec(foundation::VideoCodec::Apng)
         .format("apng")
         .arg("-plays")
-        .arg("0") // Loop forever
+        .arg("0")
+        .arg("-final_delay")
+        .arg(format!("{final_duration_ms}/1000"))
         .output(output_apng);
 
     let ffmpeg_result = run_animated_process(builder.build()).map_err(|e| {
-        VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {e}"))
+        VidQualityError::ConversionError(format!(
+            "FFmpeg 9 animated WebP → APNG conversion failed to start: {e}"
+        ))
     })?;
 
     if !ffmpeg_result.status.success() {
         let stderr = String::from_utf8_lossy(&ffmpeg_result.stderr);
         return Err(VidQualityError::ConversionError(format!(
-            "FFmpeg APNG creation failed: {stderr}"
+            "FFmpeg 9 animated WebP → APNG conversion failed: {}",
+            foundation::io_utils::tail_error_lines(&stderr, 5)
         )));
     }
 
     if verbose {
-        log_detail!(&format!(
-            "  ↳ Intermediate conversion: WebP deconstructed and merged to APNG ({frame_count} frames)"
-        ));
+        log_detail!(
+            "  ↳ Intermediate conversion: FFmpeg 9 coalesced WebP canvas to APNG ({frame_count} frames)"
+        );
     }
 
     Ok(())
@@ -3205,6 +3160,113 @@ mod tests {
     use tempfile::Builder;
 
     #[test]
+    fn animated_webp_ffmpeg9_coalesces_offsets_and_preserves_timing() {
+        for tool in ["ffmpeg", "ffprobe", "webpmux"] {
+            if !required_tool_available(tool) {
+                eprintln!("skipping animated WebP integration test: {tool} unavailable");
+                return;
+            }
+        }
+
+        let ffmpeg = foundation::common_utils::resolve_tool_path("ffmpeg")
+            .expect("ffmpeg was checked above");
+        let decoder_listing = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-decoders"])
+            .output()
+            .expect("list ffmpeg decoders");
+        if !String::from_utf8_lossy(&decoder_listing.stdout).contains("webp_anim") {
+            eprintln!("skipping animated WebP integration test: FFmpeg 9 decoder unavailable");
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("create WebP regression tempdir");
+        let base = temp.path().join("base.webp");
+        let patch = temp.path().join("patch.webp");
+        let animated = temp.path().join("offset.webp");
+        let apng = temp.path().join("offset.apng");
+        std::fs::write(
+            &base,
+            [
+                0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+                0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x03, 0xc0, 0x00, 0x00, 0x07, 0x10, 0xfd,
+                0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+            ],
+        )
+        .expect("write red 4x4 WebP frame");
+        std::fs::write(
+            &patch,
+            [
+                0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+                0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x01, 0x40, 0x00, 0x00, 0x07, 0x10, 0xd1,
+                0xff, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+            ],
+        )
+        .expect("write blue 2x2 WebP frame");
+
+        let mut mux = foundation::WebpmuxBuilder::new();
+        mux.add_frame(&base, 100, 0, 0, false)
+            .add_frame(&patch, 0, 2, 2, true)
+            .add_frame(&base, 200, 0, 0, false)
+            .loop_count(0)
+            .output(&animated);
+        let muxed = run_animated_process(mux.build()).expect("assemble animated WebP");
+        assert!(muxed.status.success(), "webpmux failed: {:?}", muxed.stderr);
+
+        extract_webp_to_apng(&animated, &apng, false).expect("coalesce animated WebP to APNG");
+
+        let (_frames, _frames_path, frame_count) =
+            extract_frames_for_gifski(&apng, None, false).expect("extract APNG frames for gifski");
+        assert_eq!(frame_count, 3);
+
+        let decoded = Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error"])
+            .arg("-i")
+            .arg(&apng)
+            .args([
+                "-vf",
+                "select=eq(n\\,1)",
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-",
+            ])
+            .output()
+            .expect("decode second APNG frame");
+        assert!(
+            decoded.status.success(),
+            "ffmpeg failed: {:?}",
+            decoded.stderr
+        );
+        assert_eq!(decoded.stdout.len(), 4 * 4 * 4);
+        assert_eq!(&decoded.stdout[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&decoded.stdout[60..64], &[0, 0, 255, 255]);
+
+        let ffprobe = foundation::common_utils::resolve_tool_path("ffprobe")
+            .expect("ffprobe was checked above");
+        let timing = Command::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "frame=duration_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&apng)
+            .output()
+            .expect("probe APNG timing");
+        assert!(timing.status.success());
+        let durations = String::from_utf8_lossy(&timing.stdout);
+        assert_eq!(
+            durations.lines().collect::<Vec<_>>(),
+            ["0.100000", "0.100000", "0.200000"]
+        );
+    }
+
+    #[test]
     fn avif_animation_encoder_prefers_svt_then_aom() {
         let listing = "
  V....D libaom-av1           libaom AV1
@@ -3263,6 +3325,97 @@ mod tests {
         let info = " * Image Sequence Frames: (not-a-count expected frames)";
 
         assert!(parse_avifdec_sequence_frame_count(info).is_err());
+    }
+
+    #[test]
+    fn synthetic_grayscale_animation_avif_roundtrip_stays_neutral() {
+        let Some(avifenc) = foundation::common_utils::resolve_tool_path("avifenc") else {
+            eprintln!("Skipping grayscale animation test: avifenc is unavailable");
+            return;
+        };
+        if !required_tool_available("ffmpeg") || !required_tool_available("avifdec") {
+            eprintln!("Skipping grayscale animation test: ffmpeg or avifdec is unavailable");
+            return;
+        }
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let input = root.path().join("synthetic_gray.apng");
+        let y4m = root.path().join("synthetic_gray.y4m");
+        let encoded = root.path().join("synthetic_gray.avif");
+
+        let mut source = foundation::FfmpegBuilder::new();
+        source
+            .overwrite()
+            .loglevel("error")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("color=c=gray:s=64x64:r=4:d=0.75")
+            .pix_fmt_str("gray")
+            .format("apng")
+            .output(&input);
+        let output = run_animated_process(source.build()).expect("create synthetic grayscale APNG");
+        assert!(
+            output.status.success(),
+            "synthetic APNG creation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let output = encode_animated_avif_with_avifenc(&input, &y4m, &encoded, 0, 1, &[], &avifenc)
+            .expect("encode synthetic grayscale animation");
+        assert!(
+            output.status.success(),
+            "animated AVIF encode failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            validate_animated_avif_output(&encoded).expect("validate animated AVIF") > 1,
+            "animated AVIF must retain multiple frames"
+        );
+
+        let decoded = root.path().join("synthetic_gray.ppm");
+        let mut decode = foundation::FfmpegBuilder::new();
+        decode
+            .overwrite()
+            .loglevel("error")
+            .input(&encoded)
+            .arg("-frames:v")
+            .arg("1")
+            .pix_fmt_str("rgb24")
+            .format("image2")
+            .output(&decoded);
+        let output = run_animated_process(decode.build()).expect("decode first AVIF frame");
+        assert!(
+            output.status.success(),
+            "animated AVIF decode failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ppm = std::fs::read(decoded).expect("read decoded PPM");
+        let pixel_offset = ppm
+            .windows(5)
+            .position(|window| window == b"\n255\n")
+            .map(|offset| offset + 5)
+            .expect("valid PPM header");
+        let pixels = &ppm[pixel_offset..];
+        assert_eq!(pixels.len(), 64 * 64 * 3, "unexpected decoded frame size");
+        let (max_channel_delta, worst_pixel) =
+            pixels
+                .chunks_exact(3)
+                .fold((0u8, [0u8; 3]), |worst, pixel| {
+                    let delta = pixel[0]
+                        .abs_diff(pixel[1])
+                        .max(pixel[1].abs_diff(pixel[2]))
+                        .max(pixel[0].abs_diff(pixel[2]));
+                    if delta > worst.0 {
+                        (delta, [pixel[0], pixel[1], pixel[2]])
+                    } else {
+                        worst
+                    }
+                });
+        assert!(
+            max_channel_delta <= 2,
+            "grayscale animation gained a color cast: max RGB delta {max_channel_delta}, pixel {worst_pixel:?}"
+        );
     }
 
     #[test]

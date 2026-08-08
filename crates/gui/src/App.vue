@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { useI18n } from "./composables/useI18n";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import {
+  getCurrentWindow,
+  invoke,
+  listen,
+  open,
+  type UnlistenFn,
+} from "./nativeHost";
 
 const { t, setLocale, locale } = useI18n();
 
@@ -78,6 +81,10 @@ const toggleMaximize = async () => {
   }
 };
 const closeWindow = () => getCurrentWindow().close();
+const startWindowDrag = (event: MouseEvent) => {
+  if (event.button !== 0 || (event.target as Element).closest("button")) return;
+  void getCurrentWindow().startDragging();
+};
 
 const toggleLanguage = () => {
   currentLocaleIndex.value = (currentLocaleIndex.value + 1) % locales.length;
@@ -151,7 +158,7 @@ let dialogTimeout: ReturnType<typeof setTimeout> | null = null;
 let noticeTimeout: ReturnType<typeof setTimeout> | null = null;
 let motionMediaQuery: MediaQueryList | null = null;
 let stopVisualWatch: (() => void) | null = null;
-const tauriUnlisteners: UnlistenFn[] = [];
+const nativeUnlisteners: UnlistenFn[] = [];
 
 const setUiNotice = (message: string, durationMs = 3200) => {
   uiNotice.value = message;
@@ -216,6 +223,66 @@ const startMockProcessing = () => {
   }, 50);
 };
 
+type ResumeAction = "resume" | "fresh" | "cancel";
+
+const requestResumeAction = (): ResumeAction => {
+  if (
+    globalThis.confirm(
+      "检测到上次未完成的任务。\n\n选择“确定”继续上次任务；选择“取消”可改为重新开始。",
+    )
+  ) {
+    return "resume";
+  }
+  return globalThis.confirm(
+    "确定重新开始吗？旧状态会被丢弃；已有输出不会被覆盖，而是使用新的输出目录。",
+  )
+    ? "fresh"
+    : "cancel";
+};
+
+const runProcessorWithResumeDecision = async (
+  targetOutputMode: string,
+  strategyArg: "avif" | "jxl" | null,
+) => {
+  let shouldResume = mfbToggles.resumeMode;
+  let shouldStartFresh = false;
+  for (;;) {
+    try {
+      const result = await invoke("process_media", {
+        targetPath: folderPath.value,
+        processingMode: processingMode.value,
+        outputMode: targetOutputMode,
+        strategy: strategyArg,
+        ultimate: mfbToggles.ultimateMode,
+        verbose: mfbToggles.verboseMode,
+        resume: shouldResume,
+        fresh: shouldStartFresh,
+        shortestPath: mfbToggles.shortestPath,
+      });
+      appendLog(`[SUCCESS] ${String(result)}`);
+      return;
+    } catch (error) {
+      const hasResumeDecision = logs.value.some((line) =>
+        line.includes("MFB_RESUME_DECISION_REQUIRED"),
+      );
+      if (!hasResumeDecision || shouldResume || shouldStartFresh) throw error;
+
+      const action = requestResumeAction();
+      if (action === "resume") {
+        shouldResume = true;
+        mfbToggles.resumeMode = true;
+        appendLog("[RESUME] User chose to continue the saved task.");
+      } else if (action === "fresh") {
+        shouldStartFresh = true;
+        appendLog("[FRESH] User chose a fresh task; saved state will not be reused.");
+      } else {
+        appendLog("[INFO] Task cancelled; saved state was preserved.");
+        return;
+      }
+    }
+  }
+};
+
 const startCliProcessing = async () => {
   if (processing.value) return;
   if (!folderPath.value) {
@@ -237,17 +304,7 @@ const startCliProcessing = async () => {
       strategyArg = "jxl";
     }
 
-    const result = await invoke("process_media", {
-      targetPath: folderPath.value,
-      processingMode: processingMode.value,
-      outputMode: targetOutputMode,
-      strategy: strategyArg,
-      ultimate: mfbToggles.ultimateMode,
-      verbose: mfbToggles.verboseMode,
-      resume: mfbToggles.resumeMode,
-      shortestPath: mfbToggles.shortestPath,
-    });
-    appendLog(`[SUCCESS] ${String(result)}`);
+    await runProcessorWithResumeDecision(targetOutputMode, strategyArg);
   } catch (error) {
     appendLog(`[ERROR] ${String(error)}`);
   } finally {
@@ -469,7 +526,7 @@ onMounted(() => {
     });
 
   // Real Native File Drop Listener
-  listen("tauri://file-drop", (event: { payload: unknown }) => {
+  listen("file-drop", (event: { payload: unknown }) => {
     const paths = event.payload as string[];
     if (paths.length > 0) {
       if (isCliMode.value) {
@@ -486,17 +543,21 @@ onMounted(() => {
     }
   })
     .then((unlisten) => {
-      tauriUnlisteners.push(unlisten);
+      nativeUnlisteners.push(unlisten);
     })
-    .catch(() => {});
+    .catch((error: unknown) => {
+      console.error("Failed to register native file-drop listener:", error);
+    });
 
   listen<string>("process-log", (event) => {
     appendLog(event.payload);
   })
     .then((unlisten) => {
-      tauriUnlisteners.push(unlisten);
+      nativeUnlisteners.push(unlisten);
     })
-    .catch(() => {});
+    .catch((error: unknown) => {
+      console.error("Failed to register native process-log listener:", error);
+    });
 });
 onUnmounted(() => {
   globalThis.removeEventListener("dragover", preventDrag);
@@ -504,10 +565,10 @@ onUnmounted(() => {
   globalThis.removeEventListener("mousemove", onMouseMove);
   motionMediaQuery?.removeEventListener("change", syncReducedMotionPreference);
   stopVisualWatch?.();
-  for (const unlisten of tauriUnlisteners) {
+  for (const unlisten of nativeUnlisteners) {
     unlisten();
   }
-  tauriUnlisteners.length = 0;
+  nativeUnlisteners.length = 0;
   if (dialogTimeout) clearTimeout(dialogTimeout);
   if (noticeTimeout) clearTimeout(noticeTimeout);
   if (progressInterval) clearInterval(progressInterval);
@@ -525,16 +586,20 @@ onUnmounted(() => {
     />
 
     <!-- ─── HEADER (Liquid Glass) ─── -->
-    <header class="header liquid-glass" data-tauri-drag-region>
-      <div class="header-left" data-tauri-drag-region>
-        <div class="logo-container" data-tauri-drag-region>
-          <div class="logo-icon" data-tauri-drag-region>🚀</div>
+    <header
+      class="header liquid-glass"
+      @mousedown="startWindowDrag"
+      @dblclick="toggleMaximize"
+    >
+      <div class="header-left">
+        <div class="logo-container">
+          <div class="logo-icon">🚀</div>
         </div>
-        <div class="title-group" data-tauri-drag-region>
-          <h1 data-tauri-drag-region>
+        <div class="title-group">
+          <h1>
             {{ t("title") }}
           </h1>
-          <p data-tauri-drag-region>
+          <p>
             {{ t("subtitle") }}
           </p>
         </div>

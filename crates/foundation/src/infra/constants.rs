@@ -501,14 +501,16 @@ pub const ENV_ENABLE_EXPLORATION_ALGORITHM_SEAL: &str =
 /// [`crate::algorithm_seal`]).
 pub const ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_ALGORITHM_SEAL";
-/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_LAYER6_KNN`] (default
-/// **on**).
+/// Explicit opt-in for Layer 6 HNSW when the decision tree is uncertain.
+pub const LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY: &str =
+    "MODERN_FORMAT_LOOP_INTENT_LAYER6_KNN_OPT_IN";
+/// Legacy default-on name; runtime code deliberately ignores it.
 #[deprecated(
     since = "0.11.4",
-    note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN=1 to relax"
+    note = "Use MODERN_FORMAT_LOOP_INTENT_LAYER6_KNN_OPT_IN=1 for explicit opt-in"
 )]
 pub const ENV_ENABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_ENABLE_LOOP_INTENT_LAYER6_KNN";
-/// Kill-switch for Layer 6 HNSW when the decision tree is uncertain.
+/// Kill-switch for Layer 6 HNSW; takes precedence over the explicit opt-in.
 pub const ENV_DISABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN";
 /// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_INFERENCE_LOG`] (default
 /// **on**).

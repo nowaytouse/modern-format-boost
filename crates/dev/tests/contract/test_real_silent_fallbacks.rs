@@ -3019,7 +3019,6 @@ fn fabrication_scan_skip_file(path: &Path) -> bool {
         name == std::ffi::OsStr::new("ssim_mapping.rs")
             || name == std::ffi::OsStr::new("algorithm_audit.rs")
             || name == std::ffi::OsStr::new("constants.rs")
-            || name == std::ffi::OsStr::new("media_conversion_delivery_heatmap.py")
     })
 }
 
@@ -3944,8 +3943,8 @@ fn media_conversion_numeric_prior_unified_scan_m233() {
         hits.join("\n")
     );
 
-    let heatmap = root.join("crates/dev/scripts/media_conversion_delivery_heatmap.py");
-    assert!(heatmap.is_file(), "heatmap audit script must exist");
+    let heatmap = root.join("crates/dev/src/bin/delivery_heatmap.rs");
+    assert!(heatmap.is_file(), "Rust heatmap audit binary must exist");
     let heatmap_hits = silent_fabrication_offenders_in_files(
         &root,
         &[heatmap],
@@ -3953,7 +3952,7 @@ fn media_conversion_numeric_prior_unified_scan_m233() {
     );
     assert!(
         heatmap_hits.is_empty(),
-        "heatmap.py is allowlisted from numeric-prior scan (pattern catalog only):\n{}",
+        "delivery_heatmap.rs must not contain numeric-prior fabrication:\n{}",
         heatmap_hits.join("\n")
     );
 }
@@ -8668,7 +8667,7 @@ fn media_conversion_hardening_audit_snapshot() {
     let audit_path = root.join("crates/dev/src/fixtures/media_conversion_deep_audit.json");
     assert!(
         audit_path.is_file(),
-        "run: python3 crates/dev/scripts/media_conversion_delivery_heatmap.py --deep"
+        "run: cargo run --locked -p dev --bin delivery_heatmap -- --deep-audit"
     );
     let audit: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&audit_path).expect("audit json readable")) // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -17637,9 +17636,9 @@ fn media_conversion_delivery_layer_sealed() {
          visibility"
     );
     assert!(
-        root.join("crates/dev/scripts/media_conversion_delivery_heatmap.py")
+        root.join("crates/dev/src/bin/delivery_heatmap.rs")
             .is_file(),
-        "delivery heatmap script must exist for M39 audits"
+        "Rust delivery_heatmap binary must exist for M39 audits"
     );
     assert!(
         !read_hardening_doc(&root, "MEDIA_CONVERSION_DISCIPLINE_SEAL.md").is_empty(),

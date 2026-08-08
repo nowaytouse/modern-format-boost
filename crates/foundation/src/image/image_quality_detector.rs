@@ -1044,6 +1044,13 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
     analyze_image_quality_with_cache(path, None)
 }
 
+fn is_jpeg_content(path: &Path) -> bool {
+    matches!(
+        crate::image::format_detect::detect_true_format(path),
+        Ok(crate::image::format_detect::FormatKind::Jpeg)
+    )
+}
+
 #[must_use]
 pub fn analyze_image_quality_with_cache(
     path: &Path,
@@ -1053,12 +1060,7 @@ pub fn analyze_image_quality_with_cache(
         return None;
     }
 
-    let is_jpeg_hint = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .is_some_and(|e| e == "jpg" || e == "jpeg");
-
-    if is_jpeg_hint {
+    if is_jpeg_content(path) {
         return None;
     }
 
@@ -1226,6 +1228,7 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
 mod property_tests {
     use super::*;
     use proptest::prelude::*;
+    use std::io::Write;
 
     proptest! {
         #[test]
@@ -1262,6 +1265,26 @@ mod property_tests {
             let conf = calculate_analysis_confidence(pixels, size, Some(edge), Some(div));
             prop_assert!((0.0_f64..=1.0_f64).contains(&conf), "Confidence must be in [0, 1] (got {:?})", conf);
         }
+    }
+
+    #[test]
+    fn jpeg_quality_bypass_uses_content_not_suffix() {
+        let mut spoof = tempfile::Builder::new()
+            .suffix(".jpg")
+            .tempfile()
+            .expect("create spoof JPEG path");
+        spoof
+            .write_all(b"\x89PNG\r\n\x1a\n")
+            .expect("write PNG signature");
+        assert!(!is_jpeg_content(spoof.path()));
+
+        let mut jpeg = tempfile::Builder::new()
+            .suffix(".bin")
+            .tempfile()
+            .expect("create JPEG content path");
+        jpeg.write_all(&[0xFF, 0xD8, 0xFF])
+            .expect("write JPEG signature");
+        assert!(is_jpeg_content(jpeg.path()));
     }
 
     #[test]

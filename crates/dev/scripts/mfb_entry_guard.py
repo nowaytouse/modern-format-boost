@@ -61,7 +61,6 @@ SCRIPT_INVOKERS: dict[str, frozenset[str]] = {
     "backfill_directory_scores.py": _COMMON,
     "loop_intent_clustering.py": _COMMON,
     "quality_regression_model.py": _COMMON,
-    "media_conversion_delivery_heatmap.py": _COMMON,
     "drag_and_drop_processor.py": frozenset(
         {INVOKER_DIRECT, INVOKER_TEST_HARNESS, INVOKER_DATABASE_MANAGER}
     ),
@@ -78,7 +77,6 @@ PRODUCTION_GUARDED_SCRIPTS: frozenset[str] = frozenset(
         "drag_and_drop_processor.py",
         "backfill_directory_scores.py",
         "loop_intent_clustering.py",
-        "media_conversion_delivery_heatmap.py",
         "python_api.py",
     }
 )

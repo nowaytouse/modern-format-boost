@@ -2235,11 +2235,20 @@ pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
 }
 
 fn is_image_container(path: &Path) -> bool {
-    let ext = crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path);
-    matches!(
-        ext.as_str(),
-        "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
-    )
+    crate::image::format_detect::detect_true_format(path).is_ok_and(|format| {
+        matches!(
+            format,
+            crate::image::format_detect::FormatKind::Avif
+                | crate::image::format_detect::FormatKind::Heic
+                | crate::image::format_detect::FormatKind::Heif
+                | crate::image::format_detect::FormatKind::Gif
+                | crate::image::format_detect::FormatKind::WebP
+                | crate::image::format_detect::FormatKind::Png
+                | crate::image::format_detect::FormatKind::Jpeg
+                | crate::image::format_detect::FormatKind::Bmp
+                | crate::image::format_detect::FormatKind::Tiff
+        )
+    })
 }
 
 #[inline]
@@ -2260,13 +2269,10 @@ fn is_animated_image_like_input(
         }
     }
 
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        let ext = e.to_ascii_lowercase();
-        matches!(
-            ext.as_str(),
-            "gif" | "webp" | "avif" | "heic" | "heif" | "apng"
-        )
-    })
+    crate::quality_matcher::SourceCodec::identify_by_content(path)
+        .ok()
+        .flatten()
+        .is_some_and(|codec| codec.can_be_animated())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2276,6 +2282,21 @@ enum AnimatedExplorationEncodeMode {
     ExplorationSample,
     /// One full-length encode at the chosen CRF (deliverable timeline).
     FullTimeline,
+}
+
+#[derive(Clone, Copy)]
+struct RenderedCandidate {
+    crf: f32,
+    mode: AnimatedExplorationEncodeMode,
+    preset: EncoderPreset,
+}
+
+impl RenderedCandidate {
+    fn matches(self, crf: f32, mode: AnimatedExplorationEncodeMode, preset: EncoderPreset) -> bool {
+        crate::float_compare::approx_eq_crf(self.crf, crf)
+            && self.mode == mode
+            && self.preset == preset
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2935,6 +2956,7 @@ struct CpuFineTuneSession<'a> {
     iterations: u32,
     best_crf: Option<f32>,
     best_size: Option<u64>,
+    rendered_candidate: Option<RenderedCandidate>,
     early_insight_triggered: bool,
     prefer_compat_ssim_mode: bool,
     tracking: &'a mut TrackingState,
@@ -3149,6 +3171,7 @@ impl<'a> CpuFineTuneSession<'a> {
             iterations: 0,
             best_crf: None,
             best_size: None,
+            rendered_candidate: None,
             early_insight_triggered: false,
             prefer_compat_ssim_mode: false,
             tracking,
@@ -3232,6 +3255,11 @@ impl<'a> CpuFineTuneSession<'a> {
         let size = self
             .fine_tune_encoder
             .encode_full(crf, self.exploration_mode, self.preset)?;
+        self.rendered_candidate = Some(RenderedCandidate {
+            crf,
+            mode: self.exploration_mode,
+            preset: self.preset,
+        });
         self.size_cache.insert(crf, size);
         self.cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
@@ -4955,7 +4983,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 if size < self.input_pure_media_size + size_tolerance {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!("Best CRF {crf:.2} settled from search (output on disk)")
+                        &format!("Best CRF {crf:.2} selected from search history")
                     );
                 } else {
                     crate::media_conversion_gate::explore_gpu_coarse_audit(
@@ -5039,6 +5067,11 @@ impl<'a> CpuFineTuneSession<'a> {
                 AnimatedExplorationEncodeMode::FullTimeline,
                 self.final_output_preset,
             )?;
+            self.rendered_candidate = Some(RenderedCandidate {
+                crf: final_crf,
+                mode: AnimatedExplorationEncodeMode::FullTimeline,
+                preset: self.final_output_preset,
+            });
             self.iterations += 1;
             // Preset upgraded mid-pipeline: follow up with Phase 5 to squeeze further
             // gains.
@@ -5064,8 +5097,46 @@ impl<'a> CpuFineTuneSession<'a> {
                 AnimatedExplorationEncodeMode::FullTimeline,
                 self.final_output_preset,
             )?;
+            self.rendered_candidate = Some(RenderedCandidate {
+                crf: final_crf,
+                mode: AnimatedExplorationEncodeMode::FullTimeline,
+                preset: self.final_output_preset,
+            });
             self.iterations += 1;
             run_phase5 = true;
+        }
+
+        let use_final_render = !self.early_insight_triggered
+            && (self.use_animated_exploration_sampling
+                || (needs_final_preset_render && final_crf < self.max_crf));
+        let settlement_mode = if use_final_render {
+            AnimatedExplorationEncodeMode::FullTimeline
+        } else {
+            self.exploration_mode
+        };
+        let settlement_preset = if use_final_render {
+            self.final_output_preset
+        } else {
+            self.preset
+        };
+        if !self.rendered_candidate.is_some_and(|rendered| {
+            rendered.matches(final_crf, settlement_mode, settlement_preset)
+        }) {
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_PHASE_3,
+                &format!("Materializing selected CRF {final_crf:.2} on disk")
+            );
+            final_pure_media_size = self.fine_tune_encoder.encode_full(
+                final_crf,
+                settlement_mode,
+                settlement_preset,
+            )?;
+            self.rendered_candidate = Some(RenderedCandidate {
+                crf: final_crf,
+                mode: settlement_mode,
+                preset: settlement_preset,
+            });
+            self.iterations += 1;
         }
 
         Ok((final_crf, final_pure_media_size, run_phase5))
@@ -5140,6 +5211,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 "gpu_coarse_phase5_stale_backup_preclean",
                 &backup_path,
             );
+            let backup_candidate = self.rendered_candidate;
             if let Err(e) = std::fs::rename(self.output, &backup_path) {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_encode",
@@ -5172,6 +5244,11 @@ impl<'a> CpuFineTuneSession<'a> {
                 self.final_output_preset,
             ) {
                 Ok(test_size) => {
+                    self.rendered_candidate = Some(RenderedCandidate {
+                        crf: test_crf,
+                        mode: AnimatedExplorationEncodeMode::FullTimeline,
+                        preset: self.final_output_preset,
+                    });
                     self.iterations += 1;
                     if test_size < final_pure_media_size {
                         let pct_gain = (1.0_f64
@@ -5230,6 +5307,7 @@ impl<'a> CpuFineTuneSession<'a> {
                                 self.output.display()
                             ));
                         }
+                        self.rendered_candidate = backup_candidate;
                     }
 
                     if crate::float_compare::approx_eq_crf(test_crf, 0.0) {
@@ -5258,6 +5336,7 @@ impl<'a> CpuFineTuneSession<'a> {
                             self.output.display()
                         ));
                     }
+                    self.rendered_candidate = backup_candidate;
                     break;
                 }
             }
@@ -6580,5 +6659,35 @@ mod tests {
             pct.is_nan(),
             "zero input_size must return NaN, not fabricated 0.0: {pct}"
         );
+    }
+
+    #[test]
+    fn rendered_candidate_identity_covers_crf_mode_and_preset() {
+        let rendered = super::RenderedCandidate {
+            crf: 20.8,
+            mode: super::AnimatedExplorationEncodeMode::FullTimeline,
+            preset: EncoderPreset::Slow,
+        };
+
+        assert!(rendered.matches(
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!rendered.matches(
+            20.7,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!rendered.matches(
+            20.8,
+            super::AnimatedExplorationEncodeMode::ExplorationSample,
+            EncoderPreset::Slow
+        ));
+        assert!(!rendered.matches(
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slower
+        ));
     }
 }

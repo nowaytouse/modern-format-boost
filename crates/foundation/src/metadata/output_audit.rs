@@ -249,7 +249,16 @@ fn metadata_tag_map(
 
 fn preserve_audit_excludes_tag(key: &str) -> bool {
     let tag = key.rsplit(':').next().unwrap_or(key);
-    tag.eq_ignore_ascii_case("Orientation") || tag.eq_ignore_ascii_case("XMPToolkit")
+    tag.eq_ignore_ascii_case("Orientation")
+        || tag.eq_ignore_ascii_case("XMPToolkit")
+        || [
+            "Keys:CompatibleBrands",
+            "Keys:MajorBrand",
+            "Keys:MinorVersion",
+            "UserData:SoftwareVersion",
+        ]
+        .iter()
+        .any(|generated| key.eq_ignore_ascii_case(generated))
 }
 
 fn removable_payload_bytes(path: &Path) -> io::Result<u64> {
@@ -466,6 +475,29 @@ mod tests {
     }
 
     #[test]
+    fn preserve_audit_excludes_only_container_generated_video_tags() {
+        for generated in [
+            "Keys:CompatibleBrands",
+            "Keys:MajorBrand",
+            "Keys:MinorVersion",
+            "UserData:SoftwareVersion",
+        ] {
+            assert!(preserve_audit_excludes_tag(generated));
+        }
+        for creative in [
+            "Keys:Title",
+            "UserData:Description",
+            "XMP-photoshop:DateCreated",
+            "XMP-xmp:CreateDate",
+        ] {
+            assert!(
+                !preserve_audit_excludes_tag(creative),
+                "creative metadata must remain custody-checked: {creative}"
+            );
+        }
+    }
+
+    #[test]
     fn preserve_policy_rejects_wrong_source_non_identity_metadata() {
         let temp = TempDir::new().expect("tempdir");
         let src = temp.path().join("src.jpg");
@@ -582,7 +614,7 @@ mod tests {
         std::fs::write(&sidecar, b"<x:xmpmeta/>").expect("write source sidecar");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF"),
+                .join("tests/fixtures/metadata_clear_baseline.avif.fixture"),
             &dst,
         )
         .expect("copy cleared AVIF fixture");
@@ -596,6 +628,40 @@ mod tests {
     }
 
     #[test]
+    fn metadata_clear_fixture_contains_only_uniform_synthetic_pixels() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        let temp = TempDir::new().expect("tempdir");
+        let decoded = temp.path().join("fixture.png");
+        let avifdec =
+            crate::common_utils::resolve_tool_path("avifdec").expect("avifdec must be available");
+        let output = std::process::Command::new(avifdec)
+            .arg(&fixture)
+            .arg(&decoded)
+            .output()
+            .expect("decode privacy-safe AVIF fixture");
+        assert!(
+            output.status.success(),
+            "avifdec failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let pixels = image::open(&decoded)
+            .expect("open decoded AVIF fixture")
+            .to_rgb8();
+        assert_eq!(pixels.dimensions(), (109, 106));
+        let first = pixels.get_pixel(0, 0).0;
+        assert!(
+            pixels.pixels().iter().all(|pixel| pixel.0 == first),
+            "metadata-clear AVIF fixture must remain a single-color synthetic image"
+        );
+        assert!(
+            std::fs::metadata(&fixture).expect("fixture metadata").len() <= 1024,
+            "metadata-clear AVIF fixture unexpectedly contains excess payload"
+        );
+    }
+
+    #[test]
     fn clear_policy_rejects_foreign_metadata_in_real_avif_fixture() {
         let temp = TempDir::new().expect("tempdir");
         let src = temp.path().join("source.png");
@@ -605,7 +671,7 @@ mod tests {
             .expect("write source png");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF"),
+                .join("tests/fixtures/metadata_clear_baseline.avif.fixture"),
             &dst,
         )
         .expect("copy cleared AVIF fixture");

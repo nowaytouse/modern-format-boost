@@ -22,7 +22,7 @@ Layout (under resolved log root):
 | ``verbose_{stamp}.log`` | drag-and-drop | ROUTED / HANDOFF / RSYNC audit |
 | ``Bundle_{stamp}/`` | drag-and-drop | Archives session artifacts (worker logs, jsonl, verbose, audit, manifest) |
 | ``session_audit_{stamp}.jsonl`` | drag-and-drop | Append-only session lifecycle audit (ROUTED / HANDOFF / pipeline) |
-| ``mfb_audit_{day}.log`` | ``mfb_logger`` | Python tooling audit |
+| ``mfb_audit_{day}.log`` | Python training tools | Python tooling audit |
 | ``diagnostic_report_{stamp}.txt`` | Rust ``verify`` | Post-batch integrity report |
 | ``run_training_{stamp}.log`` | ``run_training.py`` | Training session log |
 | ``training_session_audit.jsonl`` | ``run_training.py`` | Append-only lifecycle audit (start/phase/heartbeat/exit/signals) |
@@ -101,7 +101,7 @@ def is_forbidden_log_path(path: Path) -> bool:
 
 
 def _default_user_log_dir() -> Path:
-    return default_mfb_state_root() / "logs"
+    return Path.home() / MFB_DEFAULT_HOME_DIRNAME / "logs"
 
 
 def persistent_log_dir() -> Path:
