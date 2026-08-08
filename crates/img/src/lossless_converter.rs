@@ -3709,6 +3709,18 @@ where
     (Some(best_quality), probe_count)
 }
 
+fn measure_avif_probe_payload(
+    path: &Path,
+    quality: u8,
+    complete_file_size: u64,
+) -> std::result::Result<u64, String> {
+    foundation::image::static_payload::isobmff_mdat(path).map_err(|error| {
+        format!(
+            "AVIF q={quality} payload measurement failed after complete_file={complete_file_size}B: {error}"
+        )
+    })
+}
+
 fn try_jxl_to_avif_extreme_handoff(
     input: &Path,
     encoder_input: &Path,
@@ -3747,13 +3759,24 @@ fn try_jxl_to_avif_extreme_handoff(
                 options,
             ) {
                 Ok((temp_path, output_size)) => {
-                    let payload_size =
-                        foundation::image::static_payload::isobmff_mdat(&temp_path).ok();
-                    log_detail!(&format!(
-                        "JXL->AVIF exact quality probe: q={quality}, complete_file={output_size}B, pure_payload={payload_size:?}B, source_pure_payload={input_payload_size}B"
-                    ));
+                    let payload_result =
+                        measure_avif_probe_payload(&temp_path, quality, output_size);
                     cleanup_temp_output(&temp_path, input);
-                    payload_size
+                    match payload_result {
+                        Ok(payload_size) => {
+                            log_detail!(&format!(
+                                "JXL->AVIF exact quality probe: q={quality}, complete_file={output_size}B, pure_payload={payload_size}B, source_pure_payload={input_payload_size}B"
+                            ));
+                            Some(payload_size)
+                        }
+                        Err(reason) => {
+                            log_detail!(&format!(
+                                "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
+                            ));
+                            last_error = Some(reason);
+                            None
+                        }
+                    }
                 }
                 Err(err) => {
                     let reason = err.to_string();
@@ -6876,6 +6899,19 @@ mod tests {
             Err("quality verification failed".to_string())
         });
         assert_eq!(failed, Err("quality verification failed".to_string()));
+    }
+
+    #[test]
+    fn avif_probe_payload_measurement_preserves_the_real_error() {
+        let dir = tempdir().expect("tempdir");
+        let malformed = dir.path().join("malformed.avif");
+        std::fs::write(&malformed, b"not-isobmff").expect("write malformed AVIF");
+
+        let error = measure_avif_probe_payload(&malformed, 88, 11)
+            .expect_err("malformed AVIF probe must not become an ordinary candidate miss");
+        assert!(error.contains("AVIF q=88 payload measurement failed"));
+        assert!(error.contains("complete_file=11B"));
+        assert!(error.contains("ISOBMFF"));
     }
 
     #[test]
