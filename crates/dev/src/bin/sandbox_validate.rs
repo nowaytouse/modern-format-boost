@@ -49,6 +49,30 @@ fn string_arg(value: &str) -> OsString {
     OsString::from(value)
 }
 
+/// Keep the synthetic source lossless so the sandbox measures HEVC conversion,
+/// not whether HEVC can beat an already compressed default-x264 fixture.
+fn lossless_h264_fixture_args(output: &Path) -> Vec<OsString> {
+    vec![
+        string_arg("-hide_banner"),
+        string_arg("-loglevel"),
+        string_arg("error"),
+        string_arg("-y"),
+        string_arg("-f"),
+        string_arg("lavfi"),
+        string_arg("-i"),
+        string_arg("testsrc=duration=8:size=640x360:rate=30"),
+        string_arg("-c:v"),
+        string_arg("libx264"),
+        string_arg("-preset"),
+        string_arg("ultrafast"),
+        string_arg("-crf"),
+        string_arg("0"),
+        string_arg("-pix_fmt"),
+        string_arg("yuv420p"),
+        path_arg(output),
+    ]
+}
+
 fn render_command(program: &OsStr, args: &[OsString]) -> String {
     let mut parts = Vec::with_capacity(args.len() + 1);
     parts.push(program.to_string_lossy().into_owned());
@@ -168,23 +192,10 @@ fn main() -> Result<()> {
     println!("Sandbox: {}", sandbox_path.display());
 
     // Make fixtures
+    let video_fixture = src.join("video9.mp4");
     run_cmd(
         OsStr::new("ffmpeg"),
-        &[
-            string_arg("-hide_banner"),
-            string_arg("-loglevel"),
-            string_arg("error"),
-            string_arg("-y"),
-            string_arg("-f"),
-            string_arg("lavfi"),
-            string_arg("-i"),
-            string_arg("testsrc=duration=8:size=640x360:rate=30"),
-            string_arg("-c:v"),
-            string_arg("libx264"),
-            string_arg("-pix_fmt"),
-            string_arg("yuv420p"),
-            path_arg(&src.join("video9.mp4")),
-        ],
+        &lossless_h264_fixture_args(&video_fixture),
         None,
     )?;
 
@@ -241,7 +252,7 @@ fn main() -> Result<()> {
             string_arg("--no-resume"),
             string_arg("-o"),
             path_arg(&opt),
-            path_arg(&src.join("video9.mp4")),
+            path_arg(&video_fixture),
         ],
         Some(&vlog),
     )?;
@@ -409,6 +420,20 @@ mod tests {
                 OsString::from("--"),
             ]
         );
+    }
+
+    #[test]
+    fn h264_fixture_is_explicitly_lossless() {
+        let args = lossless_h264_fixture_args(Path::new("/tmp/video9.mp4"));
+
+        assert!(args.windows(2).any(|pair| {
+            pair[0].as_os_str() == OsStr::new("-preset")
+                && pair[1].as_os_str() == OsStr::new("ultrafast")
+        }));
+        assert!(args.windows(2).any(|pair| {
+            pair[0].as_os_str() == OsStr::new("-crf")
+                && pair[1].as_os_str() == OsStr::new("0")
+        }));
     }
 
     #[test]
