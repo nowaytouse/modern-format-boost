@@ -1644,6 +1644,7 @@ where
                         handle_photos_import_recovery(
                             "poisoned_session",
                             &mut relaunch_photos_for_import_recovery,
+                            &mut probe_photos_import_session_health,
                         )?;
                         poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
                             ImgQualityError::AnalysisError(
@@ -1930,6 +1931,7 @@ where
             handle_photos_import_recovery(
                 "periodic_window_boundary",
                 &mut relaunch_photos_for_import_recovery,
+                &mut probe_photos_import_session_health,
             )?;
         }
         let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, entries.len());
@@ -2006,6 +2008,7 @@ where
                             handle_photos_import_recovery(
                                 "poisoned_session",
                                 &mut relaunch_photos_for_import_recovery,
+                                &mut probe_photos_import_session_health,
                             )?;
                             poisoned_attempts =
                                 poisoned_attempts.checked_add(1).ok_or_else(|| {
@@ -2752,6 +2755,7 @@ fn photos_import_controllable_item_failure(detail: &str) -> bool {
 fn handle_photos_import_recovery(
     reason: &str,
     relaunch: &mut impl FnMut(&str) -> Result<()>,
+    probe_session_health: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     match relaunch(reason) {
         Ok(()) => Ok(()),
@@ -2760,38 +2764,84 @@ fn handle_photos_import_recovery(
                 target: "photos_import",
                 reason,
                 error = %err,
-                "Periodic Photos recovery failed; checking if Photos is still responsive"
+                "Periodic Photos recovery failed; proving the existing session is still responsive"
             );
-
-            #[cfg(all(target_os = "macos", not(test)))]
-            match get_photos_pid() {
-                Ok(Some(_pid)) => {
-                    tracing::warn!(
-                        target: "photos_import",
-                        reason,
-                        "Photos still running after recovery failure; session may be degraded"
-                    );
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        target: "photos_import",
-                        reason,
-                        error = %e,
-                        "Failed to check if Photos is running after recovery failure"
-                    );
-                }
-            }
-
+            probe_session_health().map_err(|probe_err| {
+                tracing::error!(
+                    target: "photos_import",
+                    reason,
+                    recovery_error = %err,
+                    probe_error = %probe_err,
+                    "Periodic Photos recovery and functional session probe both failed"
+                );
+                ImgQualityError::AnalysisError(format!(
+                    "Periodic Photos recovery failed ({err}); functional session probe also failed ({probe_err})"
+                ))
+            })?;
             tracing::warn!(
                 target: "photos_import",
                 reason,
-                "Continuing with best-effort session; import verifier remains authoritative"
+                "Periodic recovery failed, but a bounded Photos AppleEvent probe proved the existing session responsive; continuing import"
             );
             Ok(())
         }
         Err(err) => Err(err),
     }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn probe_photos_import_session_health() -> Result<()> {
+    let osascript = resolve_osascript_command();
+    let mut command = std::process::Command::new(&osascript);
+    command.arg("-e").arg(
+        r#"with timeout of 15 seconds
+tell application "Photos" to get version
+end timeout"#,
+    );
+    let output = crate::process_runner::ManagedProcess::spawn(&mut command)
+        .and_then(|process| {
+            process.wait_timeout(
+                Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                "Photos import recovery health probe",
+            )
+        })
+        .map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "Photos recovery health probe failed via {}: {err}",
+                osascript.display()
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos recovery health probe exited unsuccessfully: {}",
+            output.stderr.trim()
+        )));
+    }
+    let version = output.stdout.trim();
+    if version.is_empty() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos recovery health probe returned an empty version".to_string(),
+        ));
+    }
+    tracing::info!(
+        target: "photos_import",
+        photos_version = version,
+        "Photos recovery health probe succeeded"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unnecessary_wraps)]
+fn probe_photos_import_session_health() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "macos"), not(test)))]
+fn probe_photos_import_session_health() -> Result<()> {
+    Err(ImgQualityError::AnalysisError(
+        "Photos import recovery health probe is only supported on macOS".to_string(),
+    ))
 }
 
 fn complete_photos_quit_recovery(
@@ -6189,21 +6239,54 @@ mod tests {
     }
 
     #[test]
-    fn periodic_photos_recovery_timeout_does_not_abort_import_window() {
+    fn periodic_photos_recovery_continues_only_after_functional_health_proof() {
         let mut recovery_calls = Vec::new();
-        let result =
-            handle_photos_import_recovery("periodic_window_boundary", &mut |reason: &str| {
+        let mut health_probe_calls = 0usize;
+        let result = handle_photos_import_recovery(
+            "periodic_window_boundary",
+            &mut |reason: &str| {
                 recovery_calls.push(reason.to_string());
                 Err(ImgQualityError::AnalysisError(
                     "timed out waiting for Photos process quit state".to_string(),
                 ))
-            });
+            },
+            &mut || {
+                health_probe_calls += 1;
+                Ok(())
+            },
+        );
 
         assert!(
             result.is_ok(),
-            "periodic relaunch recovery is best-effort because import proof still gates success"
+            "a functional Photos health proof may preserve the current import window"
         );
         assert_eq!(recovery_calls, vec!["periodic_window_boundary"]);
+        assert_eq!(health_probe_calls, 1);
+    }
+
+    #[test]
+    fn periodic_photos_recovery_fails_when_functional_health_probe_fails() {
+        let result = handle_photos_import_recovery(
+            "periodic_window_boundary",
+            &mut |_reason: &str| {
+                Err(ImgQualityError::AnalysisError(
+                    "timed out waiting for Photos process quit state".to_string(),
+                ))
+            },
+            &mut || {
+                Err(ImgQualityError::AnalysisError(
+                    "AppleEvent probe timed out".to_string(),
+                ))
+            },
+        );
+
+        let err = result.expect_err("unproven Photos session health must fail closed");
+        let detail = err.to_string();
+        assert!(
+            detail.contains("timed out waiting for Photos process quit state")
+                && detail.contains("AppleEvent probe timed out"),
+            "both recovery and health-probe failures must remain visible: {err}"
+        );
     }
 
     #[test]
@@ -6232,17 +6315,29 @@ mod tests {
 
     #[test]
     fn poisoned_photos_recovery_timeout_remains_fatal() {
-        let result = handle_photos_import_recovery("poisoned_session", &mut |_reason: &str| {
-            Err(ImgQualityError::AnalysisError(
-                "timed out waiting for Photos process quit state".to_string(),
-            ))
-        });
+        let mut health_probe_called = false;
+        let result = handle_photos_import_recovery(
+            "poisoned_session",
+            &mut |_reason: &str| {
+                Err(ImgQualityError::AnalysisError(
+                    "timed out waiting for Photos process quit state".to_string(),
+                ))
+            },
+            &mut || {
+                health_probe_called = true;
+                Ok(())
+            },
+        );
 
         let err = result.expect_err("poisoned Photos session recovery must fail closed");
         assert!(
             err.to_string()
                 .contains("timed out waiting for Photos process quit state"),
             "unexpected err: {err}"
+        );
+        assert!(
+            !health_probe_called,
+            "poisoned sessions must not be rescued by the periodic-boundary health probe"
         );
     }
 
