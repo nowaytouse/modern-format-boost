@@ -1063,6 +1063,11 @@ struct PhotosCheckpointImportReport {
     failed_count: usize,
 }
 
+enum PhotosImportBatchOutcome {
+    Imported(Vec<LibraryAssetRecord>),
+    DeferredItem { source_rel: String, detail: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PhotosImportWindow {
     start: usize,
@@ -1877,6 +1882,162 @@ where
     Ok(verified.imported_assets.len())
 }
 
+#[cfg(all(target_os = "macos", not(test)))]
+fn reconcile_photos_batch_after_session_failure<Q, P>(
+    marker: &mut WorkingCopyMarker,
+    batch_entries: &[PhotosImportPendingEntry],
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+) -> Result<Option<Vec<LibraryAssetRecord>>>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+{
+    let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
+        run_photos_import_applescript_session_mode(
+            "same-run media reconciliation",
+            entries,
+            "reconcile",
+        )
+    };
+    let recovered = reconcile_uncheckpointed_photos_assets(
+        marker,
+        batch_entries,
+        query_assets,
+        is_quarantined,
+        &mut reconcile_imports,
+    )?;
+    if recovered != batch_entries.len() {
+        return Ok(None);
+    }
+
+    let batch_paths = batch_entries
+        .iter()
+        .map(|entry| entry.rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let recovered_assets = marker
+        .photos_imported_assets
+        .iter()
+        .filter(|asset| batch_paths.contains(asset.rel_path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if recovered_assets.len() != batch_entries.len() {
+        return Ok(None);
+    }
+    tracing::info!(
+        target: "photos_import",
+        recovered,
+        "Photos error occurred after commit; recovered verified assets instead of importing duplicates"
+    );
+    Ok(Some(recovered_assets))
+}
+
+fn import_photos_batch_with_recovery<Q, P, R>(
+    _marker: &mut WorkingCopyMarker,
+    batch_entries: &[PhotosImportPendingEntry],
+    fail_fast: bool,
+    window_start: usize,
+    batch_number: usize,
+    batch_count: usize,
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+    run_import_batch: &mut R,
+) -> Result<PhotosImportBatchOutcome>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+    R: FnMut(&[(PathBuf, String)]) -> Result<String>,
+{
+    let manifest_entries = batch_entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.album_name.clone()))
+        .collect::<Vec<_>>();
+    let output_paths = batch_entries
+        .iter()
+        .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
+        .collect::<Vec<_>>();
+    let mut poisoned_attempts = 0usize;
+    loop {
+        let attempt_result = (|| {
+            let stdout = run_import_batch(&manifest_entries)?;
+            let report_pairs = fast_img_pairs_from_photos_import_ids(
+                &output_paths,
+                stdout.as_bytes(),
+                batch_entries.len(),
+            )?;
+            library_records_from_pending_import(
+                batch_entries,
+                &report_pairs,
+                query_assets,
+                is_quarantined,
+            )
+        })();
+        match attempt_result {
+            Ok(batch_assets) => return Ok(PhotosImportBatchOutcome::Imported(batch_assets)),
+            Err(err) => {
+                let detail = err.to_string();
+                if fail_fast {
+                    return Err(err);
+                }
+                if let Some(poison_reason) = photos_import_retry_reason(&detail)
+                    && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                {
+                    tracing::warn!(
+                        target: "photos_import",
+                        window_start,
+                        batch_number,
+                        batch_count,
+                        poisoned_attempts,
+                        poison_reason,
+                        detail = %detail,
+                        "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
+                    );
+                    handle_photos_import_recovery(
+                        "poisoned_session",
+                        &mut relaunch_photos_for_import_recovery,
+                        &mut probe_photos_import_session_health,
+                    )?;
+                    poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "Photos import poison retry counter overflowed".to_string(),
+                        )
+                    })?;
+                    tracing::info!(
+                        target: "photos_import",
+                        window_start,
+                        batch_number,
+                        batch_count,
+                        poisoned_attempts,
+                        poison_reason,
+                        "Photos import recovery complete; automatically retrying current batch"
+                    );
+                    #[cfg(all(target_os = "macos", not(test)))]
+                    if let Some(recovered_assets) = reconcile_photos_batch_after_session_failure(
+                        _marker,
+                        batch_entries,
+                        query_assets,
+                        is_quarantined,
+                    )? {
+                        return Ok(PhotosImportBatchOutcome::Imported(recovered_assets));
+                    }
+                    continue;
+                }
+                if batch_entries.len() == 1 && photos_import_controllable_item_failure(&detail) {
+                    let source_rel = batch_entries[0].source_rel.clone();
+                    tracing::error!(
+                        target: "photos_import",
+                        source_rel = %source_rel,
+                        detail = %detail,
+                        "Photos rejected one file; continuing normal-mode import and deferring final failure"
+                    );
+                    return Ok(PhotosImportBatchOutcome::DeferredItem { source_rel, detail });
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
 fn import_pending_media_entries_with_checkpoint<Q, P, R>(
     marker: &mut WorkingCopyMarker,
     pending_entries: &[PhotosImportPendingEntry],
@@ -1934,7 +2095,7 @@ where
                 &mut probe_photos_import_session_health,
             )?;
         }
-        let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, entries.len());
+        let batch_sizes = photos_import_batch_sizes(entries.len());
         let batch_count = batch_sizes.len();
         let mut offset = 0usize;
         for (batch_index, batch_size) in batch_sizes.into_iter().enumerate() {
@@ -1952,10 +2113,6 @@ where
                     entries.len()
                 ))
             })?;
-            let manifest_entries = batch_entries
-                .iter()
-                .map(|entry| (entry.path.clone(), entry.album_name.clone()))
-                .collect::<Vec<_>>();
             tracing::info!(
                 target: "photos_import",
                 window_start = window.start,
@@ -1965,127 +2122,23 @@ where
                 batch_files = batch_entries.len(),
                 "Starting Photos import batch"
             );
-            let output_paths = batch_entries
-                .iter()
-                .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
-                .collect::<Vec<_>>();
-            let mut poisoned_attempts = 0usize;
-            let batch_assets = loop {
-                let attempt_result = (|| {
-                    let stdout = run_import_batch(&manifest_entries)?;
-                    let report_pairs = fast_img_pairs_from_photos_import_ids(
-                        &output_paths,
-                        stdout.as_bytes(),
-                        batch_entries.len(),
-                    )?;
-                    library_records_from_pending_import(
-                        batch_entries,
-                        &report_pairs,
-                        query_assets,
-                        is_quarantined,
-                    )
-                })();
-                match attempt_result {
-                    Ok(batch_assets) => break Some(batch_assets),
-                    Err(err) => {
-                        let detail = err.to_string();
-                        if fail_fast {
-                            return Err(err);
-                        }
-                        if let Some(poison_reason) = photos_import_retry_reason(&detail)
-                            && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
-                        {
-                            tracing::warn!(
-                                target: "photos_import",
-                                window_start = window.start,
-                                batch_number,
-                                batch_count,
-                                poisoned_attempts,
-                                poison_reason,
-                                detail = %detail,
-                                "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
-                            );
-                            handle_photos_import_recovery(
-                                "poisoned_session",
-                                &mut relaunch_photos_for_import_recovery,
-                                &mut probe_photos_import_session_health,
-                            )?;
-                            poisoned_attempts =
-                                poisoned_attempts.checked_add(1).ok_or_else(|| {
-                                    ImgQualityError::AnalysisError(
-                                        "Photos import poison retry counter overflowed".to_string(),
-                                    )
-                                })?;
-                            tracing::info!(
-                                target: "photos_import",
-                                window_start = window.start,
-                                batch_number,
-                                batch_count,
-                                poisoned_attempts,
-                                poison_reason,
-                                "Photos import recovery complete; automatically retrying current batch"
-                            );
-                            #[cfg(all(target_os = "macos", not(test)))]
-                            {
-                                let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
-                                    run_photos_import_applescript_session_mode(
-                                        "same-run media reconciliation",
-                                        entries,
-                                        "reconcile",
-                                    )
-                                };
-                                let recovered = reconcile_uncheckpointed_photos_assets(
-                                    marker,
-                                    batch_entries,
-                                    query_assets,
-                                    is_quarantined,
-                                    &mut reconcile_imports,
-                                )?;
-                                if recovered == batch_entries.len() {
-                                    let batch_paths = batch_entries
-                                        .iter()
-                                        .map(|entry| entry.rel_path.as_str())
-                                        .collect::<BTreeSet<_>>();
-                                    let recovered_assets = marker
-                                        .photos_imported_assets
-                                        .iter()
-                                        .filter(|asset| {
-                                            batch_paths.contains(asset.rel_path.as_str())
-                                        })
-                                        .cloned()
-                                        .collect::<Vec<_>>();
-                                    if recovered_assets.len() == batch_entries.len() {
-                                        tracing::info!(
-                                            target: "photos_import",
-                                            recovered,
-                                            "Photos error occurred after commit; recovered verified assets instead of importing duplicates"
-                                        );
-                                        break Some(recovered_assets);
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        if batch_entries.len() == 1
-                            && photos_import_controllable_item_failure(&detail)
-                        {
-                            let source_rel = batch_entries[0].source_rel.clone();
-                            tracing::error!(
-                                target: "photos_import",
-                                source_rel = %source_rel,
-                                detail = %detail,
-                                "Photos rejected one file; continuing normal-mode import and deferring final failure"
-                            );
-                            deferred_item_failures.push((source_rel, detail));
-                            break None;
-                        }
-                        return Err(err);
-                    }
+            let mut batch_assets = match import_photos_batch_with_recovery(
+                marker,
+                batch_entries,
+                fail_fast,
+                window.start,
+                batch_number,
+                batch_count,
+                query_assets,
+                is_quarantined,
+                run_import_batch,
+            )? {
+                PhotosImportBatchOutcome::Imported(batch_assets) => batch_assets,
+                PhotosImportBatchOutcome::DeferredItem { source_rel, detail } => {
+                    deferred_item_failures.push((source_rel, detail));
+                    offset = end;
+                    continue;
                 }
-            };
-            let Some(mut batch_assets) = batch_assets else {
-                offset = end;
-                continue;
             };
             checkpoint_photos_import_window(marker, batch_entries, &batch_assets)?;
             imported_assets.append(&mut batch_assets);
@@ -3368,18 +3421,7 @@ fn photos_import_candidate_manifest_entries(
         .collect()
 }
 
-#[cfg(test)]
 fn photos_import_batch_sizes(total: usize) -> Vec<usize> {
-    photos_import_batch_sizes_for_strategy(photos_import_strategy(total), total)
-}
-
-fn photos_import_batch_sizes_for_strategy(
-    _strategy: PhotosImportStrategy,
-    total: usize,
-) -> Vec<usize> {
-    if total == 0 {
-        return Vec::new();
-    }
     vec![1; total]
 }
 
@@ -6286,7 +6328,7 @@ mod tests {
             windows.iter().map(|window| window.len).collect::<Vec<_>>(),
             vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP, 51]
         );
-        let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, windows[0].len);
+        let batch_sizes = photos_import_batch_sizes(windows[0].len);
         assert_eq!(batch_sizes.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
         assert!(batch_sizes.iter().all(|batch_size| *batch_size == 1));
         Ok(())
@@ -6423,41 +6465,21 @@ mod tests {
 
     #[test]
     fn photos_import_batch_sizes_use_one_file_transactions() {
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 1),
-            vec![1]
-        );
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 11),
-            vec![1; 11]
-        );
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 21),
-            vec![1; 21]
-        );
-    }
-
-    #[test]
-    fn photos_import_batch_sizes_use_fast_path_for_small_pending_sets() {
-        assert_eq!(photos_import_batch_sizes(2), vec![1; 2]);
-        assert_eq!(
-            photos_import_batch_sizes(FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP),
-            vec![1; FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP]
-        );
-        assert_eq!(
-            photos_import_batch_sizes(150),
-            vec![1; 150],
-            "FastSmallSet must checkpoint one file at a time"
-        );
-    }
-
-    #[test]
-    fn photos_import_batch_sizes_keep_stable_path_for_large_pending_sets() {
-        assert_eq!(
-            photos_import_batch_sizes(151),
-            vec![1; 151],
-            "StableCheckpointed must checkpoint one file at a time"
-        );
+        for total in [
+            0,
+            1,
+            2,
+            11,
+            21,
+            FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP,
+            FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP + 1,
+        ] {
+            assert_eq!(
+                photos_import_batch_sizes(total),
+                vec![1; total],
+                "every Photos import path must checkpoint one file at a time"
+            );
+        }
     }
 
     #[test]
