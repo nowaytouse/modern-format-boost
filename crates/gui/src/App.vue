@@ -184,11 +184,11 @@ const shouldStickTerminalToBottom = () => {
 
 const appendLog = (entry: string) => {
   const shouldStick = shouldStickTerminalToBottom();
-  logs.value.push(entry);
+  logs.value.push(...entry.split("\n"));
 
   // Memory bound: avoid infinite array growth over very long sessions
   if (logs.value.length > 3000) {
-    logs.value.splice(0, 600);
+    logs.value.splice(0, logs.value.length - 2400);
   }
 
   if (!shouldStick || scrollTimeout) {

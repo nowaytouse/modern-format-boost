@@ -61,6 +61,8 @@ private struct TrustedWebContent {
 }
 
 private let maxProcessLogChunkBytes = 64 * 1024
+private let maxProcessLogBatchBytes = 256 * 1024
+private let maxProcessLogBatchEntries = 256
 
 private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
     var chunks: [String] = []
@@ -82,6 +84,80 @@ private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String
         buffer.removeAll(keepingCapacity: false)
     }
     return chunks
+}
+
+private final class ProcessLogBackpressure: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maxBytes: Int
+    private let maxEntries: Int
+    private var pending = ""
+    private var pendingBytes = 0
+    private var pendingEntries = 0
+    private var omittedEntries: UInt64 = 0
+    private var deliveryInFlight = false
+
+    init(
+        maxBytes: Int = maxProcessLogBatchBytes,
+        maxEntries: Int = maxProcessLogBatchEntries,
+    ) {
+        self.maxBytes = maxBytes
+        self.maxEntries = maxEntries
+    }
+
+    func enqueue(_ entry: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let separatorBytes = pendingEntries == 0 ? 0 : 1
+        let entryBytes = entry.utf8.count
+        if pendingEntries >= maxEntries
+            || pendingBytes + separatorBytes + entryBytes > maxBytes
+        {
+            if omittedEntries < UInt64.max { omittedEntries += 1 }
+        } else {
+            if pendingEntries > 0 { pending.append("\n") }
+            pending.append(entry)
+            pendingBytes += separatorBytes + entryBytes
+            pendingEntries += 1
+        }
+
+        guard !deliveryInFlight else { return false }
+        deliveryInFlight = true
+        return true
+    }
+
+    func takeDelivery() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard deliveryInFlight else { return nil }
+
+        var payload = pending
+        if omittedEntries > 0 {
+            if pendingEntries > 0 { payload.append("\n") }
+            payload.append(
+                "[MFB UI] omitted \(omittedEntries) process log entries while the renderer was busy",
+            )
+        }
+        pending.removeAll(keepingCapacity: true)
+        pendingBytes = 0
+        pendingEntries = 0
+        omittedEntries = 0
+        return payload
+    }
+
+    func finishDelivery() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let hasPending = pendingEntries > 0 || omittedEntries > 0
+        if !hasPending { deliveryInFlight = false }
+        return hasPending
+    }
+
+    var isIdle: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !deliveryInFlight && pendingEntries == 0 && omittedEntries == 0
+    }
 }
 
 private enum ProcessorLocator {
@@ -230,6 +306,8 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
     weak var webView: WKWebView?
     weak var window: NSWindow?
     private var activeProcess: Process?
+    private let processLogs = ProcessLogBackpressure()
+    private var pendingProcessCompletion: (() -> Void)?
     private let trustedContent: TrustedWebContent
 
     init(trustedContent: TrustedWebContent) {
@@ -349,7 +427,7 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
         }
     }
 
-    func emit(_ name: String, payload: Any) {
+    func emit(_ name: String, payload: Any, completion: (() -> Void)? = nil) {
         guard JSONSerialization.isValidJSONObject(["name": name, "payload": payload]),
               let data = try? JSONSerialization.data(withJSONObject: [
                   "name": name,
@@ -357,9 +435,16 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
               ]),
               let json = String(data: data, encoding: .utf8)
         else {
+            completion?()
             return
         }
-        webView?.evaluateJavaScript("window.__MFB_NATIVE_EVENT__?.(\(json))")
+        guard let webView else {
+            completion?()
+            return
+        }
+        webView.evaluateJavaScript("window.__MFB_NATIVE_EVENT__?.(\(json))") { _, _ in
+            completion?()
+        }
     }
 
     func terminateActiveProcess() {
@@ -452,17 +537,45 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
             let status = process.terminationStatus
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.activeProcess = nil
-                if status == 0 {
-                    replyHandler("Completed successfully", nil)
-                } else {
-                    replyHandler(nil, "Process exited with status: \(status)")
-                }
+                self.completeProcessingAfterLogs(status: status, replyHandler: replyHandler)
+            }
+        }
+    }
+
+    private func completeProcessingAfterLogs(
+        status: Int32,
+        replyHandler: @escaping (Any?, String?) -> Void,
+    ) {
+        let finish = { [weak self] in
+            self?.activeProcess = nil
+            if status == 0 {
+                replyHandler("Completed successfully", nil)
+            } else {
+                replyHandler(nil, "Process exited with status: \(status)")
+            }
+        }
+        if processLogs.isIdle {
+            finish()
+        } else {
+            pendingProcessCompletion = finish
+        }
+    }
+
+    private func flushProcessLogs() {
+        guard let payload = processLogs.takeDelivery() else { return }
+        emit("process-log", payload: payload) { [weak self] in
+            guard let self else { return }
+            if self.processLogs.finishDelivery() {
+                self.flushProcessLogs()
+            } else if let completion = self.pendingProcessCompletion {
+                self.pendingProcessCompletion = nil
+                completion()
             }
         }
     }
 
     private func stream(_ handle: FileHandle, prefix: String, group: DispatchGroup) {
+        let processLogs = processLogs
         group.enter()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             defer { group.leave() }
@@ -472,11 +585,15 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
                 if chunk.isEmpty { break }
                 buffer.append(chunk)
                 for line in drainProcessLogChunks(&buffer, flush: false) {
-                    DispatchQueue.main.async { self?.emit("process-log", payload: prefix + line) }
+                    if processLogs.enqueue(prefix + line) {
+                        DispatchQueue.main.async { self?.flushProcessLogs() }
+                    }
                 }
             }
             for line in drainProcessLogChunks(&buffer, flush: true) {
-                DispatchQueue.main.async { self?.emit("process-log", payload: prefix + line) }
+                if processLogs.enqueue(prefix + line) {
+                    DispatchQueue.main.async { self?.flushProcessLogs() }
+                }
             }
         }
     }
@@ -790,6 +907,21 @@ private func runSelfTest() -> Int32 {
         let finalChunks = drainProcessLogChunks(&oversizedLog, flush: true)
         guard finalChunks.count == 1, finalChunks[0].utf8.count == 17, oversizedLog.isEmpty else {
             fputs("native-host self-test log tail flush failed\n", stderr)
+            return 1
+        }
+        let logBackpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
+        guard logBackpressure.enqueue("first"),
+              !logBackpressure.enqueue("second"),
+              !logBackpressure.enqueue("omitted"),
+              logBackpressure.takeDelivery()
+                == "first\nsecond\n[MFB UI] omitted 1 process log entries while the renderer was busy",
+              !logBackpressure.enqueue("next"),
+              logBackpressure.finishDelivery(),
+              logBackpressure.takeDelivery() == "next",
+              !logBackpressure.finishDelivery(),
+              logBackpressure.isIdle
+        else {
+            fputs("native-host self-test log backpressure failed\n", stderr)
             return 1
         }
         print("native-host self-test passed")
