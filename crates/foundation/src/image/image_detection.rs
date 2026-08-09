@@ -4362,10 +4362,17 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
 fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
+    let file_len = file.metadata().map_err(ImgQualityError::IoError)?.len();
+    if file_len > crate::constants::IMAGE_ANALYSIS_FILE_SIZE_LIMIT {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "ICO: file is too large ({file_len} bytes > {} max allowed)",
+            crate::constants::IMAGE_ANALYSIS_FILE_SIZE_LIMIT,
+        )));
+    }
 
     // ICO header: reserved(2) + type(2) + count(2) = 6 bytes
     let mut header = [0u8; 6];
-    file.read(&mut header).map_err(|err| {
+    file.read_exact(&mut header).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "ICO: failed to read 6-byte header from '{}': {err}",
             path.display()
@@ -4373,6 +4380,32 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     })?;
 
     let image_count = usize::from(u16::from_le_bytes([header[4], header[5]]));
+    if header[0..2] != [0, 0] || header[2..4] != [1, 0] || image_count == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "ICO: invalid ICONDIR header in '{}' (reserved={}, type={}, count={image_count})",
+            path.display(),
+            u16::from_le_bytes([header[0], header[1]]),
+            u16::from_le_bytes([header[2], header[3]]),
+        )));
+    }
+    let directory_end = 6_u64
+        .checked_add(
+            u64::try_from(image_count)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "ICO: image count conversion failed in '{}': {error}",
+                        path.display()
+                    ))
+                })?
+                * 16,
+        )
+        .filter(|end| *end <= file_len)
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: directory for {image_count} images exceeds file length {file_len} in '{}'",
+                path.display()
+            ))
+        })?;
     let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     // Each directory entry is 16 bytes, starting at offset 6
@@ -4382,37 +4415,21 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                 ImgQualityError::AnalysisError(format!("ICO index conversion failed for entry {i}"))
             })?
             * 16;
-        if file.seek(SeekFrom::Start(entry_offset)).is_err() {
-            crate::media_conversion_gate::probe_layer_audit(
-                "delivery_db_metadata",
-                path,
-                format!(
-                    "ICO DECODE AUDIT: Failed to seek to entry {} at offset {} for '{}' | \
-                     Forensic: IO failure during directory traversal; breaking loop to prevent \
-                     corrupt metadata emission",
-                    i,
-                    entry_offset,
-                    path.display()
-                ),
-            );
-            break;
-        }
+        file.seek(SeekFrom::Start(entry_offset))
+            .map_err(ImgQualityError::IoError)?;
 
         let mut entry = [0u8; 16];
-        if file.read(&mut entry).is_err() {
-            crate::media_conversion_gate::probe_layer_audit(
-                "probe_image_detection",
-                path,
-                format!(
-                    "ICO DECODE AUDIT: Truncated entry {} at offset {} for '{}' | Forensic: \
-                     Unexpected EOF during directory parse; breaking loop to prevent \
-                     out-of-bounds access",
-                    i,
-                    entry_offset,
-                    path.display()
-                ),
-            );
-            break;
+        file.read_exact(&mut entry).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: directory entry {i} is truncated in '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if entry[3] != 0 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "ICO: directory entry {i} has non-zero reserved byte in '{}'",
+                path.display()
+            )));
         }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
@@ -4422,59 +4439,45 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         let img_offset = u64::from(u32::from_le_bytes([
             entry[12], entry[13], entry[14], entry[15],
         ]));
+        let img_end = img_offset
+            .checked_add(img_size)
+            .filter(|end| img_size >= 8 && img_offset >= directory_end && *end <= file_len)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: entry {i} image range offset={img_offset}, size={img_size} is outside \
+                     data region {directory_end}..{file_len} in '{}'",
+                    path.display()
+                ))
+            })?;
 
-        // Peak into image data for PNG magic
-        match file.seek(SeekFrom::Start(img_offset)) {
-            Ok(_) => {
-                let mut magic_peek = [0u8; 8];
-                match file.read_exact(&mut magic_peek) {
-                    Ok(()) if magic_peek == png_magic => {
-                        // Seek back to start of image data for full analysis
-                        file.seek(SeekFrom::Start(img_offset))?;
-                        let mut img_reader = (&file).take(img_size);
-                        // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't
-                        // provide it easily, we read the PNG part into
-                        // memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
-                        // This is infinitely safer than loading the whole 64MB ICO.
-                        let Some(png_capacity) =
-                            crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
-                        else {
-                            crate::media_conversion_gate::probe_layer_audit(
-                                "delivery_db_numeric",
-                                path,
-                                format!(
-                                    "ICO DECODE AUDIT: Image size {} in '{}' overflows usize | \
-                                     Forensic: Magnitude exceeds platform pointer width; skipping \
-                                     entry to prevent OOM panic",
-                                    img_size,
-                                    path.display()
-                                ),
-                            );
-                            continue;
-                        };
-                        let mut png_data = Vec::with_capacity(png_capacity);
-                        img_reader.read_to_end(&mut png_data)?;
-                        let analysis = analyze_png_quantization_from_bytes(&png_data)?;
-                        if analysis.is_quantized {
-                            return Ok(CompressionType::Lossy);
-                        }
-                    }
-                    Ok(()) => {}
-                    Err(err) => {
-                        crate::media_conversion_gate::probe_layer_audit(
-                            "ico_embedded_png_magic_read_failed",
-                            path,
-                            format!("failed to read embedded ICO image magic: {err}"),
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                crate::media_conversion_gate::probe_layer_audit(
-                    "ico_embedded_png_seek_failed",
-                    path,
-                    format!("failed to seek to embedded ICO image offset {img_offset}: {err}"),
-                );
+        file.seek(SeekFrom::Start(img_offset))
+            .map_err(ImgQualityError::IoError)?;
+        let mut magic_peek = [0u8; 8];
+        file.read_exact(&mut magic_peek).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: failed to read entry {i} image header ending at {img_end} in '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if magic_peek == png_magic {
+            file.seek(SeekFrom::Start(img_offset))
+                .map_err(ImgQualityError::IoError)?;
+            let png_len = crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(format!(
+                        "ICO: entry {i} image size {img_size} overflows usize in '{}'",
+                        path.display()
+                    ))
+                })?;
+            let mut png_data = vec![0; png_len];
+            file.read_exact(&mut png_data).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: entry {i} PNG payload changed or truncated during read in '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            if analyze_png_quantization_from_bytes(&png_data)?.is_quantized {
+                return Ok(CompressionType::Lossy);
             }
         }
     }

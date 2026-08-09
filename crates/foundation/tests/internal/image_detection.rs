@@ -54,6 +54,25 @@ fn png_text_decompression_rejects_output_beyond_remaining_budget() {
 }
 
 #[test]
+fn ico_declared_image_span_must_fit_the_file() {
+    let mut ico = vec![0, 0, 1, 0, 1, 0];
+    let mut entry = [0_u8; 16];
+    entry[0] = 1;
+    entry[1] = 1;
+    entry[8..12].copy_from_slice(&64_u32.to_le_bytes());
+    entry[12..16].copy_from_slice(&22_u32.to_le_bytes());
+    ico.extend_from_slice(&entry);
+    ico.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+    let mut file = NamedTempFile::new().expect("temp ICO");
+    file.write_all(&ico).expect("write malformed ICO");
+    let error = detect_compression(&DetectedFormat::ICO, file.path())
+        .expect_err("ICO entry outside the physical file must fail before allocation");
+
+    assert!(error.to_string().contains("image range"));
+}
+
+#[test]
 fn pixel_coordinate_clamp_stays_within_image_bounds() {
     use crate::numeric_cast::u64_to_u32_strict;
 
