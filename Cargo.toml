@@ -54,12 +54,12 @@ categories = ["multimedia", "command-line-utilities"]
 # Override crates.io with git sources for dependencies that require upstream fixes.
 # Use exact commits from Cargo.lock to ensure proc-macro companions are resolved.
 anyhow = { git = "https://github.com/dtolnay/anyhow" }
-thiserror = { git = "https://github.com/dtolnay/thiserror", rev = "ec42ea70852f8db43e971700d1ccc184957d1b32" }
-thiserror-impl = { git = "https://github.com/dtolnay/thiserror", rev = "ec42ea70852f8db43e971700d1ccc184957d1b32" }
-tracing = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
-tracing-attributes = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
-tracing-subscriber = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
-tracing-appender = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
+thiserror = { git = "https://github.com/dtolnay/thiserror" }
+thiserror-impl = { git = "https://github.com/dtolnay/thiserror" }
+tracing = { git = "https://github.com/tokio-rs/tracing" }
+tracing-attributes = { git = "https://github.com/tokio-rs/tracing" }
+tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
+tracing-appender = { git = "https://github.com/tokio-rs/tracing" }
 clap = { git = "https://github.com/clap-rs/clap" }
 indicatif = { git = "https://github.com/console-rs/indicatif" }
 walkdir = { git = "https://github.com/BurntSushi/walkdir" }
@@ -87,26 +87,26 @@ exr = { git = "https://github.com/johannesvollmer/exrs" }
 jpegxl-rs = { git = "https://github.com/inflation/jpegxl-rs" }
 rug = { git = "https://gitlab.com/tspiteri/rug" }
 paste = { git = "https://github.com/dtolnay/paste" }
-zerocopy = { git = "https://github.com/google/zerocopy", rev = "3b29d25ae1d7bcb12321eef9016721612c6724f7" }
-zerocopy-derive = { git = "https://github.com/google/zerocopy", rev = "3b29d25ae1d7bcb12321eef9016721612c6724f7" }
-profiling = { git = "https://github.com/aclysma/profiling", rev = "da44bd1c5497c665c0f00e5d70594fc14d390b4b" }
-profiling-procmacros = { git = "https://github.com/aclysma/profiling", rev = "da44bd1c5497c665c0f00e5d70594fc14d390b4b" }
+zerocopy = { git = "https://github.com/google/zerocopy" }
+zerocopy-derive = { git = "https://github.com/google/zerocopy" }
+profiling = { git = "https://github.com/aclysma/profiling" }
+profiling-procmacros = { git = "https://github.com/aclysma/profiling" }
 # equator 0.4.2 not available in git; use crates.io version
 
 [workspace.dependencies]
 # Core error_handling>
 # Core error handling
 anyhow = { git = "https://github.com/dtolnay/anyhow" }
-thiserror = { git = "https://github.com/dtolnay/thiserror", rev = "ec42ea70852f8db43e971700d1ccc184957d1b32" }
+thiserror = { git = "https://github.com/dtolnay/thiserror" }
 
 # Logging and tracing
-tracing = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
-tracing-subscriber = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437", features = [
+tracing = { git = "https://github.com/tokio-rs/tracing" }
+tracing-subscriber = { git = "https://github.com/tokio-rs/tracing", features = [
   "fmt",
   "env-filter",
   "json",
 ] }
-tracing-appender = { git = "https://github.com/tokio-rs/tracing", rev = "d9d4c542de10f5d3a711b7a45ffe450fd0666437" }
+tracing-appender = { git = "https://github.com/tokio-rs/tracing" }
 
 # CLI
 clap = { git = "https://github.com/clap-rs/clap", features = [

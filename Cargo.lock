@@ -187,7 +187,7 @@ dependencies = [
  "num-traits",
  "pastey",
  "rayon",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
  "v_frame",
  "y4m",
 ]
@@ -935,7 +935,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1350,7 +1350,7 @@ dependencies = [
  "byteorder",
  "half",
  "jpegxl-sys",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2234,7 +2234,7 @@ dependencies = [
 [[package]]
 name = "profiling"
 version = "1.0.18"
-source = "git+https://github.com/aclysma/profiling?rev=da44bd1c5497c665c0f00e5d70594fc14d390b4b#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
+source = "git+https://github.com/aclysma/profiling#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
 dependencies = [
  "profiling-procmacros",
 ]
@@ -2242,7 +2242,7 @@ dependencies = [
 [[package]]
 name = "profiling-procmacros"
 version = "1.0.18"
-source = "git+https://github.com/aclysma/profiling?rev=da44bd1c5497c665c0f00e5d70594fc14d390b4b#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
+source = "git+https://github.com/aclysma/profiling#da44bd1c5497c665c0f00e5d70594fc14d390b4b"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -2499,7 +2499,7 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "simd_helpers",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
  "v_frame",
  "wasm-bindgen",
 ]
@@ -2609,7 +2609,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2990,10 +2990,10 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror?rev=ec42ea70852f8db43e971700d1ccc184957d1b32#ec42ea70852f8db43e971700d1ccc184957d1b32"
+version = "2.0.20"
+source = "git+https://github.com/dtolnay/thiserror#8336b8407fbfe69177c504cdbc379db20cf6f131"
 dependencies = [
- "thiserror-impl 2.0.18",
+ "thiserror-impl 2.0.20",
 ]
 
 [[package]]
@@ -3009,12 +3009,12 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
-source = "git+https://github.com/dtolnay/thiserror?rev=ec42ea70852f8db43e971700d1ccc184957d1b32#ec42ea70852f8db43e971700d1ccc184957d1b32"
+version = "2.0.20"
+source = "git+https://github.com/dtolnay/thiserror#8336b8407fbfe69177c504cdbc379db20cf6f131"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3215,7 +3215,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -3225,11 +3225,11 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "crossbeam-channel",
  "symlink",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
  "time",
  "tracing-subscriber",
 ]
@@ -3237,7 +3237,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3247,7 +3247,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "valuable",
 ]
@@ -3255,7 +3255,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "log",
  "once_cell",
@@ -3265,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "serde",
  "tracing-core",
@@ -3274,7 +3274,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing?rev=d9d4c542de10f5d3a711b7a45ffe450fd0666437#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -3825,16 +3825,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.52"
-source = "git+https://github.com/google/zerocopy?rev=3b29d25ae1d7bcb12321eef9016721612c6724f7#3b29d25ae1d7bcb12321eef9016721612c6724f7"
+version = "0.8.56"
+source = "git+https://github.com/google/zerocopy#6dc429c451bdf1d7202ec1ec2cf426514e00d8eb"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.52"
-source = "git+https://github.com/google/zerocopy?rev=3b29d25ae1d7bcb12321eef9016721612c6724f7#3b29d25ae1d7bcb12321eef9016721612c6724f7"
+version = "0.8.56"
+source = "git+https://github.com/google/zerocopy#6dc429c451bdf1d7202ec1ec2cf426514e00d8eb"
 dependencies = [
  "proc-macro2",
  "quote",
