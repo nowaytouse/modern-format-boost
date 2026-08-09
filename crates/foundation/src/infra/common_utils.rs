@@ -24,23 +24,18 @@ pub fn get_extension_lowercase(path: &Path) -> String {
     crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path)
 }
 
-/// Resolve the Apple Photos library path for use with `osxphotos query --db`.
+/// Resolve candidate Apple Photos libraries for `osxphotos query --db`.
 ///
-/// This bypasses macOS TCC/sandbox restrictions on direct container directory access.
-/// It attempts to find the Photos library through standard macOS APIs and returns
-/// the library path in a format compatible with the `--db` argument.
-///
-/// # Returns
-/// A `PathBuf` representing the Photos library path
-///
-/// # Errors
-/// Returns an error if the Photos library path cannot be determined.
-pub fn photos_library_path() -> anyhow::Result<PathBuf> {
-    // Check environment variable override first
+/// The explicit override remains first, followed by libraries in `~/Pictures`
+/// ordered by database modification time. Callers that hold an imported Photos
+/// UUID must probe these candidates instead of assuming the newest database is
+/// the library Photos actually imported into.
+pub fn photos_library_paths() -> anyhow::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
     if let std::result::Result::Ok(env_path) = std::env::var("MFB_PHOTOS_LIBRARY_PATH") {
         let path = PathBuf::from(env_path);
         if path.exists() {
-            return Ok(path);
+            paths.push(path);
         }
     }
 
@@ -74,8 +69,10 @@ pub fn photos_library_path() -> anyhow::Result<PathBuf> {
     // Sort candidates by modification time, newest first
     candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-    if let Some((best_path, _)) = candidates.first() {
-        return Ok(best_path.clone());
+    for (path, _) in candidates {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
     }
 
     // Common macOS Photos library paths as fallback
@@ -87,9 +84,13 @@ pub fn photos_library_path() -> anyhow::Result<PathBuf> {
 
     // Test each potential path
     for path in &default_paths {
-        if path.exists() && path.is_dir() {
-            return Ok(path.clone());
+        if path.exists() && path.is_dir() && !paths.contains(path) {
+            paths.push(path.clone());
         }
+    }
+
+    if !paths.is_empty() {
+        return Ok(paths);
     }
 
     let err = anyhow::anyhow!(

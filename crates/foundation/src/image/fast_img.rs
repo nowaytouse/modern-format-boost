@@ -2750,6 +2750,8 @@ fn photos_import_controllable_item_failure(detail: &str) -> bool {
     photos_zero_import_context(detail).is_some()
         || lower.contains("photos returned 0 imported items")
         || lower.contains("photos applescript import returned 0 ids for ")
+        || (lower.contains("photos verifier has")
+            && lower.contains("without required proof after"))
 }
 
 fn handle_photos_import_recovery(
@@ -3810,7 +3812,36 @@ fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAs
     query_osxphotos_asset_probes_once(uuids)
 }
 
-fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+fn query_osxphotos_asset_probes_in_libraries_with<Q>(
+    uuids: &[String],
+    libraries: &[PathBuf],
+    mut query_library: Q,
+) -> Result<(Vec<FastImgLibraryAssetProbe>, Option<PathBuf>)>
+where
+    Q: FnMut(&Path, &[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+{
+    if libraries.is_empty() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos verifier has no candidate library to query".to_string(),
+        ));
+    }
+    for library in libraries {
+        match query_library(library, uuids) {
+            Ok(probes) => {
+                if !probes.is_empty() {
+                    return Ok((probes, Some(library.clone())));
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok((Vec::new(), None))
+}
+
+fn query_osxphotos_asset_probes_from_library(
+    uuids: &[String],
+    library: &Path,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
@@ -3835,7 +3866,7 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
     command
         .arg("query")
         .arg("--db")
-        .arg(crate::common_utils::photos_library_path()?)
+        .arg(library)
         .arg("--uuid-from-file")
         .arg(uuid_file.path())
         .arg("--mute")
@@ -3845,6 +3876,7 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         target: "photos_import",
         uuid_count = uuids.len(),
         timeout_secs = timeout.as_secs(),
+        library = %library.display(),
         "Starting osxphotos query"
     );
     let start = std::time::Instant::now();
@@ -3854,14 +3886,12 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         })
         .map_err(|e| ImgQualityError::AnalysisError(format!("osxphotos query failed: {e}")))?;
     let elapsed = start.elapsed();
-
-    // Record actual startup time for adaptive timeout (success path)
     record_osxphotos_query_startup_time(elapsed.as_secs());
-
     tracing::info!(
         target: "photos_import",
         uuid_count = uuids.len(),
         elapsed_secs = elapsed.as_secs(),
+        library = %library.display(),
         "osxphotos query completed"
     );
     if !output.status.success() {
@@ -3880,7 +3910,6 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
             "osxphotos query blocked by system permissions or locked DB: {stderr}"
         )));
     }
-
     let records: Vec<FastImgQueryRecord> = serde_json::from_str(&output.stdout).map_err(|e| {
         ImgQualityError::AnalysisError(format!("parse osxphotos query JSON failed: {e}"))
     })?;
@@ -3903,6 +3932,40 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
             })
         })
         .collect()
+}
+
+fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    if uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut libraries = crate::common_utils::photos_library_paths()?;
+    let cached_library = OSXPHOTOS_IMPORT_LIBRARY_CACHE
+        .lock()
+        .map_err(|_| {
+            ImgQualityError::AnalysisError(
+                "Photos verifier library cache lock is poisoned".to_string(),
+            )
+        })?
+        .clone();
+    if let Some(cached_library) = cached_library
+        && cached_library.is_dir()
+    {
+        libraries.retain(|library| library != &cached_library);
+        libraries.insert(0, cached_library);
+    }
+    let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
+        uuids,
+        &libraries,
+        |library, uuids| query_osxphotos_asset_probes_from_library(uuids, library),
+    )?;
+    if let Some(resolved_library) = resolved_library {
+        *OSXPHOTOS_IMPORT_LIBRARY_CACHE.lock().map_err(|_| {
+            ImgQualityError::AnalysisError(
+                "Photos verifier library cache lock is poisoned".to_string(),
+            )
+        })? = Some(resolved_library);
+    }
+    Ok(probes)
 }
 
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_ENV: &str = "MFB_FAST_IMG_ICLOUD_VERIFY_ATTEMPTS";
@@ -3928,6 +3991,8 @@ const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_INTERVAL_FILES: usize = 500; // Increased 
 /// storage" bug.
 static OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(120);
+static OSXPHOTOS_IMPORT_LIBRARY_CACHE: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
 
 /// Session-level flag tracking whether osxphotos has been proven responsive.
 /// First successful query sets this to true, enabling faster subsequent
@@ -5823,11 +5888,15 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn photos_import_normal_mode_continues_after_one_rejected_file() -> Result<()> {
+    fn photos_import_normal_mode_continues_after_one_unverified_file() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
             temp_dir.path().to_str().unwrap(),
+        );
+        let _verify_delay_guard = crate::common_utils::EnvGuard::set(
+            FAST_IMG_ICLOUD_VERIFY_DELAY_MS_ENV,
+            "0",
         );
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Batch_optimized");
@@ -5859,15 +5928,12 @@ mod tests {
                 })?
                 .to_string();
             import_calls.push(stem.clone());
-            if stem == "b" {
-                Ok(String::new())
-            } else {
-                Ok(format!("UUID-{stem}\n"))
-            }
+            Ok(format!("UUID-{stem}\n"))
         };
         let mut query_assets = |uuids: &[String]| {
             uuids
                 .iter()
+                .filter(|uuid| uuid.as_str() != "UUID-b")
                 .map(|uuid| {
                     let stem = uuid.trim_start_matches("UUID-");
                     Ok(FastImgLibraryAssetProbe {
@@ -6533,6 +6599,40 @@ mod tests {
             None,
             "a partial import must not retry already imported files"
         );
+    }
+
+    #[test]
+    fn photos_verifier_falls_back_to_library_containing_imported_uuid() -> Result<()> {
+        let requested = ["UUID-A".to_string()];
+        let wrong_library = PathBuf::from("wrong.photoslibrary");
+        let imported_library = PathBuf::from("system.photoslibrary");
+        let libraries = [wrong_library.clone(), imported_library.clone()];
+        let mut queried = Vec::new();
+
+        let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
+            &requested,
+            &libraries,
+            |library, _| {
+                queried.push(library.to_path_buf());
+                if library == imported_library {
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".to_string(),
+                        path: PathBuf::from("system.photoslibrary/originals/a.AVIF"),
+                        iscloudasset: true,
+                        incloud: Some(true),
+                        ismissing: false,
+                    }])
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+        )?;
+
+        assert_eq!(queried, libraries);
+        assert_eq!(resolved_library.as_ref(), Some(&imported_library));
+        assert_eq!(probes.len(), 1);
+        assert_eq!(probes[0].uuid, "UUID-A");
+        Ok(())
     }
 
     #[test]
