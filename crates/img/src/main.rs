@@ -3152,7 +3152,7 @@ fn fast_img_effective_encode_parallelism(
 
 /// Quality exploration result for AVIF Meme Mode.
 enum AvifQualityExploreResult {
-    /// Highest-quality candidate within the source's pure-media budget.
+    /// Highest verified candidate within the source's pure-media budget.
     Found {
         quality: u8,
         temp_path: PathBuf,
@@ -3523,6 +3523,10 @@ const fn avif_meme_candidate_fits_source(
     candidate.pure_media_size <= source_pure_media_size
 }
 
+fn tighter_avif_meme_unavailable_quality(current: Option<u8>, quality: u8) -> Option<u8> {
+    Some(current.map_or(quality, |current| current.min(quality)))
+}
+
 fn retain_smallest_avif_meme_candidate(
     best: &mut Option<AvifMemeCandidate>,
     candidate: AvifMemeCandidate,
@@ -3627,7 +3631,7 @@ fn explore_avif_meme_quality(
     let mut best_fallback: Option<AvifMemeCandidate> = None;
     let mut coarse_quality = 100u8;
     let mut first_fit_quality: Option<u8> = None;
-    let mut high_fail_quality: Option<u8> = None;
+    let mut upper_unavailable_quality: Option<u8> = None;
     let mut current_passed_candidate: Option<AvifMemeCandidate> = None;
     let mut last_probe_error = None;
 
@@ -3657,7 +3661,10 @@ fn explore_avif_meme_quality(
                     current_passed_candidate = Some(res.candidate);
                     break;
                 }
-                high_fail_quality = Some(coarse_quality);
+                upper_unavailable_quality = tighter_avif_meme_unavailable_quality(
+                    upper_unavailable_quality,
+                    coarse_quality,
+                );
                 if let Some(cleanup) =
                     retain_smallest_avif_meme_candidate(&mut best_fallback, res.candidate)
                 {
@@ -3676,6 +3683,10 @@ fn explore_avif_meme_quality(
                 ) {
                     return result;
                 }
+                upper_unavailable_quality = tighter_avif_meme_unavailable_quality(
+                    upper_unavailable_quality,
+                    coarse_quality,
+                );
                 last_probe_error = Some(reason);
             }
         }
@@ -3686,10 +3697,13 @@ fn explore_avif_meme_quality(
         coarse_quality = coarse_quality.saturating_sub(COARSE_STEP);
     }
 
-    // Phase 2: Binary search refinement in (low_pass, high_fail) to find true max quality within budget
-    if let (Some(low_pass), Some(high_fail)) = (first_fit_quality, high_fail_quality) {
+    // Phase 2: Binary search refinement in (low_pass, upper_unavailable).
+    // Only a verified fitting candidate may advance the lower bound.
+    if let (Some(low_pass), Some(upper_unavailable)) =
+        (first_fit_quality, upper_unavailable_quality)
+    {
         let mut low = low_pass;
-        let mut high = high_fail;
+        let mut high = upper_unavailable;
 
         for _ in 0..img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET {
             if high.saturating_sub(low) <= 1 {
@@ -10817,6 +10831,20 @@ mod fast_img_hardening_tests {
         assert!(args.iter().any(|arg| arg == "set"));
         assert!(args.iter().any(|arg| arg == "-strip"));
         Ok(())
+    }
+
+    #[test]
+    fn meme_avif_probe_errors_tighten_the_unavailable_quality_bound() {
+        let upper = super::tighter_avif_meme_unavailable_quality(None, 100);
+        assert_eq!(upper, Some(100));
+        assert_eq!(
+            super::tighter_avif_meme_unavailable_quality(upper, 90),
+            Some(90)
+        );
+        assert_eq!(
+            super::tighter_avif_meme_unavailable_quality(Some(90), 100),
+            Some(90)
+        );
     }
 
     #[test]
