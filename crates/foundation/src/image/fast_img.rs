@@ -1134,7 +1134,7 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
     reconcile_existing: bool,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
-    let output_paths = fast_img_marker_output_paths(marker);
+    let output_paths = fast_img_marker_output_paths(marker)?;
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
@@ -1222,10 +1222,10 @@ pub fn reverify_media_outputs_with_library_verifier(
 /// Unlike the legacy JXL-only importer, this preserves each marker entry's
 /// output extension so shortest-path AVIF delivery can use the same custody
 /// verification without treating AVIF files as JXL.
-#[must_use]
 pub fn build_fast_img_output_import_candidates(
     marker: &WorkingCopyMarker,
-) -> Vec<PhotosImportCandidate> {
+) -> Result<Vec<PhotosImportCandidate>> {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut candidates = marker
         .blake3_log
         .iter()
@@ -1240,7 +1240,7 @@ pub fn build_fast_img_output_import_candidates(
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
-    candidates
+    Ok(candidates)
 }
 
 /// Build Photos import rows for fast-img tier 2 (lossy modern static originals).
@@ -1722,6 +1722,7 @@ fn photos_import_checkpoint_plan<P>(
 where
     P: FnMut(&Path) -> Result<bool>,
 {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut pending_entries = Vec::new();
     let mut proven_assets = Vec::new();
     let persisted_assets = marker
@@ -1799,7 +1800,7 @@ where
         .iter()
         .map(|asset| asset.rel_path.as_str())
         .collect::<BTreeSet<_>>();
-    let candidates = build_fast_img_output_import_candidates(marker)
+    let candidates = build_fast_img_output_import_candidates(marker)?
         .into_iter()
         .filter(|candidate| persisted_paths.contains(candidate.rel_path.as_str()))
         .collect::<Vec<_>>();
@@ -3808,6 +3809,7 @@ fn library_handle_from_batch_probes(
     mut query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
 ) -> Result<LibraryHandle> {
+    validate_fast_img_marker_path_contract(marker)?;
     let expected_output_count = marker.expected_output_count();
     if report_pairs.len() != expected_output_count {
         return Err(ImgQualityError::AnalysisError(format!(
@@ -4762,14 +4764,23 @@ fn marker_entry_out_rel(source_rel: &str, entry: &Blake3Entry) -> String {
     })
 }
 
-fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Vec<(String, PathBuf)> {
+fn validate_fast_img_marker_path_contract(marker: &WorkingCopyMarker) -> Result<()> {
+    marker
+        .validate_checkpoint_path_contract(&marker.working_copy)
+        .map_err(|err| {
+            ImgQualityError::AnalysisError(format!("fast-img marker path validation failed: {err}"))
+        })
+}
+
+fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Result<Vec<(String, PathBuf)>> {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut outputs = Vec::new();
     for (source_rel, entry) in &marker.blake3_log {
         let out_rel = marker_entry_out_rel(source_rel, entry);
         outputs.push((out_rel.clone(), marker.working_copy.join(out_rel)));
     }
     outputs.sort_by(|left, right| left.0.cmp(&right.0));
-    outputs
+    Ok(outputs)
 }
 
 /// Prompt the user for a yes/no confirmation (§Import confirm gate, GAP-3).
@@ -4912,7 +4923,7 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
         let err =
             fast_img_pairs_from_photos_import_ids(&output_paths, b"\n", marker.src_jpeg_count)
@@ -4995,7 +5006,7 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
         let err = fast_img_pairs_from_photos_import_ids(
             &output_paths,
@@ -5056,6 +5067,7 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Batch_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
         marker.blake3_log.insert(
             "微信/a.jpg".to_string(),
@@ -5066,7 +5078,7 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
         let entries = fast_img_photos_import_manifest_entries(&marker, &output_paths);
 
@@ -5080,6 +5092,7 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Meme_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
         marker.blake3_log.insert(
             "nested/source.png".to_string(),
@@ -5091,7 +5104,7 @@ mod tests {
             },
         );
 
-        let candidates = build_fast_img_output_import_candidates(&marker);
+        let candidates = build_fast_img_output_import_candidates(&marker).unwrap();
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].rel_path, "nested/source.avif");

@@ -7260,7 +7260,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         return Ok(());
     }
 
-    let import_candidates = build_fast_img_output_import_candidates(marker);
+    let import_candidates = build_fast_img_output_import_candidates(marker)?;
     let mut library_handle = if import_complete_or_later(&marker.stage) {
         let library_handle = if fast_img_marker_has_complete_import_proof(marker) {
             let library_handle = reverify_media_outputs_with_library_verifier(

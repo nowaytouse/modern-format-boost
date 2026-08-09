@@ -3,7 +3,7 @@
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1782,6 +1782,50 @@ fn default_strategy() -> String {
     "jxl".to_string()
 }
 
+fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
+    let path = Path::new(rel);
+    if rel.is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "fast-img marker {kind} must be a non-empty normalized relative path: {rel:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_no_symlink_components(root: &Path, rel: &Path) -> Result<(), String> {
+    let mut current = root.to_path_buf();
+    for component in rel.components() {
+        let Component::Normal(name) = component else {
+            return Err(format!(
+                "fast-img marker output path is not normalized: {}",
+                rel.display()
+            ));
+        };
+        current.push(name);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "fast-img marker output path contains a symlink: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "fast-img marker output path inspection failed for {}: {err}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl WorkingCopyMarker {
     #[must_use]
     pub fn new(src_dir: PathBuf, working_copy: PathBuf, src_jpeg_count: usize) -> Self {
@@ -1851,6 +1895,64 @@ impl WorkingCopyMarker {
             if self.failed_sources.contains_key(rel) {
                 return Err(format!("{rel} recorded as both skipped and failed"));
             }
+        }
+        Ok(())
+    }
+
+    pub fn validate_relative_path_contract(&self) -> Result<(), String> {
+        for rel in self
+            .blake3_log
+            .keys()
+            .chain(self.skipped_sources.keys())
+            .chain(self.failed_sources.keys())
+        {
+            validate_marker_relative_path("source path", rel)?;
+        }
+        for entry in self.blake3_log.values() {
+            if let Some(out_rel) = entry.out_rel.as_deref() {
+                validate_marker_relative_path("output path", out_rel)?;
+            }
+        }
+        for asset in self
+            .tier2_imported_assets
+            .iter()
+            .chain(&self.photos_imported_assets)
+        {
+            validate_marker_relative_path("library asset path", &asset.rel_path)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_checkpoint_path_contract(
+        &self,
+        expected_working_copy: &Path,
+    ) -> Result<(), String> {
+        self.validate_relative_path_contract()?;
+        let expected = expected_working_copy.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize expected fast-img working copy {} failed: {err}",
+                expected_working_copy.display()
+            )
+        })?;
+        let recorded = self.working_copy.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize recorded fast-img working copy {} failed: {err}",
+                self.working_copy.display()
+            )
+        })?;
+        if recorded != expected {
+            return Err(format!(
+                "fast-img marker working copy mismatch: expected={} recorded={}",
+                expected.display(),
+                recorded.display()
+            ));
+        }
+        for (source_rel, entry) in &self.blake3_log {
+            let out_rel = entry.out_rel.as_deref().map_or_else(
+                || PathBuf::from(source_rel).with_extension("JXL"),
+                PathBuf::from,
+            );
+            validate_no_symlink_components(&expected, &out_rel)?;
         }
         Ok(())
     }
@@ -2020,6 +2122,14 @@ pub fn marker_path_for_working_copy(working_copy: &Path) -> PathBuf {
 }
 
 pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    marker
+        .validate_relative_path_contract()
+        .map_err(std::io::Error::other)?;
+    if marker.working_copy.exists() {
+        marker
+            .validate_checkpoint_path_contract(&marker.working_copy)
+            .map_err(std::io::Error::other)?;
+    }
     if marker.working_copy == marker.src_dir || marker.working_copy.starts_with(&marker.src_dir) {
         return Err(std::io::Error::other(format!(
             "fast-img marker output must not be inside source tree: source={} output={}",
@@ -2052,15 +2162,26 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     Ok(())
 }
 
+fn parse_marker_for_working_copy(
+    data: &[u8],
+    working_copy: &Path,
+) -> std::io::Result<WorkingCopyMarker> {
+    let marker: WorkingCopyMarker =
+        serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    marker
+        .validate_checkpoint_path_contract(working_copy)
+        .map_err(std::io::Error::other)?;
+    Ok(marker)
+}
+
 pub fn read_marker(working_copy: &Path) -> std::io::Result<WorkingCopyMarker> {
     let marker_path = marker_path_for_working_copy(working_copy);
     match std::fs::read(&marker_path) {
-        Ok(data) => serde_json::from_slice(&data).map_err(std::io::Error::other),
+        Ok(data) => parse_marker_for_working_copy(&data, working_copy),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             let legacy_path = working_copy.join(".mfb_wc");
             let data = std::fs::read(&legacy_path)?;
-            let marker: WorkingCopyMarker =
-                serde_json::from_slice(&data).map_err(std::io::Error::other)?;
+            let marker = parse_marker_for_working_copy(&data, working_copy)?;
             write_marker_atomic(&marker)?;
             Ok(marker)
         }
@@ -2397,6 +2518,7 @@ mod working_copy_tests {
         );
         let src = root.path().join("Photos");
         let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src, wc, 2);
         marker.stage = FastImgStageName::OutputPrepared;
 
@@ -2406,6 +2528,54 @@ mod working_copy_tests {
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&marker.working_copy).exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn marker_io_rejects_tampered_paths() {
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&wc).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("../escape.JXL".to_string()),
+                src: "src-hash".to_string(),
+                out: "out-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("normalized relative path"));
+
+        let outside_file = outside.join("outside.JXL");
+        std::fs::write(&outside_file, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside_file, wc.join("link.JXL")).unwrap();
+        marker
+            .blake3_log
+            .get_mut("a.jpg")
+            .unwrap()
+            .out_rel = Some("link.JXL".to_string());
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("contains a symlink"));
+
+        marker.working_copy = outside;
+        let marker_path = marker_path_for_working_copy(&wc);
+        std::fs::create_dir_all(marker_path.parent().unwrap()).unwrap();
+        std::fs::write(&marker_path, serde_json::to_vec_pretty(&marker).unwrap()).unwrap();
+        let err = read_marker(&wc).unwrap_err();
+        assert!(err.to_string().contains("working copy mismatch"));
     }
 
     #[test]
