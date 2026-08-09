@@ -35,6 +35,25 @@ fn parse_png_structure_rejects_truncated_text_chunk() {
 }
 
 #[test]
+fn png_text_decompression_rejects_output_beyond_remaining_budget() {
+    let mut encoder = flate2::write::ZlibEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    );
+    encoder
+        .write_all(&[b'a'; 65])
+        .expect("compress PNG text fixture");
+    let compressed = encoder.finish().expect("finish PNG text fixture");
+    let mut remaining_budget = 64;
+
+    let error = decompress_png_text_bounded(&compressed, &mut remaining_budget)
+        .expect_err("decompressed PNG text beyond the budget must fail loudly");
+
+    assert!(error.to_string().contains("exceeds remaining 64 byte"));
+    assert_eq!(remaining_budget, 64, "failed payload must not consume budget");
+}
+
+#[test]
 fn pixel_coordinate_clamp_stays_within_image_bounds() {
     use crate::numeric_cast::u64_to_u32_strict;
 

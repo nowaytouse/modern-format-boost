@@ -1982,8 +1982,8 @@ impl PngQuantizationSession {
 
         if self.png_info.color_type == 3
             && compression_ratio < crate::constants::PNG_SIZE_EFFICIENCY_THRESHOLD
-            && self.png_info.width * self.png_info.height
-                > crate::constants::PNG_EFFICIENCY_PIXEL_COUNT_THRESHOLD
+            && u64::from(self.png_info.width) * u64::from(self.png_info.height)
+                > u64::from(crate::constants::PNG_EFFICIENCY_PIXEL_COUNT_THRESHOLD)
         {
             self.factors.size_efficiency_anomaly = crate::constants::PNG_SIZE_EFFICIENCY_ANOMALY;
             self.explanations.push(format!(
@@ -2301,9 +2301,6 @@ impl PngQuantizationSession {
 ///
 /// # Errors
 /// Returns an error if the PNG structure is invalid or decoding fails.
-///
-/// # Panics
-/// Panics if the PNG decompression fails unexpectedly on a valid zTXt chunk.
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -2330,25 +2327,74 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
+fn decompress_png_text_bounded(data: &[u8], remaining_budget: &mut usize) -> Result<Vec<u8>> {
+    let allowed = *remaining_budget;
+    let read_limit = u64::try_from((*remaining_budget).saturating_add(1)).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "PNG text decompression limit conversion failed: {error}"
+        ))
+    })?;
+    let mut decompressed = Vec::new();
+    flate2::read::ZlibDecoder::new(data)
+        .take(read_limit)
+        .read_to_end(&mut decompressed)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "PNG compressed text payload is invalid: {error}"
+            ))
+        })?;
+    if decompressed.len() > *remaining_budget {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "PNG decompressed text exceeds remaining {allowed} byte safety budget"
+        )));
+    }
+    *remaining_budget -= decompressed.len();
+    Ok(decompressed)
+}
+
 /// # Errors
 /// Returns an error if the file cannot be read or if the PNG structure is
 /// corrupted. Specifically, `ImgQualityError::IoError` for file operations and
 /// `ImgQualityError::AnalysisError` for parsing issues.
-///
-/// # Panics
-/// Panics if the PNG structure is fundamentally corrupted beyond repair.
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
-    fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
-        let offset = i64::try_from(bytes).map_err(|e| {
+    fn skip_bytes<R: Seek>(
+        reader: &mut R,
+        bytes: u64,
+        stream_end: u64,
+        context: &str,
+    ) -> Result<()> {
+        let current = reader.stream_position().map_err(|error| {
             ImgQualityError::AnalysisError(format!(
-                "PNG chunk too large to seek while parsing {context}: {e}"
+                "Failed to locate PNG stream while parsing {context}: {error}"
             ))
         })?;
-        reader.seek(SeekFrom::Current(offset)).map_err(|e| {
-            ImgQualityError::AnalysisError(format!("Failed to seek past {context}: {e}"))
+        let next = current
+            .checked_add(bytes)
+            .filter(|next| *next <= stream_end)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "PNG {context} extends beyond the end of the file"
+                ))
+            })?;
+        reader.seek(SeekFrom::Start(next)).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "Failed to seek past PNG {context}: {error}"
+            ))
         })?;
         Ok(())
     }
+
+    let initial_position = reader.stream_position().map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Failed to locate PNG stream start: {error}"))
+    })?;
+    let stream_end = reader.seek(SeekFrom::End(0)).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Failed to locate PNG stream end: {error}"))
+    })?;
+    reader
+        .seek(SeekFrom::Start(initial_position))
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!("Failed to rewind PNG stream: {error}"))
+        })?;
 
     let mut header = [0u8; 8];
 
@@ -2366,6 +2412,18 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     reader
         .read_exact(&mut ihdr_header)
         .map_err(|e| ImgQualityError::AnalysisError(format!("Missing IHDR: {e}")))?;
+    if u32::from_be_bytes([
+        ihdr_header[0],
+        ihdr_header[1],
+        ihdr_header[2],
+        ihdr_header[3],
+    ]) != 13
+        || &ihdr_header[4..8] != b"IHDR"
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG must begin with a 13-byte IHDR chunk".to_string(),
+        ));
+    }
     let mut ihdr_data = [0u8; 13];
     reader
         .read_exact(&mut ihdr_data)
@@ -2375,12 +2433,38 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     let bit_depth = ihdr_data[8];
     let color_type = ihdr_data[9];
-    skip_bytes(&mut reader, 4, "IHDR CRC")?;
+    let compression_method = ihdr_data[10];
+    let filter_method = ihdr_data[11];
+    let interlace_method = ihdr_data[12];
+    const PNG_DIMENSION_MAX: u32 = 0x7FFF_FFFF;
+    if width == 0 || height == 0 || width > PNG_DIMENSION_MAX || height > PNG_DIMENSION_MAX {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG IHDR dimensions are outside the valid range".to_string(),
+        ));
+    }
+    let valid_depth = match color_type {
+        0 => [1, 2, 4, 8, 16].contains(&bit_depth),
+        2 | 4 | 6 => [8, 16].contains(&bit_depth),
+        3 => [1, 2, 4, 8].contains(&bit_depth),
+        _ => false,
+    };
+    if !valid_depth
+        || compression_method != 0
+        || filter_method != 0
+        || interlace_method > 1
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG IHDR contains an unsupported format field".to_string(),
+        ));
+    }
+    skip_bytes(&mut reader, 4, stream_end, "IHDR CRC")?;
 
     let mut palette_size: Option<usize> = None;
     let mut has_trns = false;
     let mut has_text_chunks = false;
     let mut detected_tool: Option<String> = None;
+    let mut decompressed_text_budget = crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT;
+    let mut saw_idat = false;
 
     let signatures: &[(&str, &str)] = &[
         ("pngquant", "pngquant"),
@@ -2411,7 +2495,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     loop {
         match reader.read_exact(&mut buf) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(ImgQualityError::AnalysisError(
+                    "PNG ended before the IEND chunk".to_string(),
+                ));
+            }
             Err(e) => {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "Failed to read PNG chunk header: {e}"
@@ -2422,7 +2510,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
         let chunk_type = &buf[4..8];
 
         match chunk_type {
-            b"PLTE" if color_type == 3 => {
+            b"PLTE" => {
                 let plte_len =
                     crate::numeric_cast::u64_to_usize_strict(chunk_len, "PLTE chunk_len")
                         .ok_or_else(|| {
@@ -2430,12 +2518,28 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                                 "Invalid PLTE length: {chunk_len}"
                             ))
                         })?;
-                palette_size = Some(plte_len / 3);
-                skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
+                if plte_len == 0 || plte_len > 768 || plte_len % 3 != 0 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "Invalid PLTE length: {plte_len}"
+                    )));
+                }
+                if color_type == 0 || color_type == 4 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PLTE is forbidden for greyscale PNG images".to_string(),
+                    ));
+                }
+                if color_type == 3 {
+                    palette_size = Some(plte_len / 3);
+                }
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "PLTE chunk")?;
+            }
+            b"IDAT" => {
+                saw_idat = true;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "IDAT chunk")?;
             }
             b"tRNS" => {
                 has_trns = true;
-                skip_bytes(&mut reader, chunk_len + 4, "tRNS chunk")?;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "tRNS chunk")?;
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
@@ -2447,9 +2551,10 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             ))
                         })?;
                 if text_len > crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT {
-                    return Err(ImgQualityError::AnalysisError(
-                        "PNG text chunk exceeds 10MB safety limit".to_string(),
-                    ));
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "PNG text chunk exceeds {} byte safety limit",
+                        crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT
+                    )));
                 }
                 let mut payload = vec![0u8; text_len];
                 reader.read_exact(&mut payload).map_err(|e| {
@@ -2457,84 +2562,142 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                         "Failed to read PNG text chunk payload: {e}"
                     ))
                 })?;
-                if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                    let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                let null_pos = payload.iter().position(|&b| b == 0).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG text chunk is missing its keyword separator".to_string(),
+                    )
+                })?;
+                if !(1..=79).contains(&null_pos) {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG text keyword length must be between 1 and 79 bytes".to_string(),
+                    ));
+                }
+                let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                for &(pattern, tool_name) in signatures {
+                    if keyword.contains(pattern) {
+                        detected_tool = Some(tool_name.to_string());
+                        break;
+                    }
+                }
+
+                if detected_tool.is_none() {
+                    let (text_payload, is_compressed) = match chunk_type {
+                        b"zTXt" => {
+                            let method = payload.get(null_pos + 1).copied().ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG zTXt chunk is missing its compression method".to_string(),
+                                )
+                            })?;
+                            if method != 0 {
+                                return Err(ImgQualityError::AnalysisError(format!(
+                                    "PNG zTXt chunk uses unsupported compression method {method}"
+                                )));
+                            }
+                            let compressed = payload.get(null_pos + 2..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG zTXt chunk is missing compressed text".to_string(),
+                                )
+                            })?;
+                            (compressed, true)
+                        }
+                        b"iTXt" => {
+                            let comp_flag = payload.get(null_pos + 1).copied().ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG iTXt chunk is missing its compression flag".to_string(),
+                                )
+                            })?;
+                            let method = payload.get(null_pos + 2).copied().ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG iTXt chunk is missing its compression method".to_string(),
+                                )
+                            })?;
+                            if comp_flag > 1 || (comp_flag == 1 && method != 0) {
+                                return Err(ImgQualityError::AnalysisError(format!(
+                                    "PNG iTXt chunk has invalid compression flag/method {comp_flag}/{method}"
+                                )));
+                            }
+                            let mut pos = null_pos + 3;
+                            let lang_null = payload
+                                .get(pos..)
+                                .and_then(|rest| rest.iter().position(|&byte| byte == 0))
+                                .ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its language separator".to_string(),
+                                    )
+                                })?;
+                            pos += lang_null + 1;
+                            let translated_null = payload
+                                .get(pos..)
+                                .and_then(|rest| rest.iter().position(|&byte| byte == 0))
+                                .ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its translated keyword separator"
+                                            .to_string(),
+                                    )
+                                })?;
+                            pos += translated_null + 1;
+                            let text = payload.get(pos..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG iTXt chunk has an invalid text offset".to_string(),
+                                )
+                            })?;
+                            (text, comp_flag == 1)
+                        }
+                        b"tEXt" => {
+                            let text = payload.get(null_pos + 1..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG tEXt chunk has an invalid text offset".to_string(),
+                                )
+                            })?;
+                            (text, false)
+                        }
+                        _ => {
+                            return Err(ImgQualityError::AnalysisError(
+                                "Unsupported PNG text chunk type".to_string(),
+                            ));
+                        }
+                    };
+
+                    let decompressed;
+                    let text = if is_compressed {
+                        decompressed = decompress_png_text_bounded(
+                            text_payload,
+                            &mut decompressed_text_budget,
+                        )?;
+                        String::from_utf8_lossy(&decompressed)
+                    } else {
+                        String::from_utf8_lossy(text_payload)
+                    };
                     for &(pattern, tool_name) in signatures {
-                        if keyword.contains(pattern) {
+                        if text.contains(pattern) {
                             detected_tool = Some(tool_name.to_string());
                             break;
                         }
                     }
-
-                    if detected_tool.is_none() {
-                        let mut text_payload = None;
-                        let mut is_compressed = false;
-
-                        match chunk_type {
-                            b"zTXt" if null_pos + 2 < payload.len() => {
-                                // zTXt: keyword\0 + method(1) + compressed_text
-                                text_payload = Some(&payload[null_pos + 2..]);
-                                is_compressed = true;
-                            }
-                            b"iTXt" if null_pos + 5 < payload.len() => {
-                                // iTXt: keyword\0 + flag(1) + method(1) + lang\0 + trans\0 + text
-                                let comp_flag = payload[null_pos + 1];
-                                let mut pos = null_pos + 3;
-                                if let Some(lang_null) = payload[pos..].iter().position(|&b| b == 0)
-                                {
-                                    pos += lang_null + 1;
-                                    if let Some(trans_null) =
-                                        payload[pos..].iter().position(|&b| b == 0)
-                                    {
-                                        pos += trans_null + 1;
-                                        if pos < payload.len() {
-                                            text_payload = Some(&payload[pos..]);
-                                            is_compressed = comp_flag == 1;
-                                        }
-                                    }
-                                }
-                            }
-                            b"tEXt" => {
-                                text_payload = Some(&payload[null_pos + 1..]);
-                                is_compressed = false;
-                            }
-                            _ => {}
-                        }
-
-                        if let Some(data) = text_payload {
-                            if is_compressed {
-                                let mut decompressed = Vec::new();
-                                // Security: 50MB decompression limit to prevent Zip Bomb / OOM
-                                if flate2::read::ZlibDecoder::new(data)
-                                    .take(52_428_800)
-                                    .read_to_end(&mut decompressed)
-                                    .is_ok()
-                                {
-                                    let text = String::from_utf8_lossy(&decompressed);
-                                    for &(pattern, tool_name) in signatures {
-                                        if text.contains(pattern) {
-                                            detected_tool = Some(tool_name.to_string());
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else {
-                                let text = String::from_utf8_lossy(data);
-                                for &(pattern, tool_name) in signatures {
-                                    if text.contains(pattern) {
-                                        detected_tool = Some(tool_name.to_string());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
-                skip_bytes(&mut reader, 4, "text chunk CRC")?;
+                skip_bytes(&mut reader, 4, stream_end, "text chunk CRC")?;
             }
-            b"IEND" => break,
+            b"IEND" => {
+                if chunk_len != 0 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG IEND chunk must be empty".to_string(),
+                    ));
+                }
+                if !saw_idat {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG IEND appeared before any IDAT chunk".to_string(),
+                    ));
+                }
+                skip_bytes(&mut reader, 4, stream_end, "IEND CRC")?;
+                break;
+            }
             _ => {
-                skip_bytes(&mut reader, chunk_len + 4, "PNG chunk")?;
+                skip_bytes(
+                    &mut reader,
+                    chunk_len + 4,
+                    stream_end,
+                    "PNG chunk",
+                )?;
             }
         }
     }
