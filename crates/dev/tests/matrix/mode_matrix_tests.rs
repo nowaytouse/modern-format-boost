@@ -536,7 +536,10 @@ fn synthetic_grayscale_video_production_roundtrip_stays_rgb_neutral() -> Result<
     let converted = auto_convert_with_cache(&input, &config, None)
         .context("production grayscale video conversion failed")?;
     assert!(converted.success, "conversion failed: {converted:?}");
-    assert_eq!(converted.strategy.target, TargetVideoFormat::HevcLosslessMkv);
+    assert_eq!(
+        converted.strategy.target,
+        TargetVideoFormat::HevcLosslessMkv
+    );
 
     let decoded = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
@@ -556,20 +559,23 @@ fn synthetic_grayscale_video_production_roundtrip_stays_rgb_neutral() -> Result<
         WIDTH * HEIGHT * 3 * FRAMES,
         "production conversion must preserve every synthetic grayscale frame"
     );
-    let (max_channel_delta, worst_pixel) = decoded.stdout.chunks_exact(3).fold(
-        (0u8, [0u8; 3]),
-        |worst, pixel| {
-            let delta = pixel[0]
-                .abs_diff(pixel[1])
-                .max(pixel[1].abs_diff(pixel[2]))
-                .max(pixel[0].abs_diff(pixel[2]));
-            if delta > worst.0 {
-                (delta, [pixel[0], pixel[1], pixel[2]])
-            } else {
-                worst
-            }
-        },
-    );
+    let (max_channel_delta, worst_pixel) =
+        decoded
+            .stdout
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .fold((0u8, [0u8; 3]), |worst, pixel| {
+                let delta = pixel[0]
+                    .abs_diff(pixel[1])
+                    .max(pixel[1].abs_diff(pixel[2]))
+                    .max(pixel[0].abs_diff(pixel[2]));
+                if delta > worst.0 {
+                    (delta, [pixel[0], pixel[1], pixel[2]])
+                } else {
+                    worst
+                }
+            });
     assert!(
         max_channel_delta <= 2,
         "production grayscale video gained a color cast: max RGB delta \

@@ -62,7 +62,7 @@ export default tseslint.config(
   {
     ignores: [
       "dist/",
-            "src-macos/",
+      "src-macos/",
       "node_modules/",
       "*.cjs",
       "*.config.ts",

@@ -1516,21 +1516,19 @@ fn loop_count_zero_bonus(meta: &LoopMeta) -> Option<f64> {
         Some(DurationTier::UltraShort | DurationTier::Short) => {
             Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MAX)
         }
-        Some(DurationTier::MediumLong) => Some(
-            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
+        Some(DurationTier::MediumLong) => {
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-            ),
-        ),
-        Some(DurationTier::Long | DurationTier::VeryLong) => Some(
-            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
+            ))
+        }
+        Some(DurationTier::Long | DurationTier::VeryLong) => {
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-            ),
-        ),
-        Some(DurationTier::DefinitivelyLong) => {
-            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MIN)
+            ))
         }
+        Some(DurationTier::DefinitivelyLong) => Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MIN),
         None => None,
     }
 }
@@ -2162,8 +2160,7 @@ impl<'a> WeakHeuristicScorer<'a> {
             0.0_f64
         };
         self.log_odds.add(
-            (crate::constants::SHORT_CLIP_MIN_BIAS
-                + headroom * crate::constants::SHORT_CLIP_HEADROOM_MAX
+            (headroom.mul_add(crate::constants::SHORT_CLIP_HEADROOM_MAX, crate::constants::SHORT_CLIP_MIN_BIAS)
                 + format_bonus
                 + cadence_bonus)
                 * crate::constants::SHORT_CLIP_PRIOR_LOG_ODDS,
@@ -3308,7 +3305,7 @@ fn logistic_regression_fusion(
 
     let score = density_signal.mul_add(
         LAYER6_LR_W_DENSITY,
-        (logit(knn_prob) * LAYER6_LR_W_KNN) + (logit(tree_prob) * LAYER6_LR_W_TREE),
+        f64::mul_add(logit(tree_prob), LAYER6_LR_W_TREE, logit(knn_prob) * LAYER6_LR_W_KNN),
     ) + LAYER6_LR_BIAS;
 
     // Apply sigmoid once to convert the log-odds-weighted sum back to probability
@@ -5262,14 +5259,13 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
         .enumerate()
         .map(|(i, &v)| crate::numeric_cast::usize_to_f64(2 * (i + 1)) * v)
         .sum();
-    finite_structural_signal_score(
-        (weighted_sum / (n * sum)) - (n + 1.0) / n,
-        "motion_gini",
-    )
+    finite_structural_signal_score((weighted_sum / (n * sum)) - (n + 1.0) / n, "motion_gini")
 }
 
 fn structural_signal_samples_are_valid(values: &[f64], signal: &'static str) -> bool {
-    let valid = values.iter().all(|value| value.is_finite() && *value >= 0.0);
+    let valid = values
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0);
     if !valid {
         tracing::warn!(
             target: "mfb.algorithm",
@@ -5587,9 +5583,8 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
 /// Returns true if motion vectors suggest synthetic/sticker content.
 fn detect_localized_motion(mvs: &[f64]) -> bool {
     mvs.len() >= 10
-        && zero_motion_ratio(mvs).is_some_and(|ratio| {
-            ratio > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO
-        })
+        && zero_motion_ratio(mvs)
+            .is_some_and(|ratio| ratio > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO)
 }
 
 /// Extract first frame from video to temporary `PNG` for analysis.
@@ -5812,11 +5807,9 @@ fn ydif_ffmpeg_filter(frame_count: Option<u64>) -> String {
 }
 
 fn parse_ydif_sample(token: &str) -> anyhow::Result<f64> {
-    let value = token
-        .parse::<f64>()
-        .map_err(|err| {
-            anyhow::anyhow!("malformed loop_intent lavfi YDIF token {token:?}: {err}")
-        })?;
+    let value = token.parse::<f64>().map_err(|err| {
+        anyhow::anyhow!("malformed loop_intent lavfi YDIF token {token:?}: {err}")
+    })?;
     if !value.is_finite() || value < 0.0 {
         anyhow::bail!(
             "invalid loop_intent lavfi YDIF sample {token:?}: expected finite non-negative value"
@@ -5908,8 +5901,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
             );
             if ydif_values.len() >= LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES {
                 anyhow::bail!(
-                    "loop_intent lavfi YDIF exceeded bounded sample budget of {} frames",
-                    LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES
+                    "loop_intent lavfi YDIF exceeded bounded sample budget of {LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES} frames"
                 );
             }
             ydif_values.push(parse_ydif_sample(token)?);
@@ -5929,9 +5921,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         "mfb-loop-thumbnail-",
     )?;
     let thumbnail_path = thumbnail_temp_dir.path().join("frame.rgb");
-    let scale_filter = format!(
-        "scale={LOOP_INTENT_THUMBNAIL_DIM}:{LOOP_INTENT_THUMBNAIL_DIM}"
-    );
+    let scale_filter = format!("scale={LOOP_INTENT_THUMBNAIL_DIM}:{LOOP_INTENT_THUMBNAIL_DIM}");
     let mut thumbnail_command = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
         .frames_v(1)
@@ -6014,10 +6004,7 @@ fn temporal_flatness_score(ydif_values: &[f64]) -> Option<f64> {
     }
     let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
     let std = variance.sqrt();
-    finite_structural_signal_score(
-        1.0 / (1.0 + std / (mean + 1e-6)),
-        "temporal_flatness",
-    )
+    finite_structural_signal_score(1.0 / (1.0 + std / (mean + 1e-6)), "temporal_flatness")
 }
 
 fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
@@ -6164,10 +6151,7 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / (crate::numeric_cast::usize_to_f64(n.saturating_sub(1).max(1)) * variance);
 
-    finite_structural_signal_score(
-        f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0),
-        "temporal_jitter",
-    )
+    finite_structural_signal_score(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0), "temporal_jitter")
 }
 
 fn support_relief_from_loop_support(
@@ -7460,18 +7444,12 @@ mod tests {
             LOOP_INTENT_THUMBNAIL_RGB_BYTES
         );
 
-        std::fs::write(
-            file.path(),
-            vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES - 1],
-        )
-        .expect("write short thumbnail fixture");
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES - 1])
+            .expect("write short thumbnail fixture");
         assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
 
-        std::fs::write(
-            file.path(),
-            vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES + 1],
-        )
-        .expect("write oversized thumbnail fixture");
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES + 1])
+            .expect("write oversized thumbnail fixture");
         assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
     }
 

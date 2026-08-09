@@ -46,7 +46,7 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
 
     for (row, base_row) in result.iter_mut().zip(base_table.iter()) {
         for (cell, &base_value) in row.iter_mut().zip(base_row.iter()) {
-            let value = ((scale * f64::from(base_value)) + JPEG_IJG_ROUNDING_OFFSET)
+            let value = f64::mul_add(scale, f64::from(base_value), JPEG_IJG_ROUNDING_OFFSET)
                 / JPEG_IJG_ROUNDING_DIVISOR;
             let scaled = value
                 .floor()

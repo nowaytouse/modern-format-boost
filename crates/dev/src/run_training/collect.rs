@@ -25,7 +25,9 @@ fn is_animated_for_loop_collect(path: &Path) -> Result<bool> {
         "png" => is_animated_png(path),
         "jxl" => is_animated_jxl(path),
         // apng, avif/heic/heif: treat as potentially animated (conservative); video containers
-        "apng" | "avif" | "heic" | "heif" | "hif" | "mp4" | "mov" | "webm" | "mkv" | "avi" => Ok(true),
+        "apng" | "avif" | "heic" | "heif" | "hif" | "mp4" | "mov" | "webm" | "mkv" | "avi" => {
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }

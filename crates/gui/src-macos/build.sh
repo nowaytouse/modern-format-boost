@@ -22,11 +22,11 @@ fi
 
 arch=$(uname -m)
 case "$arch" in
-    arm64|x86_64) ;;
-    *)
-        echo "Unsupported macOS architecture: $arch" >&2
-        exit 1
-        ;;
+arm64 | x86_64) ;;
+*)
+    echo "Unsupported macOS architecture: $arch" >&2
+    exit 1
+    ;;
 esac
 
 rm -rf -- "$bundle"

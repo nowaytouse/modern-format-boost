@@ -98,11 +98,7 @@ fn verify_command(_repo_root: &Path, verify_bin: &Path) -> (OsString, Vec<OsStri
     )
 }
 
-fn run_cmd(
-    program: &OsStr,
-    args: &[OsString],
-    log_path: Option<&Path>,
-) -> Result<Output> {
+fn run_cmd(program: &OsStr, args: &[OsString], log_path: Option<&Path>) -> Result<Output> {
     let rendered = render_command(program, args);
     println!("+ {rendered}");
     let mut command = Command::new(program);
@@ -431,8 +427,7 @@ mod tests {
                 && pair[1].as_os_str() == OsStr::new("ultrafast")
         }));
         assert!(args.windows(2).any(|pair| {
-            pair[0].as_os_str() == OsStr::new("-crf")
-                && pair[1].as_os_str() == OsStr::new("0")
+            pair[0].as_os_str() == OsStr::new("-crf") && pair[1].as_os_str() == OsStr::new("0")
         }));
     }
 

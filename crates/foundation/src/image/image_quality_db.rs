@@ -1163,7 +1163,7 @@ pub(crate) fn bpp_heuristic_score(analysis: &ImageAnalysis) -> Result<f64> {
     let entropy_score = (entropy / 8.0).clamp(0.0, 1.0);
     let bpp_score = (1.0 - (spatial_bpp / 20.0).clamp(0.0, 1.0)).max(0.0);
     let lossless_bonus = if analysis.is_lossless { 0.1 } else { 0.0 };
-    let raw = (entropy_score * 0.5 + bpp_score * 0.5 + lossless_bonus).clamp(0.0, 1.0);
+    let raw = (bpp_score.mul_add(0.5, entropy_score * 0.5) + lossless_bonus).clamp(0.0, 1.0);
     crate::algorithm_seal::quality_unit_probability(raw)
         .ok_or_else(|| anyhow::anyhow!("bpp heuristic score failed quality seal (non-finite)"))
 }

@@ -99,12 +99,8 @@ pub fn is_animated_webp(path: &Path) -> Result<bool> {
 }
 
 pub fn is_animated_png(path: &Path) -> Result<bool> {
-    foundation::image::png_validation::is_apng_file(path).map_err(|error| {
-        anyhow!(
-            "PNG animation probe failed for {}: {error}",
-            path.display()
-        )
-    })
+    foundation::image::png_validation::is_apng_file(path)
+        .map_err(|error| anyhow!("PNG animation probe failed for {}: {error}", path.display()))
 }
 
 pub fn is_probably_animated_isobmff(path: &Path) -> Result<bool> {
@@ -1714,10 +1710,7 @@ mod tests {
 
         fs::write(&webp, b"RIFF\x18\x00\x00\x00WEBPVP8XANIM").unwrap();
         let mut apng_data = b"\x89PNG\r\n\x1a\n".to_vec();
-        apng_data.extend(png_chunk(
-            b"IHDR",
-            &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0],
-        ));
+        apng_data.extend(png_chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
         apng_data.extend(png_chunk(b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0]));
         let mut fctl = vec![0; 26];
         fctl[7] = 1;

@@ -49,12 +49,7 @@ pub mod webp {
 
         let id = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
         let size = crate::numeric_cast::u32_to_usize_strict(
-            u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]),
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
             "webp_chunk_size",
         )
         .ok_or_else(|| {
@@ -206,11 +201,13 @@ pub mod webp {
                     let duration_ms = u32::from(chunk.payload[12])
                         | (u32::from(chunk.payload[13]) << 8)
                         | (u32::from(chunk.payload[14]) << 16);
-                    total_ms = total_ms.checked_add(u64::from(duration_ms)).ok_or_else(|| {
-                        ImgQualityError::NumericError(
-                            "WebP animation duration overflow".to_string(),
-                        )
-                    })?;
+                    total_ms = total_ms
+                        .checked_add(u64::from(duration_ms))
+                        .ok_or_else(|| {
+                            ImgQualityError::NumericError(
+                                "WebP animation duration overflow".to_string(),
+                            )
+                        })?;
                 }
                 _ => {}
             }
@@ -446,8 +443,8 @@ pub mod webp {
         if frame_count <= 1 || total_ms == 0 {
             return Ok(None);
         }
-        let duration_secs = crate::numeric_cast::u64_to_f64(total_ms)
-            / crate::constants::MS_PER_SEC_F64;
+        let duration_secs =
+            crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64;
         if !duration_secs.is_finite() || duration_secs <= 0.0_f64 {
             return Ok(None);
         }
@@ -505,9 +502,7 @@ pub mod webp {
         let vp8x = [
             b'V', b'P', b'8', b'X', 10, 0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0,
         ];
-        let anim = [
-            b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let anim = [b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let mut body = Vec::new();
         body.extend_from_slice(&vp8x);
         body.extend_from_slice(&anim);
@@ -1147,8 +1142,7 @@ mod tests {
 
     #[test]
     fn test_webp_lossless_detection() {
-        let webp_lossless =
-            b"RIFF\x12\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f\x00\x00\x00\x00\x00";
+        let webp_lossless = b"RIFF\x12\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f\x00\x00\x00\x00\x00";
         let mut file =
             NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(webp_lossless)

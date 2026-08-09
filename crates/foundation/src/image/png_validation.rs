@@ -58,19 +58,25 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
 
     while pos < data.len() {
         let header = data
-            .get(pos..pos.checked_add(8).ok_or_else(|| invalid_png("PNG offset overflow"))?)
+            .get(
+                pos..pos
+                    .checked_add(8)
+                    .ok_or_else(|| invalid_png("PNG offset overflow"))?,
+            )
             .ok_or_else(|| invalid_png("PNG chunk header is truncated"))?;
         let length_u32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
         if length_u32 > 0x7fff_ffff {
-            return Err(invalid_png("PNG chunk length exceeds the specification limit"));
+            return Err(invalid_png(
+                "PNG chunk length exceeds the specification limit",
+            ));
         }
         let length = usize::try_from(length_u32)
             .map_err(|_| invalid_png("PNG chunk length does not fit this platform"))?;
         let chunk_type = [header[4], header[5], header[6], header[7]];
-        if !chunk_type.iter().all(|byte| byte.is_ascii_alphabetic())
-            || !chunk_type[2].is_ascii_uppercase()
-        {
-            return Err(invalid_png("PNG chunk type contains invalid bytes or reserved bit"));
+        if !chunk_type.iter().all(u8::is_ascii_alphabetic) || !chunk_type[2].is_ascii_uppercase() {
+            return Err(invalid_png(
+                "PNG chunk type contains invalid bytes or reserved bit",
+            ));
         }
         let payload_start = pos
             .checked_add(8)
@@ -121,7 +127,9 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
                 || payload[11] != 0
                 || payload[12] > 1
             {
-                return Err(invalid_png("PNG IHDR contains invalid dimensions or format fields"));
+                return Err(invalid_png(
+                    "PNG IHDR contains invalid dimensions or format fields",
+                ));
             }
             canvas = Some((width, height));
             pos = next;
@@ -157,8 +165,7 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
                 {
                     return Err(invalid_png("APNG contains an invalid fcTL frame boundary"));
                 }
-                let sequence =
-                    u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let sequence = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 if sequence != next_sequence {
                     return Err(invalid_png("APNG fcTL sequence has a gap or duplicate"));
                 }
@@ -170,21 +177,27 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
                 let x = u32::from_be_bytes([payload[12], payload[13], payload[14], payload[15]]);
                 let y = u32::from_be_bytes([payload[16], payload[17], payload[18], payload[19]]);
                 let Some((canvas_width, canvas_height)) = canvas else {
-                    return Err(invalid_png("APNG frame appeared before PNG canvas metadata"));
+                    return Err(invalid_png(
+                        "APNG frame appeared before PNG canvas metadata",
+                    ));
                 };
                 if width == 0
                     || height == 0
-                    || x.checked_add(width).is_none_or(|right| right > canvas_width)
-                    || y.checked_add(height).is_none_or(|bottom| bottom > canvas_height)
+                    || x.checked_add(width)
+                        .is_none_or(|right| right > canvas_width)
+                    || y.checked_add(height)
+                        .is_none_or(|bottom| bottom > canvas_height)
                     || payload[24] > 2
                     || payload[25] > 1
                 {
-                    return Err(invalid_png("APNG fcTL contains invalid frame geometry or mode"));
+                    return Err(invalid_png(
+                        "APNG fcTL contains invalid frame geometry or mode",
+                    ));
                 }
                 let delay_num = u16::from_be_bytes([payload[20], payload[21]]);
                 let delay_den = u16::from_be_bytes([payload[22], payload[23]]);
-                duration_secs += f64::from(delay_num)
-                    / f64::from(if delay_den == 0 { 100 } else { delay_den });
+                duration_secs +=
+                    f64::from(delay_num) / f64::from(if delay_den == 0 { 100 } else { delay_den });
                 frame_count = frame_count
                     .checked_add(1)
                     .ok_or_else(|| invalid_png("APNG frame count overflow"))?;
@@ -201,8 +214,7 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
                 {
                     return Err(invalid_png("APNG contains fdAT outside a valid frame"));
                 }
-                let sequence =
-                    u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let sequence = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 if sequence != next_sequence {
                     return Err(invalid_png("APNG fdAT sequence has a gap or duplicate"));
                 }
@@ -413,10 +425,7 @@ mod tests {
         assert!((info.duration_secs - 0.03).abs() < f64::EPSILON);
 
         let mut marker_in_payload = PNG_SIGNATURE.to_vec();
-        marker_in_payload.extend(chunk(
-            b"IHDR",
-            &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0],
-        ));
+        marker_in_payload.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
         marker_in_payload.extend(chunk(b"IDAT", b"acTLfcTL"));
         marker_in_payload.extend(chunk(b"IEND", &[]));
         assert_eq!(parse_apng_animation(&marker_in_payload).unwrap(), None);

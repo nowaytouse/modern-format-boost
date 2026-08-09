@@ -747,7 +747,7 @@ fn extract_frames_for_gifski(
     Ok((frame_dir, frame_dir_path, frame_count))
 }
 
-/// Read authoritative WebP timing with `webpmux`, then let FFmpeg 9 coalesce the
+/// Read authoritative WebP timing with `webpmux`, then let `FFmpeg` 9 coalesce the
 /// animation canvas and encode APNG. Extracting individual WebP frame rectangles
 /// loses their x/y offsets plus blend/dispose semantics.
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
@@ -3400,7 +3400,9 @@ mod tests {
         assert_eq!(pixels.len(), 64 * 64 * 3, "unexpected decoded frame size");
         let (max_channel_delta, worst_pixel) =
             pixels
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .fold((0u8, [0u8; 3]), |worst, pixel| {
                     let delta = pixel[0]
                         .abs_diff(pixel[1])

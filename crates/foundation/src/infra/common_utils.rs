@@ -626,11 +626,10 @@ fn parse_isobmff_box(data: &[u8], pos: usize) -> Option<([u8; 4], &[u8], usize)>
 #[must_use]
 pub fn isobmff_ftyp_payload(data: &[u8]) -> Option<&[u8]> {
     let (box_type, payload, _) = parse_isobmff_box(data, 0)?;
-    (box_type == *b"ftyp" && payload.len() >= 8 && payload[8..].len() % 4 == 0)
-        .then_some(payload)
+    (box_type == *b"ftyp" && payload.len() >= 8 && payload[8..].len() % 4 == 0).then_some(payload)
 }
 
-fn is_isobmff_container(box_type: [u8; 4]) -> bool {
+const fn is_isobmff_container(box_type: [u8; 4]) -> bool {
     matches!(
         &box_type,
         b"moov"

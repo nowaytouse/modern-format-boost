@@ -4959,10 +4959,10 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
         0.95_f64
     } else if initial_crf < 30.0 {
         let t = (initial_crf - 20.0) / 10.0;
-        0.95_f64 - f64::from(t) * 0.03_f64
+        f64::mul_add(f64::from(t), -0.03_f64, 0.95_f64)
     } else {
         let t = ((initial_crf - 30.0) / 20.0).min(1.0);
-        0.92_f64 - f64::from(t) * 0.04_f64
+        f64::mul_add(f64::from(t), -0.04_f64, 0.92_f64)
     };
 
     (max_crf, min_ssim.clamp(0.85, 0.98))

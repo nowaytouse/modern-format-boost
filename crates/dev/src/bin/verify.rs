@@ -2490,7 +2490,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
         fs::write(
             optimized.join("meme.avif"),
-        b"\x00\x00\x00\x14ftypavif\x00\x00\x00\x00avif",
+            b"\x00\x00\x00\x14ftypavif\x00\x00\x00\x00avif",
         )
         .unwrap();
         let marker_data = serde_json::json!({

@@ -1000,8 +1000,16 @@ mod tests {
             (".jpg", b"8BPS\x00\x01", FormatKind::Psd),
             (".jpg", b"P6\n1 1\n255\n", FormatKind::Pnm),
             (".jpg", b"DDS \x00\x00", FormatKind::Dds),
-            (".jpg", b"\x00\x00\x00\x10ftypmp42\x00\x00\x00\x00", FormatKind::Mp4),
-            (".jpg", b"\x00\x00\x00\x10ftypqt  \x00\x00\x00\x00", FormatKind::Mov),
+            (
+                ".jpg",
+                b"\x00\x00\x00\x10ftypmp42\x00\x00\x00\x00",
+                FormatKind::Mp4,
+            ),
+            (
+                ".jpg",
+                b"\x00\x00\x00\x10ftypqt  \x00\x00\x00\x00",
+                FormatKind::Mov,
+            ),
             (".jpg", b"\x1A\x45\xDF\xA3webm", FormatKind::Webm),
         ];
 

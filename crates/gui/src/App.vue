@@ -286,7 +286,9 @@ const runProcessorWithResumeDecision = async () => {
         appendLog("[RESUME] User chose to continue the saved task.");
       } else if (action === "fresh") {
         shouldStartFresh = true;
-        appendLog("[FRESH] User chose a fresh task; saved state will not be reused.");
+        appendLog(
+          "[FRESH] User chose a fresh task; saved state will not be reused.",
+        );
       } else {
         appendLog("[INFO] Task cancelled; saved state was preserved.");
         return;

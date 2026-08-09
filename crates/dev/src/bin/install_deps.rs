@@ -209,13 +209,11 @@ fn main() -> Result<()> {
         let libcxx_tbd = PathBuf::from(sdk_path_trimmed).join("usr/lib/libc++.tbd");
         let target_tbd = tmp_lib_dir.join("libstdc++.tbd");
         if libcxx_tbd.exists() {
-            run_cmd(
-                &format!(
-                    "ln -sf \"{}\" \"{}\"",
-                    libcxx_tbd.display(),
-                    target_tbd.display()
-                ),
-            )?;
+            run_cmd(&format!(
+                "ln -sf \"{}\" \"{}\"",
+                libcxx_tbd.display(),
+                target_tbd.display()
+            ))?;
             print_c(
                 GREEN,
                 &format!(
@@ -233,12 +231,10 @@ fn main() -> Result<()> {
 
         // 2. Create libstdc++.dylib pointing to system libc++.dylib
         let target_dylib = tmp_lib_dir.join("libstdc++.dylib");
-        run_cmd(
-            &format!(
-                "ln -sf \"/usr/lib/libc++.dylib\" \"{}\"",
-                target_dylib.display()
-            ),
-        )?;
+        run_cmd(&format!(
+            "ln -sf \"/usr/lib/libc++.dylib\" \"{}\"",
+            target_dylib.display()
+        ))?;
         print_c(
             GREEN,
             &format!(
@@ -306,9 +302,7 @@ fn main() -> Result<()> {
                 pick_symbol("🦀", "[RUST]")
             ),
         );
-        run_cmd(
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
-        )?;
+        run_cmd("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")?;
         let home = match std::env::var("HOME") {
             Ok(h) => h,
             Err(e) => return Err(anyhow!("HOME environment variable not set: {e}")),

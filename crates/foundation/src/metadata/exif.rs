@@ -699,10 +699,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     for tag in QUICKTIME_CONTAINER_DATE_TAGS {
         builder.arg(format!("-{tag}={best_date}"));
     }
-    builder
-        .quiet()
-        .ignore_minor()
-        .input(dst);
+    builder.quiet().ignore_minor().input(dst);
 
     let output = builder.build().output()?;
 

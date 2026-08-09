@@ -1724,7 +1724,7 @@ mod tests {
             root.join("video-disguised.jpg"),
             b"\0\0\0\x10ftypisom\0\0\0\0",
         )
-            .map_err(|e| anyhow::anyhow!("write video header: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("write video header: {e}"))?;
 
         let files = scan_image_files(root, &["jpg", "png"], true)?;
         let rels = sorted_relative_paths(root, &files)?;

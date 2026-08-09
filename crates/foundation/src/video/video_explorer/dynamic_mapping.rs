@@ -111,7 +111,7 @@ impl DynamicCrfMapper {
             0.5
         };
 
-        let interpolated_offset = offset1 + t * (offset2 - offset1);
+        let interpolated_offset = f32::mul_add(t, offset2 - offset1, offset1);
         let confidence = crate::constants::DYNAMIC_MAPPING_CONFIDENCE_HIGH;
 
         (

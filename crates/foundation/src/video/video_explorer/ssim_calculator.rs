@@ -483,9 +483,9 @@ fn pooled_metric_mean_from_json(stdout: &str, metric: &str) -> anyhow::Result<Op
     else {
         return Ok(None);
     };
-    mean.as_f64().map(Some).ok_or_else(|| {
-        anyhow::anyhow!("libvmaf pooled metric {metric}.mean must be a JSON number")
-    })
+    mean.as_f64()
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("libvmaf pooled metric {metric}.mean must be a JSON number"))
 }
 
 fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {

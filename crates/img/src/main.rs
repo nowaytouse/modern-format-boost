@@ -3362,7 +3362,7 @@ fn run_avif_input_decoder(
 }
 
 /// Use avifenc-supported JPEG/PNG inputs directly. Other static formats use an
-/// authoritative decoder; ImageMagick adapters/fallbacks require explicit expert mode.
+/// authoritative decoder; `ImageMagick` adapters/fallbacks require explicit expert mode.
 fn prepare_fast_img_avif_encoder_input(
     source: &Path,
     format: FormatKind,

@@ -91,9 +91,7 @@ fn psql(connstr: &str, sql: &str) -> Result<String> {
 fn update_embedding_sql(table: &str, id: &str, vector: &str) -> String {
     let escaped = vector.replace('\'', "''");
     let id_escaped = id.replace('\'', "''");
-    format!(
-        "UPDATE {table} SET embedding = '{escaped}'::vector WHERE id::text = '{id_escaped}'"
-    )
+    format!("UPDATE {table} SET embedding = '{escaped}'::vector WHERE id::text = '{id_escaped}'")
 }
 
 fn update_transaction(updates: &[String]) -> String {

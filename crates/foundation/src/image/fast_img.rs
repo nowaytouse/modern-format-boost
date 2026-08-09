@@ -40,9 +40,7 @@ fn run_fast_img_command_with_timeout(
     timeout: Duration,
     context: &str,
 ) -> std::io::Result<std::process::Output> {
-    crate::process_runner::run_command_with_liveness_timeout(
-        command, timeout, timeout, context,
-    )
+    crate::process_runner::run_command_with_liveness_timeout(command, timeout, timeout, context)
 }
 
 /// Returns `true` when `path` has true JPEG magic bytes.
@@ -137,9 +135,7 @@ pub fn verify_jxl_roundtrip_integrity(
         FAST_IMG_MEDIA_PROBE_TIMEOUT,
         "fast-img JXL roundtrip decode",
     )
-    .map_err(|e| {
-        ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}"))
-    })?;
+    .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}")))?;
 
     if !decode_output.status.success() {
         let stderr = first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
@@ -2835,8 +2831,7 @@ fn photos_import_controllable_item_failure(detail: &str) -> bool {
     photos_zero_import_context(detail).is_some()
         || lower.contains("photos returned 0 imported items")
         || lower.contains("photos applescript import returned 0 ids for ")
-        || (lower.contains("photos verifier has")
-            && lower.contains("without required proof after"))
+        || (lower.contains("photos verifier has") && lower.contains("without required proof after"))
 }
 
 fn handle_photos_import_recovery(
@@ -2920,7 +2915,7 @@ end timeout"#,
 
 #[cfg(test)]
 #[allow(clippy::unnecessary_wraps)]
-fn probe_photos_import_session_health() -> Result<()> {
+const fn probe_photos_import_session_health() -> Result<()> {
     Ok(())
 }
 
@@ -4063,11 +4058,10 @@ fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAs
         libraries.retain(|library| library != &library_hint);
         libraries.insert(0, library_hint);
     }
-    let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
-        uuids,
-        &libraries,
-        |library, uuids| query_osxphotos_asset_probes_from_library(uuids, library),
-    )?;
+    let (probes, resolved_library) =
+        query_osxphotos_asset_probes_in_libraries_with(uuids, &libraries, |library, uuids| {
+            query_osxphotos_asset_probes_from_library(uuids, library)
+        })?;
     if let Some(resolved_library) = resolved_library {
         *OSXPHOTOS_IMPORT_LIBRARY_HINT.lock().map_err(|_| {
             ImgQualityError::AnalysisError(
@@ -4696,10 +4690,7 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
 #[cfg(target_os = "macos")]
 fn clear_quarantine_xattr(path: &Path) -> Result<()> {
     let mut command = std::process::Command::new(MACOS_XATTR_PATH);
-    command
-        .arg("-d")
-        .arg("com.apple.quarantine")
-        .arg(path);
+    command.arg("-d").arg("com.apple.quarantine").arg(path);
     let output = run_fast_img_command_with_timeout(
         &mut command,
         FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
@@ -4730,10 +4721,7 @@ const fn clear_quarantine_xattr(path: &Path) {
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
     let mut command = std::process::Command::new(MACOS_XATTR_PATH);
-    command
-        .arg("-p")
-        .arg("com.apple.quarantine")
-        .arg(path);
+    command.arg("-p").arg("com.apple.quarantine").arg(path);
     let output = run_fast_img_command_with_timeout(
         &mut command,
         FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
@@ -5562,7 +5550,10 @@ mod tests {
             MACOS_KILLALL_PATH,
             MACOS_XATTR_PATH,
         ] {
-            assert!(Path::new(path).is_absolute(), "system tool is not absolute: {path}");
+            assert!(
+                Path::new(path).is_absolute(),
+                "system tool is not absolute: {path}"
+            );
         }
     }
 
@@ -5833,7 +5824,7 @@ mod tests {
         let output = wc.join("a.AVIF");
         std::fs::write(&output, b"avif-a").unwrap();
         let hash = crate::common_utils::calculate_blake3_hash(&output)?;
-        let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
+        let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
@@ -6074,10 +6065,8 @@ mod tests {
             crate::constants::ENV_MFB_HOME_ROOT,
             temp_dir.path().to_str().unwrap(),
         );
-        let _verify_delay_guard = crate::common_utils::EnvGuard::set(
-            FAST_IMG_ICLOUD_VERIFY_DELAY_MS_ENV,
-            "0",
-        );
+        let _verify_delay_guard =
+            crate::common_utils::EnvGuard::set(FAST_IMG_ICLOUD_VERIFY_DELAY_MS_ENV, "0");
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Batch_optimized");
         std::fs::create_dir_all(&wc).unwrap();
@@ -6633,12 +6622,15 @@ mod tests {
                 input.display()
             )));
         }
-        let input_name = input.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-            ImgQualityError::AnalysisError(format!(
-                "live Photos smoke input has no UTF-8 file name: {}",
-                input.display()
-            ))
-        })?;
+        let input_name = input
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "live Photos smoke input has no UTF-8 file name: {}",
+                    input.display()
+                ))
+            })?;
         if !input_name.starts_with("mfb-photos-smoke-") {
             return Err(ImgQualityError::AnalysisError(format!(
                 "live Photos smoke input must use the mfb-photos-smoke-* synthetic-fixture prefix: {}",

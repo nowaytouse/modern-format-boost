@@ -3648,15 +3648,14 @@ pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
     metadata_retry: &mut AvifencMetadataRetryState,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64, String)> {
-    let (temp_output, output_size) =
-        convert_to_avif_probe_from_encoder_input_with_speed_and_state(
-            source,
-            encoder_input,
-            quality,
-            speed,
-            metadata_retry,
-            options,
-        )?;
+    let (temp_output, output_size) = convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        metadata_retry,
+        options,
+    )?;
     let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output) {
         Ok(hash) => hash,
         Err(error) => {
@@ -3716,11 +3715,8 @@ pub fn finalize_meme_avif_probe(
         return Ok(TaskResult::skipped_exists(source, &output)?);
     }
 
-    if let Err(error) = verify_avif_probe_custody(
-        &output,
-        expected_content_blake3,
-        "after commit",
-    ) {
+    if let Err(error) = verify_avif_probe_custody(&output, expected_content_blake3, "after commit")
+    {
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "meme AVIF custody mismatch output cleanup",
             &output,
@@ -4991,7 +4987,7 @@ fn try_explore_ultimate_jxl_distance(
             .iter()
             .filter(|(distance, size)| *distance < accepted_distance && *size >= input_size)
             .map(|(distance, _)| *distance)
-            .max_by(|left, right| left.total_cmp(right))
+            .max_by(f32::total_cmp)
             .unwrap_or(floor);
         let mut refinement_iterations = 0u32;
 
@@ -5009,10 +5005,7 @@ fn try_explore_ultimate_jxl_distance(
         while accepted_distance - lower_bound >= precision
             && refinement_iterations < MAX_REFINEMENT_ITERATIONS
         {
-            let midpoint = f64::midpoint(
-                f64::from(lower_bound),
-                f64::from(accepted_distance),
-            );
+            let midpoint = f64::midpoint(f64::from(lower_bound), f64::from(accepted_distance));
             let candidate_distance = foundation::jxl_explorer::clamp_explore_distance(
                 foundation::numeric_cast::f64_to_f32_lossy(midpoint),
             );
@@ -6019,8 +6012,7 @@ mod tests {
         };
 
         let content_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
-        let result =
-            finalize_meme_avif_probe(&source, &candidate, &content_blake3, &options)?;
+        let result = finalize_meme_avif_probe(&source, &candidate, &content_blake3, &options)?;
 
         assert!(result.success);
         assert!(
@@ -6037,8 +6029,8 @@ mod tests {
     }
 
     #[test]
-    fn finalize_meme_avif_probe_rejects_candidate_changed_after_verification()
-    -> anyhow::Result<()> {
+    fn finalize_meme_avif_probe_rejects_candidate_changed_after_verification() -> anyhow::Result<()>
+    {
         let root = tempfile::tempdir()?;
         let output_dir = root.path().join("out");
         std::fs::create_dir(&output_dir)?;
@@ -6059,13 +6051,8 @@ mod tests {
         };
         let output = get_output_path(&source, EXT_AVIF, &options)?;
 
-        let error = finalize_meme_avif_probe(
-            &source,
-            &candidate,
-            &verified_blake3,
-            &options,
-        )
-        .expect_err("changed candidate must not inherit prior pixel proof");
+        let error = finalize_meme_avif_probe(&source, &candidate, &verified_blake3, &options)
+            .expect_err("changed candidate must not inherit prior pixel proof");
 
         assert!(error.to_string().contains("custody mismatch before commit"));
         assert!(!candidate.exists(), "changed candidate must be cleaned up");

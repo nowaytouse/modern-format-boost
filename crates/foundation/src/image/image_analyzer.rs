@@ -1600,10 +1600,8 @@ fn check_png_animation(path: &Path) -> Result<bool> {
     )
     .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
     let bytes = std::fs::read(path)?;
-    Ok(
-        crate::image::png_validation::parse_apng_animation(&bytes)?
-            .is_some_and(|info| info.frame_count > 1),
-    )
+    Ok(crate::image::png_validation::parse_apng_animation(&bytes)?
+        .is_some_and(|info| info.frame_count > 1))
 }
 
 fn check_gif_animation(path: &Path) -> Result<bool> {

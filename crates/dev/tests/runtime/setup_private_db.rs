@@ -61,7 +61,12 @@ fn eof_cancels_without_writing_default_config() -> Result<()> {
 
     run_setup(repo.path(), "")?;
 
-    assert!(!repo.path().join(".modern_format_boost/local_env.json").exists());
+    assert!(
+        !repo
+            .path()
+            .join(".modern_format_boost/local_env.json")
+            .exists()
+    );
     Ok(())
 }
 

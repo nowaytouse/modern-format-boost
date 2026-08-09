@@ -1018,8 +1018,8 @@ fn try_probe_from_animated_apng_header(
     let frame_count = u64::from(info.frame_count);
 
     let file_size = animated_header_file_size(path, "apng")?;
-    let duration = (info.duration_secs.is_finite() && info.duration_secs > 0.0)
-        .then_some(info.duration_secs);
+    let duration =
+        (info.duration_secs.is_finite() && info.duration_secs > 0.0).then_some(info.duration_secs);
     let frame_rate =
         duration.map(|duration| crate::numeric_cast::u64_to_f64(frame_count) / duration);
 
@@ -1186,12 +1186,13 @@ fn try_probe_from_animated_webp_header(
     }
     let file_size = animated_header_file_size(path, "webp")?;
     let timing_data = animated_header_timing_data(path, "webp")?;
-    let timing = crate::image_formats::webp::timing_stats_from_bytes(&timing_data).map_err(|err| {
-        crate::ffprobe::FFprobeError::ParseError(format!(
-            "WebP header timing parse failed for {}: {err}",
-            path.display()
-        ))
-    })?;
+    let timing =
+        crate::image_formats::webp::timing_stats_from_bytes(&timing_data).map_err(|err| {
+            crate::ffprobe::FFprobeError::ParseError(format!(
+                "WebP header timing parse failed for {}: {err}",
+                path.display()
+            ))
+        })?;
     let frame_count = timing.as_ref().map_or_else(
         || {
             u64::from(

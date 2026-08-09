@@ -354,10 +354,10 @@ impl ManagedProcess {
             .ok_or_else(|| anyhow::anyhow!("Stderr thread missing during join"))?;
         let stdout = stdout_thread.join();
         let stderr = stderr_thread.join();
-        let stdout = stdout
-            .map_err(|error| anyhow::anyhow!("Stdout reader panicked: {error:?}"))??;
-        let stderr = stderr
-            .map_err(|error| anyhow::anyhow!("Stderr reader panicked: {error:?}"))??;
+        let stdout =
+            stdout.map_err(|error| anyhow::anyhow!("Stdout reader panicked: {error:?}"))??;
+        let stderr =
+            stderr.map_err(|error| anyhow::anyhow!("Stderr reader panicked: {error:?}"))??;
 
         if !status.success() && self.audit_nonzero_exit {
             crate::media_conversion_gate::delivery_tool_process_failed_audit(
@@ -698,8 +698,8 @@ mod tests {
         command.arg("-c").arg(
             "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i+1)); done; printf done >&2",
         );
-        let result = ManagedProcess::spawn_with_policy(&mut command, false, false, 64)
-            .and_then(|process| {
+        let result =
+            ManagedProcess::spawn_with_policy(&mut command, false, false, 64).and_then(|process| {
                 process.wait_timeout(Duration::from_secs(2), "bounded output fixture")
             });
         let error = match result {

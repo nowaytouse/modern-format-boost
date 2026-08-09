@@ -1364,7 +1364,7 @@ mod tests {
         std::fs::copy(&src, &out).expect("adopt AVIF byte-identically");
         let shared_hash = crate::common_utils::calculate_blake3_hash(&src).unwrap();
         let mut ctx = PipelineCtx {
-            working_copy: wc.clone(),
+            working_copy: wc,
             src_dir,
             blake3_log: BTreeMap::new(),
             expected_count: 1,
@@ -2034,6 +2034,7 @@ pub fn resolve_working_copy_dir(src: &Path) -> PathBuf {
 }
 
 /// Select a new adjacent working copy without consuming any prior marker.
+#[must_use]
 pub fn resolve_fresh_working_copy_dir(src: &Path) -> PathBuf {
     resolve_working_copy_dir_inner(src, false)
 }
@@ -2166,8 +2167,7 @@ fn parse_marker_for_working_copy(
     data: &[u8],
     working_copy: &Path,
 ) -> std::io::Result<WorkingCopyMarker> {
-    let marker: WorkingCopyMarker =
-        serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
     marker
         .validate_checkpoint_path_contract(working_copy)
         .map_err(std::io::Error::other)?;
@@ -2562,11 +2562,7 @@ mod working_copy_tests {
         let outside_file = outside.join("outside.JXL");
         std::fs::write(&outside_file, b"outside").unwrap();
         std::os::unix::fs::symlink(&outside_file, wc.join("link.JXL")).unwrap();
-        marker
-            .blake3_log
-            .get_mut("a.jpg")
-            .unwrap()
-            .out_rel = Some("link.JXL".to_string());
+        marker.blake3_log.get_mut("a.jpg").unwrap().out_rel = Some("link.JXL".to_string());
         let err = write_marker_atomic(&marker).unwrap_err();
         assert!(err.to_string().contains("contains a symlink"));
 

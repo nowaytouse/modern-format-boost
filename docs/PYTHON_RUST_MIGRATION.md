@@ -27,13 +27,13 @@ if a new top-level Python script is not in the training/ML allowlist.
 
 ## Canonical commands
 
-| Task | Source-tree command | Release command |
-| --- | --- | --- |
-| Training orchestration | `cargo run --locked -p dev --bin run_training -- <options>` | `run_training <options>` |
-| Full repository checks | `cargo run --locked -p dev --bin check_all -- <options>` | `check_all <options>` |
-| Dependency installation | `cargo run --locked -p dev --bin install_deps -- <options>` | `install_deps <options>` |
-| iCloud Photos import | `cargo run --locked -p dev --bin icloud_import -- <options>` | `icloud_import <options>` |
-| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>` | `smart_build <options>` |
+| Task                          | Source-tree command                                          | Release command           |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------- |
+| Training orchestration        | `cargo run --locked -p dev --bin run_training -- <options>`  | `run_training <options>`  |
+| Full repository checks        | `cargo run --locked -p dev --bin check_all -- <options>`     | `check_all <options>`     |
+| Dependency installation       | `cargo run --locked -p dev --bin install_deps -- <options>`  | `install_deps <options>`  |
+| iCloud Photos import          | `cargo run --locked -p dev --bin icloud_import -- <options>` | `icloud_import <options>` |
+| Incremental application build | `cargo run --locked -p dev --bin smart_build -- <options>`   | `smart_build <options>`   |
 
 Rust training orchestration may invoke Python-native ML workers. That is an
 implementation boundary, not a second public command surface.
@@ -50,21 +50,21 @@ implementation boundary, not a second public command surface.
 
 ## Physically retired operational Python
 
-| Rust owner | Removed Python source | Behavioral lock |
-| --- | --- | --- |
-| `cache_cleaner` | `cache_cleaner.py` | Rust binary unit tests |
-| `check_all` | `check_all.py` | Rust binary unit tests and CI workflow contract |
-| `collect_optimized` | `collect_optimized.py` | snapshot/restore failure-propagation unit tests |
-| `create_live_photo` | `create_live_photo.py` | `create_live_photo` runtime integration test |
-| `generate_test_media` | `generate_test_media.py` | FFmpeg failure-propagation unit test and CI fixture generation |
-| `icloud_import` | `icloud_import.py` | album, rename, lock, and preflight unit tests |
-| `install_deps` | `install_deps.py` | dependency-plan and canonical follow-up command unit tests |
-| `delivery_heatmap` | `media_conversion_delivery_heatmap.py` | delivery heatmap unit tests and hardening contract |
-| `mfb_rust_toolchain` | `mfb_rust_toolchain.py` | Rust toolchain resolution unit tests |
-| `normalize_stale_embed_measurement_slots` | `normalize_stale_embed_measurement_slots.py` | vector normalization and single-transaction SQL unit tests |
-| `sandbox_validate` | `sandbox_validate.py` | sandbox argument and command-construction unit tests |
-| `session_audit` | `session_audit.py` | explicit audit-write error unit tests |
-| `setup_private_db` | `setup_private_db.py` | runtime tests for default, existing, legacy, override, and EOF cancellation |
+| Rust owner                                | Removed Python source                        | Behavioral lock                                                             |
+| ----------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |
+| `cache_cleaner`                           | `cache_cleaner.py`                           | Rust binary unit tests                                                      |
+| `check_all`                               | `check_all.py`                               | Rust binary unit tests and CI workflow contract                             |
+| `collect_optimized`                       | `collect_optimized.py`                       | snapshot/restore failure-propagation unit tests                             |
+| `create_live_photo`                       | `create_live_photo.py`                       | `create_live_photo` runtime integration test                                |
+| `generate_test_media`                     | `generate_test_media.py`                     | FFmpeg failure-propagation unit test and CI fixture generation              |
+| `icloud_import`                           | `icloud_import.py`                           | album, rename, lock, and preflight unit tests                               |
+| `install_deps`                            | `install_deps.py`                            | dependency-plan and canonical follow-up command unit tests                  |
+| `delivery_heatmap`                        | `media_conversion_delivery_heatmap.py`       | delivery heatmap unit tests and hardening contract                          |
+| `mfb_rust_toolchain`                      | `mfb_rust_toolchain.py`                      | Rust toolchain resolution unit tests                                        |
+| `normalize_stale_embed_measurement_slots` | `normalize_stale_embed_measurement_slots.py` | vector normalization and single-transaction SQL unit tests                  |
+| `sandbox_validate`                        | `sandbox_validate.py`                        | sandbox argument and command-construction unit tests                        |
+| `session_audit`                           | `session_audit.py`                           | explicit audit-write error unit tests                                       |
+| `setup_private_db`                        | `setup_private_db.py`                        | runtime tests for default, existing, legacy, override, and EOF cancellation |
 
 Deletion is part of the contract. Reintroducing one of these Python files as a
 wrapper or compatibility copy fails the migration contract test.

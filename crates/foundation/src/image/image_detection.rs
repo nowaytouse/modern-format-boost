@@ -819,10 +819,8 @@ pub fn animatable_format_confirmed_static_only(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            Ok(
-                crate::image::png_validation::parse_apng_animation(&data)?
-                    .is_none_or(|info| info.frame_count <= 1),
-            )
+            Ok(crate::image::png_validation::parse_apng_animation(&data)?
+                .is_none_or(|info| info.frame_count <= 1))
         }
         DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => {
             isobmff_confirmed_static_only(path)
@@ -2116,8 +2114,7 @@ impl PngQuantizationSession {
             is_quantized: true,
             quality_estimate: None,
             confidence: Some(
-                crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT
-                    + tc_score_f * crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE,
+                tc_score_f.mul_add(crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE, crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT),
             ),
             factor_scores: self.factors.clone(),
             detected_tool: None,
@@ -2367,9 +2364,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 ))
             })?;
         reader.seek(SeekFrom::Start(next)).map_err(|error| {
-            ImgQualityError::AnalysisError(format!(
-                "Failed to seek past PNG {context}: {error}"
-            ))
+            ImgQualityError::AnalysisError(format!("Failed to seek past PNG {context}: {error}"))
         })?;
         Ok(())
     }
@@ -2438,11 +2433,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
         3 => [1, 2, 4, 8].contains(&bit_depth),
         _ => false,
     };
-    if !valid_depth
-        || compression_method != 0
-        || filter_method != 0
-        || interlace_method > 1
-    {
+    if !valid_depth || compression_method != 0 || filter_method != 0 || interlace_method > 1 {
         return Err(ImgQualityError::AnalysisError(
             "PNG IHDR contains an unsupported format field".to_string(),
         ));
@@ -2591,11 +2582,13 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             (compressed, true)
                         }
                         b"iTXt" => {
-                            let comp_flag = payload.get(null_pos + 1).copied().ok_or_else(|| {
-                                ImgQualityError::AnalysisError(
-                                    "PNG iTXt chunk is missing its compression flag".to_string(),
-                                )
-                            })?;
+                            let comp_flag =
+                                payload.get(null_pos + 1).copied().ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its compression flag"
+                                            .to_string(),
+                                    )
+                                })?;
                             let method = payload.get(null_pos + 2).copied().ok_or_else(|| {
                                 ImgQualityError::AnalysisError(
                                     "PNG iTXt chunk is missing its compression method".to_string(),
@@ -2612,7 +2605,8 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                                 .and_then(|rest| rest.iter().position(|&byte| byte == 0))
                                 .ok_or_else(|| {
                                     ImgQualityError::AnalysisError(
-                                        "PNG iTXt chunk is missing its language separator".to_string(),
+                                        "PNG iTXt chunk is missing its language separator"
+                                            .to_string(),
                                     )
                                 })?;
                             pos += lang_null + 1;
@@ -2682,12 +2676,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 break;
             }
             _ => {
-                skip_bytes(
-                    &mut reader,
-                    chunk_len + 4,
-                    stream_end,
-                    "PNG chunk",
-                )?;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "PNG chunk")?;
             }
         }
     }
@@ -3164,7 +3153,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         } else {
             0.0_f64
         };
-        total_score += ch_score * weight;
+        total_score = f64::mul_add(ch_score, weight, total_score);
     }
 
     // Diagonal scan on luma for efficiency — catches diagonal gradients
@@ -3942,7 +3931,7 @@ fn estimate_png_quantized_quality(
     };
 
     let range = crate::constants::PNG_QUALITY_EST_MAX - crate::constants::PNG_QUALITY_EST_MIN;
-    let q = crate::constants::PNG_QUALITY_EST_MIN + adjusted * range;
+    let q = f64::mul_add(adjusted, range, crate::constants::PNG_QUALITY_EST_MIN);
     let result = crate::numeric_cast::f64_to_u8_strict(q.round(), "png_estimated_quality")
         .ok_or_else(|| {
             ImgQualityError::AnalysisError(format!(
@@ -4162,9 +4151,7 @@ pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
     ));
     data.extend(fctl_chunk(1, 2, 100));
     let mut second_frame = 2u32.to_be_bytes().to_vec();
-    second_frame.extend_from_slice(&[
-        0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
-    ]);
+    second_frame.extend_from_slice(&[0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01]);
     data.extend(png_chunk(b"fdAT", &second_frame));
     data.extend(png_chunk(b"IEND", &[]));
     data
@@ -4264,14 +4251,12 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     }
     let directory_end = 6_u64
         .checked_add(
-            u64::try_from(image_count)
-                .map_err(|error| {
-                    ImgQualityError::AnalysisError(format!(
-                        "ICO: image count conversion failed in '{}': {error}",
-                        path.display()
-                    ))
-                })?
-                * 16,
+            u64::try_from(image_count).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: image count conversion failed in '{}': {error}",
+                    path.display()
+                ))
+            })? * 16,
         )
         .filter(|end| *end <= file_len)
         .ok_or_else(|| {
