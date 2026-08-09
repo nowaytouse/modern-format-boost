@@ -38,6 +38,9 @@ use std::path::Path;
 
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = crate::constants::WEBP_RATIO_SAMPLE_MAX_DIM;
 const LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES: usize = 512;
+const LOOP_INTENT_THUMBNAIL_DIM: usize = 64;
+const LOOP_INTENT_THUMBNAIL_RGB_BYTES: usize =
+    LOOP_INTENT_THUMBNAIL_DIM * LOOP_INTENT_THUMBNAIL_DIM * 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilenameKind {
@@ -5822,6 +5825,41 @@ fn parse_ydif_sample(token: &str) -> anyhow::Result<f64> {
     Ok(value)
 }
 
+fn read_loop_intent_thumbnail_rgb(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to inspect loop-intent thumbnail {}: {err}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "loop-intent thumbnail is not a regular file: {}",
+        path.display()
+    );
+    let expected = crate::numeric_cast::usize_to_u64(LOOP_INTENT_THUMBNAIL_RGB_BYTES);
+    anyhow::ensure!(
+        metadata.len() == expected,
+        "loop-intent thumbnail payload size mismatch: expected {expected} bytes, got {} at {}",
+        metadata.len(),
+        path.display()
+    );
+    let bytes = std::fs::read(path).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to read loop-intent thumbnail {}: {err}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        bytes.len() == LOOP_INTENT_THUMBNAIL_RGB_BYTES,
+        "loop-intent thumbnail changed while reading: expected {} bytes, got {} at {}",
+        LOOP_INTENT_THUMBNAIL_RGB_BYTES,
+        bytes.len(),
+        path.display()
+    );
+    Ok(bytes)
+}
+
 /// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
 /// benchmarks. `YDIF` is sampled across the full declared timeline and bounded
 /// to prevent long or malformed media from producing unbounded diagnostic
@@ -5884,50 +5922,50 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         }
     }
 
-    // 2. Extract Palette Depth
-    let thumb_output = crate::ffmpeg_builder::FfmpegBuilder::new()
+    // 2. Extract Palette Depth. Write binary RGB to a private temporary file so
+    // the text-oriented managed process runner never decodes arbitrary pixels.
+    let thumbnail_temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+        "loop_intent_thumbnail",
+        "mfb-loop-thumbnail-",
+    )?;
+    let thumbnail_path = thumbnail_temp_dir.path().join("frame.rgb");
+    let scale_filter = format!(
+        "scale={LOOP_INTENT_THUMBNAIL_DIM}:{LOOP_INTENT_THUMBNAIL_DIM}"
+    );
+    let mut thumbnail_command = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
         .frames_v(1)
         .arg("-vf")
-        .arg("scale=64:64")
+        .arg(scale_filter)
         .format("rawvideo")
         .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
-        .output_pipe()
-        .build()
-        .output()?;
+        .overwrite()
+        .output(&thumbnail_path)
+        .build();
+    crate::process_runner::ManagedProcess::spawn_captured(&mut thumbnail_command)?
+        .wait_timeout(
+            crate::ffmpeg_process::ffmpeg_timeout(),
+            "loop intent RGB thumbnail extraction",
+        )?
+        .check_loud("loop intent RGB thumbnail extraction")?;
+    let thumbnail_rgb = read_loop_intent_thumbnail_rgb(&thumbnail_path)?;
 
-    if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
-        let mut quantized = std::collections::HashSet::new();
-        for chunk in thumb_output.stdout.as_chunks::<3>().0 {
-            let r = chunk
-                .first()
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse red channel"))?
-                >> 3_i32;
-            let g = chunk
-                .get(1)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse green channel"))?
-                >> 3_i32;
-            let b = chunk
-                .get(2)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse blue channel"))?
-                >> 3_i32;
-            quantized.insert((r, g, b));
-        }
-        meta.palette_depth = Some(palette_depth_score(quantized.len()));
-
-        // 3. Extract Real Physics (225-dimensional 15x15 luminance grid)
-        // Reuse the already decoded 64x64 raw RGB buffer to avoid extra FFmpeg/Decoding
-        // overhead
-        if let Some(img_buf) =
-            image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(64, 64, thumb_output.stdout)
-        {
-            let dynamic_img = image::DynamicImage::ImageRgb8(img_buf);
-            meta.physics_225 = Some(crate::real_physics::extract_image_physics_225(&dynamic_img));
-        }
+    let mut quantized = std::collections::HashSet::new();
+    for &[r, g, b] in thumbnail_rgb.as_chunks::<3>().0 {
+        quantized.insert((r >> 3_i32, g >> 3_i32, b >> 3_i32));
     }
+    meta.palette_depth = Some(palette_depth_score(quantized.len()));
+
+    // 3. Extract Real Physics (225-dimensional 15x15 luminance grid). Reuse
+    // the validated raw RGB frame to avoid another decode.
+    let img_buf = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(
+        crate::numeric_cast::usize_to_u32_sat(LOOP_INTENT_THUMBNAIL_DIM),
+        crate::numeric_cast::usize_to_u32_sat(LOOP_INTENT_THUMBNAIL_DIM),
+        thumbnail_rgb,
+    )
+    .ok_or_else(|| anyhow::anyhow!("validated loop-intent RGB thumbnail shape was rejected"))?;
+    let dynamic_img = image::DynamicImage::ImageRgb8(img_buf);
+    meta.physics_225 = Some(crate::real_physics::extract_image_physics_225(&dynamic_img));
     Ok(())
 }
 
@@ -7408,6 +7446,33 @@ mod tests {
             assert_eq!(motion_periodicity_score(&samples), None);
             assert_eq!(temporal_jitter_score(&samples), None);
         }
+    }
+
+    #[test]
+    fn loop_intent_thumbnail_requires_one_exact_rgb_frame() {
+        let file = tempfile::NamedTempFile::new().expect("thumbnail fixture");
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES])
+            .expect("write exact thumbnail fixture");
+        assert_eq!(
+            read_loop_intent_thumbnail_rgb(file.path())
+                .expect("exact RGB frame")
+                .len(),
+            LOOP_INTENT_THUMBNAIL_RGB_BYTES
+        );
+
+        std::fs::write(
+            file.path(),
+            vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES - 1],
+        )
+        .expect("write short thumbnail fixture");
+        assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
+
+        std::fs::write(
+            file.path(),
+            vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES + 1],
+        )
+        .expect("write oversized thumbnail fixture");
+        assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
     }
 
     #[test]
