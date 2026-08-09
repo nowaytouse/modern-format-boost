@@ -2618,7 +2618,7 @@ fn photos_import_session_timeout(batch_count: usize) -> Result<Duration> {
 fn log_photos_resource_state(chunk_number: usize, phase: &str) {
     match get_photos_pid() {
         Ok(Some(pid)) => {
-            let output = std::process::Command::new("ps")
+            let output = std::process::Command::new(MACOS_PS_PATH)
                 .args(["-p", &pid, "-o", "rss=,vsz="])
                 .output();
 
@@ -2674,7 +2674,7 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
         }
     }
 
-    match std::process::Command::new("vm_stat").output() {
+    match std::process::Command::new(MACOS_VM_STAT_PATH).output() {
         Ok(output) if output.status.success() => {
             let vm_stat = String::from_utf8_lossy(&output.stdout);
             if let Some(free_line) = vm_stat.lines().find(|l| l.contains("Pages free:")) {
@@ -2709,7 +2709,7 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
 }
 
 fn get_photos_pid() -> Result<Option<String>> {
-    let output = std::process::Command::new("pgrep")
+    let output = std::process::Command::new(MACOS_PGREP_PATH)
         .args(["-x", "Photos"])
         .output()
         .map_err(|err| {
@@ -2956,7 +2956,7 @@ fn relaunch_photos_for_import_recovery(reason: &str) -> Result<()> {
 
     let mut last_launch_error = None;
     for attempt in 1..=FAST_IMG_PHOTOS_IMPORT_RELAUNCH_OPEN_ATTEMPTS {
-        let mut open_command = std::process::Command::new("open");
+        let mut open_command = std::process::Command::new(MACOS_OPEN_PATH);
         open_command.args(["-a", "Photos"]);
         let open_output = crate::process_runner::ManagedProcess::spawn(&mut open_command)
             .and_then(|process| {
@@ -3115,7 +3115,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             "Photos failed to quit gracefully after {}s, forcing termination via killall -9",
             FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS
         );
-        let _ = std::process::Command::new("killall")
+        let _ = std::process::Command::new(MACOS_KILLALL_PATH)
             .args(["-9", "Photos"])
             .status();
         std::thread::sleep(Duration::from_secs(2)); // Wait for kill to take effect
@@ -3136,7 +3136,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             phase,
             "First killall failed, retrying with -KILL signal"
         );
-        let _ = std::process::Command::new("killall")
+        let _ = std::process::Command::new(MACOS_KILLALL_PATH)
             .args(["-KILL", "Photos"])
             .status();
         std::thread::sleep(Duration::from_secs(2));
@@ -4029,6 +4029,16 @@ const FAST_IMG_OSXPHOTOS_QUERY_TIMEOUT_SECS_ENV: &str = "MFB_FAST_IMG_OSXPHOTOS_
 const FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF_ENV: &str = "MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF";
 const FAST_IMG_PHOTOS_IMPORT_TIMEOUT_SECS_ENV: &str = "MFB_FAST_IMG_PHOTOS_IMPORT_TIMEOUT_SECS";
 const FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE_ENV: &str = "MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE";
+const MACOS_OSASCRIPT_PATH: &str = "/usr/bin/osascript";
+const MACOS_PS_PATH: &str = "/bin/ps";
+const MACOS_VM_STAT_PATH: &str = "/usr/bin/vm_stat";
+const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
+#[cfg(target_os = "macos")]
+const MACOS_OPEN_PATH: &str = "/usr/bin/open";
+#[cfg(target_os = "macos")]
+const MACOS_KILLALL_PATH: &str = "/usr/bin/killall";
+#[cfg(target_os = "macos")]
+const MACOS_XATTR_PATH: &str = "/usr/bin/xattr";
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_DEFAULT: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_MAX: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_DEFAULT: usize = 64;
@@ -4552,8 +4562,7 @@ fn resolve_osxphotos_command() -> Result<PathBuf> {
 }
 
 fn resolve_osascript_command() -> PathBuf {
-    crate::common_utils::resolve_tool_path("osascript")
-        .unwrap_or_else(|| PathBuf::from("/usr/bin/osascript"))
+    PathBuf::from(MACOS_OSASCRIPT_PATH)
 }
 
 #[derive(Debug)]
@@ -4630,7 +4639,7 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
 
 #[cfg(target_os = "macos")]
 fn clear_quarantine_xattr(path: &Path) -> Result<()> {
-    let output = std::process::Command::new("xattr")
+    let output = std::process::Command::new(MACOS_XATTR_PATH)
         .arg("-d")
         .arg("com.apple.quarantine")
         .arg(path)
@@ -4659,7 +4668,7 @@ const fn clear_quarantine_xattr(path: &Path) {
 
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
-    let output = std::process::Command::new("xattr")
+    let output = std::process::Command::new(MACOS_XATTR_PATH)
         .arg("-p")
         .arg("com.apple.quarantine")
         .arg(path)
@@ -5456,6 +5465,28 @@ mod tests {
         assert_eq!(attempts, 1);
         assert!(err.to_string().contains("not authorized"));
         Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[serial_test::serial]
+    fn photos_system_commands_ignore_path_override() {
+        let _path_guard = crate::common_utils::EnvGuard::set("PATH", "/tmp/untrusted");
+        assert_eq!(
+            resolve_osascript_command(),
+            PathBuf::from(MACOS_OSASCRIPT_PATH)
+        );
+        for path in [
+            MACOS_OSASCRIPT_PATH,
+            MACOS_PS_PATH,
+            MACOS_VM_STAT_PATH,
+            MACOS_PGREP_PATH,
+            MACOS_OPEN_PATH,
+            MACOS_KILLALL_PATH,
+            MACOS_XATTR_PATH,
+        ] {
+            assert!(Path::new(path).is_absolute(), "system tool is not absolute: {path}");
+        }
     }
 
     #[test]
