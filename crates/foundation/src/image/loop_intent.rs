@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = crate::constants::WEBP_RATIO_SAMPLE_MAX_DIM;
+const LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilenameKind {
@@ -5732,28 +5733,67 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
         .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Gif)
 }
 
+fn ydif_sample_stride(frame_count: Option<u64>) -> u64 {
+    let sample_limit = crate::numeric_cast::usize_to_u64(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+    frame_count
+        .filter(|&count| count > 0)
+        .map_or(1, |count| count.div_ceil(sample_limit).max(1))
+}
+
+fn ydif_ffmpeg_filter(frame_count: Option<u64>) -> String {
+    let sample_stride = ydif_sample_stride(frame_count);
+    format!("signalstats,select='not(mod(n\\,{sample_stride}))',metadata=print")
+}
+
+fn parse_ydif_sample(token: &str) -> anyhow::Result<f64> {
+    let value = token
+        .parse::<f64>()
+        .map_err(|err| {
+            anyhow::anyhow!("malformed loop_intent lavfi YDIF token {token:?}: {err}")
+        })?;
+    if !value.is_finite() || value < 0.0 {
+        anyhow::bail!(
+            "invalid loop_intent lavfi YDIF sample {token:?}: expected finite non-negative value"
+        );
+    }
+    Ok(value)
+}
+
 /// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
-/// benchmarks.
+/// benchmarks. `YDIF` is sampled across the full declared timeline and bounded
+/// to prevent long or malformed media from producing unbounded diagnostic
+/// output.
 ///
 /// # Errors
-/// Returns an error if the `FFmpeg` command fails or the output cannot be
-/// parsed. # Panics
-///
-/// Panics if the `FFmpeg` output contains malformed UTF-8 or if internal signal
-/// statistics parsing fails unexpectedly.
+/// Returns an error if `FFmpeg` fails, exceeds its deadline, emits more than the
+/// bounded sample budget, or returns malformed/non-finite signal data.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
-    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+    let known_frame_count = meta
+        .real_frame_count
+        .filter(|&count| count > 0)
+        .or_else(|| meta.frame_count.filter(|&count| count > 0));
+    let filter = ydif_ffmpeg_filter(known_frame_count);
+    let mut command = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
+        .frames_v(crate::numeric_cast::usize_to_u32_sat(
+            LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES,
+        ))
         .arg("-vf")
-        .arg("signalstats,metadata=print")
+        .arg(filter)
         .format("null")
         .output_pipe()
-        .build()
-        .output()?;
+        .build();
+    let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
+        .wait_liveness_timeout(
+            crate::ffmpeg_process::ffmpeg_timeout(),
+            crate::process_runner::video_process_hard_timeout(),
+            "loop intent YDIF sampling",
+        )?
+        .check_loud("loop intent YDIF sampling")?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut ydif_values = Vec::new();
+    let mut ydif_values = Vec::with_capacity(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+    let stderr = &output.stderr;
     for line in stderr.lines() {
         if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
             let tail = crate::media_conversion_gate::utf8_suffix_or_empty(
@@ -5765,12 +5805,13 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
                 tail,
                 "loop_intent lavfi YDIF",
             );
-            match token.parse::<f64>() {
-                Ok(val) => ydif_values.push(val),
-                Err(err) => {
-                    anyhow::bail!("malformed loop_intent lavfi YDIF token {token:?}: {err}");
-                }
+            if ydif_values.len() >= LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES {
+                anyhow::bail!(
+                    "loop_intent lavfi YDIF exceeded bounded sample budget of {} frames",
+                    LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES
+                );
             }
+            ydif_values.push(parse_ydif_sample(token)?);
         }
     }
     if !ydif_values.is_empty() {
@@ -7213,6 +7254,24 @@ mod tests {
             matches!(verdict, Verdict::LoopStrong(_)),
             "Expected LoopStrong for silent audio track, got: {verdict:?}"
         );
+    }
+
+    #[test]
+    fn ydif_sampling_is_bounded_and_rejects_invalid_evidence() {
+        let sample_limit = crate::numeric_cast::usize_to_u64(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+        for frame_count in [1, sample_limit, sample_limit + 1, 10_000, u64::MAX] {
+            let stride = ydif_sample_stride(Some(frame_count));
+            assert!(frame_count.div_ceil(stride) <= sample_limit);
+        }
+        assert_eq!(ydif_sample_stride(None), 1);
+        assert_eq!(
+            ydif_ffmpeg_filter(Some(sample_limit + 1)),
+            "signalstats,select='not(mod(n\\,2))',metadata=print"
+        );
+        assert_eq!(parse_ydif_sample("1.25").expect("finite YDIF"), 1.25);
+        assert!(parse_ydif_sample("NaN").is_err());
+        assert!(parse_ydif_sample("inf").is_err());
+        assert!(parse_ydif_sample("-0.1").is_err());
     }
 
     #[test]
