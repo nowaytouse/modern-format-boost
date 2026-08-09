@@ -4672,7 +4672,7 @@ fn try_explore_ultimate_jxl_distance(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
-    const MAX_CONTINUED_ITERATIONS: u32 = 20;
+    const MAX_REFINEMENT_ITERATIONS: u32 = 20;
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
@@ -4732,6 +4732,8 @@ fn try_explore_ultimate_jxl_distance(
     }
 
     let mut best_final: Option<(usize, u64, std::path::PathBuf)> = None;
+    let mut finalized_sizes = Vec::with_capacity(screening.finalists.len());
+    let mut total_iterations = screening.iterations;
 
     for (finalist_idx, finalist) in screening.finalists.iter().enumerate() {
         log_detail!(&format!(
@@ -4746,7 +4748,7 @@ fn try_explore_ultimate_jxl_distance(
         let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-        match encode_jxl_probe_to_output(
+        let finalist_result = encode_jxl_probe_to_output(
             input,
             actual_input,
             &candidate_output,
@@ -4758,8 +4760,12 @@ fn try_explore_ultimate_jxl_distance(
             icc_path,
             color_info,
             "Finalist encode",
-        ) {
+        );
+        total_iterations = total_iterations.saturating_add(1);
+
+        match finalist_result {
             Ok(size) => {
+                finalized_sizes.push((finalist.distance, size));
                 log_detail!(&format!(
                     "{} ↳ e{} Result: {} efficiency",
                     foundation::infra::static_logs::messages::LABEL_PHASE_2,
@@ -4846,43 +4852,55 @@ fn try_explore_ultimate_jxl_distance(
     foundation::io_utils::robust_move(&best_path, temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    // ── Phase: Continued Downward Exploration at e10 ────────────────────
-    // e10 has greater compression potential than e7. After finalists settle,
-    // continue stepping distance downward (higher quality) to see if e10
-    // can produce even smaller files at lower distances.
-    // STRICT RULE: stop immediately on first size increase.
+    // ── Phase: e10 quality-boundary refinement ──────────────────────────
+    // e10 may keep the output below source size at a lower distance than e7.
+    // Reuse the finalist ordering rule: once size beats the source, lower
+    // distance wins even when it is larger than the current accepted output.
     let mut accepted_distance = best_candidate.distance;
     let mut accepted_size = best_size;
     {
         let floor = foundation::constants::JXL_EXPLORE_FLOOR;
-        // Adaptive step: use 1/10th of current distance, clamped to sane bounds
-        let step = (accepted_distance / 10.0).clamp(
-            foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION,
-            0.01,
-        );
-        let mut test_distance = accepted_distance - step;
-        let mut continued_iterations = 0u32;
+        let precision = foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION;
+        let mut lower_bound = finalized_sizes
+            .iter()
+            .filter(|(distance, size)| *distance < accepted_distance && *size >= input_size)
+            .map(|(distance, _)| *distance)
+            .max_by(|left, right| left.total_cmp(right))
+            .unwrap_or(floor);
+        let mut refinement_iterations = 0u32;
 
-        if test_distance >= floor {
+        if accepted_distance - lower_bound >= precision {
             log_detail!(&format!(
-                "{} Continued e{} exploration: stepping down from d={} (step={})",
+                "{} e{} quality refinement: binary bracket d={}..{} (precision={})",
                 foundation::modern_ui::symbols::pick("🔬", "[AUDIT]"),
                 final_effort,
+                foundation::jxl_explorer::format_distance_for_log(lower_bound),
                 foundation::jxl_explorer::format_distance_for_log(accepted_distance),
-                foundation::jxl_explorer::format_distance_for_log(step),
+                foundation::jxl_explorer::format_distance_for_log(precision),
             ));
         }
 
-        while test_distance >= floor && continued_iterations < MAX_CONTINUED_ITERATIONS {
-            // Canonicalize to avoid float drift
-            let candidate_distance =
-                foundation::jxl_explorer::clamp_explore_distance(test_distance);
+        while accepted_distance - lower_bound >= precision
+            && refinement_iterations < MAX_REFINEMENT_ITERATIONS
+        {
+            let midpoint = f64::midpoint(
+                f64::from(lower_bound),
+                f64::from(accepted_distance),
+            );
+            let candidate_distance = foundation::jxl_explorer::clamp_explore_distance(
+                foundation::numeric_cast::f64_to_f32_lossy(midpoint),
+            );
+            if candidate_distance <= lower_bound + f32::EPSILON
+                || candidate_distance >= accepted_distance - f32::EPSILON
+            {
+                break;
+            }
 
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-            match encode_jxl_probe_to_output(
+            let refinement_result = encode_jxl_probe_to_output(
                 input,
                 actual_input,
                 &candidate_output,
@@ -4893,16 +4911,25 @@ fn try_explore_ultimate_jxl_distance(
                 options.allow_expert_options(),
                 icc_path,
                 color_info,
-                "Continued exploration",
-            ) {
+                "Quality-boundary refinement",
+            );
+            refinement_iterations += 1;
+            total_iterations = total_iterations.saturating_add(1);
+
+            match refinement_result {
                 Ok(size) => {
-                    continued_iterations += 1;
                     let pct_label = format_output_size_ratio_pct(input_size, size);
 
-                    if size < accepted_size {
-                        // Progress: smaller file at lower distance
+                    if compare_jxl_finalists(
+                        input_size,
+                        candidate_distance,
+                        size,
+                        accepted_distance,
+                        accepted_size,
+                    ) == std::cmp::Ordering::Less
+                    {
                         log_detail!(&format!(
-                            "{} d={} -> {} of input (gain)",
+                            "{} d={} -> {} of input (higher quality within size gate)",
                             foundation::modern_ui::symbols::pick("✓", "[+]"),
                             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
                             pct_label
@@ -4916,11 +4943,10 @@ fn try_explore_ultimate_jxl_distance(
                         );
                         foundation::io_utils::robust_move(&candidate_output, temp_output)
                             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-                        test_distance -= step;
                     } else {
-                        // Size increased or stayed the same — stop immediately
+                        lower_bound = candidate_distance;
                         log_detail!(&format!(
-                            "{} d={} -> {} of input (size increased, stopping)",
+                            "{} d={} -> {} of input (outside size gate; tightening bracket)",
                             foundation::modern_ui::symbols::pick("✗", "[x]"),
                             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
                             pct_label
@@ -4929,7 +4955,6 @@ fn try_explore_ultimate_jxl_distance(
                             "jxl continued nonwinner cleanup",
                             &candidate_output,
                         );
-                        break;
                     }
                 }
                 Err(err) => {
@@ -4938,7 +4963,7 @@ fn try_explore_ultimate_jxl_distance(
                         &candidate_output,
                     );
                     log_detail!(&format!(
-                        "Continued exploration probe failed at d={}: {err}",
+                        "Quality refinement probe failed at d={}: {err}",
                         foundation::jxl_explorer::format_distance_for_log(candidate_distance)
                     ));
                     break;
@@ -4946,14 +4971,14 @@ fn try_explore_ultimate_jxl_distance(
             }
         }
 
-        if continued_iterations > 0 && accepted_distance < best_candidate.distance {
+        if refinement_iterations > 0 && accepted_distance < best_candidate.distance {
             log_stat!(
                 foundation::infra::static_logs::messages::LABEL_PHASE_3,
                 format!(
                     "Refinement Improved: d={} -> d={} ({} probes)",
                     foundation::jxl_explorer::format_distance_for_log(best_candidate.distance),
                     foundation::jxl_explorer::format_distance_for_log(accepted_distance),
-                    continued_iterations
+                    refinement_iterations
                 )
             );
         }
@@ -4961,7 +4986,7 @@ fn try_explore_ultimate_jxl_distance(
 
     let mut log = screening.log.clone();
     log.push(format!(
-        "Accepted e10 finalist d={} -> {} of input",
+        "Accepted e10 candidate d={} -> {} of input",
         foundation::jxl_explorer::format_distance_for_log(accepted_distance),
         format_output_size_ratio_pct(input_size, accepted_size),
     ));
@@ -4974,8 +4999,8 @@ fn try_explore_ultimate_jxl_distance(
     let result = foundation::jxl_explorer::JxlExploreResult {
         accepted_distance,
         output_size: fs::metadata(temp_output)?.len(),
-        iterations: screening.iterations,
-        ladder_phase: best_candidate.ladder_phase,
+        iterations: total_iterations,
+        ladder_phase: accepted_distance == best_candidate.distance && best_candidate.ladder_phase,
         screened_best_distance: screening.best_distance,
         screened_best_size: screening.best_output_size,
         promoted_distances: screening
@@ -6712,7 +6737,7 @@ mod tests {
     }
 
     #[test]
-    fn smoke_jxl_final_round_prefers_lower_distance_once_size_beats_source() {
+    fn smoke_jxl_quality_ranking_accepts_larger_output_at_lower_distance_within_gate() {
         assert_eq!(
             compare_jxl_finalists(9_000_000, 0.01, 8_800_000, 0.1, 7_500_000),
             std::cmp::Ordering::Less
