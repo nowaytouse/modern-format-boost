@@ -1594,32 +1594,16 @@ fn is_animated_format(path: &Path, format: ImageFormat) -> Result<bool> {
 }
 
 fn check_png_animation(path: &Path) -> Result<bool> {
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+    )
+    .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
     let bytes = std::fs::read(path)?;
-
-    // Stage 1: Structural Walk (Official Spec)
-    let (structural_is_animated, structural_count) =
-        crate::image_detection::parse_apng_frames(&bytes);
-    if structural_is_animated && structural_count > 1 {
-        return Ok(true);
-    }
-
-    // Stage 2: Feature Scan (Loose Bitstream Search)
-    // Scan for acTL [61 63 54 4C] or fcTL [66 63 54 4C] markers
-    let apng_actl_found = bytes.windows(4).any(|w| w == b"acTL");
-    let apng_fctl_detected = bytes.windows(4).any(|w| w == b"fcTL");
-
-    if (apng_actl_found || apng_fctl_detected) && !structural_is_animated {
-        // [Disagreement] Deep Internal Validation
-        if deep_research_png_animation(&bytes) {
-            crate::log_detail!(
-                &crate::infra::static_logs::messages::MSG_ANALYZER_APNG_DEEP_RESEARCH
-                    .replace("{}", &path.display().to_string())
-            );
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(
+        crate::image::png_validation::parse_apng_animation(&bytes)?
+            .is_some_and(|info| info.frame_count > 1),
+    )
 }
 
 fn check_gif_animation(path: &Path) -> Result<bool> {
@@ -1706,21 +1690,6 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
     }
 
     confirmed > 1
-}
-
-/// Internal Deep Research: APNG
-/// Validates if fcTL/acTL markers are consistent.
-fn deep_research_png_animation(bytes: &[u8]) -> bool {
-    // APNG uses fcTL (Frame Control Chunk)
-    let mut confirmed_fctl = 0_i32;
-    let mut i = 8; // skip signature
-    while i + 8 < bytes.len() {
-        if bytes.get(i + 4..i + 8) == Some(b"fcTL") {
-            confirmed_fctl += 1_i32;
-        }
-        i += 1;
-    }
-    confirmed_fctl > 0 // Even 1 fcTL usually means it's an APNG (the first frame might have it)
 }
 
 /// Public entry for retrying animation duration (e.g. from main when

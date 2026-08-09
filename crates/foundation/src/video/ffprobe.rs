@@ -887,23 +887,21 @@ fn parse_video_stream_fields(
         }
     }
 
-    // Root fix: APNG via `png_pipe` — trust `acTL` / `fcTL` when ffprobe omits
-    // frames (M126).
+    // Root fix: APNG via `png_pipe` — use validated APNG structure when ffprobe
+    // omits frames (M126).
     if format_name.contains("png")
         || format_name.contains("apng")
         || video_codec.eq_ignore_ascii_case("apng")
     {
         let data = read_native_probe_bytes(path, "apng native frame fallback")?;
-        let (is_animated, fc) = crate::image_detection::parse_apng_frames(&data);
-        if is_animated && fc > 1 {
-            let native_frames = u64::from(fc);
+        let info = crate::image::png_validation::parse_apng_animation(&data)
+            .map_err(|error| FFprobeError::ParseError(error.to_string()))?;
+        if let Some(info) = info.filter(|info| info.frame_count > 1) {
+            let native_frames = u64::from(info.frame_count);
             frame_count = Some(native_frames);
-            if duration.is_none()
-                && let Some(stats) = crate::image_detection::apng_timing_stats_from_bytes(&data)
-                && stats.duration_secs > 0.0_f64
-            {
+            if duration.is_none() && info.duration_secs > 0.0_f64 {
                 avg_frame_rate =
-                    Some(crate::numeric_cast::u64_to_f64(native_frames) / stats.duration_secs);
+                    Some(crate::numeric_cast::u64_to_f64(native_frames) / info.duration_secs);
             }
         }
     }

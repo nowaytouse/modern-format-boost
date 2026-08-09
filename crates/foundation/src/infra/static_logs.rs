@@ -1803,8 +1803,6 @@ pub mod messages {
     pub const MSG_ANALYZER_HEIC_VENDOR: &str =
         "Analyzer Audit: HEIC vendor-specific metadata found for {}";
     pub const MSG_ANALYZER_CACHE_HIT: &str = "Analyzer Audit: Cache hit for {}";
-    pub const MSG_ANALYZER_APNG_DEEP_RESEARCH: &str =
-        "Analyzer Audit: Initiating APNG deep bitstream research for {}";
     pub const MSG_ANALYZER_WEBP_JOINT_AUDIT: &str =
         "Analyzer Audit: Initiating joint WebP/Video forensic audit for {}";
     pub const MSG_ANALYZER_STATIC_GIF: &str =

@@ -99,21 +99,12 @@ pub fn is_animated_webp(path: &Path) -> Result<bool> {
 }
 
 pub fn is_animated_png(path: &Path) -> Result<bool> {
-    let data = read_prefix(path, 1024 * 1024)?;
-    if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(anyhow!(
-            "PNG animation probe failed for {}: missing PNG signature",
+    foundation::image::png_validation::is_apng_file(path).map_err(|error| {
+        anyhow!(
+            "PNG animation probe failed for {}: {error}",
             path.display()
-        ));
-    }
-    if data.len() < 24 || &data[12..16] != b"IHDR" {
-        return Err(anyhow!(
-            "PNG animation probe failed for {}: malformed or truncated IHDR",
-            path.display()
-        ));
-    }
-    let has_actl = data.windows(4).any(|w| w == b"acTL");
-    Ok(has_actl)
+        )
+    })
 }
 
 pub fn is_probably_animated_isobmff(path: &Path) -> Result<bool> {
@@ -1697,6 +1688,24 @@ mod tests {
 
     #[test]
     fn test_media_scope_routes_disguised_animated_formats_by_content() {
+        fn png_chunk(chunk_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut crc = u32::MAX;
+            for &byte in chunk_type.iter().chain(payload) {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+                }
+            }
+            let mut chunk = u32::try_from(payload.len())
+                .expect("test PNG payload fits u32")
+                .to_be_bytes()
+                .to_vec();
+            chunk.extend_from_slice(chunk_type);
+            chunk.extend_from_slice(payload);
+            chunk.extend_from_slice(&(!crc).to_be_bytes());
+            chunk
+        }
+
         let tempdir = tempfile::tempdir().unwrap();
         let webp = tempdir.path().join("animated-webp.bin");
         let apng = tempdir.path().join("animated-png.bin");
@@ -1704,11 +1713,24 @@ mod tests {
         let fake_jpg = tempdir.path().join("fake.jpg");
 
         fs::write(&webp, b"RIFF\x18\x00\x00\x00WEBPVP8XANIM").unwrap();
-        fs::write(
-            &apng,
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08acTL",
-        )
-        .unwrap();
+        let mut apng_data = b"\x89PNG\r\n\x1a\n".to_vec();
+        apng_data.extend(png_chunk(
+            b"IHDR",
+            &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0],
+        ));
+        apng_data.extend(png_chunk(b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0]));
+        let mut fctl = vec![0; 26];
+        fctl[7] = 1;
+        fctl[11] = 1;
+        fctl[21] = 1;
+        fctl[23] = 100;
+        apng_data.extend(png_chunk(b"fcTL", &fctl));
+        apng_data.extend(png_chunk(
+            b"IDAT",
+            &[0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01],
+        ));
+        apng_data.extend(png_chunk(b"IEND", &[]));
+        fs::write(&apng, apng_data).unwrap();
         fs::write(&still_jpeg, b"\xff\xd8\xff\xe0jpeg").unwrap();
         fs::write(&fake_jpg, b"not media").unwrap();
 

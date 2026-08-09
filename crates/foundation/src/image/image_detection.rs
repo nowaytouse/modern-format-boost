@@ -527,7 +527,9 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (is_animated, frame_count) = parse_apng_frames(&data);
+            let info = crate::image::png_validation::parse_apng_animation(&data)?;
+            let frame_count = info.map_or(1, |info| info.frame_count);
+            let is_animated = frame_count > 1;
             let fps = if is_animated {
                 apng_timing_stats_from_bytes(&data)
                     .filter(|stats| stats.fps.is_finite() && stats.fps > 0.0_f64)
@@ -817,8 +819,10 @@ pub fn animatable_format_confirmed_static_only(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (is_animated, count) = parse_apng_frames(&data);
-            Ok(!is_animated && count <= 1)
+            Ok(
+                crate::image::png_validation::parse_apng_animation(&data)?
+                    .is_none_or(|info| info.frame_count <= 1),
+            )
         }
         DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => {
             isobmff_confirmed_static_only(path)
@@ -4087,63 +4091,16 @@ pub(crate) struct ApngTimingStats {
     pub fps: f64,
 }
 
-fn apng_frame_delay_secs(delay_num: u16, delay_den: u16) -> f64 {
-    let den = if delay_den == 0 { 100_u16 } else { delay_den };
-    f64::from(delay_num) / f64::from(den)
-}
-
 /// Aggregate APNG timing from `fcTL` frame delays and `acTL` frame count.
 #[must_use]
 pub(crate) fn apng_timing_stats_from_bytes(data: &[u8]) -> Option<ApngTimingStats> {
-    let (is_animated, frame_count) = parse_apng_frames(data);
-    if !is_animated || frame_count <= 1 {
+    let info = crate::image::png_validation::parse_apng_animation(data)
+        .ok()
+        .flatten()?;
+    let frame_count = info.frame_count;
+    let duration_secs = info.duration_secs;
+    if frame_count <= 1 {
         return None;
-    }
-
-    let mut duration_secs = 0.0_f64;
-    let mut pos = 8usize;
-    while pos + 12 <= data.len() {
-        let Some(length_bytes) = data.get(pos..pos + 4) else {
-            break;
-        };
-        let length = u32::from_be_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]);
-        pos += 4;
-
-        let Some(chunk_type) = data.get(pos..pos + 4) else {
-            break;
-        };
-        pos += 4;
-
-        if chunk_type == b"fcTL" {
-            let Some(chunk_data_size) =
-                crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-            else {
-                break;
-            };
-            if chunk_data_size >= 26 && pos + 24 <= data.len() {
-                let delay_num = u16::from_be_bytes([data[pos + 20], data[pos + 21]]);
-                let delay_den = u16::from_be_bytes([data[pos + 22], data[pos + 23]]);
-                let delay = apng_frame_delay_secs(delay_num, delay_den);
-                if delay.is_finite() && delay >= 0.0_f64 {
-                    duration_secs += delay;
-                }
-            }
-        }
-
-        let Some(chunk_data_size) =
-            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-        else {
-            break;
-        };
-        if pos > data.len().saturating_sub(chunk_data_size.saturating_add(4)) {
-            break;
-        }
-        pos += chunk_data_size.saturating_add(4);
     }
 
     if !duration_secs.is_finite() || duration_secs <= f64::EPSILON {
@@ -4175,12 +4132,18 @@ pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
         );
         chunk.extend_from_slice(chunk_type);
         chunk.extend_from_slice(payload);
-        chunk.extend_from_slice(&[0, 0, 0, 0]);
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(chunk_type);
+        hasher.update(payload);
+        chunk.extend_from_slice(&hasher.finalize().to_be_bytes());
         chunk
     }
 
-    fn fctl_chunk(delay_num: u16, delay_den: u16) -> Vec<u8> {
+    fn fctl_chunk(sequence: u32, delay_num: u16, delay_den: u16) -> Vec<u8> {
         let mut payload = vec![0u8; 26];
+        payload[0..4].copy_from_slice(&sequence.to_be_bytes());
+        payload[7] = 1;
+        payload[11] = 1;
         payload[20] = crate::numeric_cast::u16_high8_to_u8(delay_num);
         payload[21] = crate::numeric_cast::u16_low8_to_u8(delay_num);
         payload[22] = crate::numeric_cast::u16_high8_to_u8(delay_den);
@@ -4192,70 +4155,19 @@ pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
     let ihdr = [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0];
     data.extend(png_chunk(b"IHDR", &ihdr));
     data.extend(png_chunk(b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]));
-    data.extend(fctl_chunk(1, 100));
-    data.extend(fctl_chunk(2, 100));
+    data.extend(fctl_chunk(0, 1, 100));
+    data.extend(png_chunk(
+        b"IDAT",
+        &[0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01],
+    ));
+    data.extend(fctl_chunk(1, 2, 100));
+    let mut second_frame = 2u32.to_be_bytes().to_vec();
+    second_frame.extend_from_slice(&[
+        0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
+    ]);
+    data.extend(png_chunk(b"fdAT", &second_frame));
     data.extend(png_chunk(b"IEND", &[]));
     data
-}
-
-/// Parse APNG (Animated PNG) frame count from PNG data
-/// Returns (`is_animated`, `frame_count`)
-pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
-    // Look for acTL (Animation Control) chunk
-    let mut pos = 8; // Skip PNG signature
-    while pos + 12 <= data.len() {
-        // Read chunk length (big-endian)
-        let Some(length_bytes) = data.get(pos..pos + 4) else {
-            break;
-        };
-        let length = u32::from_be_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]);
-        pos += 4;
-
-        // Read chunk type
-        let Some(chunk_type) = data.get(pos..pos + 4) else {
-            break;
-        };
-        pos += 4;
-
-        // Check if this is acTL chunk
-        if chunk_type == b"acTL" {
-            if pos + 4 <= data.len() {
-                // Read num_frames (first 4 bytes of acTL data)
-                let Some(num_frames_bytes) = data.get(pos..pos + 4) else {
-                    break;
-                };
-                let num_frames = u32::from_be_bytes([
-                    num_frames_bytes[0],
-                    num_frames_bytes[1],
-                    num_frames_bytes[2],
-                    num_frames_bytes[3],
-                ]);
-                return (num_frames > 1, num_frames.max(1));
-            }
-            crate::media_conversion_gate::probe_layer_batch_audit(
-                "delivery_db_numeric",
-                "PNG DECODE AUDIT: acTL chunk found but num_frames data is missing/truncated! | \
-                 Forensic: Malformed APNG bitstream; refusing to forge frame count to prevent \
-                 downstream numeric corruption",
-            );
-            return (true, 0); // Honest report: it's animated, but count is unknown
-        }
-
-        // Skip chunk data and CRC
-        let Some(chunk_data_size) =
-            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-        else {
-            break;
-        };
-        pos += chunk_data_size + 4;
-    }
-
-    (false, 1)
 }
 
 // ============================================================================

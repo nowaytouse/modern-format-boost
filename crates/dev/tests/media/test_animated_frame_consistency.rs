@@ -35,13 +35,12 @@ fn png_without_actl_stays_static_image_domain() {
 }
 
 #[test]
-fn apng_actl_header_routes_to_animated_image_domain() {
+fn apng_requires_validated_content_not_a_fixed_header_marker() {
     let mut header = b"\x89PNG\r\n\x1a\n".to_vec();
     header.extend_from_slice(&[0; 29]);
     header.extend_from_slice(b"acTL");
 
     let codec = SourceCodec::identify_by_header(&header);
 
-    assert_eq!(codec, Some(SourceCodec::Apng));
-    assert!(SourceCodec::Apng.is_animated());
+    assert_eq!(codec, Some(SourceCodec::Png));
 }

@@ -329,11 +329,16 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     }
 
     if buffer[0] == 0x89 && buffer[1] == 0x50 && buffer[2] == 0x4E && buffer[3] == 0x47 {
-        if buffer[..bytes_read]
-            .windows(4)
-            .any(|chunk| chunk == b"acTL" || chunk == b"fcTL")
-        {
-            return Some("apng");
+        match crate::image::png_validation::is_apng_file(path) {
+            Ok(true) => return Some("apng"),
+            Ok(false) => {}
+            Err(error) => {
+                crate::media_conversion_gate::delivery_runtime_path_audit(
+                    "delivery_runtime",
+                    path,
+                    format!("Format Detection: PNG animation validation failed: {error}"),
+                );
+            }
         }
         return Some("png");
     }

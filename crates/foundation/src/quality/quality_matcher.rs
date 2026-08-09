@@ -308,7 +308,7 @@ impl SourceCodec {
     /// This is the "Tight Entry" mechanism that avoids relying on file
     /// extensions.
     pub fn identify_by_content(path: &std::path::Path) -> std::io::Result<Option<Self>> {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::Read;
         let mut file = std::fs::File::open(path).map_err(|e| {
             crate::media_conversion_gate::probe_quality_layer_audit(
                 "quality_matcher_open_failed",
@@ -323,7 +323,7 @@ impl SourceCodec {
                 ),
             )
         })?;
-        let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
+        let mut header = [0u8; 64]; // Expanded to capture the WebP VP8X header.
         let n = file.read(&mut header).map_err(|e| {
             crate::media_conversion_gate::probe_quality_layer_audit(
                 "quality_matcher_header_read_failed",
@@ -394,108 +394,12 @@ impl SourceCodec {
             }
         }
 
-        // Deep APNG verification
-        // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
-        // can push the acTL chunk far beyond the header. We use Seek to jump over chunk
-        // data.
-        if codec == Some(Self::Png) {
-            file.seek(SeekFrom::Start(8)).map_err(|e| {
-                crate::media_conversion_gate::probe_quality_layer_audit(
-                    "quality_matcher_apng_seek_failed",
-                    path,
-                    format!("failed to seek for APNG chunk scan: {e}"),
-                );
-                e
-            })?;
-            let mut chunk_header = [0u8; 8];
-            loop {
-                if let Err(e) = file.read_exact(&mut chunk_header) {
-                    if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                        crate::media_conversion_gate::probe_quality_layer_audit(
-                            "quality_matcher_apng_chunk_read_failed",
-                            path,
-                            format!("failed to read APNG chunk header: {e}"),
-                        );
-                        return Err(e);
-                    }
-                    break;
-                }
-                let b1 = if let Some(b) = chunk_header.first() {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        &format!(
-                            "APNG CORRUPTION AUDIT: Chunk header missing byte 0 at position {:?} \
-                             | Forensic: Unexpected EOF during animation traversal; breaking scan",
-                            file.stream_position()
-                        )
-                    );
-                    break;
-                };
-                let b2 = if let Some(b) = chunk_header.get(1) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 1 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let b3 = if let Some(b) = chunk_header.get(2) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 2 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let b4 = if let Some(b) = chunk_header.get(3) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 3 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let length = u32::from_be_bytes([b1, b2, b3, b4]);
-                let Some(chunk_type) = chunk_header.get(4..8) else {
-                    crate::media_conversion_gate::probe_quality_layer_audit(
-                        "quality_matcher_apng_chunk_type_missing",
-                        path,
-                        format!(
-                            "APNG chunk type missing at position {:?}; terminating animation \
-                             search",
-                            file.stream_position()
-                        ),
-                    );
-                    break;
-                };
-
-                if chunk_type == b"acTL" {
-                    codec = Some(Self::Apng);
-                    break;
-                }
-                if chunk_type == b"IDAT" {
-                    break; // Image data reached; no animation chunk present
-                }
-
-                // Seek past the chunk data and its 4-byte CRC
-                file.seek(SeekFrom::Current(i64::from(length) + 4))
-                    .map_err(|e| {
-                        crate::media_conversion_gate::probe_quality_layer_audit(
-                            "quality_matcher_apng_chunk_seek_failed",
-                            path,
-                            format!("failed to seek past APNG chunk payload length {length}: {e}"),
-                        );
-                        e
-                    })?;
-            }
+        if codec == Some(Self::Png)
+            && crate::image::png_validation::is_apng_file(path).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+            })?
+        {
+            codec = Some(Self::Apng);
         }
 
         Ok(codec)
@@ -515,11 +419,6 @@ impl SourceCodec {
         }
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte
-            // 33 starts the second chunk)
-            if header.len() >= 41 && header.get(37..41) == Some(b"acTL") {
-                return Some(Self::Apng);
-            }
             return Some(Self::Png);
         }
         // GIF: GIF87a / GIF89a
