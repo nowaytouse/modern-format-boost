@@ -2109,7 +2109,7 @@ where
                 ));
             }
         }
-        if !cfg!(test) && window.start + window.len < pending_entries.len() {
+        if !cfg!(test) && end < pending_entries.len() {
             std::thread::sleep(Duration::from_secs(
                 FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS,
             ));
@@ -3808,10 +3808,6 @@ pub fn apply_library_assets_to_marker(
     Ok(())
 }
 
-fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
-    query_osxphotos_asset_probes_once(uuids)
-}
-
 fn query_osxphotos_asset_probes_in_libraries_with<Q>(
     uuids: &[String],
     libraries: &[PathBuf],
@@ -3825,17 +3821,33 @@ where
             "Photos verifier has no candidate library to query".to_string(),
         ));
     }
+    let mut pending = uuids.to_vec();
+    let mut probes = Vec::new();
+    let mut resolved_library = None;
     for library in libraries {
-        match query_library(library, uuids) {
-            Ok(probes) => {
-                if !probes.is_empty() {
-                    return Ok((probes, Some(library.clone())));
+        if pending.is_empty() {
+            break;
+        }
+        match query_library(library, &pending) {
+            Ok(library_probes) => {
+                if !library_probes.is_empty() {
+                    resolved_library = Some(library.clone());
+                }
+                for probe in library_probes {
+                    let Some(position) = pending.iter().position(|uuid| uuid == &probe.uuid) else {
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "Photos verifier library query returned duplicate or unexpected UUID {}",
+                            probe.uuid
+                        )));
+                    };
+                    pending.remove(position);
+                    probes.push(probe);
                 }
             }
             Err(err) => return Err(err),
         }
     }
-    Ok((Vec::new(), None))
+    Ok((probes, resolved_library))
 }
 
 fn query_osxphotos_asset_probes_from_library(
@@ -3934,24 +3946,24 @@ fn query_osxphotos_asset_probes_from_library(
         .collect()
 }
 
-fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
     let mut libraries = crate::common_utils::photos_library_paths()?;
-    let cached_library = OSXPHOTOS_IMPORT_LIBRARY_CACHE
+    let library_hint = OSXPHOTOS_IMPORT_LIBRARY_HINT
         .lock()
         .map_err(|_| {
             ImgQualityError::AnalysisError(
-                "Photos verifier library cache lock is poisoned".to_string(),
+                "Photos verifier library hint lock is poisoned".to_string(),
             )
         })?
         .clone();
-    if let Some(cached_library) = cached_library
-        && cached_library.is_dir()
+    if let Some(library_hint) = library_hint
+        && library_hint.is_dir()
     {
-        libraries.retain(|library| library != &cached_library);
-        libraries.insert(0, cached_library);
+        libraries.retain(|library| library != &library_hint);
+        libraries.insert(0, library_hint);
     }
     let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
         uuids,
@@ -3959,9 +3971,9 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         |library, uuids| query_osxphotos_asset_probes_from_library(uuids, library),
     )?;
     if let Some(resolved_library) = resolved_library {
-        *OSXPHOTOS_IMPORT_LIBRARY_CACHE.lock().map_err(|_| {
+        *OSXPHOTOS_IMPORT_LIBRARY_HINT.lock().map_err(|_| {
             ImgQualityError::AnalysisError(
-                "Photos verifier library cache lock is poisoned".to_string(),
+                "Photos verifier library hint lock is poisoned".to_string(),
             )
         })? = Some(resolved_library);
     }
@@ -3991,7 +4003,9 @@ const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_INTERVAL_FILES: usize = 500; // Increased 
 /// storage" bug.
 static OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(120);
-static OSXPHOTOS_IMPORT_LIBRARY_CACHE: std::sync::Mutex<Option<PathBuf>> =
+/// Ordering hint only: every proof query still asks osxphotos for its pending
+/// UUIDs and continues through other libraries when the hint is incomplete.
+static OSXPHOTOS_IMPORT_LIBRARY_HINT: std::sync::Mutex<Option<PathBuf>> =
     std::sync::Mutex::new(None);
 
 /// Session-level flag tracking whether osxphotos has been proven responsive.
@@ -6580,36 +6594,53 @@ mod tests {
     }
 
     #[test]
-    fn photos_verifier_falls_back_to_library_containing_imported_uuid() -> Result<()> {
-        let requested = ["UUID-A".to_string()];
-        let wrong_library = PathBuf::from("wrong.photoslibrary");
-        let imported_library = PathBuf::from("system.photoslibrary");
-        let libraries = [wrong_library.clone(), imported_library.clone()];
-        let mut queried = Vec::new();
+    fn photos_verifier_live_queries_pending_uuids_when_library_changes() -> Result<()> {
+        let requested = ["UUID-OLD".to_string(), "UUID-NEW".to_string()];
+        let previous_library = PathBuf::from("previous.photoslibrary");
+        let current_library = PathBuf::from("current.photoslibrary");
+        let libraries = [previous_library.clone(), current_library.clone()];
+        let mut queries = Vec::new();
 
         let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
             &requested,
             &libraries,
-            |library, _| {
-                queried.push(library.to_path_buf());
-                if library == imported_library {
+            |library, uuids| {
+                queries.push((library.to_path_buf(), uuids.to_vec()));
+                if library == previous_library {
                     Ok(vec![FastImgLibraryAssetProbe {
-                        uuid: "UUID-A".to_string(),
-                        path: PathBuf::from("system.photoslibrary/originals/a.AVIF"),
+                        uuid: "UUID-OLD".to_string(),
+                        path: PathBuf::from("previous.photoslibrary/originals/old.AVIF"),
                         iscloudasset: true,
                         incloud: Some(true),
                         ismissing: false,
                     }])
                 } else {
-                    Ok(Vec::new())
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-NEW".to_string(),
+                        path: PathBuf::from("current.photoslibrary/originals/new.AVIF"),
+                        iscloudasset: true,
+                        incloud: Some(true),
+                        ismissing: false,
+                    }])
                 }
             },
         )?;
 
-        assert_eq!(queried, libraries);
-        assert_eq!(resolved_library.as_ref(), Some(&imported_library));
-        assert_eq!(probes.len(), 1);
-        assert_eq!(probes[0].uuid, "UUID-A");
+        assert_eq!(
+            queries,
+            [
+                (previous_library, requested.to_vec()),
+                (current_library.clone(), vec!["UUID-NEW".to_string()]),
+            ]
+        );
+        assert_eq!(resolved_library.as_ref(), Some(&current_library));
+        assert_eq!(
+            probes
+                .iter()
+                .map(|probe| probe.uuid.as_str())
+                .collect::<Vec<_>>(),
+            ["UUID-OLD", "UUID-NEW"]
+        );
         Ok(())
     }
 
