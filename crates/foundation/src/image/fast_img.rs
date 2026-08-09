@@ -35,6 +35,16 @@ use std::time::Duration;
 #[cfg(all(target_os = "macos", not(test)))]
 use std::time::Instant;
 
+fn run_fast_img_command_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+    context: &str,
+) -> std::io::Result<std::process::Output> {
+    crate::process_runner::run_command_with_liveness_timeout(
+        command, timeout, timeout, context,
+    )
+}
+
 /// Returns `true` when `path` has true JPEG magic bytes.
 ///
 /// Content detection is never extension-only (§Detection). Deep forensic tool
@@ -118,14 +128,18 @@ pub fn verify_jxl_roundtrip_integrity(
     .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: temp alloc failed: {e}")))?;
     let temp_path = temp.path();
 
-    let decode_output = DjxlBuilder::new()
+    let mut decode_command = DjxlBuilder::new()
         .input(jxl_output)
         .output(temp_path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}"))
-        })?;
+        .build();
+    let decode_output = run_fast_img_command_with_timeout(
+        &mut decode_command,
+        FAST_IMG_MEDIA_PROBE_TIMEOUT,
+        "fast-img JXL roundtrip decode",
+    )
+    .map_err(|e| {
+        ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}"))
+    })?;
 
     if !decode_output.status.success() {
         let stderr = first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
@@ -396,18 +410,22 @@ fn ensure_no_residual_orientation_tag(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    let output = ExiftoolBuilder::new()
+    let mut command = ExiftoolBuilder::new()
         .arg("-s3")
         .arg("-Orientation")
         .input(path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!(
-                "final-integrity: Orientation probe failed for {}: {e}",
-                path.display()
-            ))
-        })?;
+        .build();
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_MEDIA_PROBE_TIMEOUT,
+        "fast-img residual Orientation probe",
+    )
+    .map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "final-integrity: Orientation probe failed for {}: {e}",
+            path.display()
+        ))
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ImgQualityError::AnalysisError(format!(
@@ -2618,9 +2636,13 @@ fn photos_import_session_timeout(batch_count: usize) -> Result<Duration> {
 fn log_photos_resource_state(chunk_number: usize, phase: &str) {
     match get_photos_pid() {
         Ok(Some(pid)) => {
-            let output = std::process::Command::new(MACOS_PS_PATH)
-                .args(["-p", &pid, "-o", "rss=,vsz="])
-                .output();
+            let mut command = std::process::Command::new(MACOS_PS_PATH);
+            command.args(["-p", &pid, "-o", "rss=,vsz="]);
+            let output = run_fast_img_command_with_timeout(
+                &mut command,
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+                "Photos process memory probe",
+            );
 
             match output {
                 Ok(output) if output.status.success() => {
@@ -2651,7 +2673,7 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
                         chunk_number,
                         phase,
                         photos_pid = %pid,
-                        "Photos process memory probe spawn failed: {err}"
+                        "Photos process memory probe command failed: {err}"
                     );
                 }
             }
@@ -2674,7 +2696,12 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
         }
     }
 
-    match std::process::Command::new(MACOS_VM_STAT_PATH).output() {
+    let mut command = std::process::Command::new(MACOS_VM_STAT_PATH);
+    match run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos system memory probe",
+    ) {
         Ok(output) if output.status.success() => {
             let vm_stat = String::from_utf8_lossy(&output.stdout);
             if let Some(free_line) = vm_stat.lines().find(|l| l.contains("Pages free:")) {
@@ -2702,23 +2729,27 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
                 target: "photos_import",
                 chunk_number,
                 phase,
-                "vm_stat probe spawn failed: {err}"
+                "vm_stat probe command failed: {err}"
             );
         }
     }
 }
 
 fn get_photos_pid() -> Result<Option<String>> {
-    let output = std::process::Command::new(MACOS_PGREP_PATH)
-        .args(["-x", "Photos"])
-        .output()
-        .map_err(|err| {
-            tracing::warn!(
-                target: "photos_import",
-                "Photos process lookup spawn failed: {err}"
-            );
-            ImgQualityError::AnalysisError(format!("Photos process lookup spawn failed: {err}"))
-        })?;
+    let mut command = std::process::Command::new(MACOS_PGREP_PATH);
+    command.args(["-x", "Photos"]);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos process lookup",
+    )
+    .map_err(|err| {
+        tracing::warn!(
+            target: "photos_import",
+            "Photos process lookup command failed: {err}"
+        );
+        ImgQualityError::AnalysisError(format!("Photos process lookup command failed: {err}"))
+    })?;
 
     if output.status.success() {
         let stdout = String::from_utf8(output.stdout).map_err(|err| {
@@ -2856,7 +2887,7 @@ end timeout"#,
     let output = crate::process_runner::ManagedProcess::spawn(&mut command)
         .and_then(|process| {
             process.wait_timeout(
-                Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
                 "Photos import recovery health probe",
             )
         })
@@ -2930,7 +2961,7 @@ fn relaunch_photos_for_import_recovery(reason: &str) -> Result<()> {
     let quit_result = crate::process_runner::ManagedProcess::spawn(&mut quit_command)
         .and_then(|process| {
             process.wait_timeout(
-                Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
                 "Photos import recovery quit",
             )
         })
@@ -2961,7 +2992,7 @@ fn relaunch_photos_for_import_recovery(reason: &str) -> Result<()> {
         let open_output = crate::process_runner::ManagedProcess::spawn(&mut open_command)
             .and_then(|process| {
                 process.wait_timeout(
-                    Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                    FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
                     "Photos import recovery launch",
                 )
             })
@@ -3075,6 +3106,33 @@ fn prepare_photos_import_session(reason: &str) -> Result<()> {
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
+fn attempt_photos_force_kill(signal: &str, phase: &str) {
+    let mut command = std::process::Command::new(MACOS_KILLALL_PATH);
+    command.args([signal, "Photos"]);
+    match run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos force-kill",
+    ) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            target: "photos_import",
+            phase,
+            signal,
+            status = ?output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "Photos force-kill command exited unsuccessfully"
+        ),
+        Err(err) => tracing::warn!(
+            target: "photos_import",
+            phase,
+            signal,
+            "Photos force-kill command failed: {err}"
+        ),
+    }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
 fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(
@@ -3115,9 +3173,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             "Photos failed to quit gracefully after {}s, forcing termination via killall -9",
             FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS
         );
-        let _ = std::process::Command::new(MACOS_KILLALL_PATH)
-            .args(["-9", "Photos"])
-            .status();
+        attempt_photos_force_kill("-9", phase);
         std::thread::sleep(Duration::from_secs(2)); // Wait for kill to take effect
 
         // Verify kill succeeded
@@ -3136,9 +3192,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             phase,
             "First killall failed, retrying with -KILL signal"
         );
-        let _ = std::process::Command::new(MACOS_KILLALL_PATH)
-            .args(["-KILL", "Photos"])
-            .status();
+        attempt_photos_force_kill("-KILL", phase);
         std::thread::sleep(Duration::from_secs(2));
 
         if get_photos_pid()?.is_none() {
@@ -4033,6 +4087,8 @@ const MACOS_OSASCRIPT_PATH: &str = "/usr/bin/osascript";
 const MACOS_PS_PATH: &str = "/bin/ps";
 const MACOS_VM_STAT_PATH: &str = "/usr/bin/vm_stat";
 const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
+const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const FAST_IMG_MEDIA_PROBE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 #[cfg(target_os = "macos")]
 const MACOS_OPEN_PATH: &str = "/usr/bin/open";
 #[cfg(target_os = "macos")]
@@ -4072,8 +4128,6 @@ const FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS: u64 = 60;
 // Initial attempt + four bounded recovery attempts. Permanent authorization,
 // unsupported-format, missing-file, and corruption errors are never retried.
 const FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT: usize = 4;
-#[cfg(all(target_os = "macos", not(test)))]
-const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS: u64 = 60; // Increased from 30s
 #[cfg(all(target_os = "macos", not(test)))]
 const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS: u64 = 120; // Increased from 45s
 #[cfg(all(target_os = "macos", not(test)))]
@@ -4639,14 +4693,19 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
 
 #[cfg(target_os = "macos")]
 fn clear_quarantine_xattr(path: &Path) -> Result<()> {
-    let output = std::process::Command::new(MACOS_XATTR_PATH)
+    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
+    command
         .arg("-d")
         .arg("com.apple.quarantine")
-        .arg(path)
-        .output()
-        .map_err(|err| {
-            ImgQualityError::AnalysisError(format!("xattr quarantine clear spawn failed: {err}"))
-        })?;
+        .arg(path);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "fast-img quarantine clear",
+    )
+    .map_err(|err| {
+        ImgQualityError::AnalysisError(format!("xattr quarantine clear command failed: {err}"))
+    })?;
     if output.status.success() {
         return Ok(());
     }
@@ -4668,12 +4727,17 @@ const fn clear_quarantine_xattr(path: &Path) {
 
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
-    let output = std::process::Command::new(MACOS_XATTR_PATH)
+    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
+    command
         .arg("-p")
         .arg("com.apple.quarantine")
-        .arg(path)
-        .output()
-        .map_err(|e| ImgQualityError::AnalysisError(format!("xattr probe failed: {e}")))?;
+        .arg(path);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "fast-img quarantine probe",
+    )
+    .map_err(|e| ImgQualityError::AnalysisError(format!("xattr probe failed: {e}")))?;
     Ok(output.status.success())
 }
 
@@ -5487,6 +5551,22 @@ mod tests {
         ] {
             assert!(Path::new(path).is_absolute(), "system tool is not absolute: {path}");
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fast_img_command_timeout_terminates_hung_child() {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30");
+        let started = std::time::Instant::now();
+        let err = run_fast_img_command_with_timeout(
+            &mut command,
+            Duration::from_millis(20),
+            "fast-img timeout regression",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
