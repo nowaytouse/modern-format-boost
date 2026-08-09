@@ -1029,35 +1029,37 @@ struct SignalFlags {
 #[derive(Debug, Default, Clone, Copy)]
 struct DerivedLoopSignals {
     flags: SignalFlags,
-    zero_motion_ratio: f64,
+    /// Share of valid motion magnitudes below the zero-motion threshold.
+    zero_motion_ratio: Option<f64>,
     /// Ratio of I-frames to total frames. GIF→MP4 encodes produce
     /// all-I-frame streams (ratio ≈ 1.0); real video with GOP structure has
-    /// ratio ≈ 0.03–0.10.
-    iframe_ratio: f64,
+    /// ratio ≈ 0.03–0.10. `None` means frame-type evidence is absent.
+    iframe_ratio: Option<f64>,
     /// Average bytes per frame. GIF-class content typically has low
-    /// `bytes_per_frame` compared to real video content.
-    bytes_per_frame: f64,
+    /// `bytes_per_frame` compared to real video content. `None` means the
+    /// required size/frame-count evidence is absent or invalid.
+    bytes_per_frame: Option<f64>,
 }
 
 impl DerivedLoopSignals {
-    #[allow(clippy::manual_unwrap_or)]
     fn from_meta(meta: &LoopMeta) -> Self {
         let zero_motion_ratio = zero_motion_ratio(&meta.mv_magnitudes);
         let i_count = meta.frame_types.iter().filter(|&&c| c == 'I').count();
         let total = meta.frame_types.len();
         let iframe_ratio = if total > 0 {
-            crate::numeric_cast::usize_to_f64(i_count) / crate::numeric_cast::usize_to_f64(total)
+            Some(
+                crate::numeric_cast::usize_to_f64(i_count)
+                    / crate::numeric_cast::usize_to_f64(total),
+            )
         } else {
-            crate::constants::LOOP_INTENT_NEUTRAL_SCORE // neutral when no frame type data
+            None
         };
-        let bytes_per_frame = match crate::media_conversion_gate::loop_bytes_per_frame_optional(
+        let bytes_per_frame = crate::media_conversion_gate::loop_bytes_per_frame_optional(
             meta.file_size_bytes,
             meta.frame_count,
             "DerivedLoopSignals::from_meta",
-        ) {
-            Some(value) => value,
-            None => f64::NAN,
-        };
+        )
+        .filter(|value| value.is_finite() && *value > 0.0);
         let is_portrait = if let (Some(w), Some(h)) = (meta.width, meta.height)
             && w > 0
             && h > 0
@@ -1073,7 +1075,9 @@ impl DerivedLoopSignals {
                 motion: SignalMotionFlags {
                     scene_cut: detect_scene_cut(&meta.pkt_sizes),
                     localized_motion: meta.mv_magnitudes.len() >= 10
-                        && zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO,
+                        && zero_motion_ratio.is_some_and(|ratio| {
+                            ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO
+                        }),
                 },
                 content: SignalContentFlags {
                     has_audible_audio: crate::media_conversion_gate::loop_audible_audio_fail_closed(
@@ -1470,15 +1474,27 @@ fn tree_layer5_resolution_path(media: &str, outcome: &str) -> &'static str {
     }
 }
 
-fn zero_motion_ratio(mvs: &[f64]) -> f64 {
+fn zero_motion_ratio(mvs: &[f64]) -> Option<f64> {
     if mvs.is_empty() {
-        return 0.0;
+        return None;
+    }
+    if mvs.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        tracing::warn!(
+            target: "mfb.algorithm",
+            pipeline = "loop_intent_signals",
+            branch = "zero_motion_invalid_sample",
+            "zero-motion ratio omitted because motion-vector magnitudes contain invalid values"
+        );
+        return None;
     }
     let zero_count = mvs
         .iter()
         .filter(|&&value| value.abs() < crate::constants::LOOP_INTENT_ZERO_MV_THRESHOLD)
         .count();
-    crate::numeric_cast::usize_to_f64(zero_count) / crate::numeric_cast::usize_to_f64(mvs.len())
+    Some(
+        crate::numeric_cast::usize_to_f64(zero_count)
+            / crate::numeric_cast::usize_to_f64(mvs.len()),
+    )
 }
 
 fn is_near_16_by_9(width: Option<u32>, height: Option<u32>) -> bool {
@@ -1492,24 +1508,27 @@ fn is_near_16_by_9(width: Option<u32>, height: Option<u32>) -> bool {
         < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
 }
 
-fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
+fn loop_count_zero_bonus(meta: &LoopMeta) -> Option<f64> {
     match meta.tier() {
         Some(DurationTier::UltraShort | DurationTier::Short) => {
-            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MAX)
         }
-        Some(DurationTier::MediumLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX
-            .mul_add(
+        Some(DurationTier::MediumLong) => Some(
+            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
             ),
-        Some(DurationTier::Long | DurationTier::VeryLong) => {
+        ),
+        Some(DurationTier::Long | DurationTier::VeryLong) => Some(
             crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-            )
+            ),
+        ),
+        Some(DurationTier::DefinitivelyLong) => {
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MIN)
         }
-        Some(DurationTier::DefinitivelyLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
-        None => f64::NAN,
+        None => None,
     }
 }
 
@@ -1897,20 +1916,18 @@ impl<'a> StructuralSignalScorer<'a> {
     }
 
     fn apply_iframe_ratio_signal(&mut self) {
-        if (self.derived.iframe_ratio - 0.5).abs() <= 0.01_f64 {
+        let Some(iframe_ratio) = self.derived.iframe_ratio else {
             return;
-        }
+        };
 
-        if self.derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH {
-            let strength = ((self.derived.iframe_ratio
-                - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH)
+        if iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH {
+            let strength = ((iframe_ratio - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH)
                 / (1.0 - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH))
                 .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             self.log_odds
                 .add(strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
-        } else if self.derived.iframe_ratio <= crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW {
-            let strength = ((crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW
-                - self.derived.iframe_ratio)
+        } else if iframe_ratio <= crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW {
+            let strength = ((crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW - iframe_ratio)
                 / crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW)
                 .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             self.log_odds
@@ -1919,11 +1936,11 @@ impl<'a> StructuralSignalScorer<'a> {
     }
 
     fn apply_bytes_per_frame_signal(&mut self) {
-        if !self.derived.bytes_per_frame.is_finite() || self.derived.bytes_per_frame <= 0.0_f64 {
+        let Some(bytes_per_frame) = self.derived.bytes_per_frame else {
             return;
-        }
+        };
 
-        let bpf_z = self.thresholds.file_size_z(self.derived.bytes_per_frame);
+        let bpf_z = self.thresholds.file_size_z(bytes_per_frame);
         if bpf_z <= -crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD {
             let strength = ((-bpf_z - crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
                 / crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
@@ -1964,7 +1981,11 @@ impl<'a> StructuralSignalScorer<'a> {
         if is_near_16_by_9(self.meta.width, self.meta.height) {
             count += 1;
         }
-        if self.derived.iframe_ratio < crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW_VETO {
+        if self
+            .derived
+            .iframe_ratio
+            .is_some_and(|ratio| ratio < crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW_VETO)
+        {
             count += 1;
         }
         count
@@ -1982,7 +2003,11 @@ impl<'a> StructuralSignalScorer<'a> {
         {
             count += 1;
         }
-        if self.derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH_VETO {
+        if self
+            .derived
+            .iframe_ratio
+            .is_some_and(|ratio| ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH_VETO)
+        {
             count += 1;
         }
         if self.loop_closure_bonus_signal() {
@@ -2217,8 +2242,9 @@ impl<'a> WeakHeuristicScorer<'a> {
         );
 
         if self.derived.flags.motion.localized_motion
-            || self.derived.zero_motion_ratio
-                > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
+            || self.derived.zero_motion_ratio.is_some_and(|ratio| {
+                ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
+            })
         {
             self.log_odds.add(LOCALIZED_MOTION_POSITIVE_LOG_ODDS);
         }
@@ -2946,8 +2972,7 @@ fn evaluate_image_tree(
     // duration approaches the long-veto boundary. Physical signals are NOT
     // affected.
     if meta.loop_count == Some(0) {
-        let bonus = loop_count_zero_bonus(meta, thresholds);
-        if bonus.is_finite() {
+        if let Some(bonus) = loop_count_zero_bonus(meta) {
             log_odds.add(bonus * metadata_trust);
         }
     } else if meta.loop_count == Some(1) {
@@ -3092,8 +3117,7 @@ fn evaluate_video_tree(
     // boundary (15s), preventing forged metadata from overcoming the Long-tier bias
     // without genuine physical loop evidence in Layers 3–5.
     if meta.loop_count == Some(0) {
-        let bonus = loop_count_zero_bonus(meta, thresholds);
-        if bonus.is_finite() {
+        if let Some(bonus) = loop_count_zero_bonus(meta) {
             log_odds.add(bonus * metadata_trust);
         }
     } else if meta.loop_count == Some(1) {
@@ -5523,7 +5547,10 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
 /// Detect localized motion (high concentration of motion in small area).
 /// Returns true if motion vectors suggest synthetic/sticker content.
 fn detect_localized_motion(mvs: &[f64]) -> bool {
-    mvs.len() >= 10 && zero_motion_ratio(mvs) > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO
+    mvs.len() >= 10
+        && zero_motion_ratio(mvs).is_some_and(|ratio| {
+            ratio > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO
+        })
 }
 
 /// Extract first frame from video to temporary `PNG` for analysis.
@@ -7272,6 +7299,33 @@ mod tests {
         assert!(parse_ydif_sample("NaN").is_err());
         assert!(parse_ydif_sample("inf").is_err());
         assert!(parse_ydif_sample("-0.1").is_err());
+    }
+
+    #[test]
+    fn derived_numeric_evidence_never_uses_floating_point_sentinels() {
+        let missing = LoopMeta::default();
+        let derived = DerivedLoopSignals::from_meta(&missing);
+        assert_eq!(derived.zero_motion_ratio, None);
+        assert_eq!(derived.iframe_ratio, None);
+        assert_eq!(derived.bytes_per_frame, None);
+        assert_eq!(loop_count_zero_bonus(&missing), None);
+
+        let valid = LoopMeta {
+            duration_secs: Some(2.0),
+            frame_count: Some(10),
+            file_size_bytes: 1_000,
+            frame_types: vec!['I', 'P'],
+            mv_magnitudes: vec![0.0; 10],
+            ..LoopMeta::default()
+        };
+        let derived = DerivedLoopSignals::from_meta(&valid);
+        assert_eq!(derived.zero_motion_ratio, Some(1.0));
+        assert_eq!(derived.iframe_ratio, Some(0.5));
+        assert_eq!(derived.bytes_per_frame, Some(100.0));
+        assert!(loop_count_zero_bonus(&valid).is_some());
+
+        let invalid_motion = [0.0, f64::NAN];
+        assert_eq!(zero_motion_ratio(&invalid_motion), None);
     }
 
     #[test]
