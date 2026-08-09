@@ -6447,21 +6447,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "macOS-only live Photos smoke test"]
+    #[ignore = "writes to the macOS System Photo Library; explicit consent required"]
     #[cfg(target_os = "macos")]
     #[serial_test::serial]
-    fn photos_import_live_smoke_debug_library() -> Result<()> {
-        use std::process::Command;
-
-        let home = std::env::var_os("HOME")
+    fn photos_import_live_smoke_system_library_requires_explicit_consent() -> Result<()> {
+        if std::env::var("MFB_LIVE_PHOTOS_SMOKE_ALLOW_SYSTEM_LIBRARY").as_deref() != Ok("1") {
+            return Err(ImgQualityError::AnalysisError(
+                "live Photos smoke writes to the System Photo Library; set \
+                 MFB_LIVE_PHOTOS_SMOKE_ALLOW_SYSTEM_LIBRARY=1 to confirm"
+                    .to_string(),
+            ));
+        }
+        let input = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_INPUT")
             .map(PathBuf::from)
-            .ok_or_else(|| ImgQualityError::AnalysisError("HOME is unset".to_string()))?;
-        let input = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_INPUT").map_or_else(
-            || home.join("Downloads/Final 2/Telegram_optimized/IMG_9644.JXL"),
-            PathBuf::from,
-        );
-        let library = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_LIBRARY")
-            .map_or_else(|| home.join("Pictures/debug.photoslibrary"), PathBuf::from);
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "MFB_LIVE_PHOTOS_SMOKE_INPUT must name an explicit synthetic fixture"
+                        .to_string(),
+                )
+            })?;
 
         if !input.exists() {
             return Err(ImgQualityError::AnalysisError(format!(
@@ -6469,51 +6473,25 @@ mod tests {
                 input.display()
             )));
         }
-        if !library.exists() {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "live Photos smoke library missing: {}",
-                library.display()
-            )));
-        }
-        let library_text = library.to_str().ok_or_else(|| {
+        let input_name = input.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
             ImgQualityError::AnalysisError(format!(
-                "live Photos smoke library path is not UTF-8: {}",
-                library.display()
+                "live Photos smoke input has no UTF-8 file name: {}",
+                input.display()
             ))
         })?;
-        let _library_guard =
-            crate::common_utils::EnvGuard::set("MFB_PHOTOS_LIBRARY_PATH", library_text);
-
-        let open_status = Command::new("open")
-            .arg("-a")
-            .arg("Photos")
-            .arg(&library)
-            .status()
-            .map_err(|e| {
-                ImgQualityError::AnalysisError(format!("open Photos for live smoke failed: {e}"))
-            })?;
-        if !open_status.success() {
-            return Err(ImgQualityError::AnalysisError(
-                "open Photos for live smoke returned non-zero".to_string(),
-            ));
+        if !input_name.starts_with("mfb-photos-smoke-") {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "live Photos smoke input must use the mfb-photos-smoke-* synthetic-fixture prefix: {}",
+                input.display()
+            )));
         }
-
-        std::thread::sleep(Duration::from_secs(3));
+        prepare_photos_import_session("live_system_library_smoke")?;
 
         let output = run_photos_import_applescript_session(
-            "JXL",
-            &[(input.clone(), "✨debug-smoke".to_string())],
+            "live system-library smoke",
+            &[(input.clone(), "✨system-library-smoke".to_string())],
         )?;
-        let rel_path = input
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "live Photos smoke input has no UTF-8 file name: {}",
-                    input.display()
-                ))
-            })?
-            .to_string();
+        let rel_path = input_name.to_string();
         let report_pairs = fast_img_pairs_from_photos_import_ids(
             &[(rel_path.clone(), input.clone())],
             output.as_bytes(),
@@ -6523,7 +6501,7 @@ mod tests {
             rel_path: rel_path.clone(),
             path: input.clone(),
             blake3: crate::common_utils::calculate_blake3_hash(&input)?,
-            album_name: "✨debug-smoke".to_string(),
+            album_name: "✨system-library-smoke".to_string(),
         }];
         let handle = library_handle_from_media_output_probes(
             &candidates,
@@ -6542,7 +6520,7 @@ mod tests {
         );
         let reconciled_output = run_photos_import_applescript_session_mode(
             "media reconciliation",
-            &[(input.clone(), "✨debug-smoke".to_string())],
+            &[(input.clone(), "✨system-library-smoke".to_string())],
             "reconcile",
         )?;
         let reconciled_identifier = reconciled_output.trim();
