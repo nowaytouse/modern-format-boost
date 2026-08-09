@@ -8555,15 +8555,15 @@ mod tests {
 
     #[test]
     fn ui_ssim_inline_or_empty_omits_segment_when_missing() {
-        assert!(ui_ssim_inline_or_empty(None, "unit_test").is_empty());
+        assert_eq!(ui_ssim_inline_or_empty(None, "unit_test"), "");
         let present = ui_ssim_inline_or_empty(Some(0.95), "unit_test");
         assert!(present.starts_with("SSIM "));
     }
 
     #[test]
     fn ui_ssim_inline_when_unmeasured_omits_without_audit_path() {
-        assert!(ui_ssim_inline_when_unmeasured(None).is_empty());
-        assert!(explore_progress_ssim_token_pending(None).is_empty());
+        assert_eq!(ui_ssim_inline_when_unmeasured(None), "");
+        assert_eq!(explore_progress_ssim_token_pending(None), "");
         assert_eq!(ui_ssim_inline_when_unmeasured(Some(0.95)), "SSIM 0.9500");
     }
 
@@ -8699,7 +8699,7 @@ mod tests {
 
     #[test]
     fn ui_exit_code_suffix_or_empty_omits_when_unknown() {
-        assert!(ui_exit_code_suffix_or_empty(None, "unit_test").is_empty());
+        assert_eq!(ui_exit_code_suffix_or_empty(None, "unit_test"), "");
         assert_eq!(
             ui_exit_code_suffix_or_empty(Some(1), "unit_test"),
             " (exit code: 1)"

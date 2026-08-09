@@ -225,15 +225,17 @@ const startMockProcessing = () => {
 
 type ResumeAction = "resume" | "fresh" | "cancel";
 
-const currentProcessorRequest = (resume: boolean, fresh = false) => {
+const currentProcessorRequest = (isResume: boolean, isFresh = false) => {
   const targetOutputMode =
     outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
-  const strategy =
-    outputMode.value === "fast_img_avif"
-      ? "avif"
-      : outputMode.value === "fast_img"
-        ? "jxl"
-        : null;
+
+  let strategy = null;
+  if (outputMode.value === "fast_img_avif") {
+    strategy = "avif";
+  } else if (outputMode.value === "fast_img") {
+    strategy = "jxl";
+  }
+
   return {
     targetPath: folderPath.value,
     processingMode: processingMode.value,
@@ -241,8 +243,8 @@ const currentProcessorRequest = (resume: boolean, fresh = false) => {
     strategy,
     ultimate: mfbToggles.ultimateMode,
     verbose: mfbToggles.verboseMode,
-    resume,
-    fresh,
+    resume: isResume,
+    fresh: isFresh,
     shortestPath: mfbToggles.shortestPath,
   };
 };
@@ -324,6 +326,9 @@ const toggleCliMode = () => {
   isCliMode.value = !isCliMode.value;
 };
 
+const shellQuote = (value: string) =>
+  "'" + value.replaceAll("'", "'\"'\"'") + "'";
+
 const generateCliCommand = () => {
   if (!folderPath.value) return "";
   if (!processorBinaryPath.value) return "Binary not found";
@@ -333,7 +338,6 @@ const generateCliCommand = () => {
   const parentDir =
     targetPath.slice(0, Math.max(0, targetPath.lastIndexOf("/"))) || "/";
 
-  const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
   let command = `cd ${shellQuote(parentDir)} && ${shellQuote(processorBinaryPath.value)}`;
 
   if (processingMode.value === "images_only") {

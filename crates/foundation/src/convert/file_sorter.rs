@@ -228,7 +228,7 @@ mod tests {
     fn test_empty_list() {
         let files: Vec<PathBuf> = vec![];
         let sorted = sort_by_size_ascending(files);
-        assert!(sorted.is_empty());
+        assert_eq!(sorted.len(), 0);
     }
 
     #[test]

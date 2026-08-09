@@ -7105,8 +7105,10 @@ mod tests {
             .unwrap_or_else(|| panic!("convert_to_jxl source missing"));
         let convert_end = source[convert_start..]
             .find("pub fn convert_to_jxl_probe(")
-            .map(|offset| convert_start + offset)
-            .unwrap_or_else(|| panic!("convert_to_jxl_probe boundary missing"));
+            .map_or_else(
+                || panic!("convert_to_jxl_probe boundary missing"),
+                |offset| convert_start + offset,
+            );
         let convert = &source[convert_start..convert_end];
         let jxl_fallback = convert
             .find("try_jxl_pre_avif_fallback(")

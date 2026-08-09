@@ -5413,7 +5413,7 @@ mod tests {
             [10, 10, 10, 10, 10, 1, 1, 1, 1, 1]
         );
         assert_eq!(report.failed_count, 11);
-        assert!(report.report_pairs.is_empty());
+        assert_eq!(report.report_pairs.len(), 0);
 
         let mut fail_fast_calls = 0usize;
         let err = import_media_outputs_with_photos_applescript_with(

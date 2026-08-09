@@ -219,7 +219,7 @@ fn video_heuristic_score(features: &VideoQualityFeatures) -> Option<f64> {
     let bpp_score = (1.0 - (bpp_frame / 2.0).clamp(0.0, 1.0)).max(0.0);
     let motion_score = (1.0 - features.motion_intensity.clamp(0.0, 1.0)).max(0.0);
     let stability = features.temporal_stability.clamp(0.0, 1.0);
-    let raw = motion_score.mul_add(0.3, bpp_score * 0.4) + stability * 0.3;
+    let raw = stability.mul_add(0.3, motion_score.mul_add(0.3, bpp_score * 0.4));
     crate::algorithm_seal::quality_unit_probability(raw)
 }
 

@@ -538,7 +538,7 @@ mod tests {
         let sample = tempfile::Builder::new().suffix(".gif").tempfile()?;
         std::fs::write(sample.path(), b"not media")?;
 
-        assert!(detect_media_extension(sample.path()).is_empty());
+        assert_eq!(detect_media_extension(sample.path()), "");
         Ok(())
     }
 

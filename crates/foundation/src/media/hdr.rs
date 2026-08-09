@@ -828,7 +828,10 @@ pub fn synthesize(
             let apply_gain = |val_raw: f32, max_val: f32| -> f32 {
                 let val_norm = val_raw / max_val;
                 let gain_px_corrected = val_norm.powf(1.0 / params.gamma.max(0.1));
-                let log2_gain = gain_px_corrected.mul_add(params.gain_map_max - params.gain_map_min, params.gain_map_min);
+                let log2_gain = gain_px_corrected.mul_add(
+                    params.gain_map_max - params.gain_map_min,
+                    params.gain_map_min,
+                );
                 log2_gain.exp2()
             };
 
@@ -1891,7 +1894,7 @@ mod tests {
             None,
         );
 
-        assert!(params.is_empty());
+        assert_eq!(params, "");
     }
 
     #[test]

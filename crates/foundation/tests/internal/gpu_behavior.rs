@@ -32,13 +32,13 @@ fn test_gpu_smart_sample_calculation_resilience() {
     if res.strategy.contains("Smart sampling") {
         assert!(res.sample_filter.contains("select="));
     } else {
-        assert!(res.sample_filter.is_empty());
+        assert_eq!(res.sample_filter, "");
     }
 
     // Test with short duration (e.g. 5 seconds) - should return "Full video" and empty filter
     let res_short = calculate_smart_sample(Path::new("dummy.mp4"), 5.0, 10.0).unwrap();
     assert!(res_short.actual_duration > 0.0);
-    assert!(res_short.sample_filter.is_empty());
+    assert_eq!(res_short.sample_filter, "");
     assert!(res_short.strategy.contains("Full video"));
 }
 

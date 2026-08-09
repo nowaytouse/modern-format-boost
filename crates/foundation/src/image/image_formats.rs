@@ -156,12 +156,12 @@ pub mod webp {
                 b"VP8L" => Some(FrameCodec::Lossless),
                 _ => None,
             };
-            if let Some(candidate) = candidate {
-                if codec.replace(candidate).is_some() {
-                    return Err(ImgQualityError::AnalysisError(
-                        "WebP ANMF: frame contains more than one VP8/VP8L bitstream".to_string(),
-                    ));
-                }
+            if let Some(candidate) = candidate
+                && codec.replace(candidate).is_some()
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "WebP ANMF: frame contains more than one VP8/VP8L bitstream".to_string(),
+                ));
             }
             pos = next;
         }

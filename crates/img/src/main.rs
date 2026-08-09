@@ -10909,11 +10909,11 @@ mod fast_img_hardening_tests {
     fn pure_media_parsers_exclude_jpeg_and_png_metadata() -> anyhow::Result<()> {
         fn append_png_chunk(
             bytes: &mut Vec<u8>,
-            chunk_type: &[u8; 4],
+            chunk_type: [u8; 4],
             payload: &[u8],
         ) -> anyhow::Result<()> {
             bytes.extend_from_slice(&u32::try_from(payload.len())?.to_be_bytes());
-            bytes.extend_from_slice(chunk_type);
+            bytes.extend_from_slice(&chunk_type);
             bytes.extend_from_slice(payload);
             bytes.extend_from_slice(&[0_u8; 4]);
             Ok(())
@@ -10939,12 +10939,12 @@ mod fast_img_hardening_tests {
 
         let png_path = root.path().join("metadata.png");
         let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
-        append_png_chunk(&mut png, b"IHDR", &[0_u8; 13])?;
-        append_png_chunk(&mut png, b"tEXt", &[0_u8; 100])?;
-        append_png_chunk(&mut png, b"PLTE", &[0_u8; 3])?;
-        append_png_chunk(&mut png, b"tRNS", &[0_u8; 1])?;
-        append_png_chunk(&mut png, b"IDAT", &[0_u8; 5])?;
-        append_png_chunk(&mut png, b"IEND", &[])?;
+        append_png_chunk(&mut png, *b"IHDR", &[0_u8; 13])?;
+        append_png_chunk(&mut png, *b"tEXt", &[0_u8; 100])?;
+        append_png_chunk(&mut png, *b"PLTE", &[0_u8; 3])?;
+        append_png_chunk(&mut png, *b"tRNS", &[0_u8; 1])?;
+        append_png_chunk(&mut png, *b"IDAT", &[0_u8; 5])?;
+        append_png_chunk(&mut png, *b"IEND", &[])?;
         std::fs::write(&png_path, png)?;
         assert_eq!(super::png_pure_media_size(&png_path)?, 22);
         Ok(())
@@ -10954,12 +10954,12 @@ mod fast_img_hardening_tests {
     fn avif_pure_media_parser_counts_only_mdat_payloads() -> anyhow::Result<()> {
         fn append_box(
             bytes: &mut Vec<u8>,
-            box_type: &[u8; 4],
+            box_type: [u8; 4],
             payload: &[u8],
         ) -> anyhow::Result<()> {
             let size = u32::try_from(payload.len() + 8)?;
             bytes.extend_from_slice(&size.to_be_bytes());
-            bytes.extend_from_slice(box_type);
+            bytes.extend_from_slice(&box_type);
             bytes.extend_from_slice(payload);
             Ok(())
         }
@@ -10967,9 +10967,9 @@ mod fast_img_hardening_tests {
         let root = TempDir::new()?;
         let avif_path = root.path().join("payload.avif");
         let mut avif = Vec::new();
-        append_box(&mut avif, b"ftyp", &[0_u8; 12])?;
-        append_box(&mut avif, b"meta", &[0_u8; 7])?;
-        append_box(&mut avif, b"mdat", &[0_u8; 11])?;
+        append_box(&mut avif, *b"ftyp", &[0_u8; 12])?;
+        append_box(&mut avif, *b"meta", &[0_u8; 7])?;
+        append_box(&mut avif, *b"mdat", &[0_u8; 11])?;
         avif.extend_from_slice(&1_u32.to_be_bytes());
         avif.extend_from_slice(b"mdat");
         avif.extend_from_slice(&19_u64.to_be_bytes());
@@ -11260,12 +11260,12 @@ mod fast_img_hardening_tests {
         };
         fn append_jxl_box(
             bytes: &mut Vec<u8>,
-            box_type: &[u8; 4],
+            box_type: [u8; 4],
             payload: &[u8],
         ) -> anyhow::Result<()> {
             let size = u32::try_from(payload.len() + 8)?;
             bytes.extend_from_slice(&size.to_be_bytes());
-            bytes.extend_from_slice(box_type);
+            bytes.extend_from_slice(&box_type);
             bytes.extend_from_slice(payload);
             Ok(())
         }
@@ -11277,14 +11277,14 @@ mod fast_img_hardening_tests {
         let mut jxl_bytes = Vec::new();
         // Container signature box (12 bytes)
         jxl_bytes.extend_from_slice(JXL_CONTAINER_MAGIC);
-        append_jxl_box(&mut jxl_bytes, b"ftyp", b"jxl \x00\x00\x00\x00")?;
-        append_jxl_box(&mut jxl_bytes, b"Exif", &[0_u8; 50])?;
+        append_jxl_box(&mut jxl_bytes, *b"ftyp", b"jxl \x00\x00\x00\x00")?;
+        append_jxl_box(&mut jxl_bytes, *b"Exif", &[0_u8; 50])?;
         // jxlp box: 4-byte sequence index + 100 bytes codestream fragment
         let mut jxlp_payload = Vec::new();
         jxlp_payload.extend_from_slice(&0_u32.to_be_bytes()); // index 0
         jxlp_payload.extend_from_slice(&[0xAB_u8; 100]); // 100 payload bytes
-        append_jxl_box(&mut jxl_bytes, JXL_BOX_JXLP, &jxlp_payload)?;
-        append_jxl_box(&mut jxl_bytes, b"xml ", &[0_u8; 30])?;
+        append_jxl_box(&mut jxl_bytes, *JXL_BOX_JXLP, &jxlp_payload)?;
+        append_jxl_box(&mut jxl_bytes, *b"xml ", &[0_u8; 30])?;
         std::fs::write(&container_jxl_path, &jxl_bytes)?;
 
         assert_eq!(
@@ -11657,7 +11657,7 @@ mod fast_img_hardening_tests {
             .ok_or_else(|| anyhow::anyhow!("missing drifted entry B"))?;
         assert_eq!(entry_a.out, output_a_hash);
         assert_eq!(entry_a.out_rel.as_deref(), Some("a.AVIF"));
-        assert!(entry_b.out.is_empty());
+        assert_eq!(entry_b.out, "");
         assert_eq!(entry_b.out_rel.as_deref(), Some("b.AVIF"));
         assert!(persisted.skipped_sources.contains_key("skip.gif"));
         assert_eq!(persisted.blake3_log.len(), 2);

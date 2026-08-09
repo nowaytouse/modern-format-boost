@@ -3448,7 +3448,7 @@ mod tests {
             strategy,
         );
 
-        assert!(output.output_path.is_empty());
+        assert_eq!(output.output_path, "");
         assert_eq!(output.output_size, 0);
         assert_eq!(output.message, "Skipped: output was created concurrently");
     }
@@ -3506,7 +3506,7 @@ mod tests {
             build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None);
 
         assert!(requires_high_bit_depth_encode(&detection));
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3531,7 +3531,7 @@ mod tests {
 
         assert!(requires_high_bit_depth_encode(&detection));
         assert!(detection.is_hdr());
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3556,7 +3556,7 @@ mod tests {
 
         assert!(requires_high_bit_depth_encode(&detection));
         assert!(!detection.is_hdr());
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3582,7 +3582,7 @@ mod tests {
 
         let params = build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None);
 
-        assert!(params.is_empty());
+        assert_eq!(params, "");
     }
 
     #[test]
@@ -3903,9 +3903,9 @@ mod tests {
         };
 
         assert!(requires_high_bit_depth_encode(&detection));
-        assert!(
-            build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None)
-                .is_empty()
+        assert_eq!(
+            build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None),
+            ""
         );
         assert_eq!(
             hdr_pix_fmt(&detection),

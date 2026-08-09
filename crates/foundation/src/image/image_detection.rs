@@ -2113,9 +2113,10 @@ impl PngQuantizationSession {
         PngQuantizationAnalysis {
             is_quantized: true,
             quality_estimate: None,
-            confidence: Some(
-                tc_score_f.mul_add(crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE, crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT),
-            ),
+            confidence: Some(tc_score_f.mul_add(
+                crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE,
+                crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT,
+            )),
             factor_scores: self.factors.clone(),
             detected_tool: None,
             explanation: format!(

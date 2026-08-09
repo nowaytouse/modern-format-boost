@@ -815,7 +815,7 @@ mod tests {
         let output = execute_conversion(&detection, &strategy, &ConversionConfig::default())?;
         assert!(output.ignored);
         assert!(!output.skipped);
-        assert!(output.output_path.is_empty());
+        assert_eq!(output.output_path, "");
         Ok(())
     }
 

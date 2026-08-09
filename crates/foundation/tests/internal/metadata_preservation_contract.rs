@@ -143,8 +143,8 @@ fn contract_macos_spotlight_xattr_policy_locked() {
         !should_copy_macos_extended_xattr("user.namespace"),
         "CONTRACT: supplemental pass owns non-Spotlight keys"
     );
-    assert!(!XATTR_MACOS_METADATA_PREFIXES.is_empty());
-    assert!(!XATTR_MACOS_EXPLICIT_KEYS.is_empty());
+    assert_ne!(XATTR_MACOS_METADATA_PREFIXES.len(), 0);
+    assert_ne!(XATTR_MACOS_EXPLICIT_KEYS.len(), 0);
 }
 
 #[cfg(target_os = "macos")]
@@ -379,7 +379,7 @@ fn contract_exact_metadata_copy_verifier_accepts_matching_metadata() {
     let check = verify_exact_metadata_copy(&src, &dst).expect("metadata copy matches");
 
     assert!(check.passed);
-    assert!(check.mismatches.is_empty());
+    assert_eq!(check.mismatches.len(), 0);
 }
 
 #[cfg(target_os = "macos")]
@@ -426,7 +426,7 @@ fn contract_exact_metadata_copy_verifier_ignores_macos_runtime_xattr_noise() {
         .expect("com.apple.cscachefs on source-only must not fail verify; lastuseddate copied");
 
     assert!(check.passed);
-    assert!(check.mismatches.is_empty());
+    assert_eq!(check.mismatches.len(), 0);
 }
 
 
@@ -466,7 +466,7 @@ fn contract_exact_metadata_copy_verifier_ignores_lastuseddate_app_variants() {
         "lastuseddate#App copied to dst must pass verify: {:?}",
         check.mismatches
     );
-    assert!(check.mismatches.is_empty());
+    assert_eq!(check.mismatches.len(), 0);
 
 }
 

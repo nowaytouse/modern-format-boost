@@ -1631,7 +1631,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
-        assert!(!probed.is_empty());
+        assert_ne!(probed.len(), 0);
         assert!(
             probed
                 .iter()

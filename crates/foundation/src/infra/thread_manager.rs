@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn test_rsync_path() {
         let path = get_rsync_path();
-        assert!(!path.is_empty());
+        assert_ne!(path, "");
     }
 
     #[test]

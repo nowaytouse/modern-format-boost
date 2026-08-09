@@ -403,15 +403,15 @@ mod tests {
 
     #[test]
     fn apng_parser_uses_validated_chunks_and_sequence_numbers() {
-        fn chunk(chunk_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        fn chunk(chunk_type: [u8; 4], payload: &[u8]) -> Vec<u8> {
             let mut bytes = u32::try_from(payload.len())
                 .expect("test payload fits u32")
                 .to_be_bytes()
                 .to_vec();
-            bytes.extend_from_slice(chunk_type);
+            bytes.extend_from_slice(&chunk_type);
             bytes.extend_from_slice(payload);
             let mut hasher = crc32fast::Hasher::new();
-            hasher.update(chunk_type);
+            hasher.update(&chunk_type);
             hasher.update(payload);
             bytes.extend_from_slice(&hasher.finalize().to_be_bytes());
             bytes
@@ -425,9 +425,9 @@ mod tests {
         assert!((info.duration_secs - 0.03).abs() < f64::EPSILON);
 
         let mut marker_in_payload = PNG_SIGNATURE.to_vec();
-        marker_in_payload.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
-        marker_in_payload.extend(chunk(b"IDAT", b"acTLfcTL"));
-        marker_in_payload.extend(chunk(b"IEND", &[]));
+        marker_in_payload.extend(chunk(*b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+        marker_in_payload.extend(chunk(*b"IDAT", b"acTLfcTL"));
+        marker_in_payload.extend(chunk(*b"IEND", &[]));
         assert_eq!(parse_apng_animation(&marker_in_payload).unwrap(), None);
 
         let mut sequence_gap = valid;

@@ -1421,7 +1421,10 @@ mod tests {
         assert_eq!(result.succeeded, 0);
         assert_eq!(result.failed, 0);
         assert_eq!(result.skipped, 0);
-        assert!(result.errors.is_empty());
+        assert_eq!(
+            result.errors,
+            [] as [(std::path::PathBuf, std::string::String); 0]
+        );
     }
 
     #[test]

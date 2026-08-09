@@ -149,8 +149,10 @@ pub fn get_mfb_root() -> Result<PathBuf> {
     let home_root = std::env::var(crate::constants::ENV_HOME)
         .map(PathBuf::from)
         .or_else(|_| std::env::var(crate::constants::ENV_USERPROFILE).map(PathBuf::from))
-        .map(|h| h.join(".modern_format_boost"))
-        .unwrap_or_else(|_| crate::media_conversion_gate::delivery_temp_mfb_root_ssot());
+        .map_or_else(
+            |_| crate::media_conversion_gate::delivery_temp_mfb_root_ssot(),
+            |h| h.join(".modern_format_boost"),
+        );
     usable_mfb_root_or_fallback(home_root, "home", "Failed to create MFB home directory")
 }
 

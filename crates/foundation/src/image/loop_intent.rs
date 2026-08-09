@@ -2160,8 +2160,10 @@ impl<'a> WeakHeuristicScorer<'a> {
             0.0_f64
         };
         self.log_odds.add(
-            (headroom.mul_add(crate::constants::SHORT_CLIP_HEADROOM_MAX, crate::constants::SHORT_CLIP_MIN_BIAS)
-                + format_bonus
+            (headroom.mul_add(
+                crate::constants::SHORT_CLIP_HEADROOM_MAX,
+                crate::constants::SHORT_CLIP_MIN_BIAS,
+            ) + format_bonus
                 + cadence_bonus)
                 * crate::constants::SHORT_CLIP_PRIOR_LOG_ODDS,
         );
@@ -3305,7 +3307,11 @@ fn logistic_regression_fusion(
 
     let score = density_signal.mul_add(
         LAYER6_LR_W_DENSITY,
-        f64::mul_add(logit(tree_prob), LAYER6_LR_W_TREE, logit(knn_prob) * LAYER6_LR_W_KNN),
+        f64::mul_add(
+            logit(tree_prob),
+            LAYER6_LR_W_TREE,
+            logit(knn_prob) * LAYER6_LR_W_KNN,
+        ),
     ) + LAYER6_LR_BIAS;
 
     // Apply sigmoid once to convert the log-odds-weighted sum back to probability

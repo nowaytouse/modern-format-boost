@@ -591,7 +591,7 @@ mod tests {
         });
 
         assert!(!output.status.success());
-        assert!(!output.stderr.is_empty());
+        assert_ne!(output.stderr.len(), 0);
     }
 
     #[test]

@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_subtitle_no_subs() {
         let result = subtitle_args_for_container(false, None, "mp4");
-        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
     }
 
     #[test]
