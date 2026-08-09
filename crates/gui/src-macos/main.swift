@@ -10,6 +10,56 @@ private struct HostError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+private struct TrustedWebContent {
+    private let rootURL: URL
+
+    init(rootURL: URL) throws {
+        if rootURL.isFileURL {
+            guard (rootURL.host ?? "").isEmpty else {
+                throw HostError(message: "Bundled web content must use a local file URL")
+            }
+            self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
+            return
+        }
+
+        guard let scheme = rootURL.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              rootURL.host?.isEmpty == false,
+              rootURL.user == nil,
+              rootURL.password == nil
+        else {
+            throw HostError(message: "MFB_DEV_URL must be an HTTP(S) URL without credentials")
+        }
+        self.rootURL = rootURL
+    }
+
+    func allows(_ candidate: URL) -> Bool {
+        if rootURL.isFileURL {
+            guard candidate.isFileURL, (candidate.host ?? "").isEmpty else { return false }
+            let candidate = candidate.resolvingSymlinksInPath().standardizedFileURL
+            let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+            return candidate.path == rootURL.path || candidate.path.hasPrefix(rootPath)
+        }
+
+        return candidate.scheme?.lowercased() == rootURL.scheme?.lowercased()
+            && candidate.host?.lowercased() == rootURL.host?.lowercased()
+            && Self.effectivePort(for: candidate) == Self.effectivePort(for: rootURL)
+    }
+
+    func allowsMessage(from candidate: URL?, isMainFrame: Bool) -> Bool {
+        isMainFrame && candidate.map(allows) == true
+    }
+
+    private static func effectivePort(for url: URL) -> Int? {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
+    }
+}
+
 private let maxProcessLogChunkBytes = 64 * 1024
 
 private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
@@ -180,12 +230,29 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
     weak var webView: WKWebView?
     weak var window: NSWindow?
     private var activeProcess: Process?
+    private let trustedContent: TrustedWebContent
+
+    init(trustedContent: TrustedWebContent) {
+        self.trustedContent = trustedContent
+        super.init()
+    }
 
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage,
         replyHandler: @escaping (Any?, String?) -> Void,
     ) {
+        guard let registeredWebView = webView,
+              message.webView === registeredWebView,
+              trustedContent.allowsMessage(
+                  from: message.frameInfo.request.url,
+                  isMainFrame: message.frameInfo.isMainFrame,
+              )
+        else {
+            NSLog("MFB_SECURITY: rejected native bridge message from untrusted frame")
+            replyHandler(nil, "Native bridge is unavailable to this page")
+            return
+        }
         guard let request = message.body as? [String: Any],
               let command = request["command"] as? String
         else {
@@ -259,10 +326,15 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
             decisionHandler(.cancel)
             return
         }
-        if url.isFileURL || url.scheme == "about" {
+        if trustedContent.allows(url) {
             decisionHandler(.allow)
-        } else {
+        } else if navigationAction.navigationType == .linkActivated,
+                  let scheme = url.scheme?.lowercased(),
+                  ["http", "https", "mailto"].contains(scheme)
+        {
             NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        } else {
             decisionHandler(.cancel)
         }
     }
@@ -495,7 +567,38 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         installMainMenu()
 
-        let host = NativeHost()
+        let contentURL: URL
+        let readAccessRoot: URL?
+        if let configured = ProcessInfo.processInfo.environment["MFB_DEV_URL"], !configured.isEmpty {
+            guard let url = URL(string: configured) else {
+                presentFatalError("MFB_DEV_URL is not a valid URL")
+                return
+            }
+            contentURL = url
+            readAccessRoot = nil
+        } else if let resources = Bundle.main.resourceURL {
+            let dist = resources.appendingPathComponent("dist", isDirectory: true)
+            let index = dist.appendingPathComponent("index.html")
+            guard FileManager.default.fileExists(atPath: index.path) else {
+                presentFatalError("Bundled Vue entry point is missing: \(index.path)")
+                return
+            }
+            contentURL = index
+            readAccessRoot = dist
+        } else {
+            presentFatalError("App resource directory is unavailable")
+            return
+        }
+
+        let trustedContent: TrustedWebContent
+        do {
+            trustedContent = try TrustedWebContent(rootURL: readAccessRoot ?? contentURL)
+        } catch {
+            presentFatalError(error.localizedDescription)
+            return
+        }
+
+        let host = NativeHost(trustedContent: trustedContent)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.addScriptMessageHandler(
@@ -550,22 +653,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.webView = webView
         self.window = window
 
-        if let url = ProcessInfo.processInfo.environment["MFB_DEV_URL"].flatMap(URL.init(string:)) {
-            webView.load(URLRequest(url: url))
+        if let readAccessRoot {
+            webView.loadFileURL(contentURL, allowingReadAccessTo: readAccessRoot)
+        } else {
+            webView.load(URLRequest(url: contentURL))
             if #available(macOS 13.3, *) {
                 webView.isInspectable = true
             }
-        } else if let resources = Bundle.main.resourceURL {
-            let dist = resources.appendingPathComponent("dist", isDirectory: true)
-            let index = dist.appendingPathComponent("index.html")
-            guard FileManager.default.fileExists(atPath: index.path) else {
-                presentFatalError("Bundled Vue entry point is missing: \(index.path)")
-                return
-            }
-            webView.loadFileURL(index, allowingReadAccessTo: dist)
-        } else {
-            presentFatalError("App resource directory is unavailable")
-            return
         }
 
         window.makeKeyAndOrderFront(nil)
@@ -613,6 +707,34 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        let bundledRoot = URL(fileURLWithPath: "/tmp/mfb-app/dist", isDirectory: true)
+        let bundledContent = try TrustedWebContent(rootURL: bundledRoot)
+        let bundledIndex = bundledRoot.appendingPathComponent("index.html")
+        let outsideBundle = URL(fileURLWithPath: "/tmp/mfb-app/private.html")
+        guard bundledContent.allows(bundledIndex),
+              bundledContent.allowsMessage(from: bundledIndex, isMainFrame: true),
+              !bundledContent.allowsMessage(from: bundledIndex, isMainFrame: false),
+              !bundledContent.allows(outsideBundle)
+        else {
+            fputs("native-host self-test bundled content trust failed\n", stderr)
+            return 1
+        }
+        guard let developmentRoot = URL(string: "http://127.0.0.1:5173/app"),
+              let sameOrigin = URL(string: "http://127.0.0.1:5173/assets/app.js"),
+              let wrongPort = URL(string: "http://127.0.0.1:5174/app"),
+              let invalidScheme = URL(string: "data:text/html,untrusted")
+        else {
+            fputs("native-host self-test URL fixture creation failed\n", stderr)
+            return 1
+        }
+        let developmentContent = try TrustedWebContent(rootURL: developmentRoot)
+        guard developmentContent.allows(sameOrigin),
+              !developmentContent.allows(wrongPort),
+              (try? TrustedWebContent(rootURL: invalidScheme)) == nil
+        else {
+            fputs("native-host self-test development origin trust failed\n", stderr)
+            return 1
+        }
         let arguments = try ProcessorCommand.arguments(from: [
             "targetPath": "/tmp/media",
             "processingMode": "images_only",
