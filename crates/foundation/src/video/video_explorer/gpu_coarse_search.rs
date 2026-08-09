@@ -2299,6 +2299,15 @@ impl RenderedCandidate {
     }
 }
 
+fn candidate_is_materialized(
+    rendered_candidate: Option<RenderedCandidate>,
+    crf: f32,
+    mode: AnimatedExplorationEncodeMode,
+    preset: EncoderPreset,
+) -> bool {
+    rendered_candidate.is_some_and(|rendered| rendered.matches(crf, mode, preset))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FineTuneQualityMode {
     Ultimate,
@@ -3248,8 +3257,14 @@ impl<'a> CpuFineTuneSession<'a> {
     }
 
     fn encode_cached(&mut self, crf: f32) -> Result<u64> {
-        if let Some(&size) = self.size_cache.get(crf) {
-            self.cpu_progress.inc_iteration(crf, size, None);
+        if let Some(&size) = self.size_cache.get(crf)
+            && candidate_is_materialized(
+                self.rendered_candidate,
+                crf,
+                self.exploration_mode,
+                self.preset,
+            )
+        {
             return Ok(size);
         }
         let size = self
@@ -3261,6 +3276,7 @@ impl<'a> CpuFineTuneSession<'a> {
             preset: self.preset,
         });
         self.size_cache.insert(crf, size);
+        self.iterations += 1;
         self.cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
     }
@@ -3373,7 +3389,6 @@ impl<'a> CpuFineTuneSession<'a> {
             );
             e
         })?;
-        self.iterations += 1;
         let gpu_pct = self.pure_media_size_pct(gpu_size);
         let gpu_ssim = if self.ultimate_mode {
             None
@@ -3628,7 +3643,6 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             let pure_media_size_pct = self.pure_media_size_pct(size);
             let current_ssim_opt = if self.ultimate_mode {
                 None
@@ -4034,7 +4048,6 @@ impl<'a> CpuFineTuneSession<'a> {
             );
 
             let ceiling_size = self.encode_cached(max_crf)?;
-            self.iterations += 1;
             let ceiling_pct = self.pure_media_size_pct(ceiling_size);
 
             if ceiling_pct >= 0.0_f64 {
@@ -4075,7 +4088,6 @@ impl<'a> CpuFineTuneSession<'a> {
             && !self.early_insight_triggered
         {
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             feedback.upward_iteration_count += 1;
 
             let pure_media_size_pct = self.pure_media_size_pct(size);
@@ -4091,9 +4103,8 @@ impl<'a> CpuFineTuneSession<'a> {
 
             let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
-            // Unified Direction Switch Logic: size stagnation past the lossless deadzone or
-            // sustained upward iteration without finding compression flips us to a downward
-            // sweep.
+            // Size stagnation past the lossless deadzone or sustained upward iteration requests
+            // a measured ceiling pivot before any downward sweep.
             if size_delta < 0.5_f64 {
                 if test_crf > 12.0 {
                     feedback.size_stagnation_count += 1;
@@ -4116,13 +4127,29 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_STRATEGY,
                     &format!(
-                        "Search Direction Switch: {trigger_reason} reached. Switching to downward \
-                         search for efficiency."
+                        "Search Direction Switch: {trigger_reason} reached. Probing ceiling CRF \
+                         {max_crf:.2} before downward search."
                     )
                 );
 
-                found_compress_point = true;
-                self.best_crf = Some(max_crf);
+                let ceiling_size = self.encode_cached(max_crf)?;
+                if ceiling_size < best_tested_size {
+                    best_tested_crf = max_crf;
+                    best_tested_size = ceiling_size;
+                }
+                if ceiling_size < self.input_pure_media_size {
+                    found_compress_point = true;
+                    self.best_crf = Some(max_crf);
+                    self.best_size = Some(ceiling_size);
+                } else {
+                    crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                        "explore_gpu_crf",
+                        format!(
+                            "Direction switch ceiling probe at CRF {max_crf:.2} remained larger \
+                             than the input; no compression point confirmed."
+                        ),
+                    );
+                }
                 break;
             }
 
@@ -4414,7 +4441,6 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             let pure_media_size_pct = self.pure_media_size_pct(size);
 
             let current_ssim_opt = if self.ultimate_mode {
@@ -4767,7 +4793,6 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
 
             let is_effectively_compressed = size < self.input_pure_media_size;
             let pure_media_size_pct = self.pure_media_size_pct(size);
@@ -4920,7 +4945,6 @@ impl<'a> CpuFineTuneSession<'a> {
                     "Forcing mandatory CRF 0.00 probe (floor guarantee)"
                 );
                 let size = self.encode_cached(0.0)?;
-                self.iterations += 1;
                 let pure_media_size_pct = self.pure_media_size_pct(size);
                 if size < self.input_pure_media_size {
                     crate::log_info!(
@@ -4979,7 +5003,7 @@ impl<'a> CpuFineTuneSession<'a> {
         };
 
         let (final_crf, mut final_pure_media_size) = match (self.best_crf, self.best_size) {
-            (Some(crf), Some(size)) if crf < self.max_crf => {
+            (Some(crf), Some(size)) => {
                 if size < self.input_pure_media_size + size_tolerance {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
@@ -4997,16 +5021,22 @@ impl<'a> CpuFineTuneSession<'a> {
                 }
                 (crf, size)
             }
-            _ => {
+            (Some(_), None) | (None, Some(_)) => {
+                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                    "explore_gpu_crf",
+                    "Search ended with an unpaired best CRF/size; refusing to fabricate a \
+                     settlement candidate",
+                );
+                bail!("GPU coarse search ended with incomplete best candidate state");
+            }
+            (None, None) => {
                 if self.early_insight_triggered {
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        "Skipping final settlement: early insight already proved further \
-                         compression is futile."
+                    crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                        "explore_gpu_crf",
+                        "Early insight ended search without a measured candidate; refusing to \
+                         invent a max-CRF size",
                     );
-                    let fallback_crf = self.max_crf;
-                    let size = self.input_pure_media_size + 1;
-                    (fallback_crf, size)
+                    bail!("Early insight ended without a measured settlement candidate");
                 } else {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
@@ -5039,7 +5069,6 @@ impl<'a> CpuFineTuneSession<'a> {
                     );
                     let max_crf = self.max_crf;
                     let size = self.encode_cached(max_crf)?;
-                    self.iterations += 1;
                     (max_crf, size)
                 }
             }
@@ -5119,9 +5148,12 @@ impl<'a> CpuFineTuneSession<'a> {
         } else {
             self.preset
         };
-        if !self.rendered_candidate.is_some_and(|rendered| {
-            rendered.matches(final_crf, settlement_mode, settlement_preset)
-        }) {
+        if !candidate_is_materialized(
+            self.rendered_candidate,
+            final_crf,
+            settlement_mode,
+            settlement_preset,
+        ) {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!("Materializing selected CRF {final_crf:.2} on disk")
@@ -6662,29 +6694,39 @@ mod tests {
     }
 
     #[test]
-    fn rendered_candidate_identity_covers_crf_mode_and_preset() {
+    fn cached_candidate_reuse_requires_materialized_identity() {
         let rendered = super::RenderedCandidate {
             crf: 20.8,
             mode: super::AnimatedExplorationEncodeMode::FullTimeline,
             preset: EncoderPreset::Slow,
         };
 
-        assert!(rendered.matches(
+        assert!(super::candidate_is_materialized(
+            Some(rendered),
             20.8,
             super::AnimatedExplorationEncodeMode::FullTimeline,
             EncoderPreset::Slow
         ));
-        assert!(!rendered.matches(
+        assert!(!super::candidate_is_materialized(
+            None,
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
             20.7,
             super::AnimatedExplorationEncodeMode::FullTimeline,
             EncoderPreset::Slow
         ));
-        assert!(!rendered.matches(
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
             20.8,
             super::AnimatedExplorationEncodeMode::ExplorationSample,
             EncoderPreset::Slow
         ));
-        assert!(!rendered.matches(
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
             20.8,
             super::AnimatedExplorationEncodeMode::FullTimeline,
             EncoderPreset::Slower
