@@ -691,9 +691,9 @@ mod tests {
     fn test_container_overhead_percent() {
         let temp = tempfile::tempdir().expect("create container fixtures");
         let mov = temp.path().join("misleading.mp4");
-        std::fs::write(&mov, b"\0\0\0\x18ftypqt  \0\0\0\0").expect("write MOV brand");
+        std::fs::write(&mov, b"\0\0\0\x10ftypqt  \0\0\0\0").expect("write MOV brand");
         let mp4 = temp.path().join("misleading.mov");
-        std::fs::write(&mp4, b"\0\0\0\x18ftypisom\0\0\0\0").expect("write MP4 brand");
+        std::fs::write(&mp4, b"\0\0\0\x10ftypisom\0\0\0\0").expect("write MP4 brand");
         let mkv = temp.path().join("misleading.avi");
         std::fs::write(&mkv, [0x1A, 0x45, 0xDF, 0xA3]).expect("write MKV signature");
         let unknown = temp.path().join("unknown.mkv");

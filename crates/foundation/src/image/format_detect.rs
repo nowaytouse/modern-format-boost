@@ -160,9 +160,9 @@ pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
         return Ok(FormatKind::WebP);
     }
 
-    // HEIF/AVIF/video/JP2: ftyp box at offset 4, brand at 8-11.
-    if n >= 12 && b[4..8] == [0x66, 0x74, 0x79, 0x70] {
-        let brand = &b[8..12];
+    // HEIF/AVIF/video/JP2: validated ftyp box with major brand first.
+    if let Some(ftyp_payload) = crate::common_utils::isobmff_ftyp_payload(b) {
+        let brand = &ftyp_payload[0..4];
         if is_avif_brand(brand) {
             return Ok(FormatKind::Avif);
         }
@@ -480,29 +480,20 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Resul
     let read_len = file.read(&mut data).map_err(ImgQualityError::IoError)?;
     data.truncate(read_len);
 
-    if data.len() < 16 || data.get(4..8) != Some(b"ftyp") {
+    let Some(ftyp_payload) = crate::common_utils::isobmff_ftyp_payload(&data) else {
+        return Ok(FormatKind::Unknown);
+    };
+    if ftyp_payload.get(0..4) != Some(major_brand) {
         return Ok(FormatKind::Unknown);
     }
-    let Some(bytes) = data.get(0..4) else {
-        return Ok(FormatKind::Unknown);
-    };
-    let box_size_bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
-    let Some(box_size) =
-        crate::numeric_cast::u32_to_usize_strict(u32::from_be_bytes(box_size_bytes), "ftyp_size")
-    else {
-        return Ok(FormatKind::Unknown);
-    };
-    let ftyp_end = box_size.min(data.len());
-    if ftyp_end < 16 {
+    let (compatible_brands, remainder) = ftyp_payload[8..].as_chunks::<4>();
+    if !remainder.is_empty() {
         return Ok(FormatKind::Unknown);
     }
-    let Some(compat_data) = data.get(16..ftyp_end) else {
-        return Ok(FormatKind::Unknown);
-    };
 
     let mut has_heic_payload_brand = false;
     let mut has_generic_heif_container = false;
-    for brand in compat_data.as_chunks::<4>().0 {
+    for brand in compatible_brands {
         if is_avif_brand(brand) {
             return Ok(FormatKind::Avif);
         }
@@ -921,26 +912,27 @@ mod tests {
 
     #[test]
     fn avif_brand_detected() {
-        // box-size(4) + ftyp(4) + brand "avif"
-        let mut b = vec![0x00, 0x00, 0x00, 0x18];
+        let mut b = vec![0x00, 0x00, 0x00, 0x10];
         b.extend_from_slice(b"ftyp");
         b.extend_from_slice(b"avif");
+        b.extend_from_slice(&[0; 4]);
         let f = write_tmp(&b);
         assert_eq!(detect_true_format(f.path()).unwrap(), FormatKind::Avif);
     }
 
     #[test]
     fn heif_heic_brand_detected() {
-        let mut b = vec![0x00, 0x00, 0x00, 0x18];
+        let mut b = vec![0x00, 0x00, 0x00, 0x10];
         b.extend_from_slice(b"ftyp");
         b.extend_from_slice(b"heic");
+        b.extend_from_slice(&[0; 4]);
         let f = write_tmp(&b);
         assert_eq!(detect_true_format(f.path()).unwrap(), FormatKind::Heic);
     }
 
     #[test]
     fn heif_mif1_compatible_brand_detected() {
-        let mut b = vec![0x00, 0x00, 0x00, 0x18];
+        let mut b = vec![0x00, 0x00, 0x00, 0x14];
         b.extend_from_slice(b"ftyp");
         b.extend_from_slice(b"mif1");
         b.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
@@ -1008,8 +1000,8 @@ mod tests {
             (".jpg", b"8BPS\x00\x01", FormatKind::Psd),
             (".jpg", b"P6\n1 1\n255\n", FormatKind::Pnm),
             (".jpg", b"DDS \x00\x00", FormatKind::Dds),
-            (".jpg", b"\x00\x00\x00\x18ftypmp42", FormatKind::Mp4),
-            (".jpg", b"\x00\x00\x00\x18ftypqt  ", FormatKind::Mov),
+            (".jpg", b"\x00\x00\x00\x10ftypmp42\x00\x00\x00\x00", FormatKind::Mp4),
+            (".jpg", b"\x00\x00\x00\x10ftypqt  \x00\x00\x00\x00", FormatKind::Mov),
             (".jpg", b"\x1A\x45\xDF\xA3webm", FormatKind::Webm),
         ];
 
@@ -1027,12 +1019,12 @@ mod tests {
     #[test]
     fn mif1_compatible_brands_disambiguate_avif_and_heif() {
         let mut avif = tempfile::Builder::new().suffix(".heic").tempfile().unwrap();
-        avif.write_all(b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00avif")
+        avif.write_all(b"\x00\x00\x00\x14ftypmif1\x00\x00\x00\x00avif")
             .unwrap();
         assert_eq!(detect_true_format(avif.path()).unwrap(), FormatKind::Avif);
 
         let mut heif = tempfile::Builder::new().suffix(".avif").tempfile().unwrap();
-        heif.write_all(b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00heif")
+        heif.write_all(b"\x00\x00\x00\x14ftypmif1\x00\x00\x00\x00heif")
             .unwrap();
         assert_eq!(detect_true_format(heif.path()).unwrap(), FormatKind::Heif);
     }

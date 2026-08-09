@@ -1720,7 +1720,10 @@ mod tests {
         write_test_image(&root.join("png-disguised.txt"), 12, 12, ImageFormat::Png);
         write_test_image(&root.join("nested/no-extension"), 12, 12, ImageFormat::Jpeg);
         write_test_image(&root.join("gif-disguised.jpg"), 12, 12, ImageFormat::Gif);
-        fs::write(root.join("video-disguised.jpg"), b"\0\0\0\x18ftypisom")
+        fs::write(
+            root.join("video-disguised.jpg"),
+            b"\0\0\0\x10ftypisom\0\0\0\0",
+        )
             .map_err(|e| anyhow::anyhow!("write video header: {e}"))?;
 
         let files = scan_image_files(root, &["jpg", "png"], true)?;

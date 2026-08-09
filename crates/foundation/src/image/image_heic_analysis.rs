@@ -664,39 +664,10 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
             let mut final_err = e;
             let error_msg = format!("{final_err}");
             let mut recovered = false;
-            let mut hard_fail = false;
-            // Fallback: Scan for 'ftyp' manually if NoFtypBox error
             if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
-                // Fallback 1: Try to find ftyp box manually
-                if let Some(pos) = data.windows(4).position(|w| w == b"ftyp")
-                    && pos >= 4
-                {
-                    let sliced_data = data.get(pos - 4..);
-                    crate::media_conversion_gate::probe_image_format_audit(
-                        "probe_heic",
-                        path,
-                        format!(
-                            "Data truncated before 'ftyp' box at position {} for '{}' | Forensic: \
-                             Unexpected EOF during recovery scan; refusing to forge context to \
-                             prevent downstream crash",
-                            pos,
-                            path.display()
-                        ),
-                    );
-                    if let Some(sliced_data) = sliced_data {
-                        if matches!(ctx.read_bytes(sliced_data), Ok(())) {
-                            recovered = true;
-                        }
-                    } else {
-                        hard_fail = true;
-                    }
-                }
-
-                // Fallback 2: Try file-based reading (doesn't require holding data reference)
-                if !recovered
-                    && !hard_fail
-                    && let Some(path_str) = path.to_str()
-                {
+                // File-based reading may use libheif's native I/O path, but never
+                // reinterpret an embedded `ftyp` byte sequence as a new file root.
+                if let Some(path_str) = path.to_str() {
                     // Create a new context for file-based reading
                     match HeifContext::new() {
                         Ok(mut file_ctx) => {
@@ -956,43 +927,10 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     None
 }
 
-/// Fallback: find box payload by direct magic byte search.
+/// Find a box payload through the shared boundary-checked ISOBMFF walker.
 #[must_use]
 pub fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
-    if let Some(pos) = data.windows(4).position(|w| w == box_type)
-        && pos >= 4
-    {
-        let mut size_bytes = [0u8; 4];
-        for (i, byte) in size_bytes.iter_mut().enumerate() {
-            *byte = if let Some(b) = data.get(pos - 4 + i) {
-                *b
-            } else {
-                crate::log_corruption!(
-                    crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                    &format!(
-                        "HEIC CORRUPTION AUDIT: Truncated box size before type at position {pos} \
-                         | Forensic: Mandatory length field missing; refusing to forge data to \
-                         prevent out-of-bounds scan"
-                    )
-                );
-                return None;
-            };
-        }
-        let Some(size) = crate::numeric_cast::u32_to_usize_strict(
-            u32::from_be_bytes(size_bytes),
-            "heic_box_size",
-        ) else {
-            crate::media_conversion_gate::probe_image_format_batch_audit(
-                "probe_heic",
-                "HEIC box size overflow! Refusing to forge data.",
-            );
-            return None;
-        };
-        if size >= 8 && pos + size - 4 <= data.len() {
-            return data.get(pos + 4..pos - 4 + size);
-        }
-    }
-    None
+    crate::common_utils::find_box_data_recursive(data, box_type)
 }
 
 #[cfg(test)]

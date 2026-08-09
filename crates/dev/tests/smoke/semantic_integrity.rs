@@ -49,7 +49,7 @@ fn smoke_semantic_integrity_skips_vs_errors() -> Result<()> {
     let output_dir_path = output_dir.path().canonicalize()?;
 
     // Create two test files with valid MP4 headers (ftyp) so they are collected by the runner
-    let valid_mp4_header = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2avc1mp41";
+    let valid_mp4_header = b"\x00\x00\x00\x20ftypisom\x00\x00\x00\x00isomiso2avc1mp41";
 
     let file1_path = input_dir_path.join("skip_me.mp4");
     fs::write(&file1_path, valid_mp4_header)?;

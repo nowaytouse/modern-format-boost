@@ -1075,39 +1075,25 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
     // HEIC/AVIF)
     use crate::constants::ISOBMFF_ANIMATED_BRANDS;
 
-    let mut file = File::open(path)?;
-
-    let mut header = [0u8; 32];
-    std::io::Read::read_exact(&mut file, &mut header)?;
-
-    if header.get(4..8) != Some(b"ftyp") {
+    let file = File::open(path)?;
+    let mut header = Vec::new();
+    std::io::Read::read_to_end(&mut file.take(4096), &mut header)?;
+    let Some(ftyp_payload) = crate::common_utils::isobmff_ftyp_payload(&header) else {
         return Ok(false);
-    }
+    };
 
-    let major_brand = &header[8..12];
+    let major_brand = &ftyp_payload[0..4];
     for seq_brand in ISOBMFF_ANIMATED_BRANDS {
         if major_brand == *seq_brand {
             return Ok(true);
         }
     }
 
-    // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    let ftyp_box_size = crate::numeric_cast::u32_to_usize_strict(ftyp_box_size, "ftyp_box_size")
-        .ok_or_else(|| ImgQualityError::AnalysisError("ftyp box size overflow".to_string()))?;
-
-    if !(16..=4096).contains(&ftyp_box_size) {
+    let (compatible_brands, remainder) = ftyp_payload[8..].as_chunks::<4>();
+    if !remainder.is_empty() {
         return Ok(false);
     }
-    let compat_size = ftyp_box_size - 16;
-    if compat_size == 0 {
-        return Ok(false);
-    }
-
-    let mut compat_data = vec![0u8; compat_size];
-    std::io::Read::read_exact(&mut file, &mut compat_data)?;
-
-    for cb in compat_data.as_chunks::<4>().0 {
+    for cb in compatible_brands {
         for seq_brand in ISOBMFF_ANIMATED_BRANDS {
             if cb == *seq_brand {
                 return Ok(true);

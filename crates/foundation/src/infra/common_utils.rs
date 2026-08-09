@@ -558,201 +558,130 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 /// - Full boxes (with version + flags after type)
 #[must_use]
 pub fn find_box_data_recursive(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
-    find_box_data_recursive_impl(data, box_type, 0, 32)
-        .first()
-        .copied()
+    find_all_box_data_recursive(data, box_type).first().copied()
 }
 
 /// Recursively find all boxes by type and return their payloads.
 #[must_use]
 pub fn find_all_box_data_recursive(data: &[u8], box_type: [u8; 4]) -> Vec<&[u8]> {
-    find_box_data_recursive_impl(data, box_type, 0, 32)
+    let mut results = Vec::new();
+    if collect_box_data_recursive(data, box_type, 0, &mut results) {
+        results
+    } else {
+        Vec::new()
+    }
 }
 
-fn find_box_data_recursive_impl(
-    data: &[u8],
+fn parse_isobmff_box(data: &[u8], pos: usize) -> Option<([u8; 4], &[u8], usize)> {
+    if data.len().checked_sub(pos)? < 8 {
+        return None;
+    }
+    let size32 = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    let box_type = [data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]];
+    let mut header_size = 8usize;
+    let total_size = match size32 {
+        0 => data.len().checked_sub(pos)?,
+        1 => {
+            if data.len().checked_sub(pos)? < 16 {
+                return None;
+            }
+            header_size = 16;
+            crate::numeric_cast::u64_to_usize_strict(
+                u64::from_be_bytes([
+                    data[pos + 8],
+                    data[pos + 9],
+                    data[pos + 10],
+                    data[pos + 11],
+                    data[pos + 12],
+                    data[pos + 13],
+                    data[pos + 14],
+                    data[pos + 15],
+                ]),
+                "isobmff_ext_size",
+            )?
+        }
+        size => crate::numeric_cast::u32_to_usize_strict(size, "isobmff_box_size")?,
+    };
+    if box_type == *b"uuid" {
+        header_size = header_size.checked_add(16)?;
+    }
+    if total_size < header_size {
+        return None;
+    }
+    let next = pos.checked_add(total_size)?;
+    if next > data.len() {
+        return None;
+    }
+    let payload_start = pos.checked_add(header_size)?;
+    Some((box_type, data.get(payload_start..next)?, next))
+}
+
+/// Return the first top-level `ftyp` payload after validating its declared box
+/// boundary. The payload starts with major brand and minor version.
+#[must_use]
+pub fn isobmff_ftyp_payload(data: &[u8]) -> Option<&[u8]> {
+    let (box_type, payload, _) = parse_isobmff_box(data, 0)?;
+    (box_type == *b"ftyp" && payload.len() >= 8 && payload[8..].len() % 4 == 0)
+        .then_some(payload)
+}
+
+fn is_isobmff_container(box_type: [u8; 4]) -> bool {
+    matches!(
+        &box_type,
+        b"moov"
+            | b"trak"
+            | b"mdia"
+            | b"minf"
+            | b"stbl"
+            | b"meta"
+            | b"iprp"
+            | b"ipco"
+            | b"moof"
+            | b"traf"
+    )
+}
+
+fn collect_box_data_recursive<'a>(
+    data: &'a [u8],
     box_type: [u8; 4],
     depth: u32,
-    max_depth: u32,
-) -> Vec<&[u8]> {
-    if depth >= max_depth {
-        return Vec::new();
+    results: &mut Vec<&'a [u8]>,
+) -> bool {
+    if depth >= 32 {
+        return false;
     }
 
-    let mut results = Vec::new();
     let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let size_raw = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-        let size = crate::numeric_cast::u32_to_usize_strict(size_raw, "isobmff_box_size");
-        let Some(size) = size else {
-            pos += 4;
-            continue;
+    while pos < data.len() {
+        let Some((current_type, payload, next)) = parse_isobmff_box(data, pos) else {
+            return false;
         };
-        let Some(current_type) = data.get(pos + 4..pos + 8) else {
-            break;
-        };
-
-        let (payload_start, next_pos) = if size == 0 {
-            (pos + 8, data.len())
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                pos += 8;
-                continue;
-            }
-            let ext_val = u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]);
-            let ext = crate::numeric_cast::u64_to_usize_strict(ext_val, "isobmff_ext_size");
-            if let Some(ext) = ext {
-                if ext < 16 || pos + ext > data.len() {
-                    pos += 16;
-                    continue;
-                }
-                (pos + 16, pos + ext)
-            } else {
-                pos += 8;
-                continue;
-            }
-        } else if size < 8 {
-            pos += 8;
-            continue;
-        } else {
-            if pos + size > data.len() {
-                pos += 8;
-                continue;
-            }
-            (pos + 8, pos + size)
-        };
-
-        if current_type == box_type
-            && next_pos <= data.len()
-            && payload_start < next_pos
-            && let Some(p) = data.get(payload_start..next_pos)
-        {
-            results.push(p);
+        if current_type == box_type {
+            results.push(payload);
         }
-
-        if matches!(
-            current_type,
-            b"moov"
-                | b"trak"
-                | b"mdia"
-                | b"minf"
-                | b"stbl"
-                | b"meta"
-                | b"iprp"
-                | b"ipco"
-                | b"moof"
-                | b"traf"
-        ) && next_pos > payload_start
-        {
-            let sub_start = if current_type == b"meta" && payload_start + 4 <= next_pos {
-                payload_start + 4
+        if is_isobmff_container(current_type) {
+            let children = if current_type == *b"meta" {
+                let Some(children) = payload.get(4..) else {
+                    return false;
+                };
+                children
             } else {
-                payload_start
+                payload
             };
-
-            if sub_start < next_pos
-                && let Some(sub) = data.get(sub_start..next_pos)
-            {
-                results.extend(find_box_data_recursive_impl(
-                    sub,
-                    box_type,
-                    depth + 1,
-                    max_depth,
-                ));
+            if !collect_box_data_recursive(children, box_type, depth + 1, results) {
+                return false;
             }
         }
-
-        if next_pos <= pos {
-            break;
-        }
-        pos = next_pos;
+        pos = next;
     }
-    results
+    true
 }
 
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL
 /// " container).
 #[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
-    find_any_box_recursive_impl(data, box_type, 0, 32)
-}
-
-fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_depth: u32) -> bool {
-    if depth >= max_depth {
-        return false;
-    }
-
-    let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let Some(size) = crate::numeric_cast::u32_to_usize_strict(
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]),
-            "isobmff_box_size",
-        ) else {
-            pos += 4;
-            continue;
-        };
-        let Some(current_type) = data.get(pos + 4..pos + 8) else {
-            break;
-        };
-        if current_type == box_type {
-            return true;
-        }
-        let (payload_start, next_pos) = if size == 0 {
-            (pos + 8, data.len())
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                pos += 8;
-                continue;
-            }
-            let ext_val = u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]);
-            let ext = crate::numeric_cast::u64_to_usize_strict(ext_val, "isobmff_ext_size");
-            if let Some(ext) = ext {
-                if ext < 16 || pos + ext > data.len() {
-                    pos += 16;
-                    continue;
-                }
-                (pos + 16, pos + ext)
-            } else {
-                pos += 8;
-                continue;
-            }
-        } else if size < 8 {
-            pos += 8;
-            continue;
-        } else {
-            if pos + size > data.len() {
-                pos += 8;
-                continue;
-            }
-            (pos + 8, pos + size)
-        };
-        if next_pos > payload_start
-            && let Some(sub_data) = data.get(payload_start..next_pos)
-            && find_any_box_recursive_impl(sub_data, box_type, depth + 1, max_depth)
-        {
-            return true;
-        }
-        pos = next_pos;
-    }
-    false
+    find_box_data_recursive(data, box_type).is_some()
 }
 
 /// Extract structural metadata (rotation/mirroring) from ISOBMFF data.
@@ -1537,7 +1466,7 @@ mod tests {
         let found = find_box_data_recursive(&data_trunc, *b"test");
         assert!(
             found.is_none(),
-            "Should be None because header is truncated and we should continue/skip"
+            "Should be None because the extended-size header is truncated"
         );
 
         // Case 2: Huge ext size (larger than data)
@@ -1550,6 +1479,25 @@ mod tests {
             found.is_none(),
             "Should be None because size is dishonest (truncated file)"
         );
+    }
+
+    #[test]
+    fn isobmff_search_does_not_resync_or_descend_into_media_payloads() {
+        let mut malformed = vec![0, 0, 0, 4];
+        malformed.extend_from_slice(b"junk");
+        malformed.extend_from_slice(&12u32.to_be_bytes());
+        malformed.extend_from_slice(b"testdata");
+        assert!(find_box_data_recursive(&malformed, *b"test").is_none());
+
+        let mut embedded = Vec::new();
+        embedded.extend_from_slice(&24u32.to_be_bytes());
+        embedded.extend_from_slice(b"mdat");
+        embedded.extend_from_slice(&16u32.to_be_bytes());
+        embedded.extend_from_slice(b"jbrddata");
+        assert!(!find_any_box_recursive(&embedded, *b"jbrd"));
+
+        let malformed_ftyp = b"\0\0\0\x11ftypavif\0\0\0\0x";
+        assert!(isobmff_ftyp_payload(malformed_ftyp).is_none());
     }
 
     #[test]

@@ -158,22 +158,17 @@ fn smoke_extract_xmp_from_heic_data() {
 
 #[test]
 fn smoke_find_box_payload_by_magic() {
-    let mut data = vec![0u8; 50];
     let magic = *b"test";
     let payload = b"hello";
-    let pos = 10;
-
-    // Size = 4 (size) + 4 (type) + 5 (payload) = 13
-    let size = 13u32.to_be_bytes();
-    data[pos - 4..pos].copy_from_slice(&size);
-    data[pos..pos + 4].copy_from_slice(&magic);
-    data[pos + 4..pos + 4 + payload.len()].copy_from_slice(payload);
+    let mut data = 13u32.to_be_bytes().to_vec();
+    data.extend_from_slice(&magic);
+    data.extend_from_slice(payload);
 
     let result = find_box_payload_by_magic(&data, magic).unwrap();
     assert_eq!(result, payload);
 
     // Test truncated box
-    let truncated_data = &data[0..pos + 2];
+    let truncated_data = &data[..10];
     assert!(find_box_payload_by_magic(truncated_data, magic).is_none());
 }
 

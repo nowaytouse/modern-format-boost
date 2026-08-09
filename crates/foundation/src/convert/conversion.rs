@@ -3717,7 +3717,7 @@ mod tests {
             ],
         )
         .unwrap_or_else(|e| panic!("write jxl magic: {e:?}"));
-        std::fs::write(&avif_output, b"\x00\x00\x00\x18ftypavif")
+        std::fs::write(&avif_output, b"\x00\x00\x00\x10ftypavif\0\0\0\0")
             .unwrap_or_else(|e| panic!("write avif magic: {e:?}"));
 
         assert!(

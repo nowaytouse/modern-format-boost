@@ -633,7 +633,7 @@ fn is_display_p3(data: &[u8]) -> bool {
         && colr_data.len() >= 11
         && colr_data.get(0..4) == Some(b"nclx")
     {
-        let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+        let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
         return primaries == crate::constants::COLOR_PRIMARY_P3;
     }
     let search_limit = crate::constants::ICC_SEARCH_LIMIT_BYTES;
@@ -641,7 +641,6 @@ fn is_display_p3(data: &[u8]) -> bool {
     let slice =
         crate::media_conversion_gate::probe_buffer_prefix_or_empty(data, end, "hdr icc scan");
     slice.windows(10).any(|w| w == b"Display P3")
-        || slice.windows(2).any(|w| w == b"P3") && slice.windows(4).any(|w| w == b"colr")
 }
 
 fn parse_gainmap_params(handle: &ImageHandle) -> Result<Option<GainMapParams>> {
@@ -1628,6 +1627,30 @@ mod tests {
     fn test_cicp_no_metadata() {
         let info = ColorInfo::default();
         assert_eq!(color_info_to_cicp(&info), None);
+    }
+
+    #[test]
+    fn display_p3_uses_nclx_primaries_not_matrix_coefficients() {
+        fn colr_box(primaries: u16, matrix: u16) -> Vec<u8> {
+            let mut payload = b"nclx".to_vec();
+            payload.extend_from_slice(&primaries.to_be_bytes());
+            payload.extend_from_slice(&1u16.to_be_bytes());
+            payload.extend_from_slice(&matrix.to_be_bytes());
+            payload.push(0);
+            let mut data = 19u32.to_be_bytes().to_vec();
+            data.extend_from_slice(b"colr");
+            data.extend(payload);
+            data
+        }
+
+        assert!(is_display_p3(&colr_box(
+            crate::constants::COLOR_PRIMARY_P3,
+            1
+        )));
+        assert!(!is_display_p3(&colr_box(
+            1,
+            crate::constants::COLOR_PRIMARY_P3
+        )));
     }
 
     #[test]

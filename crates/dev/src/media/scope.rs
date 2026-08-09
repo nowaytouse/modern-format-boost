@@ -118,24 +118,23 @@ pub fn is_animated_png(path: &Path) -> Result<bool> {
 
 pub fn is_probably_animated_isobmff(path: &Path) -> Result<bool> {
     let data = read_prefix(path, 4096)?;
-    if data.len() < 16 || &data[4..8] != b"ftyp" {
+    let payload = foundation::common_utils::isobmff_ftyp_payload(&data).ok_or_else(|| {
+        anyhow!(
+            "ISOBMFF animation probe failed for {}: malformed ftyp box",
+            path.display()
+        )
+    })?;
+    let (compatible_brands, remainder) = payload[8..].as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(anyhow!(
-            "ISOBMFF animation probe failed for {}: malformed ftyp header",
+            "ISOBMFF animation probe failed for {}: misaligned compatible brands",
             path.display()
         ));
     }
-    let mut size_bytes = [0u8; 4];
-    size_bytes.copy_from_slice(&data[0..4]);
-    let box_size = u32::from_be_bytes(size_bytes) as usize;
-    if box_size < 16 || box_size > data.len() {
-        return Err(anyhow!(
-            "ISOBMFF animation probe failed for {}: invalid ftyp box size {}",
-            path.display(),
-            box_size
-        ));
+    if &payload[0..4] == b"avis" || &payload[0..4] == b"msf1" {
+        return Ok(true);
     }
-    let brand_bytes = &data[8..box_size];
-    for chunk in brand_bytes.as_chunks::<4>().0 {
+    for chunk in compatible_brands {
         if chunk == b"avis" || chunk == b"msf1" {
             return Ok(true);
         }

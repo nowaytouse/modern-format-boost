@@ -998,7 +998,7 @@ mod tests {
         let jxl = root.path().join("actual.bin");
         std::fs::write(&jxl, [0xFF, 0x0A, 0x00]).expect("write JXL signature");
         let avif = root.path().join("actual.data");
-        std::fs::write(&avif, b"\0\0\0\x18ftypavif\0\0\0\0avif").expect("write AVIF signature");
+        std::fs::write(&avif, b"\0\0\0\x14ftypavif\0\0\0\0avif").expect("write AVIF signature");
         std::fs::write(root.path().join("spoof.jxl"), [0xFF, 0xD8, 0xFF])
             .expect("write spoofed JPEG");
 
