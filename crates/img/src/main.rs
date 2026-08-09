@@ -3158,6 +3158,7 @@ enum AvifQualityExploreResult {
         temp_path: PathBuf,
         output_size: u64,
         pure_media_size: u64,
+        content_blake3: String,
         selection: &'static str,
     },
     /// The source cannot produce a verifiable AVIF at any permitted quality.
@@ -3446,6 +3447,7 @@ struct AvifMemeCandidate {
     temp_path: PathBuf,
     output_size: u64,
     pure_media_size: u64,
+    content_blake3: String,
 }
 
 fn finish_avif_meme_after_terminal_probe_error(
@@ -3490,6 +3492,7 @@ fn finish_avif_meme_after_terminal_probe_error(
         temp_path: candidate.temp_path,
         output_size: candidate.output_size,
         pure_media_size: candidate.pure_media_size,
+        content_blake3: candidate.content_blake3,
         selection,
     })
 }
@@ -3571,8 +3574,8 @@ fn probe_single_avif_quality(
         "AVIF Meme Mode quality probe: q={quality} (speed={AVIF_MEME_SPEED}) for {}",
         source.display()
     ));
-    let (temp_path, output_size) =
-        img::lossless_converter::convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+    let (temp_path, output_size, content_blake3) =
+        img::lossless_converter::convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
             quality,
@@ -3601,6 +3604,7 @@ fn probe_single_avif_quality(
         temp_path,
         output_size,
         pure_media_size,
+        content_blake3,
     };
     let fits_source = avif_meme_candidate_fits_source(&candidate, source_pure_media_size);
     Ok(SingleProbeResult {
@@ -3654,6 +3658,7 @@ fn explore_avif_meme_quality(
                             temp_path: res.candidate.temp_path,
                             output_size: res.candidate.output_size,
                             pure_media_size: res.candidate.pure_media_size,
+                            content_blake3: res.candidate.content_blake3,
                             selection: "pure_media_budget",
                         };
                     }
@@ -3764,6 +3769,7 @@ fn explore_avif_meme_quality(
                 temp_path: final_candidate.temp_path,
                 output_size: final_candidate.output_size,
                 pure_media_size: final_candidate.pure_media_size,
+                content_blake3: final_candidate.content_blake3,
                 selection: "pure_media_budget",
             };
         }
@@ -3779,6 +3785,7 @@ fn explore_avif_meme_quality(
                 temp_path: candidate.temp_path,
                 output_size: candidate.output_size,
                 pure_media_size: candidate.pure_media_size,
+                content_blake3: candidate.content_blake3,
                 selection: "q0_pure_media_fallback",
             }
         }
@@ -3909,6 +3916,7 @@ fn fast_img_run_encode_job_inner(
                     temp_path,
                     output_size,
                     pure_media_size,
+                    content_blake3,
                     selection,
                 } => {
                     foundation::log_detail!(&format!(
@@ -3918,6 +3926,7 @@ fn fast_img_run_encode_job_inner(
                     img::lossless_converter::finalize_meme_avif_probe(
                         &job.source,
                         &temp_path,
+                        &content_blake3,
                         &convert_options,
                     )?
                 }
@@ -10854,6 +10863,7 @@ mod fast_img_hardening_tests {
             temp_path: std::path::PathBuf::from("q100.avif"),
             output_size: 1_300,
             pure_media_size: 900,
+            content_blake3: "q100".to_string(),
         };
         assert!(super::avif_meme_candidate_fits_source(&q100, 950));
         assert!(!super::avif_meme_candidate_fits_source(&q100, 899));
@@ -10867,6 +10877,7 @@ mod fast_img_hardening_tests {
                     temp_path: std::path::PathBuf::from("q90.avif"),
                     output_size: 1_200,
                     pure_media_size: 850,
+                    content_blake3: "q90".to_string(),
                 }
             )
             .is_none()
@@ -10879,6 +10890,7 @@ mod fast_img_hardening_tests {
                     temp_path: std::path::PathBuf::from("q0.avif"),
                     output_size: 1_400,
                     pure_media_size: 950,
+                    content_blake3: "q0".to_string(),
                 },
             ),
             Some(std::path::PathBuf::from("q90.avif"))
@@ -11123,12 +11135,14 @@ mod fast_img_hardening_tests {
             temp_path: fitting_path.clone(),
             output_size: 7,
             pure_media_size: 7,
+            content_blake3: "fitting".to_string(),
         });
         let mut oversized = Some(super::AvifMemeCandidate {
             quality: 100,
             temp_path: oversized_path.clone(),
             output_size: 9,
             pure_media_size: 9,
+            content_blake3: "oversized".to_string(),
         });
 
         let result = super::finish_avif_meme_after_terminal_probe_error(
@@ -11169,6 +11183,7 @@ mod fast_img_hardening_tests {
             temp_path: q0_path.clone(),
             output_size: 11,
             pure_media_size: 11,
+            content_blake3: "q0".to_string(),
         });
 
         let result = super::finish_avif_meme_after_terminal_probe_error(
@@ -11323,12 +11338,14 @@ mod fast_img_hardening_tests {
             temp_path: std::path::PathBuf::from("a.avif"),
             output_size: 100,
             pure_media_size: 90,
+            content_blake3: "a".to_string(),
         };
         let candidate_b = super::AvifMemeCandidate {
             quality: 90,
             temp_path: std::path::PathBuf::from("b.avif"),
             output_size: 110,
             pure_media_size: 80,
+            content_blake3: "b".to_string(),
         };
 
         let mut best_pure = None;

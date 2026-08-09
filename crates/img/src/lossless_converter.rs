@@ -3583,15 +3583,74 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
     }
 }
 
+/// Probe and fingerprint an AVIF candidate whose pixel proof must survive a
+/// later selection phase before commit.
+pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String)> {
+    let (temp_output, output_size) =
+        convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+            source,
+            encoder_input,
+            quality,
+            speed,
+            metadata_retry,
+            options,
+        )?;
+    let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output) {
+        Ok(hash) => hash,
+        Err(error) => {
+            cleanup_temp_output(&temp_output, source);
+            return Err(ImgQualityError::ConversionError(format!(
+                "AVIF verified candidate fingerprint failed at q={quality}: {error}"
+            )));
+        }
+    };
+    Ok((temp_output, output_size, content_blake3))
+}
+
+fn verify_avif_probe_custody(
+    path: &Path,
+    expected_content_blake3: &str,
+    stage: &str,
+) -> Result<()> {
+    let actual = foundation::common_utils::calculate_blake3_hash(path).map_err(|error| {
+        ImgQualityError::ConversionError(format!(
+            "Meme Mode AVIF candidate custody check could not hash {stage} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if actual != expected_content_blake3 {
+        return Err(ImgQualityError::ConversionError(format!(
+            "Meme Mode AVIF candidate custody mismatch at {stage}: {} no longer matches the pixel-verified content",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Commit a verified Meme Mode AVIF candidate without applying the standard
 /// "must be smaller than source" gate or copying source metadata.
 pub fn finalize_meme_avif_probe(
     source: &Path,
     temp_output: &Path,
+    expected_content_blake3: &str,
     options: &ConvertOptions,
 ) -> Result<TaskResult> {
     let input_size = fs::metadata(source)?.len();
     let output = get_output_path(source, EXT_AVIF, options)?;
+
+    if let Err(error) =
+        verify_avif_probe_custody(temp_output, expected_content_blake3, "before commit")
+    {
+        cleanup_temp_output(temp_output, source);
+        return Err(error);
+    }
 
     if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
         temp_output,
@@ -3600,6 +3659,18 @@ pub fn finalize_meme_avif_probe(
         None,
     )? {
         return Ok(TaskResult::skipped_exists(source, &output)?);
+    }
+
+    if let Err(error) = verify_avif_probe_custody(
+        &output,
+        expected_content_blake3,
+        "after commit",
+    ) {
+        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+            "meme AVIF custody mismatch output cleanup",
+            &output,
+        );
+        return Err(error);
     }
 
     // CONTRACT: meme mode must not retain removable embedded metadata.
@@ -5886,7 +5957,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = finalize_meme_avif_probe(&source, &candidate, &options)?;
+        let content_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
+        let result =
+            finalize_meme_avif_probe(&source, &candidate, &content_blake3, &options)?;
 
         assert!(result.success);
         assert!(
@@ -5899,6 +5972,43 @@ mod tests {
                 .output_path
                 .is_some_and(|path| Path::new(&path).is_file())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_meme_avif_probe_rejects_candidate_changed_after_verification()
+    -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let output_dir = root.path().join("out");
+        std::fs::create_dir(&output_dir)?;
+        let source = root.path().join("source.png");
+        let candidate = root.path().join("verified-candidate.avif");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3])).save(&source)?;
+        let sample_avif = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&sample_avif, &candidate)?;
+        let verified_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
+        let mut changed = std::fs::read(&candidate)?;
+        changed.extend_from_slice(b"changed-after-verification");
+        std::fs::write(&candidate, changed)?;
+        let options = ConvertOptions {
+            output_dir: Some(output_dir),
+            flags: ConvertFlags::FORCE,
+            ..Default::default()
+        };
+        let output = get_output_path(&source, EXT_AVIF, &options)?;
+
+        let error = finalize_meme_avif_probe(
+            &source,
+            &candidate,
+            &verified_blake3,
+            &options,
+        )
+        .expect_err("changed candidate must not inherit prior pixel proof");
+
+        assert!(error.to_string().contains("custody mismatch before commit"));
+        assert!(!candidate.exists(), "changed candidate must be cleaned up");
+        assert!(!output.exists(), "changed candidate must not be committed");
         Ok(())
     }
 
