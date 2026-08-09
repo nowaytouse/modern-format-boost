@@ -469,50 +469,44 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> anyhow::Result<Option<f
     Ok(None)
 }
 
-fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
-    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
-        let after_pooled = &stdout[pooled_pos..];
-        if let Some(ms_ssim_pos) = after_pooled.find("\"float_ms_ssim\"") {
-            let after_ms_ssim = &after_pooled[ms_ssim_pos..];
-            if let Some(mean_pos) = after_ms_ssim.find("\"mean\"") {
-                let after_mean = &after_ms_ssim[mean_pos + 6..];
-                if let Some(colon_pos) = after_mean.find(':') {
-                    let after_colon = after_mean[colon_pos + 1..].trim_start();
-                    let end = crate::media_conversion_gate::explore_metric_numeric_end(
-                        after_colon,
-                        false,
-                    );
-                    if end > 0 {
-                        match after_colon[..end].parse::<f64>() {
-                            Ok(f) => {
-                                if let Some(sealed) =
-                                    crate::video_explorer::precision::seal_ms_ssim(f)
-                                {
-                                    return Some(sealed);
-                                }
-                                crate::media_conversion_gate::explore_metric_parse_reject_audit(
-                                    "ms_ssim",
-                                    format!("float_ms_ssim mean {f:.6} out of [0,1] domain"),
-                                );
-                                return None;
-                            }
-                            Err(e) => {
-                                crate::media_conversion_gate::explore_ssim_metric_degraded_audit(
-                                    "explore_ssim_audit",
-                                    format!(
-                                        "Failed to parse float_ms_ssim value '{}': {}",
-                                        &after_colon[..end],
-                                        e
-                                    ),
-                                );
-                                return None;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+fn pooled_metric_mean_from_json(stdout: &str, metric: &str) -> anyhow::Result<Option<f64>> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
     }
+    let root: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|err| anyhow::anyhow!("failed to parse libvmaf JSON: {err}"))?;
+    let Some(mean) = root
+        .get("pooled_metrics")
+        .and_then(|pooled| pooled.get(metric))
+        .and_then(|metric_value| metric_value.get("mean"))
+    else {
+        return Ok(None);
+    };
+    mean.as_f64().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("libvmaf pooled metric {metric}.mean must be a JSON number")
+    })
+}
+
+fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
+    let value = match pooled_metric_mean_from_json(stdout, "float_ms_ssim") {
+        Ok(Some(value)) => value,
+        Ok(None) => return None,
+        Err(err) => {
+            crate::media_conversion_gate::explore_ssim_metric_degraded_audit(
+                "explore_ssim_audit",
+                format!("Failed to parse float_ms_ssim JSON: {err}"),
+            );
+            return None;
+        }
+    };
+    if let Some(sealed) = crate::video_explorer::precision::seal_ms_ssim(value) {
+        return Some(sealed);
+    }
+    crate::media_conversion_gate::explore_metric_parse_reject_audit(
+        "ms_ssim",
+        format!("float_ms_ssim mean {value:.6} out of [0,1] domain"),
+    );
     None
 }
 
@@ -932,64 +926,30 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> anyhow::Result<Option<f64>>
 }
 
 fn parse_vmaf_mean_from_json(stdout: &str) -> anyhow::Result<Option<f64>> {
-    // Look for "pooled_metrics" → "vmaf" → "mean"
-    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
-        let after_pooled = &stdout[pooled_pos..];
-        if let Some(vmaf_pos) = after_pooled.find("\"vmaf\"") {
-            let after_vmaf = &after_pooled[vmaf_pos..];
-            if let Some(mean_pos) = after_vmaf.find("\"mean\"") {
-                let after_mean = &after_vmaf[mean_pos + 6..];
-                if let Some(colon_pos) = after_mean.find(':') {
-                    let after_colon = after_mean[colon_pos + 1..].trim_start();
-                    let end = crate::media_conversion_gate::explore_metric_numeric_end(
-                        after_colon,
-                        false,
-                    );
-                    if end > 0 {
-                        if let Some(sealed) =
-                            crate::video_explorer::precision::parse_explore_vmaf_y_metric_token(
-                                &after_colon[..end],
-                            )
-                            .map_err(|err| {
-                                anyhow::anyhow!("failed to parse VMAF-Y metric token: {err}")
-                            })?
-                        {
-                            return Ok(Some(sealed));
-                        }
-                        crate::media_conversion_gate::explore_metric_parse_reject_audit(
-                            "vmaf_y",
-                            format!(
-                                "mean token {:?} out of [0,100] domain or unparseable",
-                                &after_colon[..end]
-                            ),
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-        }
+    let Some(value) = pooled_metric_mean_from_json(stdout, "vmaf")? else {
+        return Ok(None);
+    };
+    if let Some(sealed) = crate::video_explorer::precision::seal_vmaf_y(value) {
+        return Ok(Some(sealed));
     }
+    crate::media_conversion_gate::explore_metric_parse_reject_audit(
+        "vmaf_y",
+        format!("mean value {value:.6} out of [0,100] domain"),
+    );
     Ok(None)
 }
 
 fn parse_cambi_mean_from_json(stdout: &str) -> anyhow::Result<Option<f64>> {
-    // Look for "pooled_metrics" → "cambi" → "mean"
-    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
-        let after_pooled = &stdout[pooled_pos..];
-        if let Some(cambi_pos) = after_pooled.find("\"cambi\"") {
-            let after_cambi = &after_pooled[cambi_pos..];
-            if let Some(mean_pos) = after_cambi.find("\"mean\"") {
-                let after_mean = &after_cambi[mean_pos + 6..];
-                if let Some(colon_pos) = after_mean.find(':') {
-                    let after_colon = after_mean[colon_pos + 1..].trim_start();
-                    return crate::video_explorer::precision::parse_explore_cambi_metric_token(
-                        after_colon,
-                    )
-                    .map_err(|err| anyhow::anyhow!("failed to parse CAMBI metric token: {err}"));
-                }
-            }
-        }
+    let Some(value) = pooled_metric_mean_from_json(stdout, "cambi")? else {
+        return Ok(None);
+    };
+    if let Some(sealed) = crate::video_explorer::precision::seal_cambi(value) {
+        return Ok(Some(sealed));
     }
+    crate::media_conversion_gate::explore_metric_parse_reject_audit(
+        "cambi",
+        format!("mean value {value:.6} non-finite/negative"),
+    );
     Ok(None)
 }
 
@@ -1134,14 +1094,10 @@ mod tests {
     #[test]
     fn test_parse_cambi_mean_zero_banding() {
         let json = r#"{"pooled_metrics": {"cambi": {"mean": 0.0}}}"#;
-        // 0.0 falls through because the parser reads numeric chars; "0" → 0 but
-        // the end-of-numeric scan returns end=1, parse "0" → 0.0 is valid.
-        // Whether 0.0 is returned or None depends on parser sealing of a zero metric.
-        let result = ok_metric(parse_cambi_mean_from_json(json));
-        // Both Some(0.0) and None are acceptable depending on the trivial "0" parse.
-        if let Some(v) = result {
-            assert!(crate::float_compare::approx_eq_f64(v, 0.0));
-        }
+        assert!(crate::float_compare::approx_eq_f64(
+            metric_value(parse_cambi_mean_from_json(json)),
+            0.0
+        ));
     }
 
     #[test]
@@ -1322,6 +1278,22 @@ mod tests {
         let negative = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": -0.1}}}"#;
         assert!(parse_ms_ssim_from_json(too_high).is_none());
         assert!(parse_ms_ssim_from_json(negative).is_none());
+    }
+
+    #[test]
+    fn pooled_metric_parsers_do_not_borrow_a_sibling_mean() {
+        let json = r#"{
+            "pooled_metrics": {
+                "float_ms_ssim": {"min": 0.9},
+                "vmaf": {"min": 90.0},
+                "cambi": {"min": 0.0},
+                "other": {"mean": 0.5}
+            }
+        }"#;
+
+        assert!(parse_ms_ssim_from_json(json).is_none());
+        assert!(ok_metric(parse_vmaf_mean_from_json(json)).is_none());
+        assert!(ok_metric(parse_cambi_mean_from_json(json)).is_none());
     }
 
     // ── parse_ms_ssim_from_legacy ─────────────────────────────────────────
