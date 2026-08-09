@@ -225,6 +225,28 @@ const startMockProcessing = () => {
 
 type ResumeAction = "resume" | "fresh" | "cancel";
 
+const currentProcessorRequest = (resume: boolean, fresh = false) => {
+  const targetOutputMode =
+    outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
+  const strategy =
+    outputMode.value === "fast_img_avif"
+      ? "avif"
+      : outputMode.value === "fast_img"
+        ? "jxl"
+        : null;
+  return {
+    targetPath: folderPath.value,
+    processingMode: processingMode.value,
+    outputMode: targetOutputMode,
+    strategy,
+    ultimate: mfbToggles.ultimateMode,
+    verbose: mfbToggles.verboseMode,
+    resume,
+    fresh,
+    shortestPath: mfbToggles.shortestPath,
+  };
+};
+
 const requestResumeAction = (): ResumeAction => {
   if (
     globalThis.confirm(
@@ -240,25 +262,15 @@ const requestResumeAction = (): ResumeAction => {
     : "cancel";
 };
 
-const runProcessorWithResumeDecision = async (
-  targetOutputMode: string,
-  strategyArg: "avif" | "jxl" | null,
-) => {
+const runProcessorWithResumeDecision = async () => {
   let shouldResume = mfbToggles.resumeMode;
   let shouldStartFresh = false;
   for (;;) {
     try {
-      const result = await invoke("process_media", {
-        targetPath: folderPath.value,
-        processingMode: processingMode.value,
-        outputMode: targetOutputMode,
-        strategy: strategyArg,
-        ultimate: mfbToggles.ultimateMode,
-        verbose: mfbToggles.verboseMode,
-        resume: shouldResume,
-        fresh: shouldStartFresh,
-        shortestPath: mfbToggles.shortestPath,
-      });
+      const result = await invoke(
+        "process_media",
+        currentProcessorRequest(shouldResume, shouldStartFresh),
+      );
       appendLog(`[SUCCESS] ${String(result)}`);
       return;
     } catch (error) {
@@ -295,16 +307,7 @@ const startCliProcessing = async () => {
   appendLog(`[INFO] Starting processing: ${folderPath.value}`);
 
   try {
-    const targetOutputMode =
-      outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
-    let strategyArg: "avif" | "jxl" | null = null;
-    if (outputMode.value === "fast_img_avif") {
-      strategyArg = "avif";
-    } else if (outputMode.value === "fast_img") {
-      strategyArg = "jxl";
-    }
-
-    await runProcessorWithResumeDecision(targetOutputMode, strategyArg);
+    await runProcessorWithResumeDecision();
   } catch (error) {
     appendLog(`[ERROR] ${String(error)}`);
   } finally {
@@ -328,7 +331,8 @@ const generateCliCommand = () => {
   const parentDir =
     targetPath.slice(0, Math.max(0, targetPath.lastIndexOf("/"))) || "/";
 
-  let command = `cd "${parentDir}" && "${processorBinaryPath.value}"`;
+  const shellQuote = (value: string) => `'${value.split("'").join(`'"'"'`)}'`;
+  let command = `cd ${shellQuote(parentDir)} && ${shellQuote(processorBinaryPath.value)}`;
 
   if (processingMode.value === "images_only") {
     command += " --images-only";
@@ -386,7 +390,7 @@ const generateCliCommand = () => {
   if (mfbToggles.verboseMode) command += " --verbose";
   if (mfbToggles.resumeMode) command += " --resume";
 
-  command += ` "${targetPath}"`;
+  command += ` ${shellQuote(targetPath)}`;
   return command;
 };
 
@@ -425,7 +429,10 @@ const openInTerminal = async () => {
     await navigator.clipboard.writeText(command);
 
     // Try to open in external terminal
-    const result = await invoke("open_in_terminal", { command: command });
+    const result = await invoke(
+      "open_in_terminal",
+      currentProcessorRequest(mfbToggles.resumeMode),
+    );
     console.log(result);
     setUiNotice("Command copied and forwarded to your terminal.");
   } catch (error) {

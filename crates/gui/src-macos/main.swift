@@ -129,6 +129,21 @@ private enum ProcessorCommand {
         arguments.append(target)
         return arguments
     }
+
+    static func terminalShellCommand(binary: URL, arguments: [String]) throws -> String {
+        guard let target = arguments.last else {
+            throw HostError(message: "terminal command requires a target path")
+        }
+        let workingDirectory = URL(fileURLWithPath: target).deletingLastPathComponent().path
+        let command = ([binary.path] + arguments)
+            .map { shellQuote($0) }
+            .joined(separator: " ")
+        return "cd \(shellQuote(workingDirectory)) && \(command)"
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+    }
 }
 
 private final class AppWindow: NSWindow {
@@ -165,12 +180,16 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
         case "check_version_alignment":
             replyHandler(checkVersionAlignment(), nil)
         case "open_in_terminal":
-            guard let text = arguments["command"] as? String, !text.isEmpty else {
-                replyHandler(nil, "open_in_terminal requires command")
+            guard let binary = ProcessorLocator.resolve() else {
+                replyHandler(nil, ProcessorLocator.missingError())
                 return
             }
             do {
-                replyHandler(try openInTerminal(text), nil)
+                let commandArguments = try ProcessorCommand.arguments(from: arguments)
+                replyHandler(
+                    try openInTerminal(binary: binary, arguments: commandArguments),
+                    nil,
+                )
             } catch {
                 replyHandler(nil, error.localizedDescription)
             }
@@ -369,11 +388,15 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
         }
     }
 
-    private func openInTerminal(_ command: String) throws -> String {
-        let shellCommand = "\(command); exec sh"
+    private func openInTerminal(binary: URL, arguments: [String]) throws -> String {
+        let command = try ProcessorCommand.terminalShellCommand(
+            binary: binary,
+            arguments: arguments,
+        )
+        let shellCommand = "\(command); exec /bin/sh"
         for (name, executable, arguments) in [
-            ("Ghostty", "/Applications/Ghostty.app/Contents/MacOS/ghostty", ["-e", "sh", "-c", shellCommand]),
-            ("kitty", "/Applications/kitty.app/Contents/MacOS/kitty", ["sh", "-c", shellCommand]),
+            ("Ghostty", "/Applications/Ghostty.app/Contents/MacOS/ghostty", ["-e", "/bin/sh", "-c", shellCommand]),
+            ("kitty", "/Applications/kitty.app/Contents/MacOS/kitty", ["/bin/sh", "-c", shellCommand]),
         ] where FileManager.default.isExecutableFile(atPath: executable) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
@@ -381,18 +404,32 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
             if (try? process.run()) != nil { return "Opened in \(name)" }
         }
 
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
         let scripts: [(String, String)] = [
-            ("iTerm", "tell application \"iTerm\"\nactivate\nif (count of windows) = 0 then create window with default profile\ntell current window\ncreate tab with default profile\ntell current session to write text \"\(escaped)\"\nend tell\nend tell"),
-            ("Terminal", "tell application \"Terminal\"\nactivate\ndo script \"\(escaped)\"\nend tell"),
+            ("iTerm", """
+            on run argv
+                tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then create window with default profile
+                    tell current window
+                        create tab with default profile
+                        tell current session to write text (item 1 of argv)
+                    end tell
+                end tell
+            end run
+            """),
+            ("Terminal", """
+            on run argv
+                tell application "Terminal"
+                    activate
+                    do script (item 1 of argv)
+                end tell
+            end run
+            """),
         ]
         for (name, script) in scripts where name != "iTerm" || FileManager.default.fileExists(atPath: "/Applications/iTerm.app") {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
+            process.arguments = ["-e", script, shellCommand]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             do {
@@ -581,6 +618,21 @@ private func runSelfTest() -> Int32 {
         ])
         guard freshArguments == ["--mode", "fast-img", "--no-resume", "/tmp/media"] else {
             fputs("native-host self-test fresh argument mismatch: \(freshArguments)\n", stderr)
+            return 1
+        }
+        let hostileArguments = try ProcessorCommand.arguments(from: [
+            "targetPath": "/tmp/media'$(id)",
+            "processingMode": "both",
+            "outputMode": "fast_img",
+        ])
+        let terminalCommand = try ProcessorCommand.terminalShellCommand(
+            binary: URL(fileURLWithPath: "/tmp/processor"),
+            arguments: hostileArguments,
+        )
+        let expectedTerminalCommand =
+            "cd '/tmp' && '/tmp/processor' '--mode' 'fast-img' '/tmp/media'\"'\"'$(id)'"
+        guard terminalCommand == expectedTerminalCommand else {
+            fputs("native-host self-test shell quoting mismatch: \(terminalCommand)\n", stderr)
             return 1
         }
         print("native-host self-test passed")
