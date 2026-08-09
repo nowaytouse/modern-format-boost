@@ -182,6 +182,18 @@ enum CommitOutcome {
     Ready,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PixelAudit {
+    RequiredAtCommit,
+    VerifiedByCaller,
+}
+
+impl PixelAudit {
+    const fn already_verified(self) -> bool {
+        matches!(self, Self::VerifiedByCaller)
+    }
+}
+
 fn commit_with_size_check(
     input: &Path,
     temp_output: &Path,
@@ -191,6 +203,7 @@ fn commit_with_size_check(
     options: &ConvertOptions,
     format_label: &str,
     extra_info: Option<&str>,
+    pixel_audit: PixelAudit,
 ) -> Result<CommitOutcome> {
     let input_label = foundation::media_conversion_gate::path_file_name_for_log(input);
 
@@ -204,12 +217,22 @@ fn commit_with_size_check(
         extra_info
     ));
 
-    if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
-        temp_output,
-        output,
-        options.force(),
-        Some(input),
-    )? {
+    let committed = if pixel_audit.already_verified() {
+        foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+            temp_output,
+            output,
+            options.force(),
+            Some(input),
+        )?
+    } else {
+        foundation::conversion::commit_temp_to_output_with_metadata(
+            temp_output,
+            output,
+            options.force(),
+            Some(input),
+        )?
+    };
+    if !committed {
         return Ok(CommitOutcome::Skipped(TaskResult::skipped_exists(
             input, output,
         )?));
@@ -287,6 +310,36 @@ fn finalize_with_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::RequiredAtCommit,
+    )? {
+        CommitOutcome::Skipped(task) => Ok(task),
+        CommitOutcome::Ready => {
+            finalize_task(input, output, input_size, format_label, extra_info, options)
+                .map_err(ImgQualityError::IoError)
+        }
+    }
+}
+
+fn finalize_with_verified_pixels_and_size_check(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+    format_label: &str,
+    extra_info: Option<&str>,
+) -> Result<TaskResult> {
+    match commit_with_size_check(
+        input,
+        temp_output,
+        output,
+        input_size,
+        output_size,
+        options,
+        format_label,
+        extra_info,
+        PixelAudit::VerifiedByCaller,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -315,6 +368,7 @@ fn finalize_with_exact_metadata_and_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::VerifiedByCaller,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -354,6 +408,7 @@ fn finalize_with_sidecars_and_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::RequiredAtCommit,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -677,7 +732,7 @@ fn try_pipeline_recovery_fallbacks(
                 cleanup_temp_output(temp_output, input);
                 return FallbackResult::Finalized(Err(e));
             }
-            match foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+            match foundation::conversion::commit_temp_to_output_with_metadata(
                 temp_output,
                 output,
                 options.force(),
@@ -2323,7 +2378,7 @@ fn commit_jpeg_to_jxl_success(
         })?
         .len();
     let final_options = jpeg_transcode_finalization_options(options, proof);
-    finalize_with_size_check(
+    finalize_with_verified_pixels_and_size_check(
         input,
         temp_output,
         output,
@@ -3397,7 +3452,7 @@ pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
                     "AVIF pixel equivalence failed: {e}"
                 )));
             }
-            finalize_with_size_check(
+            finalize_with_verified_pixels_and_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -4152,7 +4207,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                     "Lossless AVIF pixel equivalence failed: {e}"
                 )));
             }
-            finalize_with_size_check(
+            finalize_with_verified_pixels_and_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -5776,6 +5831,12 @@ mod tests {
     use std::process::{Command, Stdio};
     use tempfile::tempdir;
     use vid::animated_image::is_high_quality_animated;
+
+    #[test]
+    fn pixel_audit_only_skips_delivery_audit_after_explicit_proof() {
+        assert!(!PixelAudit::RequiredAtCommit.already_verified());
+        assert!(PixelAudit::VerifiedByCaller.already_verified());
+    }
 
     fn test_tool_available(tool: &str) -> bool {
         match Command::new(tool)
