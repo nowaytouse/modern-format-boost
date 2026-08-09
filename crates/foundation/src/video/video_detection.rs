@@ -948,6 +948,16 @@ fn animated_header_timing_data(
     path: &Path,
     label: &'static str,
 ) -> std::result::Result<Vec<u8>, crate::ffprobe::FFprobeError> {
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+    )
+    .map_err(|err| {
+        crate::ffprobe::FFprobeError::ParseError(format!(
+            "{label} header recovery input rejected for {}: {err}",
+            path.display()
+        ))
+    })?;
     match std::fs::read(path) {
         Ok(data) => Ok(data),
         Err(err) => {
@@ -1155,23 +1165,25 @@ fn try_probe_from_animated_webp_header(
             path.display()
         )));
     }
-    let frame_count = u64::from(
-        crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
-            path,
-        ),
-    );
-
     let file_size = animated_header_file_size(path, "webp")?;
-    let timing = crate::image_formats::webp::timing_stats_from_bytes(&animated_header_timing_data(
-        path, "webp",
-    )?)
-    .map_err(|err| {
+    let timing_data = animated_header_timing_data(path, "webp")?;
+    let timing = crate::image_formats::webp::timing_stats_from_bytes(&timing_data).map_err(|err| {
         crate::ffprobe::FFprobeError::ParseError(format!(
             "WebP header timing parse failed for {}: {err}",
             path.display()
         ))
     })?;
+    let frame_count = timing.as_ref().map_or_else(
+        || {
+            u64::from(
+                crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
+                    crate::image_formats::webp::count_frames_from_bytes(&timing_data),
+                    path,
+                ),
+            )
+        },
+        |stats| u64::from(stats.frame_count),
+    );
     let duration = timing
         .as_ref()
         .map(|t| t.duration_secs)
@@ -1297,8 +1309,9 @@ fn backfill_animated_frame_count_from_bitstream_header(
         if !crate::image_formats::webp::is_animated_from_bytes(&buf) {
             return Ok(false);
         }
+        let data = animated_header_timing_data(path, "webp")?;
         let n = crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
+            crate::image_formats::webp::count_frames_from_bytes(&data),
             path,
         );
         detection.frame_count = Some(u64::from(n));
@@ -1389,7 +1402,9 @@ fn try_promote_animated_webp_from_header(
     }
     let frame_count = u64::from(
         crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
+            crate::image_formats::webp::count_frames_from_bytes(&animated_header_timing_data(
+                path, "webp",
+            )?),
             path,
         ),
     );

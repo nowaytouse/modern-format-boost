@@ -3599,25 +3599,6 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             } else {
                 precision.is_lossless_deterministic =
                     crate::image_formats::webp::is_lossless_from_bytes(&data);
-                if !precision.is_lossless_deterministic {
-                    precision.quality_estimate = match estimate_webp_quality(path) {
-                        Ok(q) => Some(q),
-                        Err(e) => {
-                            crate::media_conversion_gate::probe_layer_audit(
-                                "checkpoint_progress",
-                                path,
-                                format!(
-                                    "WEBP QUALITY AUDIT: Failed to estimate quality for '{}' | \
-                                     Forensic: Error '{}'; refusing to forge data; information \
-                                     invalidated to prevent downstream precision loss",
-                                    path.display(),
-                                    e
-                                ),
-                            );
-                            None
-                        }
-                    };
-                }
             }
         }
         DetectedFormat::JPEG => {
@@ -4111,11 +4092,6 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     let data = std::fs::read(path)?;
     let analysis = analyze_jpeg_quality(&data).map_err(ImgQualityError::AnalysisError)?;
     Ok(analysis.estimated_quality)
-}
-
-/// Estimate WebP VP8 quality by parsing the bitstream quantization index.
-fn estimate_webp_quality(path: &Path) -> Result<u8> {
-    crate::image_formats::webp::estimate_quality(path)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

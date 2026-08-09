@@ -1683,34 +1683,7 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
-
-    // Stage 1: RIFF-structural frame counting (spec-compliant chunk walking).
-    // This is the authoritative count — trust it for both positive and negative
-    // results.
     let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes)?;
-    if structural_count > 1 {
-        return Ok(true);
-    }
-
-    // Stage 2: Feature Scanning — look for ANIM/ANMF fourcc in the RIFF stream.
-    // These are top-level RIFF chunks so a header-only scan is reliable here.
-    // If the RIFF traversal already counted 0 ANMF but a top-level ANIM exists,
-    // the file has an animation header with no frame payload; use ffprobe to
-    // settle.
-    let has_anim_chunk = bytes.windows(4).any(|w| w == b"ANIM");
-    if has_anim_chunk && structural_count <= 1 {
-        // Final fallback tie-breaker
-        if let Some(duration) = get_animation_duration(path)
-            && duration > crate::constants::NEGLIGIBLE_DURATION_F32
-        {
-            crate::log_detail!(
-                &crate::infra::static_logs::messages::MSG_ANALYZER_WEBP_JOINT_AUDIT
-                    .replace("{}", &path.display().to_string())
-            );
-            return Ok(true);
-        }
-    }
-
     Ok(structural_count > 1)
 }
 
