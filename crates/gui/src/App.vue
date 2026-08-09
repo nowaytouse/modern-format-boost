@@ -331,7 +331,7 @@ const generateCliCommand = () => {
   const parentDir =
     targetPath.slice(0, Math.max(0, targetPath.lastIndexOf("/"))) || "/";
 
-  const shellQuote = (value: string) => `'${value.split("'").join(`'"'"'`)}'`;
+  const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
   let command = `cd ${shellQuote(parentDir)} && ${shellQuote(processorBinaryPath.value)}`;
 
   if (processingMode.value === "images_only") {

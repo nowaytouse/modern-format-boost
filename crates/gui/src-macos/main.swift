@@ -10,6 +10,30 @@ private struct HostError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+private let maxProcessLogChunkBytes = 64 * 1024
+
+private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
+    var chunks: [String] = []
+    while !buffer.isEmpty {
+        if let newline = buffer.firstIndex(of: 0x0A),
+           buffer.distance(from: buffer.startIndex, to: newline) <= maxProcessLogChunkBytes
+        {
+            chunks.append(String(decoding: buffer[..<newline], as: UTF8.self))
+            buffer.removeSubrange(...newline)
+            continue
+        }
+        guard buffer.count >= maxProcessLogChunkBytes else { break }
+        let end = buffer.index(buffer.startIndex, offsetBy: maxProcessLogChunkBytes)
+        chunks.append(String(decoding: buffer[..<end], as: UTF8.self))
+        buffer.removeSubrange(..<end)
+    }
+    if flush, !buffer.isEmpty {
+        chunks.append(String(decoding: buffer, as: UTF8.self))
+        buffer.removeAll(keepingCapacity: false)
+    }
+    return chunks
+}
+
 private enum ProcessorLocator {
     static func candidates(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -375,14 +399,11 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
                 buffer.append(chunk)
-                while let newline = buffer.firstIndex(of: 0x0A) {
-                    let line = String(decoding: buffer[..<newline], as: UTF8.self)
-                    buffer.removeSubrange(...newline)
+                for line in drainProcessLogChunks(&buffer, flush: false) {
                     DispatchQueue.main.async { self?.emit("process-log", payload: prefix + line) }
                 }
             }
-            if !buffer.isEmpty {
-                let line = String(decoding: buffer, as: UTF8.self)
+            for line in drainProcessLogChunks(&buffer, flush: true) {
                 DispatchQueue.main.async { self?.emit("process-log", payload: prefix + line) }
             }
         }
@@ -633,6 +654,20 @@ private func runSelfTest() -> Int32 {
             "cd '/tmp' && '/tmp/processor' '--mode' 'fast-img' '/tmp/media'\"'\"'$(id)'"
         guard terminalCommand == expectedTerminalCommand else {
             fputs("native-host self-test shell quoting mismatch: \(terminalCommand)\n", stderr)
+            return 1
+        }
+        var oversizedLog = Data(repeating: 0x61, count: maxProcessLogChunkBytes + 17)
+        let boundedChunks = drainProcessLogChunks(&oversizedLog, flush: false)
+        guard boundedChunks.count == 1,
+              boundedChunks[0].utf8.count == maxProcessLogChunkBytes,
+              oversizedLog.count == 17
+        else {
+            fputs("native-host self-test log chunk bound failed\n", stderr)
+            return 1
+        }
+        let finalChunks = drainProcessLogChunks(&oversizedLog, flush: true)
+        guard finalChunks.count == 1, finalChunks[0].utf8.count == 17, oversizedLog.isEmpty else {
+            fputs("native-host self-test log tail flush failed\n", stderr)
             return 1
         }
         print("native-host self-test passed")
