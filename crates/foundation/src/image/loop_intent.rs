@@ -5194,6 +5194,9 @@ fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
+    if !structural_signal_samples_are_valid(values, "frame_delay_cv") {
+        return None;
+    }
     let n = crate::numeric_cast::usize_to_f64(values.len());
 
     // SIMD mean calculation
@@ -5228,11 +5231,14 @@ fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
         + suffix.iter().map(|&v| (v - mean).powi(2)).sum::<f64>();
 
     let var = var_sum / n;
-    Some(var.sqrt() / mean)
+    finite_structural_signal_score(var.sqrt() / mean, "frame_delay_cv")
 }
 
 fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
+        return None;
+    }
+    if !structural_signal_samples_are_valid(values, "motion_gini") {
         return None;
     }
     let mut sorted = values.to_vec();
@@ -5253,7 +5259,37 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
         .enumerate()
         .map(|(i, &v)| crate::numeric_cast::usize_to_f64(2 * (i + 1)) * v)
         .sum();
-    Some((weighted_sum / (n * sum)) - (n + 1.0) / n)
+    finite_structural_signal_score(
+        (weighted_sum / (n * sum)) - (n + 1.0) / n,
+        "motion_gini",
+    )
+}
+
+fn structural_signal_samples_are_valid(values: &[f64], signal: &'static str) -> bool {
+    let valid = values.iter().all(|value| value.is_finite() && *value >= 0.0);
+    if !valid {
+        tracing::warn!(
+            target: "mfb.algorithm",
+            pipeline = "loop_intent_signals",
+            signal = signal,
+            sample_count = values.len(),
+            "structural signal contains non-finite or negative evidence; omitting signal"
+        );
+    }
+    valid
+}
+
+fn finite_structural_signal_score(score: f64, signal: &'static str) -> Option<f64> {
+    if score.is_finite() {
+        return Some(score);
+    }
+    tracing::warn!(
+        target: "mfb.algorithm",
+        pipeline = "loop_intent_signals",
+        signal = signal,
+        "structural signal arithmetic produced a non-finite score; omitting signal"
+    );
+    None
 }
 
 fn fps_anomaly_score(fps: f64) -> f64 {
@@ -5842,7 +5878,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         }
     }
     if !ydif_values.is_empty() {
-        meta.temporal_flatness = Some(temporal_flatness_score(&ydif_values));
+        meta.temporal_flatness = temporal_flatness_score(&ydif_values);
         if meta.block_skew.is_none() {
             meta.block_skew = block_skew_score_from_signal(&ydif_values);
         }
@@ -5902,6 +5938,9 @@ fn block_skew_score_from_signal(values: &[f64]) -> Option<f64> {
     if n < 3 {
         return None;
     }
+    if !structural_signal_samples_are_valid(values, "block_skew") {
+        return None;
+    }
     let n_f = crate::numeric_cast::usize_to_f64(n);
     let mean = values.iter().sum::<f64>() / n_f;
     let variance = values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n_f;
@@ -5920,21 +5959,27 @@ fn block_skew_score_from_signal(values: &[f64]) -> Option<f64> {
         .map(|&v| ((v - mean) / std).powi(3))
         .sum::<f64>()
         / n_f;
-    Some(skew.clamp(-10.0, 10.0))
+    finite_structural_signal_score(skew.clamp(-10.0, 10.0), "block_skew")
 }
 
-fn temporal_flatness_score(ydif_values: &[f64]) -> f64 {
+fn temporal_flatness_score(ydif_values: &[f64]) -> Option<f64> {
     if ydif_values.is_empty() {
-        return 0.5;
+        return None;
+    }
+    if !structural_signal_samples_are_valid(ydif_values, "temporal_flatness") {
+        return None;
     }
     let n = crate::numeric_cast::usize_to_f64(ydif_values.len());
     let mean = ydif_values.iter().sum::<f64>() / n;
     if mean < 1e-6_f64 {
-        return 1.0;
+        return Some(1.0);
     }
     let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
     let std = variance.sqrt();
-    1.0 / (1.0 + std / (mean + 1e-6))
+    finite_structural_signal_score(
+        1.0 / (1.0 + std / (mean + 1e-6)),
+        "temporal_flatness",
+    )
 }
 
 fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
@@ -5994,6 +6039,9 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
     if n < 6 {
         return None;
     }
+    if !structural_signal_samples_are_valid(mv_magnitudes, "motion_periodicity") {
+        return None;
+    }
 
     let mean = mv_magnitudes.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(n);
     let variance = mv_magnitudes
@@ -6033,18 +6081,22 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         .sum();
     let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
 
-    Some(
+    finite_structural_signal_score(
         f64::midpoint(
             autocorr_sum / crate::numeric_cast::usize_to_f64(valid_lags.max(1)),
             1.0,
         )
         .clamp(0.0, 1.0),
+        "motion_periodicity",
     )
 }
 
 fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     let n = pts_deltas.len();
     if n < 3 {
+        return None;
+    }
+    if !structural_signal_samples_are_valid(pts_deltas, "temporal_jitter") {
         return None;
     }
 
@@ -6074,7 +6126,10 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / (crate::numeric_cast::usize_to_f64(n.saturating_sub(1).max(1)) * variance);
 
-    Some(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0))
+    finite_structural_signal_score(
+        f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0),
+        "temporal_jitter",
+    )
 }
 
 fn support_relief_from_loop_support(
@@ -7333,9 +7388,26 @@ mod tests {
         assert_eq!(calculate_cv(&[]), None);
         assert_eq!(calculate_cv_f64(&[]), None);
         assert_eq!(calculate_gini_f64(&[]), None);
+        assert_eq!(temporal_flatness_score(&[]), None);
         assert_eq!(loop_closure_score(&[]), None);
         assert_eq!(motion_periodicity_score(&[]), None);
         assert_eq!(temporal_jitter_score(&[]), None);
+    }
+
+    #[test]
+    fn structural_metrics_reject_invalid_or_overflowing_samples() {
+        for samples in [
+            [1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [1.0, 2.0, -0.1, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [f64::MAX; 8],
+        ] {
+            assert_eq!(calculate_cv_f64(&samples), None);
+            assert_eq!(calculate_gini_f64(&samples), None);
+            assert_eq!(block_skew_score_from_signal(&samples), None);
+            assert_eq!(temporal_flatness_score(&samples), None);
+            assert_eq!(motion_periodicity_score(&samples), None);
+            assert_eq!(temporal_jitter_score(&samples), None);
+        }
     }
 
     #[test]
