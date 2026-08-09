@@ -5,10 +5,96 @@
 //! prevent kernel buffer deadlocks.
 
 use anyhow::{Context, Result};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+const MANAGED_PROCESS_CAPTURE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+fn capture_text_stream_bounded<R: Read>(
+    stream: R,
+    max_bytes: usize,
+    stream_name: &'static str,
+    command_line: String,
+    stream_verbose_stderr: bool,
+) -> Result<String> {
+    let mut reader = BufReader::new(stream);
+    let limit = u64::try_from(max_bytes.saturating_add(1)).unwrap_or(u64::MAX);
+    let mut limited = (&mut reader).take(limit);
+    let mut output = String::with_capacity(max_bytes.min(8 * 1024));
+    let mut line = Vec::new();
+    let mut captured_bytes = 0usize;
+    let mut exceeded = false;
+    let mut capture_error = None;
+
+    loop {
+        line.clear();
+        let read = match limited.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) => {
+                capture_error = Some(anyhow::anyhow!(
+                    "Failed to read child {stream_name}: {error}"
+                ));
+                break;
+            }
+        };
+        captured_bytes = captured_bytes.saturating_add(read);
+        if captured_bytes > max_bytes {
+            exceeded = true;
+            continue;
+        }
+
+        let had_newline = line.ends_with(b"\n");
+        let line = line.strip_suffix(b"\n").unwrap_or(&line);
+        let line = if had_newline {
+            line.strip_suffix(b"\r").unwrap_or(line)
+        } else {
+            line
+        };
+        match std::str::from_utf8(line) {
+            Ok(line) => {
+                if stream_verbose_stderr
+                    && crate::progress_mode::is_verbose_mode()
+                    && should_stream_verbose_stderr_line(&command_line, line)
+                {
+                    crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
+                }
+                output.push_str(line);
+                output.push('\n');
+            }
+            Err(error) => {
+                capture_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("Child {stream_name} was not valid UTF-8: {error}")
+                });
+            }
+        }
+    }
+
+    drop(limited);
+    let drain_error = std::io::copy(&mut reader, &mut std::io::sink()).err();
+
+    if exceeded {
+        crate::media_conversion_gate::delivery_runtime_batch_audit(
+            "process_output_limit",
+            format!(
+                "{stream_name} exceeded {max_bytes} captured bytes; remainder drained: {command_line}"
+            ),
+        );
+        anyhow::bail!(
+            "Child {stream_name} exceeded {max_bytes} captured bytes; remainder was drained"
+        );
+    }
+    if let Some(error) = capture_error {
+        return Err(error);
+    }
+    if let Some(error) = drain_error {
+        anyhow::bail!("Failed to drain child {stream_name}: {error}");
+    }
+
+    Ok(output)
+}
 
 #[must_use]
 pub const fn image_process_hard_timeout() -> Duration {
@@ -147,7 +233,7 @@ impl ManagedProcess {
     /// # Errors
     /// Returns error if spawning fails.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, true, true)
+        Self::spawn_with_policy(cmd, true, true, MANAGED_PROCESS_CAPTURE_MAX_BYTES)
     }
 
     /// Spawn a command whose non-zero exit is an expected, caller-inspected
@@ -157,13 +243,14 @@ impl ManagedProcess {
     /// # Errors
     /// Returns an error if spawning fails.
     pub fn spawn_captured(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, false, false)
+        Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES)
     }
 
     fn spawn_with_policy(
         cmd: &mut Command,
         stream_verbose_stderr: bool,
         audit_nonzero_exit: bool,
+        capture_max_bytes: usize,
     ) -> Result<Self> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
@@ -185,33 +272,26 @@ impl ManagedProcess {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
 
+        let stdout_command_line = command_line.clone();
         let stdout_thread = thread::spawn(move || {
-            let mut buf = String::new();
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                let line = line.map_err(|e| anyhow::anyhow!("Failed to read child stdout: {e}"))?;
-                buf.push_str(&line);
-                buf.push('\n');
-            }
-            Ok(buf)
+            capture_text_stream_bounded(
+                stdout,
+                capture_max_bytes,
+                "stdout",
+                stdout_command_line,
+                false,
+            )
         });
 
         let stderr_command_line = command_line.clone();
         let stderr_thread = thread::spawn(move || {
-            let mut buf = String::new();
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                let line = line.map_err(|e| anyhow::anyhow!("Failed to read child stderr: {e}"))?;
-                if stream_verbose_stderr
-                    && crate::progress_mode::is_verbose_mode()
-                    && should_stream_verbose_stderr_line(&stderr_command_line, &line)
-                {
-                    crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
-                }
-                buf.push_str(&line);
-                buf.push('\n');
-            }
-            Ok(buf)
+            capture_text_stream_bounded(
+                stderr,
+                capture_max_bytes,
+                "stderr",
+                stderr_command_line,
+                stream_verbose_stderr,
+            )
         });
 
         Ok(Self {
@@ -264,18 +344,20 @@ impl ManagedProcess {
     }
 
     fn finalize(mut self, status: ExitStatus) -> Result<ProcessOutput> {
-        let stdout = self
+        let stdout_thread = self
             .stdout_thread
             .take()
-            .ok_or_else(|| anyhow::anyhow!("Stdout thread missing during join"))?
-            .join()
-            .map_err(|e| anyhow::anyhow!("Stdout reader panicked: {e:?}"))??;
-        let stderr = self
+            .ok_or_else(|| anyhow::anyhow!("Stdout thread missing during join"))?;
+        let stderr_thread = self
             .stderr_thread
             .take()
-            .ok_or_else(|| anyhow::anyhow!("Stderr thread missing during join"))?
-            .join()
-            .map_err(|e| anyhow::anyhow!("Stderr reader panicked: {e:?}"))??;
+            .ok_or_else(|| anyhow::anyhow!("Stderr thread missing during join"))?;
+        let stdout = stdout_thread.join();
+        let stderr = stderr_thread.join();
+        let stdout = stdout
+            .map_err(|error| anyhow::anyhow!("Stdout reader panicked: {error:?}"))??;
+        let stderr = stderr
+            .map_err(|error| anyhow::anyhow!("Stderr reader panicked: {error:?}"))??;
 
         if !status.success() && self.audit_nonzero_exit {
             crate::media_conversion_gate::delivery_tool_process_failed_audit(
@@ -607,6 +689,27 @@ mod tests {
 
         assert!(output.status.success());
         assert_eq!(output.stdout, "done\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_output_limit_drains_noisy_process_before_failing() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i+1)); done; printf done >&2",
+        );
+        let result = ManagedProcess::spawn_with_policy(&mut command, false, false, 64)
+            .and_then(|process| {
+                process.wait_timeout(Duration::from_secs(2), "bounded output fixture")
+            });
+        let error = match result {
+            Ok(_) => panic!("oversized captured output must fail loudly"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("stdout"), "{message}");
+        assert!(message.contains("exceeded 64 captured bytes"), "{message}");
     }
 
     #[test]
