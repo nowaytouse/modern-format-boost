@@ -1408,8 +1408,167 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
     Ok(())
 }
 
-fn app_bundle_codesign_identity() -> &'static str {
-    APP_BUNDLE_CODESIGN_IDENTITY
+/// Resolve the codesign identity to use for the app bundle.
+///
+/// Priority:
+///   1. `CODESIGN_IDENTITY` environment variable (CI / release override)
+///   2. `MFB-Dev-Signing` if the certificate is present in the local keychain
+///   3. Ad-hoc (`-`) as a last-resort fallback that works without a cert
+fn app_bundle_codesign_identity() -> String {
+    // 1. Explicit env override
+    if let Ok(id) = std::env::var("CODESIGN_IDENTITY") {
+        let id = id.trim().to_owned();
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    // 2. MFB-Dev-Signing if the certificate exists in the keychain
+    let available = Command::new("security")
+        .args(["find-identity", "-v", "-p", "codesigning"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("MFB-Dev-Signing"))
+        .unwrap_or(false);
+    if available {
+        return APP_BUNDLE_CODESIGN_IDENTITY.to_owned();
+    }
+    // 3. Ad-hoc fallback — note this DOES NOT provide a stable TCC identity
+    eprintln!(
+        "\n\
+         ╔══════════════════════════════════════════════════════════════╗\n\
+         ║  WARNING: no stable code-signing identity found.            ║\n\
+         ║  Falling back to ad-hoc signing (-).                        ║\n\
+         ║                                                              ║\n\
+         ║  Photos Automation / TCC grants may not persist across       ║\n\
+         ║  rebuilds. Install MFB-Dev-Signing or set CODESIGN_IDENTITY ║\n\
+         ║  for a stable TCC identity.                                  ║\n\
+         ╚══════════════════════════════════════════════════════════════╝\n"
+    );
+    "-".to_owned()
+}
+
+
+/// Compile the Swift native host and assemble the macOS .app bundle at
+/// `target/release/bundle/macos/Modern Format Boost.app`.
+///
+/// This replaces the former `crates/gui/src-macos/build.sh` shell script
+/// and is invoked by `build_and_sync_gui()` after the Vue build.
+fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
+    let native_dir = native_gui_dir(project_root);
+    let gui_dir = vue_dir(project_root);
+    let bundle = native_app_bundle_path(project_root);
+    let macos_dir = bundle.join("Contents").join("MacOS");
+    let resources_dir = bundle.join("Contents").join("Resources");
+
+    // Detect host architecture (arm64 or x86_64)
+    let arch_out = Command::new("uname")
+        .arg("-m")
+        .output()
+        .context("uname -m")?;
+    let arch = String::from_utf8_lossy(&arch_out.stdout)
+        .trim()
+        .to_owned();
+    match arch.as_str() {
+        "arm64" | "x86_64" => {}
+        other => anyhow::bail!("Unsupported macOS architecture: {other}"),
+    }
+
+    // Verify the Vue build output exists
+    let index_html = gui_dir.join("dist").join("index.html");
+    if !index_html.is_file() {
+        anyhow::bail!("Vue build output missing: {}", index_html.display());
+    }
+    // Guard against WKWebView-incompatible module attributes
+    let index_content = fs::read_to_string(&index_html)
+        .context("read dist/index.html")?;
+    if index_content.contains("type=\"module\"") || index_content.contains("crossorigin") {
+        anyhow::bail!(
+            "Vue entry point contains type=\"module\" or crossorigin attributes, \
+             which are incompatible with bundled WKWebView file loading"
+        );
+    }
+
+    // (Re-)create the bundle skeleton
+    let _ = fs::remove_dir_all(&bundle);
+    fs::create_dir_all(&macos_dir).context("create bundle MacOS dir")?;
+    fs::create_dir_all(&resources_dir).context("create bundle Resources dir")?;
+
+    println!(
+        "{}  Compiling Swift native host ({arch})...{}",
+        style.cyan, style.reset
+    );
+    let swift_src = native_dir.join("main.swift");
+    let host_binary = macos_dir.join("Modern Format Boost");
+    let target_triple = format!("{arch}-apple-macos13.0");
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-swift-version", "5",
+            "-O",
+            "-target", &target_triple,
+            "-framework", "AppKit",
+            "-framework", "CoreServices",
+            "-framework", "WebKit",
+        ])
+        .arg(&swift_src)
+        .arg("-o")
+        .arg(&host_binary)
+        .status()
+        .context("xcrun swiftc")?;
+    if !status.success() {
+        anyhow::bail!("Swift native host compilation failed");
+    }
+
+    // Copy bundle resources
+    let info_src = native_dir.join("Info.plist");
+    let info_dst = bundle.join("Contents").join("Info.plist");
+    fs::copy(&info_src, &info_dst)
+        .with_context(|| format!("copy Info.plist to {}", info_dst.display()))?;
+
+    let icon_src = native_dir.join("icon.icns");
+    let icon_dst = resources_dir.join("icon.icns");
+    fs::copy(&icon_src, &icon_dst)
+        .with_context(|| format!("copy icon.icns to {}", icon_dst.display()))?;
+
+    let dist_src = gui_dir.join("dist");
+    let dist_dst = resources_dir.join("dist");
+    let status = Command::new("ditto")
+        .arg(&dist_src)
+        .arg(&dist_dst)
+        .status()
+        .context("ditto dist -> Resources/dist")?;
+    if !status.success() {
+        anyhow::bail!("ditto failed copying Vue dist");
+    }
+
+    // Validate plists
+    for plist in [&info_dst, &native_dir.join("entitlements.plist")] {
+        if plist.is_file() {
+            let s = Command::new("plutil")
+                .arg("-lint")
+                .arg(plist)
+                .status()
+                .with_context(|| format!("plutil -lint {}", plist.display()))?;
+            if !s.success() {
+                anyhow::bail!("plutil -lint failed for {}", plist.display());
+            }
+        }
+    }
+
+    // Run native host self-test before signing
+    println!("{}  Running native host self-test...{}", style.cyan, style.reset);
+    let test_status = Command::new(&host_binary)
+        .arg("--self-test")
+        .status()
+        .context("native host --self-test")?;
+    if !test_status.success() {
+        anyhow::bail!("Native host self-test failed");
+    }
+
+    println!(
+        "{}  Swift native host compiled and assembled.{}",
+        style.green, style.reset
+    );
+    Ok(())
 }
 
 fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
@@ -1419,15 +1578,18 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     );
     let vue_dir = vue_dir(project_root);
 
+    // Step 1: Vue frontend build (dist/ only — Swift compilation handled below)
     let status = Command::new("npm")
         .arg("run")
-        .arg("native:build")
+        .arg("build")
         .current_dir(&vue_dir)
         .status()?;
-
     if !status.success() {
-        anyhow::bail!("Native macOS GUI build failed");
+        anyhow::bail!("Vue frontend build failed");
     }
+
+    // Step 2: Compile Swift native host and assemble .app bundle skeleton
+    compile_swift_native_host(project_root, style)?;
 
     println!("{}Syncing App bundle...{}", style.dim, style.reset);
     let src_bundle = native_app_bundle_path(project_root);
@@ -1456,7 +1618,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         anyhow::bail!("Built app bundle not found at {:?}", src_bundle);
     }
 
-    // Make sure we sync the Rust binaries into the newly created App bundle
+    // Step 3: Sync Rust binaries and sign the final bundle
     sync_app_bundle(project_root, style, false)?;
 
     Ok(())

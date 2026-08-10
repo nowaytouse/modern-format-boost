@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import Darwin
 import Foundation
 import WebKit
@@ -296,6 +297,38 @@ private enum ProcessorCommand {
     }
 }
 
+/// Returns true when the requested operation will send Apple Events to Photos.app.
+/// Both "fast_img" with --shortest-path (iCloud drag-import) and "icloud_import"
+/// (explicit iCloud import mode) require the user to have granted Automation access
+/// to Photos before the backend process is launched.
+private func processingRequiresPhotosAutomation(_ values: [String: Any]) -> Bool {
+    guard let mode = values["outputMode"] as? String else { return false }
+    if mode == "icloud_import" { return true }
+    return mode == "fast_img" && values["shortestPath"] as? Bool == true
+}
+
+private enum PhotosAutomationPreflightError: LocalizedError {
+    case photosUnavailable
+    case permissionDenied(OSStatus)
+    case checkFailed(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .photosUnavailable:
+            "Photos is unavailable, so import permission could not be checked."
+        case let .permissionDenied(status):
+            "Photos Automation permission is disabled (macOS error \(status)). Enable Modern Format Boost under System Settings > Privacy & Security > Automation, then retry; existing progress will be resumed."
+        case let .checkFailed(status):
+            "Photos Automation permission check failed with macOS error \(status). No media processing was started."
+        }
+    }
+
+    var shouldOpenSettings: Bool {
+        if case .permissionDenied = self { return true }
+        return false
+    }
+}
+
 private final class AppWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -485,6 +518,7 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
 
     private func startProcessing(
         _ values: [String: Any],
+        photosAutomationAuthorized: Bool = false,
         replyHandler: @escaping (Any?, String?) -> Void,
     ) {
         guard activeProcess == nil else {
@@ -493,6 +527,32 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
         }
         guard let binary = ProcessorLocator.resolve() else {
             replyHandler(nil, ProcessorLocator.missingError())
+            return
+        }
+
+        if processingRequiresPhotosAutomation(values), !photosAutomationAuthorized {
+            requestPhotosAutomationPermission { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.startProcessing(
+                        values,
+                        photosAutomationAuthorized: true,
+                        replyHandler: replyHandler,
+                    )
+                case let .failure(error):
+                    if error.shouldOpenSettings,
+                       let settings = URL(
+                           string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+                       )
+                    {
+                        NSWorkspace.shared.open(settings)
+                    }
+                    let detail = error.localizedDescription
+                    self.emit("process-log", payload: "Photos import preflight stopped: \(detail)")
+                    replyHandler(nil, detail)
+                }
+            }
             return
         }
 
@@ -539,6 +599,85 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
                 guard let self else { return }
                 self.completeProcessingAfterLogs(status: status, replyHandler: replyHandler)
             }
+        }
+    }
+
+    private func requestPhotosAutomationPermission(
+        completion: @escaping (Result<Void, PhotosAutomationPreflightError>) -> Void,
+    ) {
+        let photosBundleIdentifier = "com.apple.Photos"
+        let checkPermission = {
+            let target = NSAppleEventDescriptor(bundleIdentifier: photosBundleIdentifier)
+            guard let descriptor = target.aeDesc else {
+                DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+                return
+            }
+            let status = AEDeterminePermissionToAutomateTarget(
+                descriptor,
+                typeWildCard,
+                typeWildCard,
+                true,
+            )
+            DispatchQueue.main.async {
+                if status == noErr {
+                    completion(.success(()))
+                } else if status == OSStatus(errAEEventNotPermitted)
+                    || status == OSStatus(errAEEventWouldRequireUserConsent)
+                {
+                    completion(.failure(.permissionDenied(status)))
+                } else {
+                    completion(.failure(.checkFailed(status)))
+                }
+            }
+        }
+
+        if NSRunningApplication.runningApplications(
+            withBundleIdentifier: photosBundleIdentifier,
+        ).isEmpty {
+            guard let photosURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: photosBundleIdentifier,
+            ) else {
+                completion(.failure(.photosUnavailable))
+                return
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+
+            // Watchdog: if Photos has not launched within 10 seconds the preflight
+            // cannot proceed, so we fail fast rather than hanging indefinitely.
+            // A nonisolated flag avoids a data race between the two async callbacks.
+            let completed = NSLock()
+            var didComplete = false
+
+            let failWithTimeout = {
+                completed.lock()
+                let alreadyDone = didComplete
+                if !alreadyDone { didComplete = true }
+                completed.unlock()
+                guard !alreadyDone else { return }
+                DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+            }
+
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10) {
+                failWithTimeout()
+            }
+
+            NSWorkspace.shared.openApplication(at: photosURL, configuration: configuration) {
+                _, error in
+                completed.lock()
+                let alreadyDone = didComplete
+                if !alreadyDone { didComplete = true }
+                completed.unlock()
+                guard !alreadyDone else { return }
+
+                if error != nil {
+                    DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+                    return
+                }
+                DispatchQueue.global(qos: .userInitiated).async { checkPermission() }
+            }
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { checkPermission() }
         }
     }
 
@@ -752,17 +891,30 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let frame = NSRect(x: 0, y: 0, width: 1100, height: 680)
         let window = AppWindow(
             contentRect: frame,
-            styleMask: [.borderless, .closable, .miniaturizable, .resizable],
+            // Use .titled so macOS registers this as a normal window:
+            // full-screen, Spaces, Exposé, window shadow, and Accessibility
+            // all require a titled window. Custom chrome is achieved via
+            // titlebarAppearsTransparent + titleVisibility = .hidden below.
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false,
         )
         window.title = "Modern Format Boost"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.contentView = webView
         window.minSize = NSSize(width: 1100, height: 680)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.isMovableByWindowBackground = true
         window.center()
+
+        // The Vue layer renders its own close / minimize / maximize controls
+        // via the native bridge. Hide the AppKit-managed traffic lights so
+        // only one set of window controls is visible to the user.
+        for buttonType: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(buttonType)?.isHidden = true
+        }
 
         host.webView = webView
         host.window = window
@@ -800,24 +952,96 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installMainMenu() {
         let main = NSMenu()
+
+        // ── App menu ──────────────────────────────────────────────────────────
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Modern Format Boost", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(
+            withTitle: "About Modern Format Boost",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: "",
+        )
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            withTitle: "Hide Modern Format Boost",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h",
+        )
+        let hideOthers = NSMenuItem(
+            title: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h",
+        )
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
+        appMenu.addItem(
+            withTitle: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: "",
+        )
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            withTitle: "Quit Modern Format Boost",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q",
+        )
         appItem.submenu = appMenu
         main.addItem(appItem)
 
+        // ── Edit menu ─────────────────────────────────────────────────────────
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(
+            withTitle: "Undo",
+            action: Selector(("undo:")),
+            keyEquivalent: "z",
+        )
+        let redo = NSMenuItem(
+            title: "Redo",
+            action: Selector(("redo:")),
+            keyEquivalent: "z",
+        )
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redo)
+        editMenu.addItem(.separator())
         for (title, action, key) in [
-            ("Cut", #selector(NSText.cut(_:)), "x"),
-            ("Copy", #selector(NSText.copy(_:)), "c"),
-            ("Paste", #selector(NSText.paste(_:)), "v"),
+            ("Cut",        #selector(NSText.cut(_:)),       "x"),
+            ("Copy",       #selector(NSText.copy(_:)),      "c"),
+            ("Paste",      #selector(NSText.paste(_:)),     "v"),
             ("Select All", #selector(NSText.selectAll(_:)), "a"),
         ] {
             editMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
         }
         editItem.submenu = editMenu
         main.addItem(editItem)
+
+        // ── Window menu ───────────────────────────────────────────────────────
+        // Required for macOS HIG compliance: Minimize (⌘M), Zoom, and
+        // Bring All to Front must appear in a "Window" menu so that
+        // NSApplication can manage the window list automatically.
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(
+            withTitle: "Minimize",
+            action: #selector(NSWindow.miniaturize(_:)),
+            keyEquivalent: "m",
+        )
+        windowMenu.addItem(
+            withTitle: "Zoom",
+            action: #selector(NSWindow.zoom(_:)),
+            keyEquivalent: "",
+        )
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(
+            withTitle: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: "",
+        )
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+        // Register this as the Window menu so AppKit manages the window list.
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = main
     }
 }
@@ -868,6 +1092,31 @@ private func runSelfTest() -> Int32 {
         ]
         guard arguments == expected else {
             fputs("native-host self-test argument mismatch: \(arguments)\n", stderr)
+            return 1
+        }
+        guard
+            // fast_img + shortestPath → requires Photos Automation
+            processingRequiresPhotosAutomation([
+                "outputMode": "fast_img",
+                "shortestPath": true,
+            ]),
+            // fast_img without shortestPath → does NOT require
+            !processingRequiresPhotosAutomation([
+                "outputMode": "fast_img",
+                "shortestPath": false,
+            ]),
+            // icloud_import → always requires Photos Automation
+            processingRequiresPhotosAutomation([
+                "outputMode": "icloud_import",
+                "shortestPath": false,
+            ]),
+            // adjacent mode → does NOT require
+            !processingRequiresPhotosAutomation([
+                "outputMode": "adjacent",
+                "shortestPath": true,
+            ])
+        else {
+            fputs("native-host self-test Photos Automation preflight routing failed\n", stderr)
             return 1
         }
         let freshArguments = try ProcessorCommand.arguments(from: [
@@ -923,6 +1172,52 @@ private func runSelfTest() -> Int32 {
         else {
             fputs("native-host self-test log backpressure failed\n", stderr)
             return 1
+        }
+
+        // ── Watchdog exactly-once simulation ───────────────────────────────────
+        // Simulate the NSLock + didComplete pattern used in
+        // requestPhotosAutomationPermission to verify that exactly one of two
+        // racing completions fires, regardless of which "wins" the race.
+        do {
+            // Case 1: timeout wins (fires first, callback arrives late)
+            let lock1 = NSLock()
+            var done1 = false
+            var fired1 = 0
+
+            let once1: () -> Void = {
+                lock1.lock()
+                let already = done1
+                if !already { done1 = true }
+                lock1.unlock()
+                guard !already else { return }
+                fired1 += 1
+            }
+            once1() // simulates timeout winning
+            once1() // simulates late callback — must be ignored
+            guard fired1 == 1 else {
+                fputs("native-host self-test watchdog exactly-once (timeout wins) failed: \(fired1)\n", stderr)
+                return 1
+            }
+
+            // Case 2: callback wins (fires first, timeout arrives late)
+            let lock2 = NSLock()
+            var done2 = false
+            var fired2 = 0
+
+            let once2: () -> Void = {
+                lock2.lock()
+                let already = done2
+                if !already { done2 = true }
+                lock2.unlock()
+                guard !already else { return }
+                fired2 += 1
+            }
+            once2() // simulates callback winning
+            once2() // simulates late timeout — must be ignored
+            guard fired2 == 1 else {
+                fputs("native-host self-test watchdog exactly-once (callback wins) failed: \(fired2)\n", stderr)
+                return 1
+            }
         }
         print("native-host self-test passed")
         return 0

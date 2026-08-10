@@ -127,8 +127,7 @@ const selectFolder = async () => {
   // 30-minute timeout for dialog (1800000 ms)
   dialogTimeout = setTimeout(() => {
     alert(
-      t("dropzone.timeout") ||
-        "Folder selection cancelled (no action for 30 minutes).",
+      t("dropzone.timeout"),
     );
     console.warn("30-minute timeout reached");
   }, 1_800_000);
@@ -532,7 +531,13 @@ onMounted(() => {
   // Version Alignment Check Mechanism
   invoke("check_version_alignment")
     .then((message: unknown) => {
-      console.log(message);
+      const msg = String(message ?? "");
+      console.log(msg);
+      // Surface binary-missing or mismatched-version warnings in the UI
+      // so the user doesn't have to open DevTools to see them.
+      if (msg.includes("Warning") || msg.includes("Skipped")) {
+        setUiNotice(`⚠️ ${msg}`, 8000);
+      }
     })
     .catch((error: unknown) => {
       console.error("Version alignment check failed:", error);
@@ -635,8 +640,18 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Window Controls -->
+        <!-- Window Controls: macOS HIG order — close · minimize · maximize -->
         <div class="window-controls">
+          <button class="window-btn close" @click="closeWindow">
+            <svg width="10" height="10" viewBox="0 0 12 12">
+              <path
+                d="M2 2 L10 10 M10 2 L2 10"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
           <button class="window-btn minimize" @click="minimizeWindow">
             <svg width="10" height="10" viewBox="0 0 12 12">
               <rect x="2" y="5" width="8" height="2" fill="currentColor" />
@@ -652,16 +667,6 @@ onUnmounted(() => {
                 fill="none"
                 stroke="currentColor"
                 stroke-width="1.5"
-              />
-            </svg>
-          </button>
-          <button class="window-btn close" @click="closeWindow">
-            <svg width="10" height="10" viewBox="0 0 12 12">
-              <path
-                d="M2 2 L10 10 M10 2 L2 10"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
               />
             </svg>
           </button>

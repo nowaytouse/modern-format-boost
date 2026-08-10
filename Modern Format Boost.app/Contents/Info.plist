@@ -25,7 +25,7 @@
 	<key>NSAppDataUsageDescription</key>
 	<string>Modern Format Boost reads user-selected media folders and Photos metadata only when processing or importing media.</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Modern Format Boost controls Photos during iCloud imports and opens Terminal only when you request an external terminal launch.</string>
+	<string>Modern Format Boost sends Apple Events to Photos to import media into your iCloud Photo Library. No files are read or modified without an action you initiate.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

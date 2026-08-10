@@ -30,7 +30,8 @@
   "dropzone": {
     "drag": "拖拽工作流至此",
     "browse": "浏览文件夹",
-    "release": "松开鼠标立即执行"
+    "release": "松开鼠标立即执行",
+    "timeout": "文件夹选择已超时（30分钟无操作，已自动取消）。"
   },
   "processing": {
     "selected_folder": "已选择的目录",
