@@ -706,26 +706,21 @@ where
 }
 
 fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
-    let detected = files
-        .iter()
-        .map(|path| {
-            crate::image::format_detect::detect_true_format(path)
-                .map(|format| (path.clone(), format))
-                .map_err(|err| (path.clone(), err))
-        })
-        .collect::<Result<Vec<_>, _>>();
-    let detected = match detected {
-        Ok(detected) => detected,
-        Err((path, err)) => {
-            return detail(
-                "decode",
-                false,
-                "every output format is detected from content".to_string(),
-                format!("format detection failed for {}: {err}", path.display()),
-                vec![path],
-            );
+    let mut detected = Vec::with_capacity(files.len());
+    for path in files {
+        match crate::image::format_detect::detect_true_format(path) {
+            Ok(format) => detected.push((path.clone(), format)),
+            Err(err) => {
+                return detail(
+                    "decode",
+                    false,
+                    "every output format is detected from content".to_string(),
+                    format!("format detection failed for {}: {err}", path.display()),
+                    vec![path.clone()],
+                );
+            }
         }
-    };
+    }
     let has_avif = detected
         .iter()
         .any(|(_, format)| *format == crate::image::format_detect::FormatKind::Avif);

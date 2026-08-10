@@ -5859,8 +5859,9 @@ fn read_loop_intent_thumbnail_rgb(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
-/// benchmarks. `YDIF` is sampled across the full declared timeline and bounded
+/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg` benchmarks.
+///
+/// `YDIF` is sampled across the full declared timeline and bounded
 /// to prevent long or malformed media from producing unbounded diagnostic
 /// output.
 ///

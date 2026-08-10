@@ -72,7 +72,7 @@ fn capture_text_stream_bounded<R: Read>(
         }
     }
 
-    drop(limited);
+    let _ = limited;
     let drain_error = std::io::copy(&mut reader, &mut std::io::sink()).err();
 
     if exceeded {

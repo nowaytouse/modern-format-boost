@@ -22,6 +22,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "sine=f=1000:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
             "-c:a",
@@ -35,6 +37,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=red:s=800x600:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -46,6 +50,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=green:s=3840x2160:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -57,6 +63,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=yellow:s=640x480:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -368,6 +376,24 @@ fn main() -> Result<()> {
     }
 
     let manifest_path = test_dir.join("MEDIA_MANIFEST.md");
+    if !manifest_path.is_file()
+        || !fs::read_to_string(&manifest_path)
+            .map(|c| c.contains("H.264"))
+            .unwrap_or(false)
+    {
+        let manifest_content = format!(
+            "# Edge Media Fixtures Manifest\n\n\
+             Automated test media generated for Modern Format Boost.\n\n\
+             - Images: {} files\n\
+             - Videos: {} files (Codecs: H.264, AV1, VP9, HEVC | Quality metrics: CRF, SSIM)\n\
+             - GIFs: {} files\n",
+            IMAGE_JOBS.len(),
+            VIDEO_JOBS.len(),
+            GIF_JOBS.len()
+        );
+        fs::write(&manifest_path, manifest_content)?;
+    }
+
     for line in summary_lines(
         &test_dir,
         &manifest_path,

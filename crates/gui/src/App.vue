@@ -126,9 +126,7 @@ const selectFolder = async () => {
 
   // 30-minute timeout for dialog (1800000 ms)
   dialogTimeout = setTimeout(() => {
-    alert(
-      t("dropzone.timeout"),
-    );
+    alert(t("dropzone.timeout"));
     console.warn("30-minute timeout reached");
   }, 1_800_000);
 
@@ -531,7 +529,8 @@ onMounted(() => {
   // Version Alignment Check Mechanism
   invoke("check_version_alignment")
     .then((message: unknown) => {
-      const msg = String(message ?? "");
+      const msg =
+        typeof message === "string" ? message : JSON.stringify(message ?? "");
       console.log(msg);
       // Surface binary-missing or mismatched-version warnings in the UI
       // so the user doesn't have to open DevTools to see them.

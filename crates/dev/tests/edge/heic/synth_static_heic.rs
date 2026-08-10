@@ -3,7 +3,10 @@
 // Minimal ISOBMFF `ftyp` with major brand `heic` (12-byte box), padded for header readers.
 #[must_use]
 fn build_synthetic_static_heic_ftyp() -> Vec<u8> {
-    let mut bytes = vec![0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'];
+    let mut bytes = vec![
+        0, 0, 0, 20, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0, b'h', b'e',
+        b'i', b'c',
+    ];
     bytes.resize(64, 0);
     bytes
 }

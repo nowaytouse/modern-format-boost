@@ -1270,6 +1270,12 @@ fn image_batch_should_abort(mode: foundation::BatchErrorMode, error: &anyhow::Er
 
 #[cfg(test)]
 mod conversion_result_adapter_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic
+    )]
     use super::{convert_result_to_output, image_batch_should_abort};
 
     #[test]
@@ -7770,6 +7776,13 @@ fn build_auto_convert_config(
 
 #[cfg(test)]
 mod fast_img_hardening_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic,
+        clippy::assertions_on_constants
+    )]
     use super::{
         ArchiveFlag, AutoImportFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
         ExpertOptionsFlag, FastImgCleanupCompleteSourceState, FastImgInputPlan,

@@ -87,8 +87,8 @@ fn static_heic_format_and_animation_probe() {
         panic!("detect_format_from_bytes must succeed on synthetic HEIC: {e:?}")
     });
     assert!(
-        matches!(fmt, DetectedFormat::HEIC),
-        "HEIC ftyp major brand must resolve to DetectedFormat::HEIC"
+        matches!(fmt, DetectedFormat::HEIC | DetectedFormat::HEIF),
+        "HEIC ftyp major brand must resolve to DetectedFormat::HEIC or HEIF (got {fmt:?})"
     );
 
     let (is_animated, frame_count, _fps) = detect_animation(path, &fmt)

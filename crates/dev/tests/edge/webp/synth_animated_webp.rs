@@ -22,7 +22,7 @@ fn build_synthetic_two_frame_animated_webp() -> Vec<u8> {
     let vp8x = [
         b'V', b'P', b'8', b'X', 10, 0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0,
     ];
-    let anim = [b'A', b'N', b'I', b'M', 0, 0, 0, 0];
+    let anim = [b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut body = Vec::new();
     body.extend_from_slice(&vp8x);
     body.extend_from_slice(&anim);

@@ -5037,40 +5037,39 @@ impl<'a> CpuFineTuneSession<'a> {
                          invent a max-CRF size",
                     );
                     bail!("Early insight ended without a measured settlement candidate");
-                } else {
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!(
-                            "Fallback: using max CRF {max:.2} (no better compression found)",
-                            max = self.max_crf
-                        )
-                    );
-
-                    let last_output_pure_media =
-                        crate::stream_size::measure_strict_pure_media(self.output)
-                            .with_context(|| {
-                                format!(
-                                    "Strict pure-media output measurement failed for {}",
-                                    self.output.display()
-                                )
-                            })?
-                            .pure_media_size();
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!(
-                            "Pure media: input {in_b} vs output {out_b} ({pct:+.1}%)",
-                            in_b = crate::format_bytes(self.input_pure_media_size),
-                            out_b = crate::format_bytes(last_output_pure_media),
-                            pct = stream_size_change_pct(
-                                last_output_pure_media,
-                                self.input_pure_media_size
-                            )
-                        )
-                    );
-                    let max_crf = self.max_crf;
-                    let size = self.encode_cached(max_crf)?;
-                    (max_crf, size)
                 }
+                crate::log_info!(
+                    crate::infra::static_logs::messages::LABEL_PHASE_3,
+                    &format!(
+                        "Fallback: using max CRF {max:.2} (no better compression found)",
+                        max = self.max_crf
+                    )
+                );
+
+                let last_output_pure_media =
+                    crate::stream_size::measure_strict_pure_media(self.output)
+                        .with_context(|| {
+                            format!(
+                                "Strict pure-media output measurement failed for {}",
+                                self.output.display()
+                            )
+                        })?
+                        .pure_media_size();
+                crate::log_info!(
+                    crate::infra::static_logs::messages::LABEL_PHASE_3,
+                    &format!(
+                        "Pure media: input {in_b} vs output {out_b} ({pct:+.1}%)",
+                        in_b = crate::format_bytes(self.input_pure_media_size),
+                        out_b = crate::format_bytes(last_output_pure_media),
+                        pct = stream_size_change_pct(
+                            last_output_pure_media,
+                            self.input_pure_media_size
+                        )
+                    )
+                );
+                let max_crf = self.max_crf;
+                let size = self.encode_cached(max_crf)?;
+                (max_crf, size)
             }
         };
 

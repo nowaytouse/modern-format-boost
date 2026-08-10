@@ -1345,6 +1345,12 @@ fn build_conversion_config(
 
 #[cfg(test)]
 mod fast_gif_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic
+    )]
     use super::{
         Cli, Commands, FastGifDelivery, command_requires_database,
         fast_gif_avif_delivery_output_path, fast_gif_avif_output_path_for,

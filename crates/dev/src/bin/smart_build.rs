@@ -1446,7 +1446,6 @@ fn app_bundle_codesign_identity() -> String {
     "-".to_owned()
 }
 
-
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
@@ -1464,9 +1463,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         .arg("-m")
         .output()
         .context("uname -m")?;
-    let arch = String::from_utf8_lossy(&arch_out.stdout)
-        .trim()
-        .to_owned();
+    let arch = String::from_utf8_lossy(&arch_out.stdout).trim().to_owned();
     match arch.as_str() {
         "arm64" | "x86_64" => {}
         other => anyhow::bail!("Unsupported macOS architecture: {other}"),
@@ -1478,8 +1475,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         anyhow::bail!("Vue build output missing: {}", index_html.display());
     }
     // Guard against WKWebView-incompatible module attributes
-    let index_content = fs::read_to_string(&index_html)
-        .context("read dist/index.html")?;
+    let index_content = fs::read_to_string(&index_html).context("read dist/index.html")?;
     if index_content.contains("type=\"module\"") || index_content.contains("crossorigin") {
         anyhow::bail!(
             "Vue entry point contains type=\"module\" or crossorigin attributes, \
@@ -1502,12 +1498,17 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     let status = Command::new("xcrun")
         .args([
             "swiftc",
-            "-swift-version", "5",
+            "-swift-version",
+            "5",
             "-O",
-            "-target", &target_triple,
-            "-framework", "AppKit",
-            "-framework", "CoreServices",
-            "-framework", "WebKit",
+            "-target",
+            &target_triple,
+            "-framework",
+            "AppKit",
+            "-framework",
+            "CoreServices",
+            "-framework",
+            "WebKit",
         ])
         .arg(&swift_src)
         .arg("-o")
@@ -1555,7 +1556,10 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     }
 
     // Run native host self-test before signing
-    println!("{}  Running native host self-test...{}", style.cyan, style.reset);
+    println!(
+        "{}  Running native host self-test...{}",
+        style.cyan, style.reset
+    );
     let test_status = Command::new(&host_binary)
         .arg("--self-test")
         .status()

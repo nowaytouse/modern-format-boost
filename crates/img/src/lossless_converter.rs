@@ -5819,6 +5819,13 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic,
+        clippy::field_reassign_with_default
+    )]
     use super::*;
     use std::cell::Cell;
     use std::process::{Command, Stdio};
