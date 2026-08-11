@@ -34,16 +34,40 @@ All notable changes to this project will be documented in this file.
   to one frame, and the edge-media manifest is regenerated from the current
   fixture inventory.
 
+### IMG Exploration Policy Hardening
+
+- **Quality-first Meme search**: AVIF probes now have explicit fitting,
+  oversized, and failed outcomes. Strict mode requires the encoded media
+  payload to be smaller than the source; equality is rejected, and a failed or
+  unverifiable probe can no longer masquerade as an oversized size boundary.
+- **Evidence-preserving refinement**: Meme refinement advances only from real
+  fitting and oversized probes. Failed quality points are skipped without
+  changing either boundary, and the result is described only as the highest
+  verified fitting candidate when probe gaps remain.
+- **Narrow JXL exploration**: JPEG reconstruction, confirmed-lossless images,
+  unknown sources, and acceptable modern lossy formats no longer enter JXL
+  distance exploration. Eligible legacy lossy inputs first encode at `d=0`;
+  exploration starts only when that real candidate misses the strict payload
+  policy. Standalone probe and quality-matched entry points use the same source
+  semantics, so they cannot silently reintroduce lossy distance for protected
+  sources or report a requested distance that was not actually encoded.
+- **Single-domain encoder effort**: JXL effort is selected once by normal,
+  ultimate, or archive policy. Large-file and exploration flags no longer
+  launch an independent e7/e8/e11 size contest, avoiding redundant encodes and
+  keeping quality search within one encoder-effort domain. User-facing and
+  telemetry messages now describe that real domain instead of the retired
+  e7-screen/e10-finalize model.
+
 ### Reliability, Delivery & CI Repairs
 
 - **FastImg AVIF Meme Mode**: Static-image delivery now normalizes every
   supported source before `avifenc --speed 0 --jobs all` and probes
   `q=100..0`. JPEG, PNG, and JXL sources use metadata-free media budgets while
-  AVIF candidates count only `mdat`; source AVIF intentionally keeps the
-  complete-file budget. The highest verified quality within budget wins, with
-  the smallest candidate under the same budget basis as fallback. Source AVIF
-  files are decoded and re-encoded, clean output omits source
-  Exif/XMP/ICC/gain-map data, and damaged supported media remains explicitly
+  AVIF candidates count only `mdat`. The highest verified quality with a
+  strictly smaller payload wins; failed probes never establish a size bound.
+  Metadata-clean source AVIF files are adopted byte-for-byte, while sources
+  that need metadata cleaning are decoded and re-encoded without source
+  Exif/XMP/ICC/gain-map data. Damaged supported media remains explicitly
   counted and retained instead of disappearing during static-container scan.
 - **Photos Import Safety**: FastImg JXL shortest-path import is rejected before
   writes. `icloud_import` now performs a no-side-effect preflight that detects

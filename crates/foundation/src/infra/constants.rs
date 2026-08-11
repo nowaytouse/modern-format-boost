@@ -1083,15 +1083,14 @@ pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
 pub const JXL_ULTIMATE_EFFORT: u8 = 11;
 /// Default effort level for standard mode
 pub const JXL_DEFAULT_EFFORT: u8 = 7;
-/// Deep production effort candidate. e9 is intentionally skipped by policy.
+/// Deep production effort retained for explicit compatibility paths.
 pub const JXL_DEEP_EFFORT: u8 = 8;
-/// Lossless-only experimental effort candidate.
+/// Lossless-only high-effort setting.
 pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
 /// Disabled production effort due to the documented e9/e10 efficiency
 /// inversion.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
-/// Runtime JXL policy: default mode always emits `e7`, ultimate mode always
-/// emits `e10`.
+/// Runtime JXL policy: default mode emits `e7`; ultimate mode emits `e11`.
 #[must_use]
 pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
     if ultimate {
@@ -1483,7 +1482,7 @@ pub const VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD: u64 = 50_000_000;
 pub const VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT: f32 = 20.0;
 /// Default SVT-AV1 preset for video upgrade recommendations.
 pub const VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT: u8 = 6;
-/// Maximum number of finalist candidates promoted for JXL e10 finalization (8).
+/// Maximum number of finalist candidates promoted for JXL verification (8).
 pub const JXL_FINALIST_LIMIT: usize = 8;
 /// Perceptual probe anchor at distance 0.03.
 pub const JXL_ANCHOR_DIST_0_03: f64 = 0.03;

@@ -1,7 +1,7 @@
 //! JXL Distance Explorer for Ultimate Mode
 //!
-//! Two-phase screening algorithm to identify distance candidates for JXL e10
-//! finalization:
+//! Two-phase screening algorithm to identify JXL distance candidates for
+//! same-effort verification:
 //!
 //! **Phase 1 (Ladder)**: Test predefined distances, promote candidates based on
 //! quality/region. **Phase 2 (Binary Search)**: Refine promising regions with
@@ -12,18 +12,19 @@
 //! Finalist promotion uses consistent priorities (see `candidate_comparator`
 //! for theory):
 //!
-//! 1. **Quality Gates**: Output must compress (size < input)
-//! 2. **Quality Metrics**: Best compression (lowest size) preferred
-//! 3. **Boundary Detection**: Candidates near 95–105% of input size promoted
-//! 4. **Region Coverage**: Promotes one candidate per distance region for
+//! 1. **Quality Gates**: Output must compress (`size < input`)
+//! 2. **Quality Axis**: Among fitting candidates, the lowest distance wins
+//! 3. **Size Tiebreaker**: Size is compared only at the same distance
+//! 4. **Boundary Detection**: Candidates near 95–105% of input size promoted
+//! 5. **Region Coverage**: Promotes one candidate per distance region for
 //!    diversity
-//! 5. **Score-based Ranking**: Finalists ranked by promotion score, then size,
+//! 6. **Score-based Ranking**: Finalists ranked by promotion score, then size,
 //!    then distance
 //!
 //! Terminology (unified with HEVC/VideoExplorer):
 //! - **Screening**: Phase 1 ladder + Phase 2 binary search exploration
 //! - **Candidate**: A specific distance value with its output size
-//! - **Finalist shortlist**: Curated subset promoted for e10 finalization
+//! - **Finalist shortlist**: Curated subset promoted for same-domain verification
 
 use crate::constants::{
     JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_FLOOR,
@@ -161,7 +162,7 @@ impl JxlScreeningResult {
         self
     }
 
-    /// Sanitize exploration distances and telemetry before e10 finalization.
+    /// Sanitize exploration distances and telemetry before finalist verification.
     pub fn seal_algorithm_outputs(&mut self) {
         if let Some(d) = crate::algorithm_seal::seal_jxl_distance(self.best_distance) {
             self.best_distance = d;
@@ -807,8 +808,8 @@ fn add_reason(
 
     candidate.reasons.push(reason);
     log.push(format!(
-        "   ✓ JXL Shortlist promotion: distance d={} qualified as '{}' candidate for e10 \
-         finalization",
+        "   ✓ JXL Shortlist promotion: distance d={} qualified as '{}' candidate for \
+         same-domain verification",
         format_distance_for_log(candidate.distance),
         reason.label()
     ));
@@ -821,7 +822,8 @@ fn shortlist_finalists(
 ) -> Vec<JxlScreenedCandidate> {
     // Tier 1: below-source candidates (output < input), sorted by ascending d.
     // These are the only candidates that can produce a net saving. Highest quality
-    // (lowest d) first so e10 has the best chance of confirming a valid winner.
+    // (lowest d) first so verification has the best chance of confirming the
+    // highest-quality valid winner.
     let mut below_source: Vec<_> = candidates
         .iter()
         .filter(|c| c.output_size < input_size)
@@ -833,8 +835,8 @@ fn shortlist_finalists(
     });
 
     // Tier 2: near-boundary oversize candidates (100–105% of input), sorted by
-    // ascending d. These sit just above break-even and may compress under e10
-    // even if e7 called them oversize.
+    // ascending d. These sit just above break-even and are retained only as
+    // boundary evidence in the same encoder-effort domain.
     let mut near_boundary_cands: Vec<_> = candidates
         .iter()
         .filter(|c| c.output_size >= input_size && near_boundary(c.output_size, input_size))
@@ -927,8 +929,8 @@ fn candidate_reason_summary(candidate: &JxlScreenedCandidate, input_size: u64) -
 /// Finalizes screening results by shortlisting top finalist candidates.
 ///
 /// Uses promotion scoring, boundary detection, and quality considerations to
-/// select finalists. The finalists are then re-evaluated with e10 parameters
-/// for ultimate mode.
+/// select finalists. The finalists are then re-evaluated in the same encoder
+/// effort domain for ultimate mode.
 ///
 /// Term definitions (see `candidate_comparator` for terminology):
 /// - **Finalists**: Selected subset from screened candidates for final
@@ -952,7 +954,7 @@ fn finalize_screening_result(
         .collect::<Vec<_>>()
         .join(", ");
     log.push(format!(
-        "Tailored e10 shortlist ({}): {finalist_summary}",
+        "Tailored same-domain shortlist ({}): {finalist_summary}",
         finalists.len()
     ));
 
@@ -1225,8 +1227,8 @@ impl JxlScreeningSession {
     }
 }
 
-/// Screens JXL distance candidates to identify finalists for e10 ultimate
-/// finalization.
+/// Screens JXL distance candidates to identify finalists for same-effort
+/// ultimate verification.
 ///
 /// ## Terminology (unified with HEVC/other explorers)
 /// - **Screening phase**: Initial exploration of distance values (Phase 1

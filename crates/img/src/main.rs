@@ -3438,7 +3438,6 @@ fn prepare_fast_img_avif_encoder_input(
 
 fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
     message.contains("pixel-diff: cannot open source image")
-        || (message.contains("official avifenc") && message.contains("timed out"))
         || (message.contains("avifenc failed at q=")
             && (message.contains("Unrecognized file format")
                 || message.contains("Unsupported file format")))
@@ -3456,39 +3455,56 @@ struct AvifMemeCandidate {
     content_blake3: String,
 }
 
+#[derive(Debug, Default)]
+struct AvifMemeQualityEvidence {
+    highest_fitting_quality: Option<u8>,
+    lowest_oversize_quality: Option<u8>,
+    failed_qualities: BTreeSet<u8>,
+}
+
+impl AvifMemeQualityEvidence {
+    fn record_fit(&mut self, quality: u8) {
+        self.highest_fitting_quality = Some(
+            self.highest_fitting_quality
+                .map_or(quality, |current| current.max(quality)),
+        );
+    }
+
+    fn record_oversize(&mut self, quality: u8) {
+        self.lowest_oversize_quality = Some(
+            self.lowest_oversize_quality
+                .map_or(quality, |current| current.min(quality)),
+        );
+    }
+
+    fn record_failed(&mut self, quality: u8) {
+        self.failed_qualities.insert(quality);
+    }
+
+    fn verified_bracket(&self) -> Option<(u8, u8)> {
+        match (self.highest_fitting_quality, self.lowest_oversize_quality) {
+            (Some(low), Some(high)) if low < high => Some((low, high)),
+            _ => None,
+        }
+    }
+
+    fn next_refinement_quality(&self) -> Option<u8> {
+        let (low, high) = self.verified_bracket()?;
+        let midpoint = low + (high - low) / 2;
+        (low.saturating_add(1)..high)
+            .filter(|quality| !self.failed_qualities.contains(quality))
+            .min_by_key(|quality| (quality.abs_diff(midpoint), std::cmp::Reverse(*quality)))
+    }
+}
+
 fn finish_avif_meme_after_terminal_probe_error(
     reason: &str,
     fitting_candidate: &mut Option<AvifMemeCandidate>,
-    fallback_candidate: &mut Option<AvifMemeCandidate>,
-    source_pure_media_size: u64,
 ) -> Option<AvifQualityExploreResult> {
     if !avif_quality_probe_error_is_source_invariant(reason) {
         return None;
     }
-    let (candidate, selection) = if let Some(candidate) = fitting_candidate.take() {
-        if let Some(cleanup) = fallback_candidate
-            .take()
-            .map(|candidate| candidate.temp_path)
-        {
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "fast_img_probe_cleanup",
-                &cleanup,
-            );
-        }
-        (candidate, "terminal_probe_fitting_fallback")
-    } else if let Some(candidate) = fallback_candidate.take() {
-        if avif_meme_candidate_fits_source(&candidate, source_pure_media_size) {
-            (candidate, "terminal_probe_fallback")
-        } else {
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "fast_img_probe_cleanup",
-                &candidate.temp_path,
-            );
-            return Some(AvifQualityExploreResult::SourceUnavailable {
-                reason: format!("{reason}; no AVIF candidate fit the source pure-media budget"),
-            });
-        }
-    } else {
+    let Some(candidate) = fitting_candidate.take() else {
         return Some(AvifQualityExploreResult::SourceUnavailable {
             reason: reason.to_string(),
         });
@@ -3499,7 +3515,7 @@ fn finish_avif_meme_after_terminal_probe_error(
         output_size: candidate.output_size,
         pure_media_size: candidate.pure_media_size,
         content_blake3: candidate.content_blake3,
-        selection,
+        selection: "terminal_probe_fitting_fallback",
     })
 }
 
@@ -3529,43 +3545,13 @@ const fn avif_meme_candidate_fits_source(
     candidate: &AvifMemeCandidate,
     source_pure_media_size: u64,
 ) -> bool {
-    candidate.pure_media_size <= source_pure_media_size
+    candidate.pure_media_size < source_pure_media_size
 }
 
-fn tighter_avif_meme_unavailable_quality(current: Option<u8>, quality: u8) -> Option<u8> {
-    Some(current.map_or(quality, |current| current.min(quality)))
-}
-
-fn retain_smallest_avif_meme_candidate(
-    best: &mut Option<AvifMemeCandidate>,
-    candidate: AvifMemeCandidate,
-) -> Option<PathBuf> {
-    if candidate.quality == AVIF_MEME_MIN_QUALITY {
-        return best.replace(candidate).map(|candidate| candidate.temp_path);
-    }
-    let is_better_than = |curr: &AvifMemeCandidate, cand: &AvifMemeCandidate| -> bool {
-        (
-            curr.pure_media_size,
-            curr.output_size,
-            std::cmp::Reverse(curr.quality),
-        ) <= (
-            cand.pure_media_size,
-            cand.output_size,
-            std::cmp::Reverse(cand.quality),
-        )
-    };
-
-    if best.as_ref().is_some_and(|current| {
-        current.quality == AVIF_MEME_MIN_QUALITY || is_better_than(current, &candidate)
-    }) {
-        return Some(candidate.temp_path);
-    }
-    best.replace(candidate).map(|candidate| candidate.temp_path)
-}
-
-struct SingleProbeResult {
-    candidate: AvifMemeCandidate,
-    fits_source: bool,
+enum AvifMemeProbeOutcome {
+    Fits(AvifMemeCandidate),
+    Oversize(AvifMemeCandidate),
+    Failed(String),
 }
 
 fn probe_single_avif_quality(
@@ -3575,12 +3561,12 @@ fn probe_single_avif_quality(
     source_pure_media_size: u64,
     convert_options: &img::lossless_converter::ConvertOptions,
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
-) -> Result<SingleProbeResult, String> {
+) -> AvifMemeProbeOutcome {
     foundation::log_detail!(&format!(
         "AVIF Meme Mode quality probe: q={quality} (speed={AVIF_MEME_SPEED}) for {}",
         source.display()
     ));
-    let (temp_path, output_size, content_blake3) =
+    let (temp_path, output_size, content_blake3) = match
         img::lossless_converter::convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
@@ -3589,7 +3575,10 @@ fn probe_single_avif_quality(
             metadata_retry,
             convert_options,
         )
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(candidate) => candidate,
+        Err(error) => return AvifMemeProbeOutcome::Failed(error.to_string()),
+    };
 
     let pure_media_size = match avif_mdat_payload_size(&temp_path) {
         Ok(size) => size,
@@ -3598,7 +3587,7 @@ fn probe_single_avif_quality(
                 "fast_img_probe_cleanup",
                 &temp_path,
             );
-            return Err(format!("pure-media measurement failed: {error}"));
+            return AvifMemeProbeOutcome::Failed(format!("pure-media measurement failed: {error}"));
         }
     };
 
@@ -3612,11 +3601,11 @@ fn probe_single_avif_quality(
         pure_media_size,
         content_blake3,
     };
-    let fits_source = avif_meme_candidate_fits_source(&candidate, source_pure_media_size);
-    Ok(SingleProbeResult {
-        candidate,
-        fits_source,
-    })
+    if avif_meme_candidate_fits_source(&candidate, source_pure_media_size) {
+        AvifMemeProbeOutcome::Fits(candidate)
+    } else {
+        AvifMemeProbeOutcome::Oversize(candidate)
+    }
 }
 
 fn explore_avif_meme_quality(
@@ -3638,10 +3627,8 @@ fn explore_avif_meme_quality(
         }
     };
 
-    let mut best_fallback: Option<AvifMemeCandidate> = None;
+    let mut evidence = AvifMemeQualityEvidence::default();
     let mut coarse_quality = 100u8;
-    let mut first_fit_quality: Option<u8> = None;
-    let mut upper_unavailable_quality: Option<u8> = None;
     let mut current_passed_candidate: Option<AvifMemeCandidate> = None;
     let mut last_probe_error = None;
 
@@ -3655,49 +3642,36 @@ fn explore_avif_meme_quality(
             convert_options,
             metadata_retry,
         ) {
-            Ok(res) => {
-                if res.fits_source {
-                    if coarse_quality == 100 {
-                        // q=100 fits budget directly, which is the absolute maximum quality
-                        return AvifQualityExploreResult::Found {
-                            quality: res.candidate.quality,
-                            temp_path: res.candidate.temp_path,
-                            output_size: res.candidate.output_size,
-                            pure_media_size: res.candidate.pure_media_size,
-                            content_blake3: res.candidate.content_blake3,
-                            selection: "pure_media_budget",
-                        };
-                    }
-                    first_fit_quality = Some(coarse_quality);
-                    current_passed_candidate = Some(res.candidate);
-                    break;
+            AvifMemeProbeOutcome::Fits(candidate) => {
+                evidence.record_fit(candidate.quality);
+                if candidate.quality == 100 {
+                    return AvifQualityExploreResult::Found {
+                        quality: candidate.quality,
+                        temp_path: candidate.temp_path,
+                        output_size: candidate.output_size,
+                        pure_media_size: candidate.pure_media_size,
+                        content_blake3: candidate.content_blake3,
+                        selection: "highest_verified_fitting",
+                    };
                 }
-                upper_unavailable_quality = tighter_avif_meme_unavailable_quality(
-                    upper_unavailable_quality,
-                    coarse_quality,
-                );
-                if let Some(cleanup) =
-                    retain_smallest_avif_meme_candidate(&mut best_fallback, res.candidate)
-                {
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "fast_img_probe_cleanup",
-                        &cleanup,
-                    );
-                }
+                current_passed_candidate = Some(candidate);
+                break;
             }
-            Err(reason) => {
+            AvifMemeProbeOutcome::Oversize(candidate) => {
+                evidence.record_oversize(candidate.quality);
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "fast_img_probe_cleanup",
+                    &candidate.temp_path,
+                );
+            }
+            AvifMemeProbeOutcome::Failed(reason) => {
+                evidence.record_failed(coarse_quality);
                 if let Some(result) = finish_avif_meme_after_terminal_probe_error(
                     &reason,
                     &mut current_passed_candidate,
-                    &mut best_fallback,
-                    source_pure_media_size,
                 ) {
                     return result;
                 }
-                upper_unavailable_quality = tighter_avif_meme_unavailable_quality(
-                    upper_unavailable_quality,
-                    coarse_quality,
-                );
                 last_probe_error = Some(reason);
             }
         }
@@ -3708,119 +3682,75 @@ fn explore_avif_meme_quality(
         coarse_quality = coarse_quality.saturating_sub(COARSE_STEP);
     }
 
-    // Phase 2: Binary search refinement in (low_pass, upper_unavailable).
-    // Only a verified fitting candidate may advance the lower bound.
-    if let (Some(low_pass), Some(upper_unavailable)) =
-        (first_fit_quality, upper_unavailable_quality)
-    {
-        let mut low = low_pass;
-        let mut high = upper_unavailable;
-
-        for _ in 0..img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET {
-            if high.saturating_sub(low) <= 1 {
-                break;
-            }
-            let mid = low + (high - low) / 2;
-            match probe_single_avif_quality(
-                source,
-                encoder_input,
-                mid,
-                source_pure_media_size,
-                convert_options,
-                metadata_retry,
-            ) {
-                Ok(res) => {
-                    if res.fits_source {
-                        // Higher quality mid fits budget! Replace lower-quality candidate
-                        if let Some(old) = current_passed_candidate.replace(res.candidate) {
-                            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                                "fast_img_probe_cleanup",
-                                &old.temp_path,
-                            );
-                        }
-                        low = mid;
-                    } else {
-                        // mid exceeds budget, clean up its temp output and shrink upper bound
-                        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                            "fast_img_probe_cleanup",
-                            &res.candidate.temp_path,
-                        );
-                        high = mid;
-                    }
-                }
-                Err(reason) => {
-                    if let Some(result) = finish_avif_meme_after_terminal_probe_error(
-                        &reason,
-                        &mut current_passed_candidate,
-                        &mut best_fallback,
-                        source_pure_media_size,
-                    ) {
-                        return result;
-                    }
-                    last_probe_error = Some(reason);
-                    high = mid;
+    // Phase 2: refine only inside a bracket proven by a fitting probe and a
+    // distinct oversized probe. Failed probes are remembered solely to avoid
+    // repeating the same point; they never move either size boundary.
+    for _ in 0..img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET {
+        let Some(mid) = evidence.next_refinement_quality() else {
+            break;
+        };
+        match probe_single_avif_quality(
+            source,
+            encoder_input,
+            mid,
+            source_pure_media_size,
+            convert_options,
+            metadata_retry,
+        ) {
+            AvifMemeProbeOutcome::Fits(candidate) => {
+                evidence.record_fit(candidate.quality);
+                if let Some(old) = current_passed_candidate.replace(candidate) {
+                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                        "fast_img_probe_cleanup",
+                        &old.temp_path,
+                    );
                 }
             }
-        }
-
-        if let Some(final_candidate) = current_passed_candidate {
-            if let Some(cleanup) = best_fallback.take().map(|c| c.temp_path) {
+            AvifMemeProbeOutcome::Oversize(candidate) => {
+                evidence.record_oversize(candidate.quality);
                 foundation::media_conversion_gate::delivery_remove_file_or_audit(
                     "fast_img_probe_cleanup",
-                    &cleanup,
+                    &candidate.temp_path,
                 );
             }
-            return AvifQualityExploreResult::Found {
-                quality: final_candidate.quality,
-                temp_path: final_candidate.temp_path,
-                output_size: final_candidate.output_size,
-                pure_media_size: final_candidate.pure_media_size,
-                content_blake3: final_candidate.content_blake3,
-                selection: "pure_media_budget",
-            };
+            AvifMemeProbeOutcome::Failed(reason) => {
+                evidence.record_failed(mid);
+                if let Some(result) = finish_avif_meme_after_terminal_probe_error(
+                    &reason,
+                    &mut current_passed_candidate,
+                ) {
+                    return result;
+                }
+                last_probe_error = Some(reason);
+            }
         }
     }
 
-    match best_fallback {
-        Some(candidate)
-            if candidate.quality == AVIF_MEME_MIN_QUALITY
-                && avif_meme_candidate_fits_source(&candidate, source_pure_media_size) =>
-        {
-            AvifQualityExploreResult::Found {
-                quality: candidate.quality,
-                temp_path: candidate.temp_path,
-                output_size: candidate.output_size,
-                pure_media_size: candidate.pure_media_size,
-                content_blake3: candidate.content_blake3,
-                selection: "q0_pure_media_fallback",
-            }
-        }
-        Some(candidate) => {
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "fast_img_probe_cleanup",
-                &candidate.temp_path,
-            );
-            AvifQualityExploreResult::SourceUnavailable {
-                reason: format!(
-                    "AVIF Meme Mode exhausted q=100..={AVIF_MEME_MIN_QUALITY} without a verified q=0 fallback{}",
-                    last_probe_error
-                        .as_deref()
-                        .map_or_else(String::new, |reason| {
-                            format!("; last probe error: {reason}")
-                        })
-                ),
-            }
-        }
-        None => AvifQualityExploreResult::SourceUnavailable {
-            reason: format!(
-                "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
-                last_probe_error
-                    .as_deref()
-                    .map_or_else(String::new, |reason| format!(
-                        "; last probe error: {reason}"
-                    ))
-            ),
-        },
+    if let Some(final_candidate) = current_passed_candidate {
+        let selection = if evidence.failed_qualities.is_empty() {
+            "highest_verified_fitting"
+        } else {
+            "highest_verified_fitting_with_probe_gaps"
+        };
+        return AvifQualityExploreResult::Found {
+            quality: final_candidate.quality,
+            temp_path: final_candidate.temp_path,
+            output_size: final_candidate.output_size,
+            pure_media_size: final_candidate.pure_media_size,
+            content_blake3: final_candidate.content_blake3,
+            selection,
+        };
+    }
+
+    AvifQualityExploreResult::SourceUnavailable {
+        reason: format!(
+            "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
+            last_probe_error
+                .as_deref()
+                .map_or_else(String::new, |reason| format!(
+                    "; last probe error: {reason}"
+                ))
+        ),
     }
 }
 
@@ -10856,21 +10786,20 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn meme_avif_probe_errors_tighten_the_unavailable_quality_bound() {
-        let upper = super::tighter_avif_meme_unavailable_quality(None, 100);
-        assert_eq!(upper, Some(100));
-        assert_eq!(
-            super::tighter_avif_meme_unavailable_quality(upper, 90),
-            Some(90)
-        );
-        assert_eq!(
-            super::tighter_avif_meme_unavailable_quality(Some(90), 100),
-            Some(90)
-        );
+    fn meme_avif_failed_probes_do_not_move_verified_size_bounds() {
+        let mut evidence = super::AvifMemeQualityEvidence::default();
+        evidence.record_oversize(100);
+        evidence.record_failed(95);
+        evidence.record_fit(90);
+
+        assert_eq!(evidence.verified_bracket(), Some((90, 100)));
+        assert_eq!(evidence.next_refinement_quality(), Some(96));
+        assert_eq!(evidence.lowest_oversize_quality, Some(100));
+        assert!(evidence.failed_qualities.contains(&95));
     }
 
     #[test]
-    fn meme_avif_uses_pure_media_budget_and_q0_fallback() -> anyhow::Result<()> {
+    fn meme_avif_strict_policy_uses_pure_media_payload() {
         let q100 = super::AvifMemeCandidate {
             quality: 100,
             temp_path: std::path::PathBuf::from("q100.avif"),
@@ -10880,42 +10809,10 @@ mod fast_img_hardening_tests {
         };
         assert!(super::avif_meme_candidate_fits_source(&q100, 950));
         assert!(!super::avif_meme_candidate_fits_source(&q100, 899));
-
-        let mut best = None;
         assert!(
-            super::retain_smallest_avif_meme_candidate(
-                &mut best,
-                super::AvifMemeCandidate {
-                    quality: 90,
-                    temp_path: std::path::PathBuf::from("q90.avif"),
-                    output_size: 1_200,
-                    pure_media_size: 850,
-                    content_blake3: "q90".to_string(),
-                }
-            )
-            .is_none()
+            !super::avif_meme_candidate_fits_source(&q100, 900),
+            "strict Meme size policy must reject an equal pure-media payload"
         );
-        assert_eq!(
-            super::retain_smallest_avif_meme_candidate(
-                &mut best,
-                super::AvifMemeCandidate {
-                    quality: 0,
-                    temp_path: std::path::PathBuf::from("q0.avif"),
-                    output_size: 1_400,
-                    pure_media_size: 950,
-                    content_blake3: "q0".to_string(),
-                },
-            ),
-            Some(std::path::PathBuf::from("q90.avif"))
-        );
-
-        let Some(candidate) = best else {
-            anyhow::bail!("verified candidate must be retained");
-        };
-        assert_eq!(candidate.quality, 0);
-        assert_eq!(candidate.output_size, 1_400);
-        assert_eq!(candidate.pure_media_size, 950);
-        Ok(())
     }
 
     #[test]
@@ -11125,10 +11022,10 @@ mod fast_img_hardening_tests {
         assert!(super::avif_quality_probe_error_is_source_invariant(
             "avifenc failed at q=90: Unsupported file format AVIF"
         ));
-        assert!(super::avif_quality_probe_error_is_source_invariant(
+        assert!(!super::avif_quality_probe_error_is_source_invariant(
             "official avifenc encode timed out after 120s"
         ));
-        assert!(super::avif_quality_probe_error_is_source_invariant(
+        assert!(!super::avif_quality_probe_error_is_source_invariant(
             "official avifenc quality probe timed out after 120s"
         ));
         assert!(!super::avif_quality_probe_error_is_source_invariant(
@@ -11137,12 +11034,10 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn fast_img_avif_timeout_keeps_last_verified_fitting_candidate() -> anyhow::Result<()> {
+    fn fast_img_avif_terminal_error_keeps_last_verified_fitting_candidate() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let fitting_path = root.path().join("q95.AVIF");
-        let oversized_path = root.path().join("q100.AVIF");
         std::fs::write(&fitting_path, b"fitting")?;
-        std::fs::write(&oversized_path, b"oversized")?;
         let mut fitting = Some(super::AvifMemeCandidate {
             quality: 95,
             temp_path: fitting_path.clone(),
@@ -11150,21 +11045,12 @@ mod fast_img_hardening_tests {
             pure_media_size: 7,
             content_blake3: "fitting".to_string(),
         });
-        let mut oversized = Some(super::AvifMemeCandidate {
-            quality: 100,
-            temp_path: oversized_path.clone(),
-            output_size: 9,
-            pure_media_size: 9,
-            content_blake3: "oversized".to_string(),
-        });
 
         let result = super::finish_avif_meme_after_terminal_probe_error(
-            "official avifenc encode timed out after 120s",
+            "avifenc failed at q=96: Unsupported file format AVIF",
             &mut fitting,
-            &mut oversized,
-            8,
         )
-        .expect("timeout is terminal");
+        .expect("unsupported source format is terminal");
         let super::AvifQualityExploreResult::Found {
             quality,
             temp_path,
@@ -11172,49 +11058,30 @@ mod fast_img_hardening_tests {
             ..
         } = result
         else {
-            anyhow::bail!("timeout must keep the last verified fitting candidate");
+            anyhow::bail!("terminal source error must keep the last verified fitting candidate");
         };
 
         assert_eq!(quality, 95);
         assert_eq!(temp_path, fitting_path);
         assert_eq!(selection, "terminal_probe_fitting_fallback");
-        assert!(
-            !oversized_path.exists(),
-            "superseded oversized probe must be removed"
-        );
         Ok(())
     }
 
     #[test]
-    fn fast_img_avif_terminal_fallback_rejects_q0_over_pure_media_budget() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let q0_path = root.path().join("q0.AVIF");
-        std::fs::write(&q0_path, b"oversized-q0")?;
+    fn fast_img_avif_terminal_error_without_verified_candidate_fails_closed() -> anyhow::Result<()>
+    {
         let mut fitting = None;
-        let mut fallback = Some(super::AvifMemeCandidate {
-            quality: super::AVIF_MEME_MIN_QUALITY,
-            temp_path: q0_path.clone(),
-            output_size: 11,
-            pure_media_size: 11,
-            content_blake3: "q0".to_string(),
-        });
 
         let result = super::finish_avif_meme_after_terminal_probe_error(
-            "official avifenc encode timed out after 120s",
+            "avifenc failed at q=100: Unsupported file format AVIF",
             &mut fitting,
-            &mut fallback,
-            10,
         )
-        .expect("timeout is terminal");
+        .expect("unsupported source format is terminal");
         let super::AvifQualityExploreResult::SourceUnavailable { reason } = result else {
-            anyhow::bail!("oversized q0 fallback must not be accepted");
+            anyhow::bail!("terminal error without verified candidate must fail closed");
         };
 
-        assert!(reason.contains("no AVIF candidate fit the source pure-media budget"));
-        assert!(
-            !q0_path.exists(),
-            "oversized q0 fallback must be cleaned up"
-        );
+        assert!(reason.contains("Unsupported file format"));
         Ok(())
     }
 
@@ -11345,29 +11212,11 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn retain_smallest_candidate_uses_pure_payload_not_complete_file() {
-        let candidate_a = super::AvifMemeCandidate {
-            quality: 70,
-            temp_path: std::path::PathBuf::from("a.avif"),
-            output_size: 100,
-            pure_media_size: 90,
-            content_blake3: "a".to_string(),
-        };
-        let candidate_b = super::AvifMemeCandidate {
-            quality: 90,
-            temp_path: std::path::PathBuf::from("b.avif"),
-            output_size: 110,
-            pure_media_size: 80,
-            content_blake3: "b".to_string(),
-        };
-
-        let mut best_pure = None;
-        super::retain_smallest_avif_meme_candidate(&mut best_pure, candidate_a);
-        super::retain_smallest_avif_meme_candidate(&mut best_pure, candidate_b);
-        assert_eq!(
-            best_pure.unwrap().temp_path,
-            std::path::PathBuf::from("b.avif")
-        );
+    fn meme_avif_evidence_prefers_higher_fitting_quality_not_smaller_size() {
+        let mut evidence = super::AvifMemeQualityEvidence::default();
+        evidence.record_fit(70);
+        evidence.record_fit(90);
+        assert_eq!(evidence.highest_fitting_quality, Some(90));
     }
 
     #[test]

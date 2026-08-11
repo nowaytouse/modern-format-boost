@@ -25,7 +25,7 @@
 //! ### JXL Ultimate Terminology
 //! - "Phase 1 ladder" → screening phase testing distance ladder
 //! - "Phase 2 probe" → refined binary search phase
-//! - "e10 finalist shortlist" → final distance candidates for e10 finalization
+//! - "finalist shortlist" → distance candidates verified in the same effort domain
 //! - "Promoted" → candidate included in finalist set for finalization
 //!
 //! ## Ranking Philosophy
@@ -39,6 +39,10 @@
 //! 4. **Parameter**: CRF (prefer aggressive/lower) or Distance (prefer higher
 //!    compression)
 //! 5. **Preset/Strategy**: Encoder preset rank (prefer slower/better quality)
+//!
+//! Explorer-specific quality axes override generic size ordering. In
+//! particular, JXL first requires `size < input`, then prefers the lowest
+//! verified distance; size is only a tiebreaker at an equal distance.
 
 use std::cmp::Ordering;
 
