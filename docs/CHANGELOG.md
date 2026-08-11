@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.3] - 2026-07-22
 
+### August 2026 Polish: FastImg Delivery & Native GUI Safety
+
+- **Photos permission before long work**: The native macOS host now checks
+  Automation access before launching FastImg shortest-path or explicit Photos
+  import work. First use can show the system consent prompt; a denied grant
+  opens the correct Privacy & Security pane without starting another conversion,
+  while the existing checkpoint remains available for an explicit resume.
+- **Stable application identity**: Native packaging now compiles and self-tests
+  the Swift host with the required CoreServices framework, binds the privacy
+  usage metadata into the final signature, and refuses an implicit ad-hoc
+  signing fallback that would invalidate Photos Automation consent on rebuild.
+  Generated app-bundle metadata and local agent notes are no longer tracked, so
+  a pull or formatting-only change cannot silently break an already signed app.
+- **Native GUI behavior**: The macOS window is a normal titled AppKit window
+  with custom chrome, standard App/Edit/Window menus, and native minimize,
+  zoom, Spaces, Exposé, and accessibility behavior. Backend version-alignment
+  warnings now surface in the UI instead of being visible only in developer
+  tools.
+- **Bounded process output**: Child stdout/stderr capture now releases its
+  bounded reader before draining the pipe, preserving the memory ceiling while
+  preventing a verbose child from blocking on a full pipe.
+- **Fail-closed verification**: Output format detection reports the exact first
+  unreadable file, malformed probe inputs remain explicit failures, and final
+  video settlement refuses incomplete early-insight state rather than
+  fabricating a candidate.
+- **Fixture reliability**: Synthetic PNG, AVIF, HEIC, and animated WebP fixtures
+  now use structurally valid headers/chunks, generated still images are limited
+  to one frame, and the edge-media manifest is regenerated from the current
+  fixture inventory.
+
 ### Reliability, Delivery & CI Repairs
 
 - **FastImg AVIF Meme Mode**: Static-image delivery now normalizes every

@@ -5823,8 +5823,7 @@ mod tests {
         clippy::unwrap_used,
         clippy::expect_used,
         clippy::expect_fun_call,
-        clippy::panic,
-        clippy::field_reassign_with_default
+        clippy::panic
     )]
     use super::*;
     use std::cell::Cell;
@@ -7170,8 +7169,10 @@ mod tests {
         let output_dir = temp.path().join("output");
         fs::write(&input, b"original jpeg bytes").expect("write source");
 
-        let mut options = ConvertOptions::default();
-        options.output_dir = Some(output_dir.clone());
+        let options = ConvertOptions {
+            output_dir: Some(output_dir.clone()),
+            ..Default::default()
+        };
         let skipped =
             jxl_avif_handoff_exhausted_result(&input, 19, &options).expect("preserve source");
 

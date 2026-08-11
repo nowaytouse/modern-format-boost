@@ -526,11 +526,18 @@ onMounted(() => {
       console.error("Failed to get processor binary path:", error);
     });
 
-  // Version Alignment Check Mechanism
   invoke("check_version_alignment")
     .then((message: unknown) => {
       const msg =
-        typeof message === "string" ? message : JSON.stringify(message ?? "");
+        typeof message === "string"
+          ? message
+          : (() => {
+              try {
+                return JSON.stringify(message ?? "");
+              } catch {
+                return String(message);
+              }
+            })();
       console.log(msg);
       // Surface binary-missing or mismatched-version warnings in the UI
       // so the user doesn't have to open DevTools to see them.

@@ -376,23 +376,17 @@ fn main() -> Result<()> {
     }
 
     let manifest_path = test_dir.join("MEDIA_MANIFEST.md");
-    if !manifest_path.is_file()
-        || !fs::read_to_string(&manifest_path)
-            .map(|c| c.contains("H.264"))
-            .unwrap_or(false)
-    {
-        let manifest_content = format!(
-            "# Edge Media Fixtures Manifest\n\n\
-             Automated test media generated for Modern Format Boost.\n\n\
-             - Images: {} files\n\
-             - Videos: {} files (Codecs: H.264, AV1, VP9, HEVC | Quality metrics: CRF, SSIM)\n\
-             - GIFs: {} files\n",
-            IMAGE_JOBS.len(),
-            VIDEO_JOBS.len(),
-            GIF_JOBS.len()
-        );
-        fs::write(&manifest_path, manifest_content)?;
-    }
+    let manifest_content = format!(
+        "# Edge Media Fixtures Manifest\n\n\
+         Automated test media generated for Modern Format Boost.\n\n\
+         - Images: {} files\n\
+         - Videos: {} files (Codecs: H.264, AV1, VP9, HEVC | Quality metrics: CRF, SSIM)\n\
+         - GIFs: {} files\n",
+        IMAGE_JOBS.len(),
+        VIDEO_JOBS.len(),
+        GIF_JOBS.len()
+    );
+    fs::write(&manifest_path, manifest_content)?;
 
     for line in summary_lines(
         &test_dir,

@@ -298,8 +298,8 @@ private enum ProcessorCommand {
 }
 
 /// Returns true when the requested operation will send Apple Events to Photos.app.
-/// Both "fast_img" with --shortest-path (iCloud drag-import) and "icloud_import"
-/// (explicit iCloud import mode) require the user to have granted Automation access
+/// Both "fast_img" with --shortest-path (verified Photos import) and "icloud_import"
+/// (explicit Photos/iCloud import mode) require the user to have granted Automation access
 /// to Photos before the backend process is launched.
 private func processingRequiresPhotosAutomation(_ values: [String: Any]) -> Bool {
     guard let mode = values["outputMode"] as? String else { return false }
@@ -317,7 +317,7 @@ private enum PhotosAutomationPreflightError: LocalizedError {
         case .photosUnavailable:
             "Photos is unavailable, so import permission could not be checked."
         case let .permissionDenied(status):
-            "Photos Automation permission is disabled (macOS error \(status)). Enable Modern Format Boost under System Settings > Privacy & Security > Automation, then retry; existing progress will be resumed."
+            "Photos Automation permission is disabled (macOS error \(status)). Enable Modern Format Boost under System Settings > Privacy & Security > Automation, then retry; existing progress can be resumed."
         case let .checkFailed(status):
             "Photos Automation permission check failed with macOS error \(status). No media processing was started."
         }
@@ -645,7 +645,7 @@ private final class NativeHost: NSObject, WKNavigationDelegate, WKScriptMessageH
 
             // Watchdog: if Photos has not launched within 10 seconds the preflight
             // cannot proceed, so we fail fast rather than hanging indefinitely.
-            // A nonisolated flag avoids a data race between the two async callbacks.
+            // A lock-protected flag avoids a data race between the two async callbacks.
             let completed = NSLock()
             var didComplete = false
 

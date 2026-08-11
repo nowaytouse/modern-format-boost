@@ -2806,7 +2806,7 @@ mod rev2_policy_tests {
 
 #[cfg(test)]
 mod meme_mode_tests {
-    use super::{WorkingCopyMarker, default_strategy};
+    use super::{WorkingCopyMarker, check_decode_probe, default_strategy};
     use std::path::PathBuf;
 
     #[test]
@@ -2902,5 +2902,14 @@ mod meme_mode_tests {
         assert_eq!(marker.encoded_count, 0, "encoded_count must default to 0");
         assert_eq!(marker.src_jpeg_count, 42);
         assert_eq!(marker.strategy, "jxl");
+    }
+
+    #[test]
+    fn check_decode_probe_fails_fast_on_invalid_file() {
+        let nonexistent = PathBuf::from("/nonexistent/file/path/that/does/not/exist.jpg");
+        let detail = check_decode_probe(&[nonexistent]);
+        assert_eq!(detail.name, "decode");
+        assert!(!detail.passed);
+        assert!(detail.actual.contains("format detection failed"));
     }
 }

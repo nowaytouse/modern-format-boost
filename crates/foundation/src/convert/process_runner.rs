@@ -20,59 +20,61 @@ fn capture_text_stream_bounded<R: Read>(
     stream_verbose_stderr: bool,
 ) -> Result<String> {
     let mut reader = BufReader::new(stream);
-    let limit = u64::try_from(max_bytes.saturating_add(1)).unwrap_or(u64::MAX);
-    let mut limited = (&mut reader).take(limit);
     let mut output = String::with_capacity(max_bytes.min(8 * 1024));
     let mut line = Vec::new();
     let mut captured_bytes = 0usize;
     let mut exceeded = false;
     let mut capture_error = None;
 
-    loop {
-        line.clear();
-        let read = match limited.read_until(b'\n', &mut line) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(error) => {
-                capture_error = Some(anyhow::anyhow!(
-                    "Failed to read child {stream_name}: {error}"
-                ));
-                break;
-            }
-        };
-        captured_bytes = captured_bytes.saturating_add(read);
-        if captured_bytes > max_bytes {
-            exceeded = true;
-            continue;
-        }
+    {
+        let limit = u64::try_from(max_bytes.saturating_add(1)).unwrap_or(u64::MAX);
+        let mut limited = (&mut reader).take(limit);
 
-        let had_newline = line.ends_with(b"\n");
-        let line = line.strip_suffix(b"\n").unwrap_or(&line);
-        let line = if had_newline {
-            line.strip_suffix(b"\r").unwrap_or(line)
-        } else {
-            line
-        };
-        match std::str::from_utf8(line) {
-            Ok(line) => {
-                if stream_verbose_stderr
-                    && crate::progress_mode::is_verbose_mode()
-                    && should_stream_verbose_stderr_line(&command_line, line)
-                {
-                    crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
+        loop {
+            line.clear();
+            let read = match limited.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) => {
+                    capture_error = Some(anyhow::anyhow!(
+                        "Failed to read child {stream_name}: {error}"
+                    ));
+                    break;
                 }
-                output.push_str(line);
-                output.push('\n');
+            };
+            captured_bytes = captured_bytes.saturating_add(read);
+            if captured_bytes > max_bytes {
+                exceeded = true;
+                continue;
             }
-            Err(error) => {
-                capture_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("Child {stream_name} was not valid UTF-8: {error}")
-                });
+
+            let had_newline = line.ends_with(b"\n");
+            let line = line.strip_suffix(b"\n").unwrap_or(&line);
+            let line = if had_newline {
+                line.strip_suffix(b"\r").unwrap_or(line)
+            } else {
+                line
+            };
+            match std::str::from_utf8(line) {
+                Ok(line) => {
+                    if stream_verbose_stderr
+                        && crate::progress_mode::is_verbose_mode()
+                        && should_stream_verbose_stderr_line(&command_line, line)
+                    {
+                        crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
+                    }
+                    output.push_str(line);
+                    output.push('\n');
+                }
+                Err(error) => {
+                    capture_error.get_or_insert_with(|| {
+                        anyhow::anyhow!("Child {stream_name} was not valid UTF-8: {error}")
+                    });
+                }
             }
         }
     }
 
-    let _ = limited;
     let drain_error = std::io::copy(&mut reader, &mut std::io::sink()).err();
 
     if exceeded {
@@ -710,6 +712,20 @@ mod tests {
 
         assert!(message.contains("stdout"), "{message}");
         assert!(message.contains("exceeded 64 captured bytes"), "{message}");
+    }
+
+    #[test]
+    fn capture_text_stream_bounded_scopes_borrow_and_drains() {
+        let data = b"line1\nline2\nline3\nline4\n";
+        let captured = capture_text_stream_bounded(
+            &data[..],
+            12,
+            "test_stream",
+            "mock_command".to_string(),
+            false,
+        );
+        let err = captured.unwrap_err();
+        assert!(err.to_string().contains("exceeded 12 captured bytes"));
     }
 
     #[test]

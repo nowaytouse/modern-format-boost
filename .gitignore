@@ -214,9 +214,7 @@ rustc-ice-*.txt
 mfb_hardening_prompts.md
 
 # AI Agent Skills & Configs
-.agents/*
-!.agents/harding/
-.agents/harding/*
+.agents/
 .kilocode/
 skills-lock.json
 

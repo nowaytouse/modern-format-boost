@@ -1284,7 +1284,7 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
             let status = Command::new("codesign")
                 .arg("--force")
                 .arg("--sign")
-                .arg(app_bundle_codesign_identity())
+                .arg(app_bundle_codesign_identity()?)
                 .arg(destination)
                 .status()
                 .with_context(|| format!("codesign {}", destination.display()))?;
@@ -1367,6 +1367,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
 
     let entitlements = native_gui_dir(project_root).join("entitlements.plist");
     let app_resources = app_bundle.join("Contents").join("Resources");
+    let signing_identity = app_bundle_codesign_identity()?;
     for bin in changed_bins {
         let bundled = app_resources.join(bin);
         if bundled.is_file() {
@@ -1374,7 +1375,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
             command
                 .arg("--force")
                 .arg("--sign")
-                .arg(app_bundle_codesign_identity());
+                .arg(&signing_identity);
             if entitlements.is_file() {
                 command.arg("--entitlements").arg(&entitlements);
             }
@@ -1389,7 +1390,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
     command
         .arg("--force")
         .arg("--sign")
-        .arg(app_bundle_codesign_identity());
+        .arg(&signing_identity);
     if entitlements.is_file() {
         command.arg("--entitlements").arg(&entitlements);
     }
@@ -1402,7 +1403,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
     println!(
         "{}App Bundle signed with {}.{}",
         style.green,
-        app_bundle_codesign_identity(),
+        signing_identity,
         style.reset
     );
     Ok(())
@@ -1413,37 +1414,28 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
 /// Priority:
 ///   1. `CODESIGN_IDENTITY` environment variable (CI / release override)
 ///   2. `MFB-Dev-Signing` if the certificate is present in the local keychain
-///   3. Ad-hoc (`-`) as a last-resort fallback that works without a cert
-fn app_bundle_codesign_identity() -> String {
+fn app_bundle_codesign_identity() -> Result<String> {
     // 1. Explicit env override
     if let Ok(id) = std::env::var("CODESIGN_IDENTITY") {
         let id = id.trim().to_owned();
         if !id.is_empty() {
-            return id;
+            return Ok(id);
         }
     }
     // 2. MFB-Dev-Signing if the certificate exists in the keychain
-    let available = Command::new("security")
+    let available = Command::new("/usr/bin/security")
         .args(["find-identity", "-v", "-p", "codesigning"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("MFB-Dev-Signing"))
         .unwrap_or(false);
     if available {
-        return APP_BUNDLE_CODESIGN_IDENTITY.to_owned();
+        return Ok(APP_BUNDLE_CODESIGN_IDENTITY.to_owned());
     }
-    // 3. Ad-hoc fallback — note this DOES NOT provide a stable TCC identity
-    eprintln!(
-        "\n\
-         ╔══════════════════════════════════════════════════════════════╗\n\
-         ║  WARNING: no stable code-signing identity found.            ║\n\
-         ║  Falling back to ad-hoc signing (-).                        ║\n\
-         ║                                                              ║\n\
-         ║  Photos Automation / TCC grants may not persist across       ║\n\
-         ║  rebuilds. Install MFB-Dev-Signing or set CODESIGN_IDENTITY ║\n\
-         ║  for a stable TCC identity.                                  ║\n\
-         ╚══════════════════════════════════════════════════════════════╝\n"
-    );
-    "-".to_owned()
+    anyhow::bail!(concat!(
+        "No stable code-signing identity found. Install MFB-Dev-Signing or set ",
+        "CODESIGN_IDENTITY explicitly; refusing ad-hoc signing because it invalidates ",
+        "persistent Photos Automation grants."
+    ))
 }
 
 /// Compile the Swift native host and assemble the macOS .app bundle at
@@ -1484,7 +1476,10 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     }
 
     // (Re-)create the bundle skeleton
-    let _ = fs::remove_dir_all(&bundle);
+    if bundle.exists() {
+        fs::remove_dir_all(&bundle)
+            .with_context(|| format!("remove stale app bundle {}", bundle.display()))?;
+    }
     fs::create_dir_all(&macos_dir).context("create bundle MacOS dir")?;
     fs::create_dir_all(&resources_dir).context("create bundle Resources dir")?;
 
@@ -1601,7 +1596,8 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
 
     if src_bundle.exists() {
         if dest_bundle.exists() {
-            let _ = fs::remove_dir_all(&dest_bundle);
+            fs::remove_dir_all(&dest_bundle)
+                .with_context(|| format!("remove stale app bundle {}", dest_bundle.display()))?;
         }
 
         let cp_status = Command::new("cp")
@@ -2159,10 +2155,9 @@ mod tests {
     }
 
     #[test]
-    fn test_app_bundle_codesign_identity_is_stable() {
-        let identity = app_bundle_codesign_identity();
-        assert_eq!(identity, "MFB-Dev-Signing");
-        assert_ne!(identity, "-");
+    fn test_default_app_bundle_codesign_identity_is_stable() {
+        assert_eq!(APP_BUNDLE_CODESIGN_IDENTITY, "MFB-Dev-Signing");
+        assert_ne!(APP_BUNDLE_CODESIGN_IDENTITY, "-");
     }
 
     #[test]
