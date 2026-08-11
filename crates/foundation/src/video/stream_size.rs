@@ -593,12 +593,14 @@ pub fn can_compress_pure_video(
         }
     };
 
-    let result = if allow_size_tolerance {
-        output_pure_media_size
-            < input_pure_media_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
+    let size_policy = if allow_size_tolerance {
+        crate::exploration_policy::SizePolicy::AllowGrowth {
+            max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        }
     } else {
-        output_pure_media_size < input_pure_media_size
+        crate::exploration_policy::SizePolicy::StrictlySmaller
     };
+    let result = size_policy.fits(output_pure_media_size, input_pure_media_size);
 
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_DETECTION,
@@ -990,18 +992,22 @@ mod prop_tests {
             output_video_size in 1u64..1_000_000_000u64,
             input_video_size in 1u64..1_000_000_000u64,
         ) {
-            let expected_can_compress = output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES);
+            let tolerance_policy = crate::exploration_policy::SizePolicy::AllowGrowth {
+                max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            };
+            let strict_policy = crate::exploration_policy::SizePolicy::StrictlySmaller;
+            let expected_can_compress = tolerance_policy.fits(output_video_size, input_video_size);
 
             // Check tolerance=true manually (mirrors logic)
             prop_assert_eq!(
                 expected_can_compress,
-                if true { output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES) } else { output_video_size < input_video_size }
+                tolerance_policy.fits(output_video_size, input_video_size)
             );
 
             // Check tolerance=false
             prop_assert_eq!(
-                output_video_size < input_video_size,
-                if false { output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES) } else { output_video_size < input_video_size }
+                strict_policy.fits(output_video_size, input_video_size),
+                strict_policy.fits(output_video_size, input_video_size)
             );
 
         }
@@ -1019,15 +1025,21 @@ mod prop_tests {
             let output_larger = base_size + delta;
 
             if delta > 0 {
-                prop_assert!(output_smaller < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES),
+                prop_assert!(crate::exploration_policy::SizePolicy::AllowGrowth {
+                    max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+                }.fits(output_smaller, input_video_size),
                     "When output {} < tolerance(input {}) it should compress", output_smaller, input_video_size);
             }
 
-            prop_assert!((output_equal < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)),
+            prop_assert!(crate::exploration_policy::SizePolicy::AllowGrowth {
+                max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            }.fits(output_equal, input_video_size),
                 "When output {} == input {} it should compress (within tolerance)", output_equal, input_video_size);
 
-            if delta >= crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES {
-                prop_assert!(output_larger >= input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES),
+            if delta > crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES {
+                prop_assert!(!crate::exploration_policy::SizePolicy::AllowGrowth {
+                    max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+                }.fits(output_larger, input_video_size),
                     "When output {} > input {} and exceeds tolerance it should not compress", output_larger, input_video_size);
             }
         }

@@ -3160,6 +3160,8 @@ fn fast_img_effective_encode_parallelism(
 enum AvifQualityExploreResult {
     /// Highest verified candidate within the source's pure-media budget.
     Found {
+        domain: foundation::exploration_policy::EncoderDomain,
+        outcome: foundation::exploration_policy::ExplorationOutcome,
         quality: u8,
         temp_path: PathBuf,
         output_size: u64,
@@ -3510,6 +3512,8 @@ fn finish_avif_meme_after_terminal_probe_error(
         });
     };
     Some(AvifQualityExploreResult::Found {
+        domain: foundation::exploration_policy::EncoderDomain::avif(AVIF_MEME_SPEED),
+        outcome: foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
         quality: candidate.quality,
         temp_path: candidate.temp_path,
         output_size: candidate.output_size,
@@ -3545,14 +3549,11 @@ const fn avif_meme_candidate_fits_source(
     candidate: &AvifMemeCandidate,
     source_pure_media_size: u64,
 ) -> bool {
-    candidate.pure_media_size < source_pure_media_size
+    foundation::exploration_policy::SizePolicy::StrictlySmaller
+        .fits(candidate.pure_media_size, source_pure_media_size)
 }
 
-enum AvifMemeProbeOutcome {
-    Fits(AvifMemeCandidate),
-    Oversize(AvifMemeCandidate),
-    Failed(String),
-}
+type AvifMemeProbeOutcome = foundation::exploration_policy::ProbeOutcome<AvifMemeCandidate, String>;
 
 fn probe_single_avif_quality(
     source: &Path,
@@ -3587,7 +3588,9 @@ fn probe_single_avif_quality(
                 "fast_img_probe_cleanup",
                 &temp_path,
             );
-            return AvifMemeProbeOutcome::Failed(format!("pure-media measurement failed: {error}"));
+            return AvifMemeProbeOutcome::Unverifiable(format!(
+                "pure-media measurement failed: {error}"
+            ));
         }
     };
 
@@ -3646,6 +3649,11 @@ fn explore_avif_meme_quality(
                 evidence.record_fit(candidate.quality);
                 if candidate.quality == 100 {
                     return AvifQualityExploreResult::Found {
+                        domain: foundation::exploration_policy::EncoderDomain::avif(
+                            AVIF_MEME_SPEED,
+                        ),
+                        outcome:
+                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
                         quality: candidate.quality,
                         temp_path: candidate.temp_path,
                         output_size: candidate.output_size,
@@ -3664,7 +3672,7 @@ fn explore_avif_meme_quality(
                     &candidate.temp_path,
                 );
             }
-            AvifMemeProbeOutcome::Failed(reason) => {
+            AvifMemeProbeOutcome::Failed(reason) | AvifMemeProbeOutcome::Unverifiable(reason) => {
                 evidence.record_failed(coarse_quality);
                 if let Some(result) = finish_avif_meme_after_terminal_probe_error(
                     &reason,
@@ -3713,7 +3721,7 @@ fn explore_avif_meme_quality(
                     &candidate.temp_path,
                 );
             }
-            AvifMemeProbeOutcome::Failed(reason) => {
+            AvifMemeProbeOutcome::Failed(reason) | AvifMemeProbeOutcome::Unverifiable(reason) => {
                 evidence.record_failed(mid);
                 if let Some(result) = finish_avif_meme_after_terminal_probe_error(
                     &reason,
@@ -3733,6 +3741,8 @@ fn explore_avif_meme_quality(
             "highest_verified_fitting_with_probe_gaps"
         };
         return AvifQualityExploreResult::Found {
+            domain: foundation::exploration_policy::EncoderDomain::avif(AVIF_MEME_SPEED),
+            outcome: foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
             quality: final_candidate.quality,
             temp_path: final_candidate.temp_path,
             output_size: final_candidate.output_size,
@@ -3804,6 +3814,78 @@ fn fast_img_adopt_static_avif(
     )))
 }
 
+const fn avif_lossless_candidate_fits_source(
+    candidate_pure_media_size: u64,
+    source_pure_media_size: u64,
+) -> bool {
+    foundation::exploration_policy::SizePolicy::StrictlySmaller
+        .fits(candidate_pure_media_size, source_pure_media_size)
+}
+
+fn try_fast_img_lossless_avif(
+    source: &Path,
+    source_format: FormatKind,
+    encoder_input: &Path,
+    options: &foundation::ConvertOptions,
+    metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
+) -> anyhow::Result<Option<foundation::TaskResult>> {
+    let source_pure_media_size = source_pure_media_size(source, source_format)?;
+    let probe =
+        img::lossless_converter::convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
+            source,
+            encoder_input,
+            AVIF_MEME_SPEED,
+            metadata_retry,
+            options,
+        );
+    let (temp_path, complete_file_size, content_blake3) = match probe {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            foundation::media_conversion_gate::delivery_api_batch_fallback_audit(
+                "fast_img_lossless_avif_probe",
+                format!(
+                    "True-lossless AVIF probe unavailable for {}; continuing with explicit Meme lossy intent: {error}",
+                    source.display()
+                ),
+            );
+            return Ok(None);
+        }
+    };
+    let candidate_pure_media_size = match avif_mdat_payload_size(&temp_path) {
+        Ok(size) => size,
+        Err(error) => {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "fast_img_lossless_probe_cleanup",
+                &temp_path,
+            );
+            return Err(error);
+        }
+    };
+    if !avif_lossless_candidate_fits_source(candidate_pure_media_size, source_pure_media_size) {
+        foundation::log_detail!(&format!(
+            "Meme Mode true-lossless AVIF is outside the active size policy: complete_file={complete_file_size}B pure_media={candidate_pure_media_size}B source_pure_media={source_pure_media_size}B; continuing with q-boundary exploration"
+        ));
+        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+            "fast_img_lossless_probe_oversize_cleanup",
+            &temp_path,
+        );
+        return Ok(None);
+    }
+    let result = img::lossless_converter::finalize_meme_avif_probe(
+        source,
+        &temp_path,
+        &content_blake3,
+        options,
+    )?
+    .with_optimization_outcome(
+        foundation::exploration_policy::ExplorationOutcome::LosslessTranscoded,
+    );
+    foundation::log_detail!(&format!(
+        "Meme Mode accepted true-lossless AVIF at speed={AVIF_MEME_SPEED}: pure_media={candidate_pure_media_size}B < source={source_pure_media_size}B"
+    ));
+    Ok(Some(result))
+}
+
 fn fast_img_run_encode_job_inner(
     job: &FastImgTranscodeJob,
     src_dir: &Path,
@@ -3840,37 +3922,62 @@ fn fast_img_run_encode_job_inner(
                     })?;
             let mut metadata_retry =
                 img::lossless_converter::AvifencMetadataRetryState::strip_all();
-            match explore_avif_meme_quality(
-                &job.source,
-                format,
-                &encoder_input.path,
-                &convert_options,
-                &mut metadata_retry,
-            ) {
-                AvifQualityExploreResult::Found {
-                    quality,
-                    temp_path,
-                    output_size,
-                    pure_media_size,
-                    content_blake3,
-                    selection,
-                } => {
-                    foundation::log_detail!(&format!(
-                        "Meme Mode (AVIF): selected q={quality} selection={selection} complete_file_size={output_size}B pure_media_size={pure_media_size}B for {} ({format:?})",
+            let source_analysis = foundation::image_analyzer::analyze_image(&job.source)
+                .with_context(|| {
+                    format!(
+                        "classify Meme Mode source semantics for {}",
                         job.source.display()
-                    ));
-                    img::lossless_converter::finalize_meme_avif_probe(
-                        &job.source,
-                        &temp_path,
-                        &content_blake3,
-                        &convert_options,
-                    )?
-                }
-                AvifQualityExploreResult::SourceUnavailable { reason } => {
-                    anyhow::bail!(
-                        "AVIF source preflight could not produce a verifiable target output for {}: {reason}",
-                        job.source.display()
-                    );
+                    )
+                })?;
+            let lossless_result = if source_analysis.is_lossless {
+                try_fast_img_lossless_avif(
+                    &job.source,
+                    format,
+                    &encoder_input.path,
+                    &convert_options,
+                    &mut metadata_retry,
+                )?
+            } else {
+                None
+            };
+            if let Some(result) = lossless_result {
+                result
+            } else {
+                match explore_avif_meme_quality(
+                    &job.source,
+                    format,
+                    &encoder_input.path,
+                    &convert_options,
+                    &mut metadata_retry,
+                ) {
+                    AvifQualityExploreResult::Found {
+                        domain,
+                        outcome,
+                        quality,
+                        temp_path,
+                        output_size,
+                        pure_media_size,
+                        content_blake3,
+                        selection,
+                    } => {
+                        foundation::log_detail!(&format!(
+                            "Meme Mode (AVIF): {outcome:?} selected {domain:?} q={quality} selection={selection} complete_file_size={output_size}B pure_media_size={pure_media_size}B for {} ({format:?})",
+                            job.source.display()
+                        ));
+                        img::lossless_converter::finalize_meme_avif_probe(
+                            &job.source,
+                            &temp_path,
+                            &content_blake3,
+                            &convert_options,
+                        )?
+                        .with_optimization_outcome(outcome)
+                    }
+                    AvifQualityExploreResult::SourceUnavailable { reason } => {
+                        anyhow::bail!(
+                            "AVIF source preflight could not produce a verifiable target output for {}: {reason}",
+                            job.source.display()
+                        );
+                    }
                 }
             }
         }
@@ -10691,8 +10798,19 @@ mod fast_img_hardening_tests {
     #[test]
     fn fast_img_avif_meme_quality_uses_normal_precision_and_speed_zero() {
         assert_eq!(super::AVIF_MEME_SPEED, 0);
+        assert_eq!(
+            foundation::exploration_policy::EncoderDomain::avif(super::AVIF_MEME_SPEED),
+            foundation::exploration_policy::EncoderDomain::avif(0),
+        );
         assert_eq!(super::AVIF_MEME_MIN_QUALITY, 0);
         assert!(img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7);
+    }
+
+    #[test]
+    fn fast_img_lossless_meme_candidate_uses_the_same_strict_size_policy() {
+        assert!(super::avif_lossless_candidate_fits_source(999, 1_000));
+        assert!(!super::avif_lossless_candidate_fits_source(1_000, 1_000));
+        assert!(!super::avif_lossless_candidate_fits_source(1_001, 1_000));
     }
 
     #[test]

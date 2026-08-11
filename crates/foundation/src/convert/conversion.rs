@@ -455,6 +455,10 @@ pub struct TaskResult {
     /// (`success_video_explored`).
     pub explore_final_crf: Option<f32>,
     pub explore_iterations: Option<u32>,
+    /// Detailed optimization disposition.  `None` is reserved for legacy or
+    /// intentionally ignored results whose product semantics are unknown.
+    #[serde(default)]
+    pub optimization_outcome: Option<crate::exploration_policy::ExplorationOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -589,6 +593,15 @@ impl TaskResult {
     }
 
     #[must_use]
+    pub const fn with_optimization_outcome(
+        mut self,
+        outcome: crate::exploration_policy::ExplorationOutcome,
+    ) -> Self {
+        self.optimization_outcome = Some(outcome);
+        self
+    }
+
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         // JPEG→JXL lossless transcode preserves DCT coefficients (true transcoding)
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")
@@ -617,6 +630,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         })
     }
 
@@ -649,6 +663,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         })
     }
 
@@ -668,6 +683,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         }
     }
 
@@ -687,6 +703,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: None,
         }
     }
 
@@ -706,6 +723,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Failed),
         }
     }
 
@@ -728,6 +746,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         }
     }
 
@@ -752,6 +771,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         }
     }
 
@@ -820,6 +840,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         })
     }
 
@@ -887,6 +908,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Failed),
         })
     }
 
@@ -940,6 +962,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         }
     }
 
@@ -1026,6 +1049,11 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
+                crate::exploration_policy::ExplorationOutcome::LosslessTranscoded
+            } else {
+                crate::exploration_policy::ExplorationOutcome::Adopted
+            }),
         }
     }
 
@@ -1071,6 +1099,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: Some(metrics.crf),
             explore_iterations: Some(metrics.iterations),
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::ExploredOptimized,
+            ),
         }
     }
 }
@@ -3957,6 +3988,10 @@ mod tests {
             result.message
         );
         assert_eq!(result.outcome(), Outcome::Converted);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::Adopted)
+        );
     }
 
     #[test]
@@ -3970,6 +4005,10 @@ mod tests {
         assert_eq!(result.skip_reason, Some("size_increase".to_string()));
         assert!(result.message.contains("larger"));
         assert_eq!(result.outcome(), Outcome::Skipped);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::Adopted)
+        );
     }
 
     #[test]
@@ -4003,6 +4042,10 @@ mod tests {
         assert!(!result.success);
         assert!(!result.skipped);
         assert_eq!(result.outcome(), Outcome::Failed);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::Failed)
+        );
         assert!(!crate::cli_runner::CliProcessingResult::is_skipped(&result));
         assert!(input.exists(), "failed conversion must retain its source");
     }

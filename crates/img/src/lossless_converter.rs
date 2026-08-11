@@ -20,6 +20,7 @@ use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
 use foundation::jxl_effort_policy::{JxlEffortContext, JxlEffortPlan};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -1154,7 +1155,7 @@ const fn resolved_jxl_distance_for_source(
 }
 
 const fn jxl_d0_misses_strict_size_policy(input_size: u64, output_size: u64) -> bool {
-    output_size >= input_size
+    !foundation::exploration_policy::SizePolicy::StrictlySmaller.fits(output_size, input_size)
 }
 
 pub fn convert_to_jxl(
@@ -1454,6 +1455,7 @@ pub fn convert_to_jxl(
                 );
             }
 
+            let explored_optimized = explore_result.is_some();
             let (final_output_size, extra_info) = explore_result.map_or_else(
                 || (output_size, None),
                 |result| {
@@ -1469,7 +1471,7 @@ pub fn convert_to_jxl(
                 },
             );
 
-            finalize_with_size_check(
+            let task = finalize_with_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -1478,7 +1480,14 @@ pub fn convert_to_jxl(
                 options,
                 LABEL_JXL,
                 extra_info.as_deref(),
-            )
+            )?;
+            Ok(if explored_optimized {
+                task.with_optimization_outcome(
+                    foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
+                )
+            } else {
+                task
+            })
         }
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
@@ -3528,6 +3537,90 @@ pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
     Ok((temp_output, output_size, content_blake3))
 }
 
+/// Probe a true-lossless AVIF candidate in a fixed speed domain and preserve
+/// its custody proof for later Meme Mode selection.
+pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    speed: u8,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String)> {
+    if let Err(error) = foundation::conversion::validate_input_file(source) {
+        return Err(ImgQualityError::ConversionError(error));
+    }
+    let output = get_output_path(source, EXT_AVIF, options)?;
+    let temp_output =
+        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|error| {
+            ImgQualityError::ConversionError(format!(
+                "lossless AVIF probe temp path failed for {}: {error}",
+                source.display()
+            ))
+        })?;
+    let result = run_avifenc_with_malformed_xmp_retry(
+        encoder_input,
+        &temp_output,
+        None,
+        true,
+        Some(speed),
+        avifenc_probe_timeout()?,
+        "official avifenc lossless Meme probe",
+        metadata_retry,
+    );
+    match result {
+        Ok(output) if output.status.success() => {
+            let output_size = match fs::metadata(&temp_output) {
+                Ok(metadata) => metadata.len(),
+                Err(error) => {
+                    cleanup_temp_output(&temp_output, source);
+                    return Err(ImgQualityError::IoError(error));
+                }
+            };
+            if let Err(error) =
+                foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
+            {
+                cleanup_temp_output(&temp_output, source);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "lossless AVIF probe health check failed: {error}"
+                )));
+            }
+            if let Err(error) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+                encoder_input,
+                &temp_output,
+            ) {
+                cleanup_temp_output(&temp_output, source);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "lossless AVIF probe pixel equivalence failed: {error}"
+                )));
+            }
+            let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output)
+            {
+                Ok(hash) => hash,
+                Err(error) => {
+                    cleanup_temp_output(&temp_output, source);
+                    return Err(ImgQualityError::ConversionError(format!(
+                        "lossless AVIF probe custody hash failed: {error}"
+                    )));
+                }
+            };
+            Ok((temp_output, output_size, content_blake3))
+        }
+        Ok(output) => {
+            cleanup_temp_output(&temp_output, source);
+            Err(ImgQualityError::ConversionError(format!(
+                "lossless AVIF Meme probe failed: {}",
+                output.stderr
+            )))
+        }
+        Err(error) => {
+            cleanup_temp_output(&temp_output, source);
+            Err(ImgQualityError::ConversionError(format!(
+                "lossless AVIF Meme probe execution failed: {error}"
+            )))
+        }
+    }
+}
+
 fn verify_avif_probe_custody(
     path: &Path,
     expected_content_blake3: &str,
@@ -3637,25 +3730,28 @@ const fn avif_handoff_selection_label(quality: u8) -> &'static str {
 
 fn search_highest_fitting_avif_quality_with<Probe>(
     input_size: u64,
-    require_smaller: bool,
+    size_policy: Option<foundation::exploration_policy::SizePolicy>,
     mut probe: Probe,
 ) -> (Option<u8>, usize)
 where
-    Probe: FnMut(u8) -> Option<u64>,
+    Probe: FnMut(u8) -> std::result::Result<u64, String>,
 {
     let mut probe_count = 0;
     let mut quality = 100;
     let mut first_fitting = None;
-    let mut upper_failure = 101;
-
+    let mut lowest_oversize = None;
+    let mut failed_qualities = BTreeSet::new();
     loop {
         probe_count += 1;
         match probe(quality) {
-            Some(size) if !require_smaller || size < input_size => {
+            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
                 first_fitting = Some(quality);
                 break;
             }
-            _ => upper_failure = quality,
+            Ok(_) => lowest_oversize = Some(quality),
+            Err(_) => {
+                failed_qualities.insert(quality);
+            }
         }
 
         if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
@@ -3671,20 +3767,29 @@ where
         return (Some(best_quality), probe_count);
     }
 
-    let mut low = best_quality + 1;
-    let mut high = upper_failure.saturating_sub(1).min(100);
     for _ in 0..AVIF_QUALITY_BINARY_PROBE_BUDGET {
-        if low > high {
+        let Some(oversize_quality) = lowest_oversize else {
+            break;
+        };
+        if best_quality.saturating_add(1) >= oversize_quality {
             break;
         }
-        let candidate = low + (high - low) / 2;
+        let midpoint = best_quality + (oversize_quality - best_quality) / 2;
+        let Some(candidate) = (best_quality.saturating_add(1)..oversize_quality)
+            .filter(|quality| !failed_qualities.contains(quality))
+            .min_by_key(|quality| (quality.abs_diff(midpoint), std::cmp::Reverse(*quality)))
+        else {
+            break;
+        };
         probe_count += 1;
         match probe(candidate) {
-            Some(size) if !require_smaller || size < input_size => {
+            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
                 best_quality = candidate;
-                low = candidate.saturating_add(1);
             }
-            _ => high = candidate.saturating_sub(1),
+            Ok(_) => lowest_oversize = Some(candidate),
+            Err(_) => {
+                failed_qualities.insert(candidate);
+            }
         }
     }
 
@@ -3726,7 +3831,8 @@ fn try_jxl_to_avif_extreme_handoff(
     let mut metadata_retry = AvifencMetadataRetryState::default();
     let (quality, probe_count) = search_highest_fitting_avif_quality_with(
         input_payload_size,
-        !options.require_output_delivery(),
+        (!options.require_output_delivery())
+            .then_some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
         |quality| {
             log_detail!(&format!(
                 "JXL->AVIF exact quality probe: q={quality}, speed=0 for {}",
@@ -3749,14 +3855,14 @@ fn try_jxl_to_avif_extreme_handoff(
                             log_detail!(&format!(
                                 "JXL->AVIF exact quality probe: q={quality}, complete_file={output_size}B, pure_payload={payload_size}B, source_pure_payload={input_payload_size}B"
                             ));
-                            Some(payload_size)
+                            Ok(payload_size)
                         }
                         Err(reason) => {
                             log_detail!(&format!(
                                 "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
                             ));
-                            last_error = Some(reason);
-                            None
+                            last_error = Some(reason.clone());
+                            Err(reason)
                         }
                     }
                 }
@@ -3765,8 +3871,8 @@ fn try_jxl_to_avif_extreme_handoff(
                     log_detail!(&format!(
                         "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
                     ));
-                    last_error = Some(reason);
-                    None
+                    last_error = Some(reason.clone());
+                    Err(reason)
                 }
             }
         },
@@ -3814,7 +3920,10 @@ fn try_jxl_to_avif_extreme_handoff(
                 "Final AVIF payload measurement failed without complete-file fallback: {error}"
             ))
         })?;
-    if !options.require_output_delivery() && avif_payload_size >= input_payload_size {
+    if !options.require_output_delivery()
+        && !foundation::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(avif_payload_size, input_payload_size)
+    {
         cleanup_temp_output(&avif_temp_output, input);
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
             "jxl_to_avif_extreme_final_size_drift",
@@ -3895,7 +4004,9 @@ fn try_jxl_pre_avif_fallback(
             color_info,
             "Pre-AVIF fallback probe",
         )?;
-        if output_size < input_payload_size {
+        if foundation::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(output_size, input_payload_size)
+        {
             foundation::fast_img::verify_pixel_equivalence_integrity(
                 input,
                 &candidate_output,
@@ -3954,7 +4065,9 @@ where
     Probe: FnMut(f32) -> std::result::Result<u64, String>,
 {
     let output_payload_size = probe(jxl_pre_avif_distance())?;
-    Ok((output_payload_size < input_payload_size).then_some(output_payload_size))
+    Ok(foundation::exploration_policy::SizePolicy::StrictlySmaller
+        .fits(output_payload_size, input_payload_size)
+        .then_some(output_payload_size))
 }
 
 fn jxl_avif_handoff_exhausted_result(
@@ -4458,8 +4571,9 @@ fn compare_jxl_finalists(
     right_distance: f32,
     right_size: u64,
 ) -> std::cmp::Ordering {
-    let left_smaller_than_input = left_size < input_size;
-    let right_smaller_than_input = right_size < input_size;
+    let policy = foundation::exploration_policy::SizePolicy::StrictlySmaller;
+    let left_smaller_than_input = policy.fits(left_size, input_size);
+    let right_smaller_than_input = policy.fits(right_size, input_size);
 
     match (left_smaller_than_input, right_smaller_than_input) {
         (true, false) => return std::cmp::Ordering::Less,
@@ -4668,7 +4782,7 @@ fn try_explore_ultimate_jxl_distance(
         return Ok(None);
     };
 
-    if best_size >= input_size {
+    if !foundation::exploration_policy::SizePolicy::StrictlySmaller.fits(best_size, input_size) {
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "jxl oversized best candidate cleanup",
             &best_path,
@@ -4704,7 +4818,11 @@ fn try_explore_ultimate_jxl_distance(
         let precision = foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION;
         let mut lower_bound = finalized_sizes
             .iter()
-            .filter(|(distance, size)| *distance < accepted_distance && *size >= input_size)
+            .filter(|(distance, size)| {
+                *distance < accepted_distance
+                    && !foundation::exploration_policy::SizePolicy::StrictlySmaller
+                        .fits(*size, input_size)
+            })
             .map(|(distance, _)| *distance)
             .max_by(f32::total_cmp)
             .unwrap_or(floor);
@@ -4836,6 +4954,8 @@ fn try_explore_ultimate_jxl_distance(
         }
     }
     let result = foundation::jxl_explorer::JxlExploreResult {
+        encoder_domain: foundation::exploration_policy::EncoderDomain::jxl(exploration_effort),
+        outcome: foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
         accepted_distance,
         output_size: fs::metadata(temp_output)?.len(),
         iterations: total_iterations,
@@ -6564,6 +6684,10 @@ mod tests {
         assert_eq!(jxl_encoder_effort(false, true), 11);
         assert_eq!(jxl_encoder_effort(false, false), 7);
         assert_eq!(jxl_encoder_effort(true, false), 11);
+        assert_ne!(
+            foundation::exploration_policy::EncoderDomain::jxl(7),
+            foundation::exploration_policy::EncoderDomain::jxl(11),
+        );
     }
 
     #[test]
@@ -6681,11 +6805,14 @@ mod tests {
     #[test]
     fn jxl_to_avif_search_finds_exact_highest_quality_boundary() {
         let mut probes = Vec::new();
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |quality| {
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
                 probes.push(quality);
-                Some(if quality <= 89 { 900 } else { 1_100 })
-            });
+                Ok(if quality <= 89 { 900 } else { 1_100 })
+            },
+        );
 
         assert_eq!(quality, Some(89));
         assert_eq!(probe_count, 7);
@@ -6694,10 +6821,30 @@ mod tests {
     }
 
     #[test]
+    fn jxl_to_avif_failed_probe_does_not_become_an_oversize_boundary() {
+        let (quality, _) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
+                if quality == 90 {
+                    Err("temporary encoder failure".to_string())
+                } else {
+                    Ok(if quality <= 89 { 900 } else { 1_100 })
+                }
+            },
+        );
+
+        assert_eq!(quality, Some(89));
+    }
+
+    #[test]
     fn jxl_to_avif_search_exhausts_before_preserving_source() {
         assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 0);
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |_quality| Some(1_000));
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |_quality| Ok(1_000),
+        );
 
         assert_eq!(quality, None);
         assert_eq!(probe_count, 11);
@@ -6706,11 +6853,14 @@ mod tests {
     #[test]
     fn jxl_to_avif_search_uses_verified_q0_as_emergency_final_fallback() {
         let mut probes = Vec::new();
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |quality| {
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
                 probes.push(quality);
-                Some(if quality == 0 { 900 } else { 1_100 })
-            });
+                Ok(if quality == 0 { 900 } else { 1_100 })
+            },
+        );
 
         assert_eq!(quality, Some(0));
         assert_eq!(
@@ -6728,9 +6878,9 @@ mod tests {
     fn required_delivery_accepts_verified_oversized_q100_avif() {
         let mut probes = Vec::new();
         let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, false, |quality| {
+            search_highest_fitting_avif_quality_with(1_000, None, |quality| {
                 probes.push(quality);
-                Some(1_100)
+                Ok(1_100)
             });
 
         assert_eq!(quality, Some(100));

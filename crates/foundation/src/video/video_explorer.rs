@@ -383,7 +383,10 @@ pub(crate) fn exploration_size_margin_from_output(
     input_pure_media_size: u64,
     output_pure_media_size: u64,
 ) -> Option<f64> {
-    if input_pure_media_size == 0 || output_pure_media_size >= input_pure_media_size {
+    if input_pure_media_size == 0
+        || !crate::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(output_pure_media_size, input_pure_media_size)
+    {
         return None;
     }
     let margin = crate::numeric_cast::u64_to_f64(
@@ -1359,7 +1362,9 @@ impl<'a> PreciseCompressionSession<'a> {
         }
 
         let max_sample = self.probe("Stage A", self.explorer.config.max_crf)?;
-        if max_sample.size >= self.explorer.input_size {
+        if !crate::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(max_sample.size, self.explorer.input_size)
+        {
             return self.finish_highly_compressed(max_sample);
         }
 
@@ -1794,7 +1799,9 @@ impl<'a> PreciseCompressionSession<'a> {
         } else {
             0.0_f64
         };
-        let compress_icon = if size < self.target_size {
+        let compress_icon = if crate::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(size, self.target_size)
+        {
             crate::media_conversion_gate::ui_icon_pick("💾", "[SAVE]")
         } else {
             crate::media_conversion_gate::ui_icon_pick("⚠️", "[WARN]")
@@ -1818,7 +1825,7 @@ impl<'a> PreciseCompressionSession<'a> {
     }
 
     const fn is_under_target(&self, size: u64) -> bool {
-        size < self.target_size
+        crate::exploration_policy::SizePolicy::StrictlySmaller.fits(size, self.target_size)
     }
 
     const fn within_fine_tune_bounds(&self, crf: f32) -> bool {
@@ -4137,7 +4144,8 @@ impl VideoExplorer {
 
     #[inline]
     const fn can_compress_with_margin(&self, output_pure_media_size: u64) -> bool {
-        output_pure_media_size < self.input_pure_media_size
+        crate::exploration_policy::SizePolicy::StrictlySmaller
+            .fits(output_pure_media_size, self.input_pure_media_size)
     }
 
     #[inline]

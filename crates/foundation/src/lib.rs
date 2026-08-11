@@ -361,6 +361,7 @@ pub use media_precision::{
     BitDepthMetadata, ImagePrecisionProfile, MediaPrecision, hevc_yuv420_output_pix_fmt,
 };
 
+pub use algo::exploration_policy;
 pub use batch::*;
 pub use codecs::*;
 pub use constants::*;

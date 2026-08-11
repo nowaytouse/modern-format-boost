@@ -1606,6 +1606,7 @@ mod fast_gif_tests {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
         };
 
         assert_eq!(fast_gif_delivery_output_path(&result)?, Some(output));
@@ -1635,6 +1636,7 @@ mod fast_gif_tests {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
         };
 
         assert_eq!(fast_gif_avif_delivery_output_path(&result)?, Some(output));

@@ -191,6 +191,9 @@ impl JxlScreeningResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JxlExploreResult {
+    /// Effort domain in which accepted distance and size were measured.
+    pub encoder_domain: crate::exploration_policy::EncoderDomain,
+    pub outcome: crate::exploration_policy::ExplorationOutcome,
     pub accepted_distance: f32,
     pub output_size: u64,
     pub iterations: u32,
@@ -249,7 +252,13 @@ impl JxlExploreResult {
         if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled() {
             return true;
         }
-        self.output_size > 0 && self.accepted_distance.is_finite() && self.iterations > 0
+        matches!(
+            self.encoder_domain,
+            crate::exploration_policy::EncoderDomain::Jxl { .. }
+        ) && self.outcome == crate::exploration_policy::ExplorationOutcome::ExploredOptimized
+            && self.output_size > 0
+            && self.accepted_distance.is_finite()
+            && self.iterations > 0
     }
 
     /// Sanitize finalized JXL exploration outputs.
@@ -416,6 +425,10 @@ fn size_ratio(size: u64, input_size: u64) -> f64 {
     {
         crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size)
     }
+}
+
+const fn candidate_fits_source(size: u64, input_size: u64) -> bool {
+    crate::exploration_policy::SizePolicy::StrictlySmaller.fits(size, input_size)
 }
 
 fn size_ratio_pct(size: u64, input_size: u64) -> f64 {
@@ -826,7 +839,7 @@ fn shortlist_finalists(
     // highest-quality valid winner.
     let mut below_source: Vec<_> = candidates
         .iter()
-        .filter(|c| c.output_size < input_size)
+        .filter(|c| candidate_fits_source(c.output_size, input_size))
         .collect();
     below_source.sort_by(|a, b| {
         a.distance
@@ -839,7 +852,10 @@ fn shortlist_finalists(
     // boundary evidence in the same encoder-effort domain.
     let mut near_boundary_cands: Vec<_> = candidates
         .iter()
-        .filter(|c| c.output_size >= input_size && near_boundary(c.output_size, input_size))
+        .filter(|c| {
+            !candidate_fits_source(c.output_size, input_size)
+                && near_boundary(c.output_size, input_size)
+        })
         .collect();
     near_boundary_cands.sort_by(|a, b| {
         a.distance
@@ -852,7 +868,7 @@ fn shortlist_finalists(
     let mut promoted_oversize: Vec<_> = candidates
         .iter()
         .filter(|c| {
-            c.output_size >= input_size
+            !candidate_fits_source(c.output_size, input_size)
                 && !near_boundary(c.output_size, input_size)
                 && !c.reasons.is_empty()
         })
@@ -1338,7 +1354,7 @@ where
         let trend = if size < previous_size { "↓" } else { "→" };
         let status = if near_boundary(size, input_size) {
             "near break-even"
-        } else if size < input_size {
+        } else if candidate_fits_source(size, input_size) {
             "below source"
         } else {
             "still oversize"
@@ -1399,7 +1415,7 @@ where
 
             let status = if near_boundary(size, input_size) {
                 "near break-even"
-            } else if size < input_size {
+            } else if candidate_fits_source(size, input_size) {
                 "below source"
             } else {
                 "still oversize"
@@ -1444,7 +1460,7 @@ where
 
             let status = if near_boundary(size, input_size) {
                 "NEAR BREAK-EVEN"
-            } else if size < input_size {
+            } else if candidate_fits_source(size, input_size) {
                 "SAFE (BELOW SOURCE)"
             } else {
                 "STILL OVERSIZE"

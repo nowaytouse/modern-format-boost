@@ -58,6 +58,32 @@ All notable changes to this project will be documented in this file.
   telemetry messages now describe that real domain instead of the retired
   e7-screen/e10-finalize model.
 
+### Unified IMG/VID Exploration Domains
+
+- **One exploration objective**: IMG and VID now use a shared size-policy,
+  probe-outcome, encoder-domain, and product-outcome vocabulary. A lossy search
+  selects the highest-quality verified product that satisfies the active size
+  policy; output size is no longer treated as the primary objective after a
+  candidate already fits.
+- **Final-domain video calibration**: A CRF found with another preset or a
+  sampled timeline is now only a locator. The requested final preset encodes
+  real full-timeline anchors, establishes its own fitting/oversized bracket,
+  and refines inside that domain. A higher-quality final candidate may be
+  larger than the current candidate as long as it still satisfies the active
+  size policy.
+- **Fresh final quality evidence**: Final VMAF-Y and PSNR-UV are measured from
+  the materialized delivery product instead of being copied from search
+  history. CAMBI remains compared with a freshly measured source baseline;
+  missing final metrics fail closed.
+- **Lossless-first Meme routing**: Confirmed-lossless Meme sources first try a
+  verified true-lossless AVIF at speed 0. Only a strictly smaller lossless
+  payload is accepted; otherwise the explicit Meme intent proceeds to lossy
+  quality-boundary exploration. Metadata-clean AVIF adoption, lossless
+  transcoding, explored optimization, and failure now have distinct outcomes.
+- **Failure-safe AVIF handoff**: JXL-to-AVIF quality search now distinguishes
+  encoder/measurement failure from a real oversized candidate. Failed quality
+  points are skipped and cannot fabricate or shrink a size boundary.
+
 ### Reliability, Delivery & CI Repairs
 
 - **FastImg AVIF Meme Mode**: Static-image delivery now normalizes every
