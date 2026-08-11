@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.11.3] - 2026-07-22
+## [0.11.3] - 2026-08-11
 
 ### August 2026 Polish: FastImg Delivery & Native GUI Safety
 

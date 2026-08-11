@@ -1372,10 +1372,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
         let bundled = app_resources.join(bin);
         if bundled.is_file() {
             let mut command = Command::new("codesign");
-            command
-                .arg("--force")
-                .arg("--sign")
-                .arg(&signing_identity);
+            command.arg("--force").arg("--sign").arg(&signing_identity);
             if entitlements.is_file() {
                 command.arg("--entitlements").arg(&entitlements);
             }
@@ -1387,10 +1384,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
     }
 
     let mut command = Command::new("codesign");
-    command
-        .arg("--force")
-        .arg("--sign")
-        .arg(&signing_identity);
+    command.arg("--force").arg("--sign").arg(&signing_identity);
     if entitlements.is_file() {
         command.arg("--entitlements").arg(&entitlements);
     }
@@ -1402,9 +1396,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
 
     println!(
         "{}App Bundle signed with {}.{}",
-        style.green,
-        signing_identity,
-        style.reset
+        style.green, signing_identity, style.reset
     );
     Ok(())
 }
