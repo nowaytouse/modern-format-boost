@@ -593,13 +593,10 @@ pub fn can_compress_pure_video(
         }
     };
 
-    let size_policy = if allow_size_tolerance {
-        crate::exploration_policy::SizePolicy::AllowGrowth {
-            max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-        }
-    } else {
-        crate::exploration_policy::SizePolicy::StrictlySmaller
-    };
+    let size_policy = crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let result = size_policy.fits(output_pure_media_size, input_pure_media_size);
 
     crate::log_info!(

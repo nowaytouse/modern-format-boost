@@ -3283,13 +3283,10 @@ impl<'a> CpuFineTuneSession<'a> {
     }
 
     const fn size_policy(&self) -> SizePolicy {
-        if self.allow_size_tolerance {
-            SizePolicy::AllowGrowth {
-                max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-            }
-        } else {
-            SizePolicy::StrictlySmaller
-        }
+        SizePolicy::strict_or_allow_growth(
+            self.allow_size_tolerance,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        )
     }
 
     const fn candidate_fits(&self, size: u64) -> bool {
@@ -5392,13 +5389,10 @@ impl<'a> CpuFineTuneSession<'a> {
             ..
         } = self;
 
-        let size_policy = if allow_size_tolerance {
-            SizePolicy::AllowGrowth {
-                max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-            }
-        } else {
-            SizePolicy::StrictlySmaller
-        };
+        let size_policy = SizePolicy::strict_or_allow_growth(
+            allow_size_tolerance,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        );
 
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,

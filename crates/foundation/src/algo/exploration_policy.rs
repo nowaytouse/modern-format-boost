@@ -16,6 +16,17 @@ pub enum SizePolicy {
 }
 
 impl SizePolicy {
+    /// Build the shared strict policy, optionally allowing a caller-selected
+    /// bounded amount of growth.
+    #[must_use]
+    pub const fn strict_or_allow_growth(allow_growth: bool, max_extra_bytes: u64) -> Self {
+        if allow_growth {
+            Self::AllowGrowth { max_extra_bytes }
+        } else {
+            Self::StrictlySmaller
+        }
+    }
+
     /// Return whether `candidate_size` satisfies this policy relative to the
     /// measured source payload.
     #[must_use]
@@ -211,6 +222,20 @@ mod tests {
         assert!(policy.fits(1_020, 1_000));
         assert!(!policy.fits(1_021, 1_000));
         assert!(policy.fits(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn optional_growth_selects_one_shared_policy() {
+        assert_eq!(
+            SizePolicy::strict_or_allow_growth(false, 20),
+            SizePolicy::StrictlySmaller
+        );
+        assert_eq!(
+            SizePolicy::strict_or_allow_growth(true, 20),
+            SizePolicy::AllowGrowth {
+                max_extra_bytes: 20
+            }
+        );
     }
 
     #[test]

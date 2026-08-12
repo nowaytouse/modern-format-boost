@@ -224,13 +224,10 @@ fn verify_pure_media_sizes(
 ) -> PureMediaVerifyResult {
     let input_pure_media = input_video.saturating_add(input_audio);
     let output_pure_media = output_video.saturating_add(output_audio);
-    let size_policy = if allow_size_tolerance {
-        crate::exploration_policy::SizePolicy::AllowGrowth {
-            max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-        }
-    } else {
-        crate::exploration_policy::SizePolicy::StrictlySmaller
-    };
+    let size_policy = crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let pure_media_compressed = size_policy.fits(output_pure_media, input_pure_media);
 
     let video_compression_ratio = size_ratio_or_one(output_video, input_video);
@@ -265,13 +262,10 @@ pub const fn is_video_compressed(
     output_video_size: u64,
     allow_size_tolerance: bool,
 ) -> bool {
-    let size_policy = if allow_size_tolerance {
-        crate::exploration_policy::SizePolicy::AllowGrowth {
-            max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-        }
-    } else {
-        crate::exploration_policy::SizePolicy::StrictlySmaller
-    };
+    let size_policy = crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     size_policy.fits(output_video_size, input_video_size)
 }
 

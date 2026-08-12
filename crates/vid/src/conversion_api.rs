@@ -1798,17 +1798,6 @@ ignored: false,
             if !explore_result.pipeline_acceptable(config.match_quality(), config.explore_smaller())
                 && (config.match_quality() || config.explore_smaller())
             {
-                let pure_media_compressed =
-                    explore_result.output_pure_media_size < explore_result.input_pure_media_size;
-                let pure_media_size_ratio = if explore_result.input_pure_media_size > 0 {
-                    let ratio = Rational::from((
-                        explore_result.output_pure_media_size,
-                        explore_result.input_pure_media_size,
-                    ));
-                    ratio.to_f64()
-                } else {
-                    1.0_f64
-                };
                 let decision =
                     ExploreGateRejectionDecision::inspect_and_log(input, &explore_result);
                 decision.emit(input);
@@ -1817,10 +1806,10 @@ ignored: false,
                 if foundation::should_keep_apple_fallback_hevc_output(
                     foundation::AppleFallbackKeepRequest {
                         codec_str: detection.codec.as_str(),
-                        pure_media_size_ratio,
+                        input_pure_media_size: explore_result.input_pure_media_size,
+                        output_pure_media_size: explore_result.output_pure_media_size,
                         flags: foundation::AppleFallbackFlags {
                             outcome: foundation::AppleOutcomeFlags {
-                                pure_media_compressed,
                                 allow_size_tolerance: config.allow_size_tolerance(),
                             },
                             context: foundation::AppleContextFlags {
@@ -2150,17 +2139,6 @@ ignored: false,
         ));
     }
 
-    let pure_media_compressed =
-        verify_result.output_pure_media_size < verify_result.input_pure_media_size;
-    let pure_media_size_ratio = if verify_result.input_pure_media_size > 0 {
-        let ratio = Rational::from((
-            verify_result.output_pure_media_size,
-            verify_result.input_pure_media_size,
-        ));
-        ratio.to_f64()
-    } else {
-        1.0_f64
-    };
     let pure_media_within_tolerance = verify_result.pure_media_compressed;
 
     // --- require_compression phase: primary decision by exact video + audio packet payload. ---
@@ -2191,10 +2169,10 @@ ignored: false,
         if foundation::should_keep_apple_fallback_hevc_output(
             foundation::AppleFallbackKeepRequest {
                 codec_str: detection.codec.as_str(),
-                pure_media_size_ratio,
+                input_pure_media_size: verify_result.input_pure_media_size,
+                output_pure_media_size: verify_result.output_pure_media_size,
                 flags: foundation::AppleFallbackFlags {
                     outcome: foundation::AppleOutcomeFlags {
-                        pure_media_compressed,
                         allow_size_tolerance: config.allow_size_tolerance(),
                     },
                     context: foundation::AppleContextFlags {

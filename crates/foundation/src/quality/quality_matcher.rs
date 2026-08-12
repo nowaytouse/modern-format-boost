@@ -2395,7 +2395,6 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AppleOutcomeFlags {
-    pub pure_media_compressed: bool,
     pub allow_size_tolerance: bool,
 }
 
@@ -2418,7 +2417,8 @@ pub struct AppleFallbackFlags {
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {
     pub codec_str: &'a str,
-    pub pure_media_size_ratio: f64,
+    pub input_pure_media_size: u64,
+    pub output_pure_media_size: u64,
     pub flags: AppleFallbackFlags,
 }
 
@@ -2436,9 +2436,48 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
     {
         return false;
     }
-    request.flags.outcome.pure_media_compressed
-        || (request.flags.outcome.allow_size_tolerance
-            && request.pure_media_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
+    crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        request.flags.outcome.allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    )
+    .fits(
+        request.output_pure_media_size,
+        request.input_pure_media_size,
+    )
+}
+
+#[cfg(test)]
+mod apple_fallback_policy_tests {
+    use super::*;
+
+    fn request(output_pure_media_size: u64, allow_size_tolerance: bool) -> AppleFallbackKeepRequest<'static> {
+        AppleFallbackKeepRequest {
+            codec_str: "vp9",
+            input_pure_media_size: 10_000_000,
+            output_pure_media_size,
+            flags: AppleFallbackFlags {
+                outcome: AppleOutcomeFlags {
+                    allow_size_tolerance,
+                },
+                context: AppleContextFlags {
+                    apple_compat: true,
+                    source_is_gif: false,
+                    ultimate_explore: false,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn apple_fallback_uses_the_shared_byte_budget() {
+        let ceiling = 10_000_000_u64 + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
+        assert!(!should_keep_apple_fallback_hevc_output(request(10_000_000, false)));
+        assert!(should_keep_apple_fallback_hevc_output(request(ceiling, true)));
+        assert!(!should_keep_apple_fallback_hevc_output(request(
+            ceiling + 1,
+            true
+        )));
+    }
 }
 
 #[must_use]
