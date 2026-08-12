@@ -6,17 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
-- **Domain-correct AVIF exploration**: Meme Mode now uses speed 1 only as a
-  bounded locator and always re-establishes the complete quality bracket and
-  refinement at final speed 0. Locator candidates cannot become final evidence,
-  preventing quality values from being compared across non-equivalent encoder
-  speed domains.
+- **Domain-correct AVIF exploration**: Meme Mode uses fast speed 6 only as a
+  bounded locator, then re-establishes the quality bracket and refinement at
+  final speed 0. Locator candidates cannot become final evidence, preventing
+  quality values from being compared across non-equivalent encoder speed
+  domains while avoiding most expensive final-domain coarse probes.
 - **Hardening rule consolidation**: Effective fail-closed, evidence, scope,
   dependency-approval, workspace-preservation, and privacy-upload rules are now
   maintained in the local mandatory policy; obsolete duplicate policy templates
   were removed.
 - **Dependency refresh**: `num-integer` and `whoami` lock entries were refreshed
   with `cargo update`; no manifest dependency was added or changed.
+- **External-sample calibration**: Healthy public JPEG, PNG, and WebP samples
+  were downloaded into a temporary directory for AVIF speed calibration; no
+  local media or Photos library content was read or copied. Speed 6 provided a
+  materially faster locator than speed 1, while all final evidence remained in
+  the speed 0 domain.
 
 ## [0.11.3] - 2026-08-11
 

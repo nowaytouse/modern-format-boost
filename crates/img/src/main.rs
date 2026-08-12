@@ -10901,7 +10901,7 @@ mod fast_img_hardening_tests {
         assert_eq!(super::AVIF_MEME_SPEED, 0);
         assert_eq!(
             foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_LOCATOR.value(),
-            1
+            6
         );
         assert_eq!(
             foundation::exploration_policy::EncoderDomain::avif(super::AVIF_MEME_SPEED),

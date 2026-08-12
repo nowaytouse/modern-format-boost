@@ -108,8 +108,8 @@ pub enum EncoderDomain {
 pub struct AvifSpeedDomain(u8);
 
 impl AvifSpeedDomain {
-    /// Adjacent locator domain; results are hints, never final evidence.
-    pub const MEME_QUALITY_LOCATOR: Self = Self(1);
+    /// Fast locator domain; results are hints, never final evidence.
+    pub const MEME_QUALITY_LOCATOR: Self = Self(6);
     /// Slow final domain used for materialized delivery candidates.
     pub const MEME_QUALITY_SEARCH: Self = Self(0);
 
@@ -297,7 +297,7 @@ mod tests {
     fn avif_quality_search_separates_locator_and_final_speed_domains() {
         let locator = AvifSpeedDomain::MEME_QUALITY_LOCATOR;
         let final_domain = AvifSpeedDomain::MEME_QUALITY_SEARCH;
-        assert_eq!(locator.value(), 1);
+        assert_eq!(locator.value(), 6);
         assert_eq!(final_domain.value(), 0);
         assert_eq!(final_domain.encoder_domain(), EncoderDomain::avif(0));
         assert_ne!(locator.encoder_domain(), final_domain.encoder_domain());
