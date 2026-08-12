@@ -906,9 +906,17 @@ fn main() -> Result<()> {
     if args.fix {
         println!("Running multi-language auto-fixers across workspace...");
         // Rust
-        let _ = Command::new("cargo").args(["fmt", "--all"]).status();
-        let _ = Command::new("cargo")
-            .args([
+        run_required(
+            &repo_root,
+            "cargo fmt --all (fix)",
+            "cargo",
+            &["fmt", "--all"],
+        )?;
+        run_required(
+            &repo_root,
+            "clippy_strict --fix",
+            "cargo",
+            &[
                 "run",
                 "--locked",
                 "-p",
@@ -917,31 +925,39 @@ fn main() -> Result<()> {
                 "clippy_strict",
                 "--",
                 "--fix",
-            ])
-            .status();
+            ],
+        )?;
         // Python
         if command_exists("ruff") {
-            let _ = Command::new("ruff").args(["check", "--fix", "."]).status();
-            let _ = Command::new("ruff").args(["format", "."]).status();
+            run_required(
+                &repo_root,
+                "ruff check --fix",
+                "ruff",
+                &["check", "--fix", "."],
+            )?;
+            run_required(&repo_root, "ruff format", "ruff", &["format", "."])?;
         }
         if command_exists("pyupgrade") && !py_files.is_empty() {
             let mut pyupgrade_args = vec!["--py311-plus".to_string()];
             pyupgrade_args.extend(py_files.iter().cloned());
-            let _ = Command::new("pyupgrade").args(pyupgrade_args).status();
+            run_required_vec(&repo_root, "pyupgrade", "pyupgrade", &pyupgrade_args)?;
         }
         // Shell
         if command_exists("shfmt") && !shell_files.is_empty() {
             let mut shfmt_args = vec!["-w".to_string(), "-i".to_string(), "4".to_string()];
             shfmt_args.extend(shell_files.iter().cloned());
-            let _ = Command::new("shfmt").args(shfmt_args).status();
+            run_required_vec(&repo_root, "shfmt", "shfmt", &shfmt_args)?;
         }
         // Vue / Node
         let vue_path = vue_dir(&repo_root);
         if vue_path.join("package.json").is_file() {
             let vue_prefix = vue_path.to_string_lossy().into_owned();
-            let _ = Command::new("npm")
-                .args(["--prefix", &vue_prefix, "run", "format"])
-                .status();
+            run_required(
+                &repo_root,
+                "Vue npm run format",
+                "npm",
+                &["--prefix", &vue_prefix, "run", "format"],
+            )?;
         }
         // Web / Prettier (MD, JSON, YAML, Vue, TS, JS, CSS, HTML)
         let mut prettier_targets = md_files.clone();
@@ -951,27 +967,30 @@ fn main() -> Result<()> {
         if command_exists("prettier") && !prettier_targets.is_empty() {
             let mut prettier_args = vec!["--write".to_string()];
             prettier_args.extend(prettier_targets);
-            let _ = Command::new("prettier").args(prettier_args).status();
+            run_required_vec(&repo_root, "prettier --write", "prettier", &prettier_args)?;
         }
         // TOML
         if let Some(cmd) = taplo_fmt_command(&toml_files, &[])
             && let Some((program, args)) = cmd.split_first()
         {
-            let _ = Command::new(program).args(args).status();
+            run_required_vec(&repo_root, "taplo fmt", program, args)?;
         }
         // SQL (PostgreSQL dialect)
         if command_exists("npx") && !sql_files.is_empty() {
             for sql_file in &sql_files {
-                let _ = Command::new("npx")
-                    .args(["-y", "sql-formatter", "-l", "postgresql", "--fix", sql_file])
-                    .status();
+                run_required(
+                    &repo_root,
+                    &format!("sql-formatter --fix {sql_file}"),
+                    "npx",
+                    &["-y", "sql-formatter", "-l", "postgresql", "--fix", sql_file],
+                )?;
             }
         }
         // Plist (macOS)
         if cfg!(target_os = "macos") && command_exists("plutil") && !plist_files.is_empty() {
             let mut plutil_args = vec!["-convert".to_string(), "xml1".to_string()];
             plutil_args.extend(plist_files.iter().cloned());
-            let _ = Command::new("plutil").args(plutil_args).status();
+            run_required_vec(&repo_root, "plutil -convert xml1", "plutil", &plutil_args)?;
         }
     }
 

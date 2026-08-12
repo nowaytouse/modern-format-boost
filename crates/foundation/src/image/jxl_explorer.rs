@@ -1060,7 +1060,7 @@ struct JxlScreeningSession {
 }
 
 impl JxlScreeningSession {
-    fn fits(&self, size: u64) -> bool {
+    const fn fits(&self, size: u64) -> bool {
         self.size_policy.fits(size, self.input_size)
     }
 
@@ -1979,7 +1979,7 @@ mod tolerance_tests {
                     Ok(source_pure - 100 * 1024)
                 }
             })
-            .unwrap_or_else(|e| panic!("exploration failed: {:?}", e))
+            .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
             .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Highest quality fitting candidate starts at d0.05.

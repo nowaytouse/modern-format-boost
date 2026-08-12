@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **CLI-only GUI surface**: Removed the non-CLI mock-processing and decorative
+  drop-zone path; the bundled UI now exposes only the real CLI command,
+  terminal execution, logs, and explicit resume/fresh decisions.
+- **Fail-closed workspace fixer**: `check_all --fix` now stops on the first
+  formatter or fixer failure instead of discarding child exit statuses. A real
+  Ruff failure therefore remains visible and cannot be reported as a clean fix.
 - **Domain-correct AVIF exploration**: Meme Mode uses fast speed 6 only as a
   bounded locator, then re-establishes the quality bracket and refinement at
   final speed 0. Locator candidates cannot become final evidence, preventing

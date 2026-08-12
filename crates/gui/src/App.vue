@@ -15,10 +15,8 @@ const locales = ["zh", "en", "ja"];
 const currentLocaleIndex = ref(0);
 
 const isDark = ref(true);
-const isCliMode = ref(false);
 const useExternalTerminal = ref(true); // Default to external terminal
 const processing = ref(false);
-const progress = ref(0);
 const folderPath = ref("");
 const logs = ref<string[]>([]);
 const uiNotice = ref("");
@@ -27,38 +25,13 @@ const displayedLogs = computed(() => logs.value.slice(-160));
 const terminalRef = ref<HTMLElement | null>(null);
 const processorBinaryPath = ref<string>("");
 const cliCommandPreview = computed(() => generateCliCommand());
-const shouldAnimateAmbient = computed(
-  () => !prefersReducedMotion.value && !isCliMode.value,
-);
+const shouldAnimateAmbient = computed(() => !prefersReducedMotion.value);
 const AUTO_SCROLL_THRESHOLD = 48;
 
-// ─── Exact Drag & Drop Script Configs ───
-// Processing Mode: Both, Images Only, Videos Only
-const processingModeOpts = computed(() => [
-  { id: "both", label: t("options.all"), icon: "📦" },
-  { id: "images_only", label: t("options.images"), icon: "🖼️" },
-  { id: "videos_only", label: t("options.videos"), icon: "🎬" },
-]);
+// ─── CLI Processing Config ───
 const processingMode = ref("both");
 
 // Output Mode / Tools
-const outputModeOpts = computed(() => [
-  { id: "adjacent", label: t("format.avif_hevc") + " (Adj)", icon: "📂" },
-  { id: "fast_img", label: t("tier.fast") + " (IMG JXL)", icon: "⚡" },
-  {
-    id: "fast_img_avif",
-    label: t("tier.fast") + " (IMG AVIF Meme)",
-    icon: "🤡",
-  },
-  { id: "fast_vid", label: t("tier.fast") + " (VID)", icon: "🚀" },
-  { id: "restore_jpeg", label: "Restore to JPEG", icon: "⏪" },
-  { id: "collect", label: "Collect Optimized", icon: "📥" },
-  { id: "merge_xmp", label: "Merge XMP", icon: "📝" },
-  { id: "icloud_import", label: "iCloud Import", icon: "☁️" },
-  { id: "diagnostic", label: "Diagnostic Analysis", icon: "🩺" },
-  { id: "cache_clean", label: "Cache Cleaner", icon: "🧹" },
-  { id: "database_manager", label: "Database Manager", icon: "🗄️" },
-]);
 const outputMode = ref("adjacent");
 
 // Advanced Toggles
@@ -95,34 +68,8 @@ const toggleTheme = () => {
   document.documentElement.dataset.theme = isDark.value ? "dark" : "light";
 };
 
-// ─── Drag & Drop ───
-const isDragging = ref(false);
-const onDragEnter = (e: DragEvent) => {
-  e.preventDefault();
-  isDragging.value = true;
-};
-const onDragLeave = (e: DragEvent) => {
-  e.preventDefault();
-  isDragging.value = false;
-};
-const onDrop = (e: DragEvent) => {
-  e.preventDefault();
-  isDragging.value = false;
-  if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-    folderPath.value =
-      e.dataTransfer.files[0].name || t("processing.dragged_folder");
-    startMockProcessing();
-  }
-};
-
 const selectFolder = async () => {
   if (processing.value) return;
-
-  if (!isCliMode.value) {
-    folderPath.value = t("processing.selected_folder");
-    startMockProcessing();
-    return;
-  }
 
   // 30-minute timeout for dialog (1800000 ms)
   dialogTimeout = setTimeout(() => {
@@ -149,7 +96,6 @@ const selectFolder = async () => {
   }
 };
 
-let progressInterval: ReturnType<typeof setInterval> | null = null;
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
 let dialogTimeout: ReturnType<typeof setTimeout> | null = null;
 let noticeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -198,26 +144,6 @@ const appendLog = (entry: string) => {
     }
     scrollTimeout = null;
   }, 16);
-};
-
-const startMockProcessing = () => {
-  if (progressInterval) clearInterval(progressInterval);
-  processing.value = true;
-  progress.value = 0;
-  progressInterval = setInterval(() => {
-    progress.value += Math.random() * 3;
-    if (progress.value >= 100) {
-      progress.value = 100;
-      if (progressInterval !== null) {
-        clearInterval(progressInterval);
-      }
-      progressInterval = null;
-      setTimeout(() => {
-        processing.value = false;
-        folderPath.value = "";
-      }, 1500);
-    }
-  }, 50);
 };
 
 type ResumeAction = "resume" | "fresh" | "cancel";
@@ -319,12 +245,8 @@ const startCliProcessing = async () => {
   }
 };
 
-const toggleCliMode = () => {
-  isCliMode.value = !isCliMode.value;
-};
-
 const shellQuote = (value: string) =>
-  "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  "'" + value.split("'").join("'\"'\"'") + "'";
 
 const generateCliCommand = () => {
   if (!folderPath.value) return "";
@@ -495,9 +417,6 @@ const syncPointerTracking = () => {
   resetPointerPosition();
 };
 
-const preventDrag = (e: Event) => {
-  e.preventDefault();
-};
 onMounted(() => {
   // We cannot use requestAnimationFrame because a hidden window may pause rendering pipelines.
   // A small timeout allows Vue to paint without deadlocking the webview.
@@ -506,8 +425,6 @@ onMounted(() => {
   }, 100);
 
   // Web Fallbacks
-  globalThis.addEventListener("dragover", preventDrag);
-  globalThis.addEventListener("drop", preventDrag);
   document.documentElement.dataset.theme = "dark";
 
   motionMediaQuery = globalThis.matchMedia("(prefers-reduced-motion: reduce)");
@@ -553,16 +470,11 @@ onMounted(() => {
   listen("file-drop", (event: { payload: unknown }) => {
     const paths = event.payload as string[];
     if (paths.length > 0) {
-      if (isCliMode.value) {
-        folderPath.value = paths[0];
-        if (useExternalTerminal.value) {
-          void openInTerminal();
-        } else {
-          void startCliProcessing();
-        }
+      folderPath.value = paths[0];
+      if (useExternalTerminal.value) {
+        void openInTerminal();
       } else {
-        folderPath.value = t("processing.dragged_folder");
-        startMockProcessing();
+        void startCliProcessing();
       }
     }
   })
@@ -584,8 +496,6 @@ onMounted(() => {
     });
 });
 onUnmounted(() => {
-  globalThis.removeEventListener("dragover", preventDrag);
-  globalThis.removeEventListener("drop", preventDrag);
   globalThis.removeEventListener("mousemove", onMouseMove);
   motionMediaQuery?.removeEventListener("change", syncReducedMotionPreference);
   stopVisualWatch?.();
@@ -595,7 +505,6 @@ onUnmounted(() => {
   nativeUnlisteners.length = 0;
   if (dialogTimeout) clearTimeout(dialogTimeout);
   if (noticeTimeout) clearTimeout(noticeTimeout);
-  if (progressInterval) clearInterval(progressInterval);
   if (scrollTimeout) clearTimeout(scrollTimeout);
   if (rafId !== null) cancelAnimationFrame(rafId);
 });
@@ -604,10 +513,7 @@ onUnmounted(() => {
 <template>
   <div class="app" @contextmenu.prevent>
     <!-- Dynamic background hardware accelerated mapping -->
-    <div
-      class="ambient-bg"
-      :class="{ 'ambient-bg--static': !shouldAnimateAmbient }"
-    />
+    <div class="ambient-bg" />
 
     <!-- ─── HEADER (Liquid Glass) ─── -->
     <header
@@ -631,13 +537,6 @@ onUnmounted(() => {
 
       <div class="header-right">
         <div class="action-group">
-          <button
-            class="icon-btn cli-toggle-btn"
-            title="Toggle CLI Mode"
-            @click="toggleCliMode"
-          >
-            <span class="text-icon">CLI</span>
-          </button>
           <button class="icon-btn" :title="t('lang')" @click="toggleLanguage">
             <span class="text-icon">{{ locale.toUpperCase() }}</span>
           </button>
@@ -690,7 +589,7 @@ onUnmounted(() => {
     </div>
 
     <!-- ─── CLI MODE CONTENT ─── -->
-    <main v-if="isCliMode" class="cli-content">
+    <main class="cli-content">
       <div class="cli-panel">
         <h2>{{ t("cli.title") }}</h2>
 
@@ -776,180 +675,11 @@ onUnmounted(() => {
       </div>
     </main>
 
-    <!-- ─── MAIN CONTENT ─── -->
-    <main v-else class="main-content">
-      <!-- LEFT PANEL: Controls -->
-      <aside class="panel controls-panel liquid-glass">
-        <div class="panel-header">
-          <h3 class="panel-title">
-            <span class="icon">⚙️</span> {{ t("advanced") }}
-          </h3>
-        </div>
-        <div class="panel-scroll">
-          <!-- Processing Mode -->
-          <div class="control-group">
-            <label class="group-label">{{ t("optionsLabel") }}</label>
-            <div class="segmented-control">
-              <label
-                v-for="mode in processingModeOpts"
-                :key="mode.id"
-                class="segment"
-                :class="{ active: processingMode === mode.id }"
-              >
-                <input v-model="processingMode" type="radio" :value="mode.id" />
-                <span class="seg-icon">{{ mode.icon }}</span>
-                <span class="seg-label">{{ mode.label }}</span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Output Mode -->
-          <div class="control-group">
-            <label class="group-label">{{ t("formatLabel") }}</label>
-            <div class="select-wrapper">
-              <select v-model="outputMode" class="liquid-select">
-                <option
-                  v-for="opt in outputModeOpts"
-                  :key="opt.id"
-                  :value="opt.id"
-                >
-                  {{ opt.icon }} {{ opt.label }}
-                </option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Boolean Toggles -->
-          <div class="control-group toggles-group">
-            <label class="toggle-row">
-              <span class="toggle-text"
-                >{{ t("toggles.ultimateMode") }}
-                <span class="badge warning">SLOW</span></span
-              >
-              <div class="switch" :class="{ on: mfbToggles.ultimateMode }">
-                <input v-model="mfbToggles.ultimateMode" type="checkbox" />
-                <div class="switch-knob" />
-              </div>
-            </label>
-            <label class="toggle-row">
-              <span class="toggle-text">{{ t("toggles.verboseMode") }}</span>
-              <div class="switch" :class="{ on: mfbToggles.verboseMode }">
-                <input v-model="mfbToggles.verboseMode" type="checkbox" />
-                <div class="switch-knob" />
-              </div>
-            </label>
-            <label class="toggle-row">
-              <span class="toggle-text">{{ t("toggles.resumeMode") }}</span>
-              <div class="switch" :class="{ on: mfbToggles.resumeMode }">
-                <input v-model="mfbToggles.resumeMode" type="checkbox" />
-                <div class="switch-knob" />
-              </div>
-            </label>
-            <label class="toggle-row">
-              <span class="toggle-text"
-                >{{ t("toggles.purgeCache") }}
-                <span class="badge info">CACHE</span></span
-              >
-              <div class="switch" :class="{ on: mfbToggles.shortestPath }">
-                <input v-model="mfbToggles.shortestPath" type="checkbox" />
-                <div class="switch-knob" />
-              </div>
-            </label>
-            <label class="toggle-row">
-              <span class="toggle-text">{{ t("toggles.skipRefresh") }}</span>
-              <div class="switch" :class="{ on: mfbToggles.cleanOutput }">
-                <input v-model="mfbToggles.cleanOutput" type="checkbox" />
-                <div class="switch-knob" />
-              </div>
-            </label>
-          </div>
-
-          <div class="panel-footer">
-            <button
-              class="liquid-btn primary"
-              :disabled="processing"
-              @click="selectFolder"
-            >
-              <span v-if="!processing">{{ t("dropzone.browse") }}</span>
-              <span v-else>Engine Running...</span>
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      <!-- RIGHT PANEL: Drop Zone -->
-      <section
-        class="panel files-panel liquid-glass"
-        :class="{ 'drag-active': isDragging }"
-        @dragenter="onDragEnter"
-        @dragover="onDragEnter"
-        @dragleave="onDragLeave"
-        @drop="onDrop"
-      >
-        <div class="drag-glow" :class="{ visible: isDragging }" />
-
-        <Transition name="fade" mode="out-in">
-          <!-- Idle State -->
-          <div v-if="!processing" key="idle" class="drop-idle">
-            <div class="drop-icon-container" :class="{ float: isDragging }">
-              <span class="huge-icon">📁</span>
-              <div class="ripple-ring" />
-            </div>
-            <h2 class="drop-title">
-              {{ isDragging ? t("dropzone.release") : t("dropzone.drag") }}
-            </h2>
-            <p class="drop-subtitle">
-              Folders drop here automatically route through pipeline.
-            </p>
-          </div>
-
-          <!-- Processing State -->
-          <div v-else key="proc" class="drop-processing">
-            <div class="progress-ring">
-              <svg width="140" height="140" viewBox="0 0 140 140">
-                <circle cx="70" cy="70" r="64" class="ring-bg" />
-                <circle
-                  cx="70"
-                  cy="70"
-                  r="64"
-                  class="ring-fill"
-                  :stroke-dasharray="`${2 * Math.PI * 64}`"
-                  :stroke-dashoffset="`${2 * Math.PI * 64 * (1 - progress / 100)}`"
-                />
-              </svg>
-              <span class="progress-text">{{ Math.round(progress) }}%</span>
-            </div>
-            <div class="proc-details">
-              <h3 class="proc-target">
-                {{ folderPath }}
-              </h3>
-              <p class="proc-status">
-                {{ t("pipeline.gate") }}
-              </p>
-            </div>
-            <div ref="terminalRef" class="terminal-logs">
-              <div
-                v-for="(log, idx) in displayedLogs"
-                :key="idx"
-                class="log-line"
-              >
-                {{ log }}
-              </div>
-            </div>
-          </div>
-        </Transition>
-      </section>
-    </main>
   </div>
 </template>
 
 <style>
 /* ─── CLI Mode Styles ─── */
-.cli-toggle-btn {
-  border: 1px solid var(--glass-border);
-  background: var(--glass-highlight);
-  font-weight: 900;
-}
 .cli-content {
   flex: 1;
   display: flex;
@@ -1258,10 +988,6 @@ body {
   );
   transition: opacity 0.5s ease;
 }
-.ambient-bg--static {
-  transform: translate3d(0, 0, 0);
-  will-change: auto;
-}
 
 .app {
   width: 100vw;
@@ -1411,481 +1137,4 @@ body {
   border: 1px solid #1aab29;
 }
 
-/* ─── Main Content ─── */
-.main-content {
-  flex: 1;
-  display: flex;
-  gap: 12px;
-  min-height: 0;
-}
-.panel {
-  display: flex;
-  flex-direction: column;
-  contain: layout paint;
-}
-
-/* Left Panel */
-.controls-panel {
-  width: 340px;
-  flex-shrink: 0;
-  padding: 20px;
-  gap: 20px;
-}
-.panel-header {
-  margin-bottom: 4px;
-}
-.panel-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-}
-.panel-scroll {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding-right: 4px;
-  margin-right: -4px;
-}
-.panel-scroll::-webkit-scrollbar {
-  width: 4px;
-}
-.panel-scroll::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.3);
-  border-radius: 4px;
-}
-
-/* Forms */
-.control-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.group-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.segmented-control {
-  display: flex;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 10px;
-  padding: 4px;
-  gap: 4px;
-}
-[data-theme="light"] .segmented-control {
-  background: rgba(0, 0, 0, 0.05);
-}
-.segment {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 4px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    background-color 0.2s ease,
-    color 0.2s ease,
-    box-shadow 0.2s ease,
-    transform 0.15s ease;
-  color: var(--text-muted);
-  position: relative;
-}
-.segment:hover {
-  transform: translateY(-1px);
-}
-.segment:active {
-  transform: translateY(0);
-}
-.segment input {
-  display: none;
-}
-.segment.active {
-  background: var(--glass-bg);
-  color: var(--text-main);
-  box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.1),
-    inset 0 1px 1px var(--glass-highlight);
-  transform: translateY(-1px);
-}
-.seg-icon {
-  font-size: 1.2rem;
-}
-.seg-label {
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-align: center;
-}
-
-.select-wrapper {
-  position: relative;
-}
-.liquid-select {
-  width: 100%;
-  appearance: none;
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--glass-border);
-  color: var(--text-main);
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  outline: none;
-  cursor: pointer;
-  box-shadow: inset 0 1px 1px var(--glass-highlight);
-  transition:
-    background-color 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    transform 0.15s ease;
-}
-[data-theme="light"] .liquid-select {
-  background: rgba(0, 0, 0, 0.05);
-}
-.liquid-select:hover {
-  border-color: var(--accent);
-  box-shadow:
-    inset 0 1px 1px var(--glass-highlight),
-    0 0 0 3px rgba(10, 132, 255, 0.1);
-}
-.liquid-select:focus {
-  border-color: var(--accent);
-  box-shadow:
-    inset 0 1px 1px var(--glass-highlight),
-    0 0 0 3px rgba(10, 132, 255, 0.2);
-}
-
-/* Switch Toggles */
-.toggles-group {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 12px;
-  padding: 4px;
-}
-[data-theme="light"] .toggles-group {
-  background: rgba(0, 0, 0, 0.03);
-}
-.toggle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    background-color 0.2s ease,
-    transform 0.15s ease;
-}
-.toggle-row:hover {
-  background: rgba(128, 128, 128, 0.1);
-  transform: translateX(2px);
-}
-.toggle-text {
-  font-size: 0.85rem;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.badge {
-  font-size: 0.6rem;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 700;
-}
-.badge.warning {
-  background: rgba(255, 149, 0, 0.2);
-  color: var(--warning);
-}
-.badge.info {
-  background: rgba(10, 132, 255, 0.2);
-  color: var(--accent);
-}
-
-.switch {
-  width: 36px;
-  height: 20px;
-  background: rgba(128, 128, 128, 0.3);
-  border-radius: 10px;
-  position: relative;
-  transition:
-    background-color 0.3s ease,
-    box-shadow 0.3s ease;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-.switch input {
-  display: none;
-}
-.switch-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: #fff;
-  border-radius: 50%;
-  transition:
-    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.3s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-.switch:hover {
-  box-shadow:
-    inset 0 1px 3px rgba(0, 0, 0, 0.2),
-    0 0 0 3px rgba(52, 199, 89, 0.1);
-}
-.switch.on {
-  background: var(--success);
-}
-.switch.on .switch-knob {
-  transform: translateX(16px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
-.panel-footer {
-  margin-top: auto;
-  padding-top: 16px;
-}
-.liquid-btn {
-  width: 100%;
-  padding: 14px;
-  border-radius: 12px;
-  border: none;
-  font-size: 0.95rem;
-  font-weight: 600;
-  cursor: pointer;
-  background: var(--glass-bg);
-  color: var(--text-main);
-  box-shadow:
-    inset 0 1px 1px var(--glass-highlight),
-    0 4px 12px rgba(0, 0, 0, 0.1);
-  border: 1px solid var(--glass-border);
-  transition:
-    background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.liquid-btn.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent-hover);
-  box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.3),
-    0 4px 15px rgba(10, 132, 255, 0.3);
-}
-.liquid-btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  transform: translateY(-1px);
-}
-.liquid-btn.primary:active:not(:disabled) {
-  transform: translateY(1px) scale(0.97);
-  box-shadow:
-    inset 0 2px 4px rgba(0, 0, 0, 0.2),
-    0 2px 8px rgba(10, 132, 255, 0.2);
-}
-.liquid-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Right Panel */
-.files-panel {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition:
-    border-color 0.3s ease,
-    transform 0.3s ease,
-    box-shadow 0.3s ease;
-}
-.files-panel.drag-active {
-  border-color: var(--accent);
-  transform: scale(0.98);
-}
-.drag-glow {
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 132, 255, 0.1);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-.drag-glow.visible {
-  opacity: 1;
-}
-
-.drop-idle,
-.drop-processing {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  z-index: 2;
-}
-
-.drop-icon-container {
-  position: relative;
-  margin-bottom: 20px;
-  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-.drop-icon-container.float {
-  transform: translateY(-20px) scale(1.1);
-}
-.huge-icon {
-  font-size: 5rem;
-  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.2));
-  position: relative;
-  z-index: 2;
-  transition: transform 0.3s ease;
-}
-.drop-icon-container:hover .huge-icon {
-  transform: scale(1.05);
-}
-.ripple-ring {
-  position: absolute;
-  inset: -20px;
-  border-radius: 50%;
-  border: 2px dashed var(--glass-border);
-  animation: spin-slow 10s linear infinite;
-  transition: border-color 0.3s ease;
-}
-.drop-icon-container:hover .ripple-ring {
-  border-color: var(--accent);
-}
-@keyframes spin-slow {
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-.drop-title {
-  font-size: 1.8rem;
-  font-weight: 700;
-  margin-bottom: 8px;
-  letter-spacing: -0.02em;
-}
-.drop-subtitle {
-  font-size: 0.95rem;
-  color: var(--text-muted);
-  max-width: 300px;
-  line-height: 1.4;
-}
-
-/* Processing UI */
-.progress-ring {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 24px;
-}
-.ring-bg {
-  fill: none;
-  stroke: rgba(128, 128, 128, 0.1);
-  stroke-width: 6;
-}
-.ring-fill {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 6;
-  stroke-linecap: round;
-  transform: rotate(-90deg);
-  transform-origin: 50% 50%;
-  transition:
-    stroke-dashoffset 0.1s linear,
-    stroke 0.3s ease;
-  filter: drop-shadow(0 0 6px rgba(10, 132, 255, 0.3));
-}
-.progress-text {
-  position: absolute;
-  font-size: 2rem;
-  font-weight: 700;
-}
-
-.proc-details {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-.proc-target {
-  font-size: 1.2rem;
-  font-weight: 600;
-}
-.pulse-bar {
-  width: 150px;
-  height: 4px;
-  background: rgba(128, 128, 128, 0.2);
-  border-radius: 2px;
-  overflow: hidden;
-  position: relative;
-}
-.pulse-indicator {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 40%;
-  background: var(--accent);
-  border-radius: 2px;
-  animation: sweep 1.5s infinite ease-in-out;
-  filter: drop-shadow(0 0 8px rgba(10, 132, 255, 0.5));
-}
-@keyframes sweep {
-  0% {
-    transform: translateX(-100%);
-    opacity: 0;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateX(300%);
-    opacity: 0;
-  }
-}
-.proc-status {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-/* Transitions */
-.fade-enter-active,
-.fade-leave-active {
-  transition:
-    opacity 0.3s ease,
-    transform 0.3s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: scale(0.95);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ambient-bg,
-  .drop-icon-container,
-  .ripple-ring,
-  .pulse-indicator,
-  .ring-fill,
-  .files-panel,
-  .fade-enter-active,
-  .fade-leave-active {
-    animation: none !important;
-    transition: none !important;
-  }
-}
 </style>

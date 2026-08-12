@@ -19,7 +19,7 @@ use foundation::ToolBuilder;
 use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
-use foundation::jxl_effort_policy::{JxlEffortContext, JxlEffortPlan};
+use foundation::jxl_effort_policy::JxlEffortPlan;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
@@ -1064,7 +1064,7 @@ enum JxlSourceSemantics {
     Unknown,
 }
 
-fn classify_jxl_source_semantics(
+const fn classify_jxl_source_semantics(
     format: &foundation::image_detection::DetectedFormat,
     compression: Option<foundation::image_detection::CompressionType>,
 ) -> JxlSourceSemantics {

@@ -3501,7 +3501,7 @@ impl AvifMemeQualityEvidence {
         self.failed_qualities.insert(quality);
     }
 
-    fn verified_bracket(&self) -> Option<(u8, u8)> {
+    const fn verified_bracket(&self) -> Option<(u8, u8)> {
         match (self.highest_fitting_quality, self.lowest_oversize_quality) {
             (Some(low), Some(high)) if low < high => Some((low, high)),
             _ => None,

@@ -2243,7 +2243,7 @@ const fn timeline_domain(mode: AnimatedExplorationEncodeMode) -> TimelineDomain 
     }
 }
 
-fn video_domain_coordinate(
+const fn video_domain_coordinate(
     crf: f32,
     encoder: VideoEncoder,
     preset: EncoderPreset,
@@ -5014,7 +5014,7 @@ impl<'a> CpuFineTuneSession<'a> {
         Ok(size)
     }
 
-    fn classify_final_domain_size(&self, size: u64) -> ProbeOutcome<u64, String> {
+    const fn classify_final_domain_size(&self, size: u64) -> ProbeOutcome<u64, String> {
         if self.candidate_fits(size) {
             ProbeOutcome::Fits(size)
         } else {
