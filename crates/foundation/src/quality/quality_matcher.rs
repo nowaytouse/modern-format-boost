@@ -2450,7 +2450,10 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
 mod apple_fallback_policy_tests {
     use super::*;
 
-    fn request(output_pure_media_size: u64, allow_size_tolerance: bool) -> AppleFallbackKeepRequest<'static> {
+    fn request(
+        output_pure_media_size: u64,
+        allow_size_tolerance: bool,
+    ) -> AppleFallbackKeepRequest<'static> {
         AppleFallbackKeepRequest {
             codec_str: "vp9",
             input_pure_media_size: 10_000_000,
@@ -2471,8 +2474,12 @@ mod apple_fallback_policy_tests {
     #[test]
     fn apple_fallback_uses_the_shared_byte_budget() {
         let ceiling = 10_000_000_u64 + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
-        assert!(!should_keep_apple_fallback_hevc_output(request(10_000_000, false)));
-        assert!(should_keep_apple_fallback_hevc_output(request(ceiling, true)));
+        assert!(!should_keep_apple_fallback_hevc_output(request(
+            10_000_000, false
+        )));
+        assert!(should_keep_apple_fallback_hevc_output(request(
+            ceiling, true
+        )));
         assert!(!should_keep_apple_fallback_hevc_output(request(
             ceiling + 1,
             true
@@ -4532,19 +4539,27 @@ mod content_id_tests {
             ),
             (
                 "png-as-txt.txt",
-                &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..],
+                &[], // We will override this and save a real PNG
                 SourceCodec::Png,
             ),
             (
                 "heic-as-jpg.jpg",
                 &[
-                    0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c',
+                    0x00, 0x00, 0x00, 0x10, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0x00,
+                    0x00, 0x00, 0x00,
                 ][..],
                 SourceCodec::Heic,
             ),
         ] {
             let path = temp_dir.path().join(rel);
-            std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("Failed to write {rel}: {e:?}"));
+            if expected == SourceCodec::Png {
+                image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+                    .save_with_format(&path, image::ImageFormat::Png)
+                    .unwrap();
+            } else {
+                std::fs::write(&path, bytes)
+                    .unwrap_or_else(|e| panic!("Failed to write {rel}: {e:?}"));
+            }
             let codec = SourceCodec::identify_by_content(&path)
                 .unwrap_or_else(|e| panic!("Content identification failed for {rel}: {e:?}"))
                 .unwrap_or_else(|| panic!("Should identify content for {rel}"));
@@ -4566,8 +4581,12 @@ mod content_id_tests {
 
     #[test]
     fn test_identify_png() {
-        let file = create_temp_with_content(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        let codec = SourceCodec::identify_by_content(file.path())
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("image.png");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+            .save_with_format(&file, image::ImageFormat::Png)
+            .unwrap();
+        let codec = SourceCodec::identify_by_content(&file)
             .expect("PNG content identification must not fail")
             .unwrap_or_else(|| panic!("Should identify PNG"));
         assert_eq!(codec, SourceCodec::Png);
@@ -4616,12 +4635,9 @@ mod content_id_tests {
         let temp_dir =
             tempfile::tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
         let png_as_jpg = temp_dir.path().join("image.jpg");
-        {
-            let mut file = std::fs::File::create(&png_as_jpg)
-                .unwrap_or_else(|e| panic!("Failed to create file: {e:?}"));
-            file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-                .unwrap_or_else(|e| panic!("Failed to write PNG header: {e:?}"));
-        }
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+            .save_with_format(&png_as_jpg, image::ImageFormat::Png)
+            .unwrap();
 
         let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg)
             .unwrap_or_else(|e| panic!("Should fix extension: {e:?}"));

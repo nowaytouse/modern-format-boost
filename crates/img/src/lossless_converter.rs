@@ -67,29 +67,6 @@ const fn input_size_allows_jxl_distance_exploration(file_size: u64) -> bool {
     file_size >= JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES
 }
 
-const fn jxl_encoder_effort(archive: bool, ultimate: bool) -> u8 {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort(JxlEffortContext::DirectEncode);
-    }
-    foundation::jxl_effort_policy::encoder_effort(ultimate)
-}
-
-fn jxl_encoder_effort_plan(archive: bool, ultimate: bool) -> Vec<JxlEffortPlan> {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort_plan(JxlEffortContext::DirectEncode);
-    }
-    foundation::jxl_effort_policy::effort_plan(JxlEffortContext::DirectEncode, ultimate)
-}
-
-fn jpeg_encoder_effort_plan(archive: bool, ultimate: bool) -> Vec<JxlEffortPlan> {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort_plan(
-            JxlEffortContext::JpegLosslessTranscode,
-        );
-    }
-    foundation::jxl_effort_policy::effort_plan(JxlEffortContext::JpegLosslessTranscode, ultimate)
-}
-
 fn format_jxl_effort_plan(plan: &[JxlEffortPlan]) -> String {
     plan.iter()
         .map(|item| item.effort())
@@ -1102,7 +1079,6 @@ fn classify_jxl_source_semantics(
         | DetectedFormat::WEBM
         | DetectedFormat::Unknown(_) => JxlSourceSemantics::Unknown,
         DetectedFormat::WebP
-        | DetectedFormat::JP2
         | DetectedFormat::JXL
         | DetectedFormat::AVIF
         | DetectedFormat::HEIC
@@ -1154,8 +1130,15 @@ const fn resolved_jxl_distance_for_source(
     }
 }
 
-const fn jxl_d0_misses_strict_size_policy(input_size: u64, output_size: u64) -> bool {
-    !foundation::exploration_policy::SizePolicy::StrictlySmaller.fits(output_size, input_size)
+/// Returns true when JXL d=0 output does NOT satisfy the active size policy.
+/// Callers must resolve the active policy from `ConvertOptions::effective_allow_size_tolerance()`
+/// and `DEFAULT_SIZE_TOLERANCE_BYTES` — never hardcode `StrictlySmaller` here.
+const fn jxl_d0_misses_active_size_policy(
+    input_size: u64,
+    output_size: u64,
+    policy: foundation::exploration_policy::SizePolicy,
+) -> bool {
+    !policy.fits(output_size, input_size)
 }
 
 pub fn convert_to_jxl(
@@ -1260,12 +1243,19 @@ pub fn convert_to_jxl(
             foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
         )]
     } else {
-        jxl_encoder_effort_plan(options.archive(), options.ultimate())
+        foundation::jxl_effort_policy::effort_plan_for_mode(
+            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+            options.ultimate(),
+            options.archive(),
+        )
     };
     let actual_eff = if is_genuine_png {
         foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT
     } else {
-        jxl_encoder_effort(options.archive(), options.ultimate())
+        foundation::jxl_effort_policy::encoder_effort_for_mode(
+            options.ultimate(),
+            options.archive(),
+        )
     };
 
     // Add conversion color metadata via CICP if available.
@@ -1368,7 +1358,7 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            let mut d0_missed_strict_size_policy = false;
+            let mut d0_missed_active_size_policy = false;
             let explore_result = if is_extreme_explore {
                 let input_payload_size = foundation::image::static_payload::measure(input)
                     .map_err(|error| {
@@ -1384,9 +1374,19 @@ pub fn convert_to_jxl(
                             "Cannot explore JXL without a pure candidate payload measurement: {error}"
                         ))
                     })?;
-                d0_missed_strict_size_policy =
-                    jxl_d0_misses_strict_size_policy(input_payload_size, output_payload_size);
-                if d0_missed_strict_size_policy {
+                // Resolve active policy: respect effective_allow_size_tolerance which
+                // may veto tolerance even when the caller requested it.
+                let active_policy =
+                    foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+                        options.effective_allow_size_tolerance(),
+                        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+                    );
+                d0_missed_active_size_policy = jxl_d0_misses_active_size_policy(
+                    input_payload_size,
+                    output_payload_size,
+                    active_policy,
+                );
+                if d0_missed_active_size_policy {
                     try_explore_ultimate_jxl_distance(
                         input,
                         &actual_input,
@@ -1400,7 +1400,8 @@ pub fn convert_to_jxl(
                     )?
                 } else {
                     log_detail!(&format!(
-                        "JXL d=0 satisfies the strict pure-media policy ({output_payload_size}B < {input_payload_size}B); quality exploration is unnecessary"
+                        "JXL d=0 satisfies active size policy ({output_payload_size}B fits \
+                         {input_payload_size}B policy={active_policy:?}); quality exploration is unnecessary"
                     ));
                     None
                 }
@@ -1408,7 +1409,7 @@ pub fn convert_to_jxl(
                 None
             };
 
-            if is_extreme_explore && d0_missed_strict_size_policy && explore_result.is_none() {
+            if is_extreme_explore && d0_missed_active_size_policy && explore_result.is_none() {
                 if let Some(output_size) = try_jxl_pre_avif_fallback(
                     input,
                     &actual_input,
@@ -1548,7 +1549,11 @@ pub fn convert_to_jxl_probe(
             foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
         )]
     } else {
-        jxl_encoder_effort_plan(options.archive(), options.ultimate())
+        foundation::jxl_effort_policy::effort_plan_for_mode(
+            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+            options.ultimate(),
+            options.archive(),
+        )
     };
 
     let result = run_direct_jxl_encode_with_policy(
@@ -1811,25 +1816,23 @@ fn jpeg_lossless_encode_plan(
 ) -> Vec<JxlEffortPlan> {
     match mode {
         JpegLosslessTranscodePlanMode::Policy => {
-            jpeg_encoder_effort_plan(options.archive(), options.ultimate())
+            foundation::jxl_effort_policy::effort_plan_for_mode(
+                foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+                options.ultimate(),
+                options.archive(),
+            )
         }
         JpegLosslessTranscodePlanMode::AggressiveE11 => {
-            if options.archive() {
-                foundation::jxl_effort_policy::archive_effort_plan(
-                    JxlEffortContext::JpegLosslessTranscode,
-                )
-            } else {
-                jpeg_aggressive_lossless_plan(true)
-            }
+            vec![JxlEffortPlan::Single(
+                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
+            )]
         }
         JpegLosslessTranscodePlanMode::StandardFallback => {
-            if options.archive() {
-                foundation::jxl_effort_policy::archive_effort_plan(
-                    JxlEffortContext::JpegLosslessTranscode,
-                )
-            } else {
-                jpeg_standard_encode_fallback_plan()
-            }
+            foundation::jxl_effort_policy::effort_plan_for_mode(
+                foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+                options.ultimate(),
+                options.archive(),
+            )
         }
     }
 }
@@ -3829,10 +3832,13 @@ fn try_jxl_to_avif_extreme_handoff(
         })?;
     let mut last_error = None;
     let mut metadata_retry = AvifencMetadataRetryState::default();
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let (quality, probe_count) = search_highest_fitting_avif_quality_with(
         input_payload_size,
-        (!options.require_output_delivery())
-            .then_some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+        (!options.require_output_delivery()).then_some(active_policy),
         |quality| {
             log_detail!(&format!(
                 "JXL->AVIF exact quality probe: q={quality}, speed=0 for {}",
@@ -3921,8 +3927,7 @@ fn try_jxl_to_avif_extreme_handoff(
             ))
         })?;
     if !options.require_output_delivery()
-        && !foundation::exploration_policy::SizePolicy::StrictlySmaller
-            .fits(avif_payload_size, input_payload_size)
+        && !active_policy.fits(avif_payload_size, input_payload_size)
     {
         cleanup_temp_output(&avif_temp_output, input);
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
@@ -3983,6 +3988,10 @@ fn try_jxl_pre_avif_fallback(
     let candidate_output = foundation::path_safety::isolated_temp_path_for_search(jxl_temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let effort = foundation::constants::jxl_effort_for_mode(true);
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let input_payload_size =
         foundation::image::static_payload::measure(input).map_err(|error| {
             ImgQualityError::ConversionError(format!(
@@ -3990,7 +3999,7 @@ fn try_jxl_pre_avif_fallback(
             ))
         })?;
 
-    match probe_jxl_pre_avif_fallback_with(input_payload_size, |distance| {
+    match probe_jxl_pre_avif_fallback_with(input_payload_size, active_policy, |distance| {
         let output_size = encode_jxl_probe_to_output(
             input,
             actual_input,
@@ -4004,9 +4013,7 @@ fn try_jxl_pre_avif_fallback(
             color_info,
             "Pre-AVIF fallback probe",
         )?;
-        if foundation::exploration_policy::SizePolicy::StrictlySmaller
-            .fits(output_size, input_payload_size)
-        {
+        if active_policy.fits(output_size, input_payload_size) {
             foundation::fast_img::verify_pixel_equivalence_integrity(
                 input,
                 &candidate_output,
@@ -4059,13 +4066,14 @@ fn try_jxl_pre_avif_fallback(
 
 fn probe_jxl_pre_avif_fallback_with<Probe>(
     input_payload_size: u64,
+    size_policy: foundation::exploration_policy::SizePolicy,
     mut probe: Probe,
 ) -> std::result::Result<Option<u64>, String>
 where
     Probe: FnMut(f32) -> std::result::Result<u64, String>,
 {
     let output_payload_size = probe(jxl_pre_avif_distance())?;
-    Ok(foundation::exploration_policy::SizePolicy::StrictlySmaller
+    Ok(size_policy
         .fits(output_payload_size, input_payload_size)
         .then_some(output_payload_size))
 }
@@ -4304,7 +4312,11 @@ pub fn convert_to_jxl_matched(
         foundation::thread_manager::get_optimal_threads()
     };
 
-    let effort_plan = jxl_encoder_effort_plan(options.archive(), options.ultimate());
+    let effort_plan = foundation::jxl_effort_policy::effort_plan_for_mode(
+        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        options.ultimate(),
+        options.archive(),
+    );
 
     log_detail!(&format!(
         "{} Encoding quality-matched JXL: {} (distance={}, effort_plan=[{}], threads={})",
@@ -4570,12 +4582,12 @@ fn compare_jxl_finalists(
     left_size: u64,
     right_distance: f32,
     right_size: u64,
+    policy: foundation::exploration_policy::SizePolicy,
 ) -> std::cmp::Ordering {
-    let policy = foundation::exploration_policy::SizePolicy::StrictlySmaller;
-    let left_smaller_than_input = policy.fits(left_size, input_size);
-    let right_smaller_than_input = policy.fits(right_size, input_size);
+    let left_fits = policy.fits(left_size, input_size);
+    let right_fits = policy.fits(right_size, input_size);
 
-    match (left_smaller_than_input, right_smaller_than_input) {
+    match (left_fits, right_fits) {
         (true, false) => return std::cmp::Ordering::Less,
         (false, true) => return std::cmp::Ordering::Greater,
         _ => {}
@@ -4632,10 +4644,17 @@ fn try_explore_ultimate_jxl_distance(
         "Ultimate Exploration: one effort domain, distance screening, shortlist verification",
     );
 
-    let exploration_effort = jxl_encoder_effort(false, true);
+    let exploration_effort = foundation::jxl_effort_policy::encoder_effort(true);
+    // Active policy: must be consistent with d0 check and SizeToleranceCheck.
+    // Resolves the same way as jxl_d0_misses_active_size_policy.
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let screening = foundation::jxl_explorer::screen_jxl_candidates(
         input_size,
         initial_output_size,
+        active_policy,
         |distance| {
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
@@ -4741,6 +4760,7 @@ fn try_explore_ultimate_jxl_distance(
                         size,
                         best_f.distance,
                         *best_size,
+                        active_policy,
                     ) == std::cmp::Ordering::Less
                 });
 
@@ -4782,7 +4802,7 @@ fn try_explore_ultimate_jxl_distance(
         return Ok(None);
     };
 
-    if !foundation::exploration_policy::SizePolicy::StrictlySmaller.fits(best_size, input_size) {
+    if !active_policy.fits(best_size, input_size) {
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "jxl oversized best candidate cleanup",
             &best_path,
@@ -4819,9 +4839,7 @@ fn try_explore_ultimate_jxl_distance(
         let mut lower_bound = finalized_sizes
             .iter()
             .filter(|(distance, size)| {
-                *distance < accepted_distance
-                    && !foundation::exploration_policy::SizePolicy::StrictlySmaller
-                        .fits(*size, input_size)
+                *distance < accepted_distance && !active_policy.fits(*size, input_size)
             })
             .map(|(distance, _)| *distance)
             .max_by(f32::total_cmp)
@@ -4882,6 +4900,7 @@ fn try_explore_ultimate_jxl_distance(
                         size,
                         accepted_distance,
                         accepted_size,
+                        active_policy,
                     ) == std::cmp::Ordering::Less
                     {
                         log_detail!(&format!(
@@ -5901,7 +5920,11 @@ mod tests {
         let error = finalize_meme_avif_probe(&source, &candidate, &verified_blake3, &options)
             .expect_err("changed candidate must not inherit prior pixel proof");
 
-        assert!(error.to_string().contains("custody mismatch before commit"));
+        assert!(
+            error
+                .to_string()
+                .contains("custody mismatch at before commit")
+        );
         assert!(!candidate.exists(), "changed candidate must be cleaned up");
         assert!(!output.exists(), "changed candidate must not be committed");
         Ok(())
@@ -5990,7 +6013,7 @@ mod tests {
             .find("fn run_cjxl_jpeg_encode_with_effort(")
             .unwrap_or_else(|| panic!("JPEG encode runner anchor missing"));
         let end = source[start..]
-            .find("fn jpeg_effort_stage_label")
+            .find("pub const JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON")
             .map_or_else(
                 || panic!("JPEG encode runner end anchor missing"),
                 |offset| start + offset,
@@ -6186,10 +6209,9 @@ mod tests {
 
     #[test]
     fn effort_policy_is_independent_of_size_and_exploration() {
-        assert_eq!(jxl_encoder_effort(false, false), 7);
-        assert_eq!(jxl_encoder_effort(false, true), 11);
-        assert_eq!(jxl_encoder_effort(true, false), 11);
-        assert_eq!(jxl_encoder_effort(true, true), 11);
+        let eff = foundation::jxl_effort_policy::encoder_effort;
+        assert_eq!(eff(false), 7);
+        assert_eq!(eff(true), 11);
     }
 
     #[test]
@@ -6249,10 +6271,33 @@ mod tests {
     }
 
     #[test]
-    fn jxl_distance_exploration_starts_only_after_d0_misses_strict_policy() {
-        assert!(!jxl_d0_misses_strict_size_policy(1_000, 999));
-        assert!(jxl_d0_misses_strict_size_policy(1_000, 1_000));
-        assert!(jxl_d0_misses_strict_size_policy(1_000, 1_001));
+    fn jxl_distance_exploration_starts_only_after_d0_misses_active_policy() {
+        use foundation::exploration_policy::SizePolicy;
+        let strict = SizePolicy::StrictlySmaller;
+        // strict: only candidate < source passes
+        assert!(!jxl_d0_misses_active_size_policy(1_000, 999, strict));
+        assert!(jxl_d0_misses_active_size_policy(1_000, 1_000, strict));
+        assert!(jxl_d0_misses_active_size_policy(1_000, 1_001, strict));
+
+        // tolerance: candidate up to source+512KiB passes — d=0 accepted without exploration
+        let tolerance = SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        let source: u64 = 10_000_000;
+        // d0 slightly above source but within 512 KiB → no exploration needed
+        assert!(!jxl_d0_misses_active_size_policy(
+            source,
+            source + 200_000,
+            tolerance
+        ));
+        // d0 above source + 512 KiB → exploration triggered
+        assert!(jxl_d0_misses_active_size_policy(
+            source,
+            source + 524_289,
+            tolerance
+        ));
+        // strict equality still rejects under strict policy
+        assert!(jxl_d0_misses_active_size_policy(source, source, strict));
         assert_eq!(
             resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossless),
             0.0
@@ -6272,18 +6317,6 @@ mod tests {
         assert_eq!(
             resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossy),
             foundation::constants::JXL_ULTIMATE_DISTANCE
-        );
-    }
-
-    #[test]
-    fn jpeg_effort_plan_uses_one_policy_selected_effort() {
-        assert_eq!(
-            jpeg_encoder_effort_plan(false, false),
-            vec![JxlEffortPlan::Single(7)]
-        );
-        assert_eq!(
-            jpeg_encoder_effort_plan(false, true),
-            vec![JxlEffortPlan::Single(11)]
         );
     }
 
@@ -6344,11 +6377,17 @@ mod tests {
     #[test]
     fn jxl_effort_plan_uses_one_final_domain_effort() {
         assert_eq!(
-            jxl_encoder_effort_plan(false, false),
+            foundation::jxl_effort_policy::effort_plan(
+                foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+                false,
+            ),
             vec![JxlEffortPlan::Single(7)]
         );
         assert_eq!(
-            jxl_encoder_effort_plan(false, true),
+            foundation::jxl_effort_policy::effort_plan(
+                foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+                true,
+            ),
             vec![JxlEffortPlan::Single(11)]
         );
     }
@@ -6681,27 +6720,63 @@ mod tests {
 
     #[test]
     fn smoke_jxl_exploration_stays_in_final_encoder_domain() {
-        assert_eq!(jxl_encoder_effort(false, true), 11);
-        assert_eq!(jxl_encoder_effort(false, false), 7);
-        assert_eq!(jxl_encoder_effort(true, false), 11);
+        let eff = foundation::jxl_effort_policy::encoder_effort;
+        assert_eq!(eff(true), 11);
+        assert_eq!(eff(false), 7);
         assert_ne!(
             foundation::exploration_policy::EncoderDomain::jxl(7),
             foundation::exploration_policy::EncoderDomain::jxl(11),
+            "Effort domains must isolate final-encoder policy parameters"
         );
     }
 
     #[test]
     fn smoke_jxl_quality_ranking_accepts_larger_output_at_lower_distance_within_gate() {
+        use foundation::exploration_policy::SizePolicy;
+        // strict mode: lower distance wins only when it fits StrictlySmaller
         assert_eq!(
-            compare_jxl_finalists(9_000_000, 0.01, 8_800_000, 0.1, 7_500_000),
+            compare_jxl_finalists(
+                9_000_000,
+                0.01,
+                8_800_000,
+                0.1,
+                7_500_000,
+                SizePolicy::StrictlySmaller,
+            ),
             std::cmp::Ordering::Less
+        );
+        // B8 tolerance test: A at d=0.10 +400 KiB fits AllowGrowth(512 KiB)
+        // B at d=0.20 strictly smaller → A wins (lower distance)
+        let source: u64 = 10_485_760; // 10 MiB
+        let policy = SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        assert_eq!(
+            compare_jxl_finalists(
+                source,
+                0.10,
+                source + 409_600, // +400 KiB — fits policy
+                0.20,
+                8_388_608, // 8 MiB — strictly smaller
+                policy,
+            ),
+            std::cmp::Ordering::Less, // A (lower distance) must win
         );
     }
 
     #[test]
-    fn smoke_jxl_final_round_requires_beating_source_before_quality_preference() {
+    fn smoke_jxl_final_round_requires_fitting_policy_before_quality_preference() {
+        use foundation::exploration_policy::SizePolicy;
+        // strict mode: candidate not fitting strict policy loses
         assert_eq!(
-            compare_jxl_finalists(9_000_000, 0.01, 9_200_000, 0.1, 8_900_000),
+            compare_jxl_finalists(
+                9_000_000,
+                0.01,
+                9_200_000,
+                0.1,
+                8_900_000,
+                SizePolicy::StrictlySmaller,
+            ),
             std::cmp::Ordering::Greater
         );
     }
@@ -6893,23 +6968,41 @@ mod tests {
     }
 
     #[test]
-    fn jxl_pre_avif_fallback_probes_q75_distance_and_requires_smaller_output() {
+    fn jxl_pre_avif_fallback_probes_q75_distance_under_active_policy() {
         let mut probes = Vec::new();
-        let accepted = probe_jxl_pre_avif_fallback_with(1_000, |distance| {
-            probes.push(distance);
-            Ok(900)
-        });
+        let accepted = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                probes.push(distance);
+                Ok(900)
+            },
+        );
         assert_eq!(accepted, Ok(Some(900)));
         assert_eq!(JXL_AVIF_HANDOFF_QUALITY_FLOOR, 75);
         assert_eq!(probes, vec![2.5]);
 
-        let unchanged = probe_jxl_pre_avif_fallback_with(1_000, |_distance| Ok(1_000));
+        let unchanged = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Ok(1_000),
+        );
         assert_eq!(unchanged, Ok(None));
 
-        let failed = probe_jxl_pre_avif_fallback_with(1_000, |_distance| {
-            Err("quality verification failed".to_string())
-        });
+        let failed = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Err("quality verification failed".to_string()),
+        );
         assert_eq!(failed, Err("quality verification failed".to_string()));
+
+        let tolerance = foundation::exploration_policy::SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        assert_eq!(
+            probe_jxl_pre_avif_fallback_with(1_000, tolerance, |_distance| Ok(1_001)),
+            Ok(Some(1_001))
+        );
     }
 
     #[test]
@@ -7315,5 +7408,32 @@ mod tests {
                 "single-channel patch {expected_channel} was remapped: {pixel:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_jxl_jp2_lossy_semantics() {
+        use foundation::image_detection::{CompressionType, DetectedFormat};
+
+        let lossy_jp2 = super::classify_jxl_source_semantics(
+            &DetectedFormat::JP2,
+            Some(CompressionType::Lossy),
+        );
+        assert_eq!(lossy_jp2, super::JxlSourceSemantics::ConfirmedLossy);
+        assert!(super::jxl_distance_exploration_allowed(lossy_jp2));
+
+        let lossless_jp2 = super::classify_jxl_source_semantics(
+            &DetectedFormat::JP2,
+            Some(CompressionType::Lossless),
+        );
+        assert_eq!(lossless_jp2, super::JxlSourceSemantics::ConfirmedLossless);
+        assert!(!super::jxl_distance_exploration_allowed(lossless_jp2));
+
+        let unknown_jp2 = super::classify_jxl_source_semantics(&DetectedFormat::JP2, None);
+        assert_eq!(unknown_jp2, super::JxlSourceSemantics::Unknown);
+        assert!(!super::jxl_distance_exploration_allowed(unknown_jp2));
+
+        let jpeg = super::classify_jxl_source_semantics(&DetectedFormat::JPEG, None);
+        assert_eq!(jpeg, super::JxlSourceSemantics::JpegReconstruction);
+        assert!(!super::jxl_distance_exploration_allowed(jpeg));
     }
 }

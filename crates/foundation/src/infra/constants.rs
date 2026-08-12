@@ -4,7 +4,9 @@
 //! environment variable toggles to ensure consistency across the workspace.
 
 // --- Size & Storage Defaults ---
-pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = MB;
+/// Default allowed pure-media payload growth: 512 KiB = 524,288 bytes.
+/// Explorer and final delivery gate must both use this constant via `SizePolicy`.
+pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = 512 * 1024;
 /// Default allowed size-growth ratio.
 pub const DEFAULT_SIZE_TOLERANCE_RATIO: f64 = 0.01;
 /// Minimum output size for images to be considered valid for deletion of

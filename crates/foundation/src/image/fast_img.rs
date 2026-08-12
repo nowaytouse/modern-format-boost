@@ -6426,6 +6426,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_import_stable_path_keeps_warmup_and_windowed_batches() -> Result<()> {
         let strategy = photos_import_strategy(FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP + 1);
         let windows = photos_import_windows(
@@ -6911,6 +6912,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_local_verifier_retries_bounded_visibility_lag() -> Result<()> {
         let targets = vec![FastImgImportProbeTarget {
             rel_path: "a.JXL".to_string(),
@@ -6953,6 +6955,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_local_verifier_retries_transient_query_errors() -> Result<()> {
         let targets = vec![FastImgImportProbeTarget {
             rel_path: "a.AVIF".to_string(),
@@ -6995,6 +6998,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_upload_verifier_defaults_are_low_process_pressure() {
         assert_eq!(fast_img_icloud_upload_verify_attempts(), 5);
         assert!(fast_img_icloud_upload_verify_batch_size() <= 64);

@@ -427,10 +427,6 @@ fn size_ratio(size: u64, input_size: u64) -> f64 {
     }
 }
 
-const fn candidate_fits_source(size: u64, input_size: u64) -> bool {
-    crate::exploration_policy::SizePolicy::StrictlySmaller.fits(size, input_size)
-}
-
 fn size_ratio_pct(size: u64, input_size: u64) -> f64 {
     size_ratio(size, input_size) * 100.0
 }
@@ -832,6 +828,7 @@ fn shortlist_finalists(
     candidates: &[JxlScreenedCandidate],
     best_idx: usize,
     input_size: u64,
+    size_policy: crate::exploration_policy::SizePolicy,
 ) -> Vec<JxlScreenedCandidate> {
     // Tier 1: below-source candidates (output < input), sorted by ascending d.
     // These are the only candidates that can produce a net saving. Highest quality
@@ -839,7 +836,7 @@ fn shortlist_finalists(
     // highest-quality valid winner.
     let mut below_source: Vec<_> = candidates
         .iter()
-        .filter(|c| candidate_fits_source(c.output_size, input_size))
+        .filter(|c| size_policy.fits(c.output_size, input_size))
         .collect();
     below_source.sort_by(|a, b| {
         a.distance
@@ -853,8 +850,7 @@ fn shortlist_finalists(
     let mut near_boundary_cands: Vec<_> = candidates
         .iter()
         .filter(|c| {
-            !candidate_fits_source(c.output_size, input_size)
-                && near_boundary(c.output_size, input_size)
+            !size_policy.fits(c.output_size, input_size) && near_boundary(c.output_size, input_size)
         })
         .collect();
     near_boundary_cands.sort_by(|a, b| {
@@ -868,7 +864,7 @@ fn shortlist_finalists(
     let mut promoted_oversize: Vec<_> = candidates
         .iter()
         .filter(|c| {
-            !candidate_fits_source(c.output_size, input_size)
+            !size_policy.fits(c.output_size, input_size)
                 && !near_boundary(c.output_size, input_size)
                 && !c.reasons.is_empty()
         })
@@ -954,6 +950,7 @@ fn candidate_reason_summary(candidate: &JxlScreenedCandidate, input_size: u64) -
 /// - **Promotion**: Reason(s) a candidate was included in finalist set
 fn finalize_screening_result(
     input_size: u64,
+    size_policy: crate::exploration_policy::SizePolicy,
     candidates: Vec<JxlScreenedCandidate>,
     best_idx: usize,
     iterations: u32,
@@ -963,7 +960,7 @@ fn finalize_screening_result(
     profile_label: &'static str,
     target_distance: f32,
 ) -> JxlScreeningResult {
-    let finalists = shortlist_finalists(&candidates, best_idx, input_size);
+    let finalists = shortlist_finalists(&candidates, best_idx, input_size, size_policy);
     let finalist_summary = finalists
         .iter()
         .map(|candidate| candidate_reason_summary(candidate, input_size))
@@ -1049,6 +1046,7 @@ fn finalize_screening_result(
 
 struct JxlScreeningSession {
     input_size: u64,
+    size_policy: crate::exploration_policy::SizePolicy,
     log: Vec<String>,
     iterations: u32,
     tested: HashSet<DistanceKey>,
@@ -1062,7 +1060,16 @@ struct JxlScreeningSession {
 }
 
 impl JxlScreeningSession {
-    fn new(input_size: u64, initial_distance: f32, initial_size: u64) -> Self {
+    fn fits(&self, size: u64) -> bool {
+        self.size_policy.fits(size, self.input_size)
+    }
+
+    fn new(
+        input_size: u64,
+        size_policy: crate::exploration_policy::SizePolicy,
+        initial_distance: f32,
+        initial_size: u64,
+    ) -> Self {
         let mut log = Vec::new();
         let mut candidates = vec![JxlScreenedCandidate {
             distance: initial_distance,
@@ -1080,6 +1087,7 @@ impl JxlScreeningSession {
 
         Self {
             input_size,
+            size_policy,
             log,
             iterations: 1,
             tested,
@@ -1142,7 +1150,7 @@ impl JxlScreeningSession {
     }
 
     fn note_phase1_outcome(&mut self, idx: usize, distance: f32, output_size: u64) {
-        if output_size < self.input_size {
+        if self.fits(output_size) {
             if self.d_under.is_none() {
                 self.d_under = Some(distance);
             }
@@ -1198,7 +1206,7 @@ impl JxlScreeningSession {
     }
 
     fn note_discovery_outcome(&mut self, idx: usize, distance: f32, output_size: u64) -> bool {
-        if output_size < self.input_size {
+        if self.fits(output_size) {
             self.d_under = Some(distance);
             self.best_below_idx = Some(idx);
             add_reason(
@@ -1222,7 +1230,7 @@ impl JxlScreeningSession {
         lo: &mut f32,
         hi: &mut f32,
     ) {
-        if output_size < self.input_size {
+        if self.fits(output_size) {
             *hi = distance;
             if self.best_below_idx.is_none_or(|best_idx| {
                 self.candidates
@@ -1266,6 +1274,7 @@ impl JxlScreeningSession {
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,
+    size_policy: crate::exploration_policy::SizePolicy,
     mut try_candidate: F,
 ) -> Result<Option<JxlScreeningResult>, String>
 where
@@ -1276,13 +1285,14 @@ where
     }
 
     let initial_distance = clamp_explore_distance(JXL_EXPLORE_FLOOR);
-    let mut session = JxlScreeningSession::new(input_size, initial_distance, initial_size);
+    let mut session =
+        JxlScreeningSession::new(input_size, size_policy, initial_distance, initial_size);
 
     // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size),
     // stop exploring. Quality is already safe and beneficial, so further
     // exploration cost is not worth it.
     let ratio = size_ratio(initial_size, input_size);
-    if ratio <= 1.0_f64 {
+    if size_policy.fits(initial_size, input_size) {
         session.log.push(format!(
             "Early exit: the required floor d={} is already safe ({:.1}% of input)",
             format_distance_for_log(initial_distance),
@@ -1290,6 +1300,7 @@ where
         ));
         return Ok(Some(finalize_screening_result(
             input_size,
+            size_policy,
             session.candidates,
             0,
             session.iterations,
@@ -1354,7 +1365,7 @@ where
         let trend = if size < previous_size { "↓" } else { "→" };
         let status = if near_boundary(size, input_size) {
             "near break-even"
-        } else if candidate_fits_source(size, input_size) {
+        } else if session.fits(size) {
             "below source"
         } else {
             "still oversize"
@@ -1415,7 +1426,7 @@ where
 
             let status = if near_boundary(size, input_size) {
                 "near break-even"
-            } else if candidate_fits_source(size, input_size) {
+            } else if session.fits(size) {
                 "below source"
             } else {
                 "still oversize"
@@ -1460,7 +1471,7 @@ where
 
             let status = if near_boundary(size, input_size) {
                 "NEAR BREAK-EVEN"
-            } else if candidate_fits_source(size, input_size) {
+            } else if session.fits(size) {
                 "SAFE (BELOW SOURCE)"
             } else {
                 "STILL OVERSIZE"
@@ -1491,6 +1502,7 @@ where
 
     Ok(Some(finalize_screening_result(
         input_size,
+        size_policy,
         session.candidates,
         final_best_idx,
         session.iterations,
@@ -1508,15 +1520,20 @@ mod tests {
 
     #[test]
     fn test_screening_keeps_best_ladder_candidate() {
-        let result = screen_jxl_candidates(100, 120, |distance| {
-            if distance
-                <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
-            {
-                Ok(90)
-            } else {
-                Ok(110)
-            }
-        })
+        let result = screen_jxl_candidates(
+            100,
+            120,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                if distance
+                    <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
+                {
+                    Ok(90)
+                } else {
+                    Ok(110)
+                }
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1551,8 +1568,13 @@ mod tests {
     fn test_screening_stays_bounded_below_ceiling() {
         // All probes always return 130 > input(100). No candidate beats the source.
         // With binary search, Phase 2 is skipped (no d_under). Result should be None.
-        let result = screen_jxl_candidates(100, 140, |_distance| Ok(130))
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        let result = screen_jxl_candidates(
+            100,
+            140,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Ok(130),
+        )
+        .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
             result.is_none(),
@@ -1562,20 +1584,25 @@ mod tests {
 
     #[test]
     fn test_screening_promotes_adjacent_and_boundary_candidates() {
-        let result = screen_jxl_candidates(100, 104, |distance| {
-            let size = if distance <= 0.002 {
-                99
-            } else if distance
-                <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
-            {
-                100
-            } else if distance <= 0.03 {
-                98
-            } else {
-                101
-            };
-            Ok(size)
-        })
+        let result = screen_jxl_candidates(
+            100,
+            104,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                let size = if distance <= 0.002 {
+                    99
+                } else if distance
+                    <= crate::numeric_cast::f64_to_f32_lossy(crate::constants::JXL_DISTANCE_PLATEAU)
+                {
+                    100
+                } else if distance <= 0.03 {
+                    98
+                } else {
+                    101
+                };
+                Ok(size)
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1595,14 +1622,19 @@ mod tests {
     fn test_screening_logs_deceleration_near_break_even() {
         // File at 1.5x oversize; break-even occurs at d > 0.1.
         // Phase 2 binary search should find a qualifying candidate below source.
-        let result = screen_jxl_candidates(100, 150, |distance| {
-            let size = if distance <= 0.1 {
-                105 // oversize: 105%
-            } else {
-                98 // below source
-            };
-            Ok(size)
-        })
+        let result = screen_jxl_candidates(
+            100,
+            150,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                let size = if distance <= 0.1 {
+                    105 // oversize: 105%
+                } else {
+                    98 // below source
+                };
+                Ok(size)
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1624,10 +1656,15 @@ mod tests {
     fn test_screening_early_exit_on_safe_initial_result() {
         // Condition A: d=0.001 is safe (90 <= 100), should exit immediately
         let mut calls = 0_i32;
-        let result = screen_jxl_candidates(100, 90, |_distance| {
-            calls += 1_i32;
-            Ok(50) // Should never be called
-        })
+        let result = screen_jxl_candidates(
+            100,
+            90,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| {
+                calls += 1_i32;
+                Ok(50) // Should never be called
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1642,10 +1679,15 @@ mod tests {
     fn test_screening_never_retests_the_floor_distance() {
         let mut probed = Vec::new();
 
-        let _result = screen_jxl_candidates(100, 130, |distance| {
-            probed.push(distance);
-            Ok(if distance < 0.02 { 120 } else { 95 })
-        })
+        let _result = screen_jxl_candidates(
+            100,
+            130,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                probed.push(distance);
+                Ok(if distance < 0.02 { 120 } else { 95 })
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1755,10 +1797,15 @@ mod tests {
         // Scenario: 1.19x oversize, every probe always oversize.
         // No d_under is ever found, so Phase 2 is skipped and result is None.
         let mut probed = Vec::new();
-        let result = screen_jxl_candidates(1000, 1190, |distance| {
-            probed.push(distance);
-            Ok(1100) // always oversize
-        })
+        let result = screen_jxl_candidates(
+            1000,
+            1190,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                probed.push(distance);
+                Ok(1100) // always oversize
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
 
         assert!(
@@ -1775,14 +1822,19 @@ mod tests {
     fn test_phase_two_converges_early_on_break_even() {
         // Scenario: file starts oversize, break-even occurs around d=0.005.
         // Binary search should narrow the bracket and converge well below budget.
-        let result = screen_jxl_candidates(1000, 1200, |distance| {
-            let size = if distance <= 0.005 {
-                1050 // oversize
-            } else {
-                950 // below source
-            };
-            Ok(size)
-        })
+        let result = screen_jxl_candidates(
+            1000,
+            1200,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                let size = if distance <= 0.005 {
+                    1050 // oversize
+                } else {
+                    950 // below source
+                };
+                Ok(size)
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1810,12 +1862,17 @@ mod tests {
     fn test_phase_two_does_not_exhaust_budget_on_monotonic_improvement() {
         // Size decreases monotonically as d increases; break-even near d=0.1.
         // Binary search should converge without exhausting the 50-iteration budget.
-        let result = screen_jxl_candidates(1000, 1192, |distance| {
-            let size = crate::numeric_cast::f64_to_u64_sat(
-                f64::from(distance).mul_add(-2000.0, 1200.0).max(800.0),
-            );
-            Ok(size)
-        })
+        let result = screen_jxl_candidates(
+            1000,
+            1192,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                let size = crate::numeric_cast::f64_to_u64_sat(
+                    f64::from(distance).mul_add(-2000.0, 1200.0).max(800.0),
+                );
+                Ok(size)
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1840,8 +1897,13 @@ mod tests {
     fn test_no_winner_skips_jxl() {
         // All probes return oversize — no candidate ever beats the source.
         // Expected result is None, not a fallback to d=0.001.
-        let result = screen_jxl_candidates(100, 200, |_distance| Ok(150))
-            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        let result = screen_jxl_candidates(
+            100,
+            200,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Ok(150),
+        )
+        .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
             result.is_none(),
@@ -1853,13 +1915,18 @@ mod tests {
     fn test_phase_two_returns_lowest_qualifying_d() {
         // Known break-even: d <= 0.04 is oversize, d > 0.04 is below source.
         // Binary search should converge best_distance to <= 0.04 + precision.
-        let result = screen_jxl_candidates(1000, 1300, |distance| {
-            if distance <= 0.04 {
-                Ok(1100) // oversize
-            } else {
-                Ok(990) // below source
-            }
-        })
+        let result = screen_jxl_candidates(
+            1000,
+            1300,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                if distance <= 0.04 {
+                    Ok(1100) // oversize
+                } else {
+                    Ok(990) // below source
+                }
+            },
+        )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
@@ -1875,11 +1942,60 @@ mod tests {
 
     #[test]
     fn screen_jxl_candidates_zero_input_is_fail_closed() {
-        let result = screen_jxl_candidates(0, 100, |_| Ok(50))
-            .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
+        let result = screen_jxl_candidates(
+            0,
+            100,
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |_| Ok(50),
+        )
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
         assert!(
             result.is_none(),
             "zero input_size must not run screening with fabricated ratio defaults"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tolerance_tests {
+    use super::*;
+
+    #[test]
+    fn test_tolerance_highest_quality_boundary_starts_early() {
+        let source_pure = 10 * 1024 * 1024; // 10 MiB
+        let policy = crate::exploration_policy::SizePolicy::AllowGrowth {
+            max_extra_bytes: 512 * 1024,
+        };
+
+        let result =
+            screen_jxl_candidates(source_pure, source_pure + 700 * 1024, policy, |distance| {
+                if distance <= 0.001 {
+                    Ok(source_pure + 700 * 1024)
+                } else if distance <= 0.05 {
+                    Ok(source_pure + 400 * 1024)
+                } else if distance <= 0.10 {
+                    Ok(source_pure + 100 * 1024)
+                } else {
+                    Ok(source_pure - 100 * 1024)
+                }
+            })
+            .unwrap_or_else(|e| panic!("exploration failed: {:?}", e))
+            .unwrap_or_else(|| panic!("screening result should exist"));
+
+        // Highest quality fitting candidate starts at d0.05.
+        // It should converge to d <= 0.05 + precision
+        let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0_f64;
+        assert!(
+            f64::from(result.best_distance) <= 0.05_f64 + precision,
+            "best_distance={} should converge to <= 0.05 + precision ({})",
+            result.best_distance,
+            0.05_f64 + precision
+        );
+        // And the output size should fit the tolerance.
+        assert!(
+            policy.fits(result.best_output_size, source_pure),
+            "best_output_size={} must fit policy",
+            result.best_output_size
         );
     }
 }

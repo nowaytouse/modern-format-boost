@@ -1233,7 +1233,9 @@ mod tests {
         use std::io::Write;
         let mut heic_stub = tempfile::Builder::new().suffix(".HEIC").tempfile().unwrap();
         heic_stub
-            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
+            .write_all(&[
+                0, 0, 0, 16, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
+            ])
             .unwrap();
 
         let decoded_stub = tempfile::Builder::new().suffix(".png").tempfile().unwrap();

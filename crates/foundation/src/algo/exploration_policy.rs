@@ -99,6 +99,31 @@ pub enum EncoderDomain {
     },
 }
 
+/// AVIF encoder-speed domain used by quality exploration.
+///
+/// Speed is deliberately fixed for a quality search: a quality value is only
+/// comparable inside one speed domain. Callers that want to compare speeds
+/// must run a separate domain search and re-verify the selected final encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvifSpeedDomain(u8);
+
+impl AvifSpeedDomain {
+    /// Adjacent locator domain; results are hints, never final evidence.
+    pub const MEME_QUALITY_LOCATOR: Self = Self(1);
+    /// Slow final domain used for materialized delivery candidates.
+    pub const MEME_QUALITY_SEARCH: Self = Self(0);
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn encoder_domain(self) -> EncoderDomain {
+        EncoderDomain::avif(self.0)
+    }
+}
+
 /// A numeric quality coordinate whose unit is meaningful only together with
 /// its encoder domain.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,6 +218,7 @@ impl EncoderDomain {
 #[serde(rename_all = "snake_case")]
 pub enum ExplorationOutcome {
     Adopted,
+    PreservedSource,
     LosslessTranscoded,
     ExploredOptimized,
     Failed,
@@ -201,8 +227,8 @@ pub enum ExplorationOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        DomainCoordinate, EncoderDomain, EncoderTuning, ExplorationOutcome, ProbeOutcome,
-        SizePolicy, TimelineDomain, VideoCodecDomain,
+        AvifSpeedDomain, DomainCoordinate, EncoderDomain, EncoderTuning, ExplorationOutcome,
+        ProbeOutcome, SizePolicy, TimelineDomain, VideoCodecDomain,
     };
     use crate::types::EncoderPreset;
 
@@ -265,6 +291,16 @@ mod tests {
     fn img_effort_and_speed_are_part_of_the_coordinate_domain() {
         assert_ne!(EncoderDomain::jxl(7), EncoderDomain::jxl(11));
         assert_ne!(EncoderDomain::avif(8), EncoderDomain::avif(0));
+    }
+
+    #[test]
+    fn avif_quality_search_separates_locator_and_final_speed_domains() {
+        let locator = AvifSpeedDomain::MEME_QUALITY_LOCATOR;
+        let final_domain = AvifSpeedDomain::MEME_QUALITY_SEARCH;
+        assert_eq!(locator.value(), 1);
+        assert_eq!(final_domain.value(), 0);
+        assert_eq!(final_domain.encoder_domain(), EncoderDomain::avif(0));
+        assert_ne!(locator.encoder_domain(), final_domain.encoder_domain());
     }
 
     #[test]

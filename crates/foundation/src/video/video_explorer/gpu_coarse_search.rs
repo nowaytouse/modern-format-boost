@@ -5386,6 +5386,7 @@ impl<'a> CpuFineTuneSession<'a> {
             iterations,
             early_insight_triggered,
             cpu_progress,
+            tracking,
             ..
         } = self;
 
@@ -6599,7 +6600,7 @@ mod tests {
     fn test_adaptive_vmaf_floor_clamps_to_sanity() {
         // baseline 88.0 - 2.0 = 86.0, matching the sanity floor
         assert!(
-            (adaptive_vmaf_floor(Some(88.0_f64)).expect("vmaf floor")
+            (crate::media_conversion_gate::explore_adaptive_vmaf_y_floor(Some(88.0_f64))
                 - crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR)
                 .abs()
                 < f64::EPSILON
@@ -6610,7 +6611,10 @@ mod tests {
     fn test_adaptive_psnr_floor_clamps_to_sanity() {
         // baseline 31.0/31.2 - 1.5 would fall below 30.0, so both clamp to the sanity
         // floor
-        let psnr = adaptive_psnr_uv_floor(Some((31.0_f64, 31.2_f64))).expect("psnr floor");
+        let psnr = crate::media_conversion_gate::explore_adaptive_psnr_uv_floor_optional(Some((
+            31.0_f64, 31.2_f64,
+        )))
+        .expect("psnr floor");
         assert!((psnr.0 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
         assert!((psnr.1 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
     }

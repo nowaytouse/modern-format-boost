@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-12
+
+### Production Hardening: AVIF Meme Search & Trust Boundaries
+
+- **Domain-correct AVIF exploration**: Meme Mode now uses speed 1 only as a
+  bounded locator and always re-establishes the complete quality bracket and
+  refinement at final speed 0. Locator candidates cannot become final evidence,
+  preventing quality values from being compared across non-equivalent encoder
+  speed domains.
+- **Hardening rule consolidation**: Effective fail-closed, evidence, scope,
+  dependency-approval, workspace-preservation, and privacy-upload rules are now
+  maintained in the local mandatory policy; obsolete duplicate policy templates
+  were removed.
+- **Dependency refresh**: `num-integer` and `whoami` lock entries were refreshed
+  with `cargo update`; no manifest dependency was added or changed.
+
 ## [0.11.3] - 2026-08-11
 
 ### August 2026 Polish: FastImg Delivery & Native GUI Safety

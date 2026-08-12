@@ -138,8 +138,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
     archive: bool,
 ) -> Result<HdrArtifacts> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     let file_label = crate::media_conversion_gate::probe_hdr_heic_input_label(input);
 
@@ -326,8 +325,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
     archive: bool,
 ) -> Result<HdrArtifacts> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,
@@ -490,8 +488,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     archive: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,

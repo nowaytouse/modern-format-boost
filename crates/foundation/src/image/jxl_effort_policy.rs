@@ -3,6 +3,18 @@
 //! The policy is intentionally centralized so JPEG bitstream encode and
 //! direct JXL encode paths do not drift. Effort is an encoder policy, not a
 //! quality-search axis: every encode phase receives one policy-selected effort.
+//!
+//! ## Encoder tiers
+//! Only two tiers exist at the algorithm layer:
+//!   - Normal   → e7  (`ultimate = false`)
+//!   - Ultimate → e11 (`ultimate = true`)
+//!
+//! `archive` is a product mode, not a third encoder tier. Normalize it to the
+//! Ultimate tier here so individual encode paths cannot drift:
+//!
+//! ```rust,ignore
+//! encoder_effort_for_mode(ultimate, archive)
+//! ```
 
 use crate::constants;
 
@@ -31,26 +43,27 @@ pub const fn encoder_effort(ultimate: bool) -> u8 {
     constants::jxl_effort_for_mode(ultimate)
 }
 
+/// Map product flags onto the two encoder tiers.
 #[must_use]
-pub const fn direct_encode_effort_for_archive(archive: bool, ultimate: bool) -> u8 {
-    if archive {
-        constants::JXL_ULTIMATE_EFFORT
-    } else {
-        constants::jxl_effort_for_mode(ultimate)
-    }
+pub const fn effective_ultimate(ultimate: bool, archive: bool) -> bool {
+    ultimate || archive
 }
 
+/// Resolve product flags and select one of the two encoder tiers.
 #[must_use]
-pub const fn archive_effort(kind: JxlEffortContext) -> u8 {
-    match kind {
-        JxlEffortContext::DirectEncode => constants::JXL_ULTIMATE_EFFORT,
-        JxlEffortContext::JpegLosslessTranscode => constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
-    }
+pub const fn encoder_effort_for_mode(ultimate: bool, archive: bool) -> u8 {
+    encoder_effort(effective_ultimate(ultimate, archive))
 }
 
+/// Build the encoder-effort plan from product flags without exposing their
+/// normalization to every encode path.
 #[must_use]
-pub fn archive_effort_plan(kind: JxlEffortContext) -> Vec<JxlEffortPlan> {
-    vec![JxlEffortPlan::Single(archive_effort(kind))]
+pub fn effort_plan_for_mode(
+    kind: JxlEffortContext,
+    ultimate: bool,
+    archive: bool,
+) -> Vec<JxlEffortPlan> {
+    effort_plan(kind, effective_ultimate(ultimate, archive))
 }
 
 /// Build the encoder-effort plan.
@@ -72,58 +85,60 @@ mod tests {
     }
 
     #[test]
-    fn effort_policy_depends_on_mode_not_input_size_or_exploration() {
-        assert_eq!(
-            effort_plan(JxlEffortContext::JpegLosslessTranscode, true),
-            vec![JxlEffortPlan::Single(constants::JXL_ULTIMATE_EFFORT)]
-        );
-        assert_eq!(
-            effort_plan(JxlEffortContext::DirectEncode, true),
-            vec![JxlEffortPlan::Single(constants::JXL_ULTIMATE_EFFORT)]
-        );
-    }
-
-    #[test]
-    fn direct_encode_uses_one_encoder_policy_effort() {
+    fn normal_tier_produces_e7() {
+        assert_eq!(encoder_effort(false), constants::JXL_DEFAULT_EFFORT);
         let plan = effort_plan(JxlEffortContext::DirectEncode, false);
         assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
-    }
-
-    #[test]
-    fn jpeg_lossless_normal_mode_uses_one_default_effort() {
         let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, false);
         assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
     }
 
     #[test]
-    fn archive_mode_hard_overrides_jpeg_lossless_encode_to_e11() {
-        assert_eq!(
-            archive_effort_plan(JxlEffortContext::JpegLosslessTranscode),
-            vec![JxlEffortPlan::Single(
-                constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
-            )]
-        );
-    }
-
-    #[test]
-    fn archive_mode_hard_overrides_direct_encode_to_e11() {
-        assert_eq!(
-            archive_effort_plan(JxlEffortContext::DirectEncode),
-            vec![JxlEffortPlan::Single(constants::JXL_ULTIMATE_EFFORT)]
-        );
-    }
-
-    #[test]
-    fn archive_direct_encode_effort_uses_e11_without_requiring_ultimate() {
-        assert_eq!(direct_encode_effort_for_archive(false, false), 7);
-        assert_eq!(direct_encode_effort_for_archive(false, true), 11);
-        assert_eq!(direct_encode_effort_for_archive(true, false), 11);
-        assert_eq!(direct_encode_effort_for_archive(true, true), 11);
-    }
-
-    #[test]
-    fn ultimate_mode_uses_one_final_domain_effort() {
+    fn ultimate_tier_produces_e11() {
+        assert_eq!(encoder_effort(true), constants::JXL_ULTIMATE_EFFORT);
         let plan = effort_plan(JxlEffortContext::DirectEncode, true);
         assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
+        let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, true);
+        assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
+    }
+
+    #[test]
+    fn archive_normalizes_to_ultimate_in_policy() {
+        let cases = [
+            (false, false, false), // Normal
+            (false, true, true),   // Ultimate
+            (true, false, true),   // archive → Ultimate
+            (true, true, true),    // archive+ultimate → Ultimate
+        ];
+        for (archive, ultimate, expected_ultimate) in cases {
+            let effective = effective_ultimate(ultimate, archive);
+            assert_eq!(effective, expected_ultimate);
+            assert_eq!(
+                encoder_effort_for_mode(ultimate, archive),
+                encoder_effort(effective)
+            );
+        }
+    }
+
+    #[test]
+    fn effort_plan_produces_single_item() {
+        assert_eq!(
+            effort_plan(JxlEffortContext::DirectEncode, false).len(),
+            1,
+            "effort plan must always contain exactly one item"
+        );
+        assert_eq!(
+            effort_plan(JxlEffortContext::DirectEncode, true).len(),
+            1,
+            "effort plan must always contain exactly one item"
+        );
+        assert_eq!(
+            efforts(&effort_plan_for_mode(
+                JxlEffortContext::DirectEncode,
+                false,
+                true,
+            )),
+            vec![constants::JXL_ULTIMATE_EFFORT]
+        );
     }
 }
