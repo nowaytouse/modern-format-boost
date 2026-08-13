@@ -107,6 +107,8 @@ photos_import_large_batch.rs
 *.ogv
 *.ts
 !crates/gui/src/composables/useI18n.d.ts
+!crates/gui/src/nativeHost.ts
+!crates/gui/vite.config.ts
 
 # Audio
 *.mp3
