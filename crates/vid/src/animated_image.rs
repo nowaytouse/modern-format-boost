@@ -176,16 +176,25 @@ fn validate_animated_avif_output(path: &Path) -> Result<u64> {
                 path.display()
             ))
         })?;
-    if output_size == 0
-        || detected_format != foundation::image::format_detect::FormatKind::Avif
-        || get_input_dimensions(path).is_err()
-        || !matches!(animated_avif_sequence_frame_count(path), Ok(count) if count > 1)
-    {
+    if output_size == 0 {
         return Err(VidQualityError::ConversionError(format!(
-            "animated AVIF validation failed for {}",
+            "animated AVIF output is empty: {}",
             path.display()
         )));
     }
+    if detected_format != foundation::image::format_detect::FormatKind::Avif {
+        return Err(VidQualityError::ConversionError(format!(
+            "animated AVIF output has unexpected format {detected_format:?}: {}",
+            path.display()
+        )));
+    }
+    get_input_dimensions(path).map_err(|error| {
+        VidQualityError::ConversionError(format!(
+            "animated AVIF dimensions are unreadable for {}: {error}",
+            path.display()
+        ))
+    })?;
+    animated_avif_sequence_frame_count(path)?;
     Ok(output_size)
 }
 

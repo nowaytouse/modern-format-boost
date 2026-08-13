@@ -123,7 +123,7 @@ impl FormatKind {
 pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
     use std::io::Read;
 
-    let mut buf = [0u8; 32];
+    let mut buf = [0u8; 4096];
     let n = {
         let mut f = std::fs::File::open(path)?;
         f.read(&mut buf).map_err(ImgQualityError::IoError)?
@@ -916,6 +916,17 @@ mod tests {
         b.extend_from_slice(b"ftyp");
         b.extend_from_slice(b"avif");
         b.extend_from_slice(&[0; 4]);
+        let f = write_tmp(&b);
+        assert_eq!(detect_true_format(f.path()).unwrap(), FormatKind::Avif);
+    }
+
+    #[test]
+    fn animated_avif_full_compatible_brand_list_detected() {
+        let mut b = vec![0x00, 0x00, 0x00, 0x2c];
+        b.extend_from_slice(b"ftyp");
+        b.extend_from_slice(b"avis");
+        b.extend_from_slice(&[0; 4]);
+        b.extend_from_slice(b"avifavismsf1iso8mif1miafMA1B");
         let f = write_tmp(&b);
         assert_eq!(detect_true_format(f.path()).unwrap(), FormatKind::Avif);
     }
