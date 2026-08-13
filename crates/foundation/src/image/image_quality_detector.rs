@@ -1269,19 +1269,23 @@ mod property_tests {
 
     #[test]
     fn jpeg_quality_bypass_uses_content_not_suffix() {
-        let mut spoof = tempfile::Builder::new()
-            .suffix(".jpg")
-            .tempfile()
-            .expect("create spoof JPEG path");
+        let mut spoof = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "jpeg_quality_content_test",
+            None,
+            Some(".jpg"),
+        )
+        .expect("create spoof JPEG path");
         spoof
             .write_all(b"\x89PNG\r\n\x1a\n")
             .expect("write PNG signature");
         assert!(!is_jpeg_content(spoof.path()));
 
-        let mut jpeg = tempfile::Builder::new()
-            .suffix(".bin")
-            .tempfile()
-            .expect("create JPEG content path");
+        let mut jpeg = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "jpeg_quality_content_test",
+            None,
+            Some(".bin"),
+        )
+        .expect("create JPEG content path");
         jpeg.write_all(&[0xFF, 0xD8, 0xFF])
             .expect("write JPEG signature");
         assert!(is_jpeg_content(jpeg.path()));

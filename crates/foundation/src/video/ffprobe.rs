@@ -676,7 +676,9 @@ fn resolve_probe_duration(
     // ANMF frame durations.
     if duration.is_none() && format_name.contains("webp") {
         let data = read_native_probe_bytes(path, "webp duration fallback")?;
-        if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+        if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data)
+            .map_err(|error| FFprobeError::ParseError(error.to_string()))?
+        {
             let native_dur = f64::from(native_dur);
             if native_dur > 0.0_f64 {
                 duration = Some(native_dur);
@@ -856,6 +858,7 @@ fn parse_video_stream_fields(
             if duration.is_none()
                 && let Some(duration_secs) =
                     crate::image_formats::webp::duration_secs_from_bytes(&data)
+                        .map_err(|error| FFprobeError::ParseError(error.to_string()))?
             {
                 let duration_secs = f64::from(duration_secs);
                 if duration_secs > 0.0_f64 {

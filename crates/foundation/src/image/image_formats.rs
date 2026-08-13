@@ -402,7 +402,10 @@ pub mod webp {
     /// Returns an error if a chunk size value overflows usize or data is
     /// malformed.
     pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
-        Ok(animation_timing_ms(data)?.map_or(0, |timing| timing.0))
+        match animation_timing_ms(data)? {
+            Some((frame_count, _)) => Ok(frame_count),
+            None => Ok(0),
+        }
     }
 
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in
@@ -411,15 +414,18 @@ pub mod webp {
     /// ANMF payload: 16-byte header, bytes 12..15 = frame duration in ms
     /// (24-bit LE). Returns None if not animated WebP or no ANMF chunks
     /// with valid durations.
-    #[must_use]
-    pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
-        let (_, total_ms) = animation_timing_ms(data).ok()??;
+    /// # Errors
+    /// Returns an error if RIFF frame traversal fails.
+    pub fn duration_secs_from_bytes(data: &[u8]) -> crate::unified_error::Result<Option<f32>> {
+        let Some((_, total_ms)) = animation_timing_ms(data)? else {
+            return Ok(None);
+        };
         if total_ms == 0 {
-            return None;
+            return Ok(None);
         }
-        Some(crate::numeric_cast::f64_to_f32_lossy(
+        Ok(Some(crate::numeric_cast::f64_to_f32_lossy(
             crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64,
-        ))
+        )))
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1259,7 +1265,7 @@ mod tests {
     fn webp_riff_parser_ignores_payload_markers_and_rejects_nonzero_padding() {
         let mut data = b"RIFF\x12\x00\x00\x00WEBPJUNK\x05\x00\x00\x00ANMF!\x00".to_vec();
         assert_eq!(webp::count_frames_from_bytes(&data).unwrap(), 0);
-        assert_eq!(webp::duration_secs_from_bytes(&data), None);
+        assert_eq!(webp::duration_secs_from_bytes(&data).unwrap(), None);
 
         *data.last_mut().expect("padding byte") = 1;
         assert!(webp::count_frames_from_bytes(&data).is_err());

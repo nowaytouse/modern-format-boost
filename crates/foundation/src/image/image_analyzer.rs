@@ -1649,7 +1649,18 @@ pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
 }
 
 fn get_animation_duration(path: &Path) -> Option<f32> {
-    let format = crate::image::format_detect::detect_true_format(path).ok()?;
+    let format = match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => format,
+        Err(error) => {
+            probe_audit!(
+                "animation_duration_format_failed",
+                path,
+                "Animation duration format probe failed: {error}",
+                error = error,
+            );
+            return None;
+        }
+    };
 
     if format == crate::image::format_detect::FormatKind::Gif {
         match crate::image_formats::gif::get_timing_stats(path) {
@@ -1767,11 +1778,20 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 
     if format == crate::image::format_detect::FormatKind::WebP && final_duration.is_none() {
         match std::fs::read(path) {
-            Ok(data) => {
-                if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+            Ok(data) => match crate::image_formats::webp::duration_secs_from_bytes(&data) {
+                Ok(Some(secs)) => {
                     final_duration = Some(secs);
                 }
-            }
+                Ok(None) => {}
+                Err(error) => {
+                    probe_audit!(
+                        "webp_duration_parse_failed",
+                        path,
+                        "WebP duration parse failed: {error}",
+                        error = error,
+                    );
+                }
+            },
             Err(err) => {
                 probe_audit!(
                     "webp_duration_read_failed",

@@ -528,8 +528,8 @@ pub fn detect_animation(
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let info = crate::image::png_validation::parse_apng_animation(&data)?;
-            let frame_count = info.map_or(1, |info| info.frame_count);
-            let is_animated = frame_count > 1;
+            let frame_count = info.map(|info| info.frame_count);
+            let is_animated = frame_count.is_some_and(|count| count > 1);
             let fps = if is_animated {
                 apng_timing_stats_from_bytes(&data)
                     .filter(|stats| stats.fps.is_finite() && stats.fps > 0.0_f64)
@@ -537,7 +537,7 @@ pub fn detect_animation(
             } else {
                 None
             };
-            return Ok((is_animated, Some(frame_count), fps));
+            return Ok((is_animated, frame_count, fps));
         }
         DetectedFormat::TIFF => {
             // TIFF does not support animation (no multi-frame sequence standard).
@@ -4084,9 +4084,16 @@ pub(crate) struct ApngTimingStats {
 /// Aggregate APNG timing from `fcTL` frame delays and `acTL` frame count.
 #[must_use]
 pub(crate) fn apng_timing_stats_from_bytes(data: &[u8]) -> Option<ApngTimingStats> {
-    let info = crate::image::png_validation::parse_apng_animation(data)
-        .ok()
-        .flatten()?;
+    let info = match crate::image::png_validation::parse_apng_animation(data) {
+        Ok(info) => info?,
+        Err(error) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "apng_timing_parse_failed",
+                format!("APNG timing parse failed: {error}"),
+            );
+            return None;
+        }
+    };
     let frame_count = info.frame_count;
     let duration_secs = info.duration_secs;
     if frame_count <= 1 {

@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **FFmpeg 9.0.1 compatibility**: Animated WebP conversion now verifies the
+  dedicated `webp_anim` demuxer before relying on FFmpeg canvas coalescing, so a
+  build without the required FFmpeg 9 surface fails explicitly instead of
+  losing frame offsets or blend/dispose semantics. WebP RIFF timing parse
+  errors are propagated rather than collapsed into a missing duration, and the
+  tool-version parser is locked against the Homebrew 9.0.1 version format.
+- **Explicit probe failures**: Content-format, animation, container-overhead,
+  model-script, environment, XMP, and output-size probes no longer discard
+  errors through boolean/optional shortcuts or forged numeric defaults. Test
+  media now uses the project-owned scratch gateway.
 - **FastImg production verification**: JXL and AVIF local delivery were verified
   with release-binary smoke runs on synthetic and healthy public media, plus a
   controlled AVIF import into the dedicated debug Photos library. Content-based

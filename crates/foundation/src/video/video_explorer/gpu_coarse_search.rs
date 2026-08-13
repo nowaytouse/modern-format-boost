@@ -2179,8 +2179,8 @@ pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
 }
 
 fn is_image_container(path: &Path) -> bool {
-    crate::image::format_detect::detect_true_format(path).is_ok_and(|format| {
-        matches!(
+    match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => matches!(
             format,
             crate::image::format_detect::FormatKind::Avif
                 | crate::image::format_detect::FormatKind::Heic
@@ -2191,8 +2191,16 @@ fn is_image_container(path: &Path) -> bool {
                 | crate::image::format_detect::FormatKind::Jpeg
                 | crate::image::format_detect::FormatKind::Bmp
                 | crate::image::format_detect::FormatKind::Tiff
-        )
-    })
+        ),
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "gpu_coarse_image_container_failed",
+                path,
+                format!("failed to detect image container for GPU exploration: {error}"),
+            );
+            false
+        }
+    }
 }
 
 #[inline]
@@ -2213,10 +2221,17 @@ fn is_animated_image_like_input(
         }
     }
 
-    crate::quality_matcher::SourceCodec::identify_by_content(path)
-        .ok()
-        .flatten()
-        .is_some_and(|codec| codec.can_be_animated())
+    match crate::quality_matcher::SourceCodec::identify_by_content(path) {
+        Ok(codec) => codec.is_some_and(|codec| codec.can_be_animated()),
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "gpu_coarse_animated_format_failed",
+                path,
+                format!("failed to identify animated input for GPU exploration: {error}"),
+            );
+            false
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

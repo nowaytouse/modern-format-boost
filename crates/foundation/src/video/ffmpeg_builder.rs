@@ -442,6 +442,30 @@ impl FfmpegBuilder {
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+
+    /// List available `FFmpeg` demuxers.
+    ///
+    /// # Errors
+    /// Returns an error if the command fails.
+    pub fn list_demuxers() -> anyhow::Result<String> {
+        let output = Self::default()
+            .get_resolved_command()
+            .arg(constants::FFMPEG_ARG_HIDE_BANNER)
+            .arg("-demuxers")
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "ffmpeg -demuxers failed{}",
+                if stderr.trim().is_empty() {
+                    format!(" with status {}", output.status)
+                } else {
+                    format!(": {}", crate::io_utils::tail_error_lines(&stderr, 3))
+                }
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
 }
 
 crate::impl_base_builder_accessors!(FfmpegBuilder);

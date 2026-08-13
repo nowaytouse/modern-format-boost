@@ -1021,9 +1021,17 @@ impl TaskResult {
         // Determine technically accurate verb:
         // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
         // - "encoding" for all other conversions from source pixels
-        let is_jpeg = crate::image::format_detect::detect_true_format(input)
-            .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Jpeg)
-            || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
+        let is_jpeg = match crate::image::format_detect::detect_true_format(input) {
+            Ok(format) => format == crate::image::format_detect::FormatKind::Jpeg,
+            Err(error) => {
+                crate::media_conversion_gate::probe_layer_audit(
+                    "conversion_result_format_failed",
+                    input,
+                    format!("failed to detect source format for conversion result: {error}"),
+                );
+                false
+            }
+        } || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
 
         let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
             "transcoding"

@@ -26,13 +26,23 @@ pub enum BatchErrorMode {
 impl BatchErrorMode {
     #[must_use]
     pub fn current() -> Self {
-        let legacy_fail_fast = std::env::var(crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST)
-            .is_ok_and(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            });
+        let legacy_fail_fast = match std::env::var(crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST) {
+            Ok(value) => matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "batch_error_mode_env",
+                    format!(
+                        "failed to read {}: {error}; using fail-fast",
+                        crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST
+                    ),
+                );
+                true
+            }
+        };
         if legacy_fail_fast {
             return Self::FailFast;
         }
@@ -89,10 +99,9 @@ impl BatchErrorMode {
                 .find_map(|cause| cause.downcast_ref::<UnifiedError>())
         });
         match unified.map(UnifiedError::category) {
-            Some(ErrorCategory::Fatal) => true,
             Some(ErrorCategory::Optional) => false,
             Some(ErrorCategory::Recoverable) => self.is_fail_fast(),
-            None => true,
+            Some(ErrorCategory::Fatal) | None => true,
         }
     }
 }

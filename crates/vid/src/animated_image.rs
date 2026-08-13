@@ -751,6 +751,18 @@ fn extract_frames_for_gifski(
 /// animation canvas and encode APNG. Extracting individual WebP frame rectangles
 /// loses their x/y offsets plus blend/dispose semantics.
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
+    let demuxers = foundation::FfmpegBuilder::list_demuxers().map_err(|error| {
+        VidQualityError::ConversionError(format!(
+            "failed to inspect FFmpeg animated WebP support: {error}"
+        ))
+    })?;
+    if !ffmpeg_listing_has_token(&demuxers, "webp_anim") {
+        return Err(VidQualityError::ConversionError(
+            "FFmpeg does not expose the webp_anim demuxer required to preserve animated WebP canvas offsets and dispose/blend semantics"
+                .to_string(),
+        ));
+    }
+
     let (frame_count, mut frame_durations_ms) = parse_webpmux_info(input)?;
     let parsed_duration_count = foundation::numeric_cast::usize_to_u32_strict(
         frame_durations_ms.len(),
@@ -3170,12 +3182,10 @@ mod tests {
 
         let ffmpeg = foundation::common_utils::resolve_tool_path("ffmpeg")
             .expect("ffmpeg was checked above");
-        let decoder_listing = Command::new(&ffmpeg)
-            .args(["-hide_banner", "-decoders"])
-            .output()
-            .expect("list ffmpeg decoders");
-        if !String::from_utf8_lossy(&decoder_listing.stdout).contains("webp_anim") {
-            eprintln!("skipping animated WebP integration test: FFmpeg 9 decoder unavailable");
+        let demuxer_listing =
+            foundation::FfmpegBuilder::list_demuxers().expect("list ffmpeg demuxers");
+        if !ffmpeg_listing_has_token(&demuxer_listing, "webp_anim") {
+            eprintln!("skipping animated WebP integration test: FFmpeg 9 demuxer unavailable");
             return;
         }
 

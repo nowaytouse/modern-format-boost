@@ -353,14 +353,21 @@ pub const DEFAULT_OVERHEAD_PERCENT: f64 = crate::constants::DEFAULT_OVERHEAD_PER
 
 #[must_use]
 pub fn get_container_overhead_percent(path: &Path) -> f64 {
-    match crate::image::format_detect::detect_true_format(path).ok() {
-        Some(crate::image::format_detect::FormatKind::Mov) => MOV_OVERHEAD_PERCENT,
-        Some(crate::image::format_detect::FormatKind::Mp4) => MP4_OVERHEAD_PERCENT,
-        Some(
+    match crate::image::format_detect::detect_true_format(path) {
+        Ok(crate::image::format_detect::FormatKind::Mov) => MOV_OVERHEAD_PERCENT,
+        Ok(crate::image::format_detect::FormatKind::Mp4) => MP4_OVERHEAD_PERCENT,
+        Ok(
             crate::image::format_detect::FormatKind::Mkv
             | crate::image::format_detect::FormatKind::Webm,
         ) => MKV_OVERHEAD_PERCENT,
-        _ => DEFAULT_OVERHEAD_PERCENT,
+        Ok(_) => DEFAULT_OVERHEAD_PERCENT,
+        Err(error) => {
+            crate::media_conversion_gate::stream_size_probe_failure_audit(
+                path,
+                format!("failed to detect container for overhead estimate: {error}"),
+            );
+            DEFAULT_OVERHEAD_PERCENT
+        }
     }
 }
 

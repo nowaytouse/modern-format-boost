@@ -5796,15 +5796,25 @@ fn sampled_webp_compression_ratio_from_image(
 /// instead of `ffprobe`.
 #[must_use]
 pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
-    crate::image::format_detect::detect_true_format(path)
-        .is_ok_and(|format| format == crate::image::format_detect::FormatKind::Gif)
+    match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => format == crate::image::format_detect::FormatKind::Gif,
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "loop_intent_gif_format_failed",
+                path,
+                format!("failed to detect GIF content for loop-intent fast path: {error}"),
+            );
+            false
+        }
+    }
 }
 
 fn ydif_sample_stride(frame_count: Option<u64>) -> u64 {
     let sample_limit = crate::numeric_cast::usize_to_u64(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
-    frame_count
-        .filter(|&count| count > 0)
-        .map_or(1, |count| count.div_ceil(sample_limit).max(1))
+    match frame_count.filter(|&count| count > 0) {
+        Some(count) => count.div_ceil(sample_limit).max(1),
+        None => 1,
+    }
 }
 
 fn ydif_ffmpeg_filter(frame_count: Option<u64>) -> String {
@@ -6006,12 +6016,14 @@ fn temporal_flatness_score(ydif_values: &[f64]) -> Option<f64> {
     }
     let n = crate::numeric_cast::usize_to_f64(ydif_values.len());
     let mean = ydif_values.iter().sum::<f64>() / n;
-    if mean < 1e-6_f64 {
-        return Some(1.0);
-    }
-    let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
-    let std = variance.sqrt();
-    finite_structural_signal_score(1.0 / (1.0 + std / (mean + 1e-6)), "temporal_flatness")
+    let score = if mean < 1e-6_f64 {
+        1.0
+    } else {
+        let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
+        let std = variance.sqrt();
+        1.0 / (1.0 + std / (mean + 1e-6))
+    };
+    finite_structural_signal_score(score, "temporal_flatness")
 }
 
 fn palette_depth_score(quantized_unique_colors: usize) -> f64 {

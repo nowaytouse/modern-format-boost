@@ -12,9 +12,9 @@ fn contract_jxl_xmp_nuclear_strip_gate_locked() -> anyhow::Result<()> {
     std::fs::write(&jxl, [0xFF, 0x0A, 0x00])?;
     std::fs::write(&jpg, [0xFF, 0xD8, 0xFF])?;
 
-    assert!(should_jxl_xmp_apple_nuclear_strip(&jxl, true));
-    assert!(!should_jxl_xmp_apple_nuclear_strip(&jxl, false));
-    assert!(!should_jxl_xmp_apple_nuclear_strip(&jpg, true));
+    assert!(should_jxl_xmp_apple_nuclear_strip(&jxl, true)?);
+    assert!(!should_jxl_xmp_apple_nuclear_strip(&jxl, false)?);
+    assert!(!should_jxl_xmp_apple_nuclear_strip(&jpg, true)?);
     Ok(())
 }
 

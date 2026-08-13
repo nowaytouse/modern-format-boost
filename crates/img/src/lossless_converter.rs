@@ -209,7 +209,7 @@ fn commit_with_size_check(
             format_label,
         ) {
             skipped.input_size = input_size;
-            skipped.output_size = fs::metadata(output).ok().map(|metadata| metadata.len());
+            skipped.output_size = Some(fs::metadata(output)?.len());
             return Ok(CommitOutcome::Skipped(skipped));
         }
     }

@@ -1408,11 +1408,15 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
 ///   2. `MFB-Dev-Signing` if the certificate is present in the local keychain
 fn app_bundle_codesign_identity() -> Result<String> {
     // 1. Explicit env override
-    if let Ok(id) = std::env::var("CODESIGN_IDENTITY") {
-        let id = id.trim().to_owned();
-        if !id.is_empty() {
-            return Ok(id);
+    match std::env::var("CODESIGN_IDENTITY") {
+        Ok(id) => {
+            let id = id.trim().to_owned();
+            if !id.is_empty() {
+                return Ok(id);
+            }
         }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => anyhow::bail!("CODESIGN_IDENTITY is not valid Unicode: {error}"),
     }
     // 2. MFB-Dev-Signing if the certificate exists in the keychain
     let available = Command::new("/usr/bin/security")
