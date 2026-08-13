@@ -8799,9 +8799,10 @@ fn media_conversion_gpu_coarse_fallback_audit_m77() {
         "crates/foundation/src/video_explorer/ssim_calculator.rs",
     ))
     .expect("ssim_calculator.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
+    let ssim_prod = production_scope(&ssim_calc);
     assert!(
-        production_scope(&ssim_calc).contains("parse_explore_vmaf_y_metric_token"),
-        "VMAF-Y parse must use central token helper (M77)"
+        ssim_prod.contains("pooled_metric_mean_from_json") && ssim_prod.contains("seal_vmaf_y"),
+        "VMAF-Y JSON parse must use the central pooled parser and metric seal (M77)"
     );
 }
 
@@ -8902,8 +8903,8 @@ fn media_conversion_explore_ssim_policy_m79() {
     let ssim = fs::read_to_string(&ssim_path).expect("ssim_calculator.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let prod = production_scope(&ssim);
     assert!(
-        prod.contains("parse_explore_cambi_metric_token"),
-        "CAMBI JSON parse must use central token helper (M79)"
+        prod.contains("pooled_metric_mean_from_json") && prod.contains("seal_cambi"),
+        "CAMBI JSON parse must use the central pooled parser and metric seal (M79)"
     );
     assert!(
         prod.contains("explore_ssim_metric_degraded_audit"),
@@ -9771,9 +9772,16 @@ fn media_conversion_apng_timing_m115() {
         prod.contains("apng_timing_stats_from_bytes"),
         "image_detection must export apng_timing_stats_from_bytes (M115)"
     );
+    let png_validation = fs::read_to_string(join_legacy_aware(
+        &root,
+        "crates/foundation/src/image/png_validation.rs",
+    ))
+    .expect("png_validation.rs must be readable");
     assert!(
-        prod.contains("apng_frame_delay_secs"),
-        "APNG delay must use fcTL delay_num/delay_den (M115)"
+        png_validation.contains("parse_apng_animation")
+            && png_validation.contains("delay_num")
+            && png_validation.contains("delay_den"),
+        "central APNG parser must derive timing from fcTL delay_num/delay_den (M115)"
     );
 
     let analyzer = fs::read_to_string(join_legacy_aware(
@@ -15604,7 +15612,8 @@ fn media_conversion_dynamic_calibration_audit_m81() {
     for needle in [
         "explore_calibration_degraded_audit",
         "explore_calibration_duration_optional",
-        "explore_calibration_probe_size_optional",
+        "measure_strict_pure_media",
+        "explore_gpu_coarse_explore_audit",
     ] {
         assert!(
             prod.contains(needle),

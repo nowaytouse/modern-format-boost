@@ -440,6 +440,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_run_cmd_propagates_nonzero_status_and_stderr() {
         let error = run_cmd("printf 'install denied' >&2; exit 7")
             .expect_err("failed dependency commands must stop the installer");
@@ -449,6 +450,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_command_exists_requires_executable_like_shutil_which() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let fake_tool = tempdir.path().join("fake-tool");
