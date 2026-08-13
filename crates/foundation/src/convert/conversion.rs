@@ -4295,7 +4295,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_size_tolerance_pure_media_independence() {
+        let _strict = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION,
+            "1",
+        );
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let input = temp_dir.path().join("input.mov");
         let complete_larger = temp_dir.path().join("complete-larger.mp4");

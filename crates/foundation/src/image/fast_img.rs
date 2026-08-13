@@ -2926,6 +2926,7 @@ fn probe_photos_import_session_health() -> Result<()> {
     ))
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn complete_photos_quit_recovery(
     reason: &str,
     quit_result: Result<()>,
