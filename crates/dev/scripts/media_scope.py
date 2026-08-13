@@ -857,7 +857,7 @@ def _audit_path_matches_rel(
     except (OSError, ValueError):
         pass
     norm = audit_path.replace("\\", "/")
-    return norm.endswith("/" + rel_norm) or norm.endswith(rel_norm) or rel_norm in norm
+    return norm.endswith(("/" + rel_norm, rel_norm)) or rel_norm in norm
 
 
 def lookup_rust_outcomes_for_rel(
@@ -1014,20 +1014,26 @@ def classify_missing_entry(
             if processing_mode == "videos_only":
                 return (
                     "pipeline_handoff",
-                    "vid ignored static/single-frame asset — "
-                    "videos_only does not require optimized output for this file",
+                    (
+                        "vid ignored static/single-frame asset — "
+                        "videos_only does not require optimized output for this file"
+                    ),
                 )
             if processing_mode == "both" and owner == PIPELINE_IMAGE:
                 return (
                     "pipeline_handoff",
-                    "vid ignored static asset — both mode expects img pipeline output "
-                    "(check img batch / rsync for this path)",
+                    (
+                        "vid ignored static asset — both mode expects img pipeline output "
+                        "(check img batch / rsync for this path)"
+                    ),
                 )
             if processing_mode == "both":
                 return (
                     "pipeline_handoff",
-                    f"vid ignored as static ({reason or 'single-frame'}); "
-                    "not an animated transcode failure",
+                    (
+                        f"vid ignored as static ({reason or 'single-frame'}); "
+                        "not an animated transcode failure"
+                    ),
                 )
 
     if rust and rust.get("pipeline") == "img":
@@ -1076,8 +1082,10 @@ def classify_missing_entry(
     if processing_mode == "videos_only" and owner == PIPELINE_IMAGE:
         return (
             "pipeline_handoff",
-            f"{true_format} is static image-owned — excluded from videos_only scope "
-            "(matches_processing_mode); no optimized counterpart required",
+            (
+                f"{true_format} is static image-owned — excluded from videos_only scope "
+                "(matches_processing_mode); no optimized counterpart required"
+            ),
         )
 
     if processing_mode == "both" and (
@@ -1092,14 +1100,18 @@ def classify_missing_entry(
             routed_note = routed or owner or "video"
             return (
                 "vid_pipeline_unverified",
-                f"{anim or 'video-route asset'}: missing mfb::audit for pipeline={routed_note}; "
-                "re-run verify with --session-audit and bundle run logs",
+                (
+                    f"{anim or 'video-route asset'}: missing mfb::audit for pipeline={routed_note}; "
+                    "re-run verify with --session-audit and bundle run logs"
+                ),
             )
         routed_note = routed or owner or "video"
         return (
             "vid_pipeline_failed",
-            f"{anim or 'video-route asset'}: session routed pipeline={routed_note}; "
-            "both mode expects vid transcode output — no optimized counterpart",
+            (
+                f"{anim or 'video-route asset'}: session routed pipeline={routed_note}; "
+                "both mode expects vid transcode output — no optimized counterpart"
+            ),
         )
 
     if processing_mode == "videos_only" and (
@@ -1114,14 +1126,18 @@ def classify_missing_entry(
             routed_note = routed or owner or "video"
             return (
                 "vid_pipeline_unverified",
-                f"{anim or 'video-route asset'}: missing mfb::audit (routed={routed_note}); "
-                "re-run verify with session/bundle logs",
+                (
+                    f"{anim or 'video-route asset'}: missing mfb::audit (routed={routed_note}); "
+                    "re-run verify with session/bundle logs"
+                ),
             )
         routed_note = routed or owner or "video"
         return (
             "vid_pipeline_failed",
-            f"{anim or 'video-route asset'}: videos_only expects vid transcode "
-            f"(routed={routed_note}) — no optimized counterpart",
+            (
+                f"{anim or 'video-route asset'}: videos_only expects vid transcode "
+                f"(routed={routed_note}) — no optimized counterpart"
+            ),
         )
 
     return (

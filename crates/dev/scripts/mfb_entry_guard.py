@@ -5,7 +5,7 @@ Project-wide Python entry guards (single source of truth).
 - ``guard_main(script_name)`` at the top of every production ``main()``.
 - ``run_delegated(...)`` for all subprocess calls into other MFB scripts / Rust CLIs.
 - Never read JSON configs here; use ``mfb_config_load.load_consumer_json``.
-"""
+"""  # noqa: EXE001
 
 from __future__ import annotations
 
@@ -447,7 +447,7 @@ def detach_to_background(
                 pass
             else:
                 print(f"  [BACKGROUND] Cleared stale pid file: {pid_file}")
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: DTZ005
     log_path = log_dir / f"{Path(sys.argv[0]).stem}_{stamp}.log"
     argv = [str(a) for a in sys.argv if a != flag_to_strip]
     with open(log_path, "ab", buffering=0) as log_f:

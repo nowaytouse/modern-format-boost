@@ -508,15 +508,7 @@ def test_fast_img_restore_check_rejects_duplicate_manifest_deleted_source(tmp_pa
         "\tsource-blake3\toutput-blake3\ttrue"
     )
     (restored / ".mfb_restore_jpeg_manifest.tsv").write_text(
-        "\n".join(
-            [
-                "# MFB_RESTORE_JPEG_MANIFEST_V1",
-                "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted",
-                row,
-                row,
-                "",
-            ]
-        ),
+        f"# MFB_RESTORE_JPEG_MANIFEST_V1\nsource_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n{row}\n{row}\n",
         encoding="utf-8",
     )
 

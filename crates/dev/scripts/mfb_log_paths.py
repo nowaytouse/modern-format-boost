@@ -160,7 +160,7 @@ def ensure_unified_log_dir() -> Path:
 
 def session_timestamp() -> datetime:
     """Current local time for session/bundle/run log filenames."""
-    return datetime.now()
+    return datetime.now()  # noqa: DTZ005
 
 
 def format_session_stamp(when: datetime | None = None) -> str:
@@ -172,7 +172,7 @@ def parse_session_stamp(stamp: str) -> datetime:
     """Parse session stamp; accepts legacy ``YYYY-MM-DD_HH-MM-SS`` bundles."""
     for fmt in (MFB_LOG_SESSION_STAMP, "%Y-%m-%d_%H-%M-%S"):
         try:
-            return datetime.strptime(stamp, fmt)
+            return datetime.strptime(stamp, fmt)  # noqa: DTZ007
         except ValueError:
             continue
     raise ValueError(f"unrecognized session log stamp: {stamp!r}")
@@ -316,7 +316,7 @@ def archive_training_session_bundle(
         "training_lane": (os.environ.get("MFB_TRAINING_LANE") or "").strip() or None,
         "scope": scope,
         "files": sorted(moved),
-        "archived_at": datetime.now().isoformat(timespec="seconds"),
+        "archived_at": datetime.now().isoformat(timespec="seconds"),  # noqa: DTZ005
     }
     if exit_snapshot is not None:
         manifest["exit"] = exit_snapshot
@@ -330,7 +330,7 @@ def archive_training_session_bundle(
 
 def append_jsonl_audit_record(audit_path: Path, event: str) -> None:
     """Append one structured audit record to an existing ``.jsonl`` file."""
-    stamp = datetime.now().isoformat(timespec="seconds")
+    stamp = datetime.now().isoformat(timespec="seconds")  # noqa: DTZ005
     record = {"ts": stamp, "event": event}
     with open(audit_path.expanduser(), "a", encoding="utf-8") as audit_f:
         audit_f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -360,11 +360,11 @@ def archive_drag_drop_session_bundle(
     try:
         session_dt = session_started_at or parse_session_stamp(stamp)
     except ValueError:
-        session_dt = datetime.now()
+        session_dt = datetime.now()  # noqa: DTZ005
 
     def _in_session_window(path: Path) -> bool:
         try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)  # noqa: DTZ006
         except OSError:
             return False
         return mtime >= session_dt - timedelta(seconds=10)
@@ -419,7 +419,7 @@ def archive_drag_drop_session_bundle(
         "session_stamp": stamp,
         "session_id": (os.environ.get("MFB_SESSION_ID") or "").strip() or None,
         "files": sorted(set(moved)),
-        "archived_at": datetime.now().isoformat(timespec="seconds"),
+        "archived_at": datetime.now().isoformat(timespec="seconds"),  # noqa: DTZ005
         "log_root": str(log_dir.resolve()),
     }
     manifest_path = bundle / "manifest.json"

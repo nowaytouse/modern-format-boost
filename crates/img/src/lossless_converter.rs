@@ -1794,6 +1794,7 @@ enum JpegLosslessTranscodePlanMode {
     StandardFallback,
 }
 
+#[allow(dead_code)]
 fn jpeg_aggressive_lossless_plan(enabled: bool) -> Vec<JxlEffortPlan> {
     if enabled {
         vec![JxlEffortPlan::Single(
@@ -1804,6 +1805,7 @@ fn jpeg_aggressive_lossless_plan(enabled: bool) -> Vec<JxlEffortPlan> {
     }
 }
 
+#[allow(dead_code)]
 fn jpeg_standard_encode_fallback_plan() -> Vec<JxlEffortPlan> {
     vec![JxlEffortPlan::Single(
         foundation::constants::JXL_DEFAULT_EFFORT,
@@ -4373,6 +4375,7 @@ pub fn convert_to_jxl_matched(
     }
 }
 
+#[allow(dead_code)]
 fn cjxl_std_failure_summary(stage: &str, output: &Output) -> String {
     let stderr_text = String::from_utf8_lossy(&output.stderr);
     let stderr_tail = stderr_text

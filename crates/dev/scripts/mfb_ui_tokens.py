@@ -35,9 +35,7 @@ def plain_mode_enabled() -> bool:
         "on",
     ):
         return True
-    if not sys.stdout.isatty():
-        return True
-    return False
+    return bool(not sys.stdout.isatty())
 
 
 def pick_symbol(emoji: str, ascii_fallback: str) -> str:

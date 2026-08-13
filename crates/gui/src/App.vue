@@ -246,7 +246,7 @@ const startCliProcessing = async () => {
 };
 
 const shellQuote = (value: string) =>
-  "'" + value.split("'").join("'\"'\"'") + "'";
+  "'" + value.replaceAll("'", "'\"'\"'") + "'";
 
 const generateCliCommand = () => {
   if (!folderPath.value) return "";
@@ -674,7 +674,6 @@ onUnmounted(() => {
         </div>
       </div>
     </main>
-
   </div>
 </template>
 
@@ -1136,5 +1135,4 @@ body {
   background: #27c93f;
   border: 1px solid #1aab29;
 }
-
 </style>

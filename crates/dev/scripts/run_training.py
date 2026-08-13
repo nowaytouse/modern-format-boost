@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import mimetypes
 import os
 import re
@@ -1151,10 +1152,7 @@ def as_object(value: object) -> JsonObject:
 def as_object_list(value: object) -> list[object]:
     if not isinstance(value, list):
         return []
-    parsed: list[object] = []
-    for item in value:
-        parsed.append(item)
-    return parsed
+    return list(value)
 
 
 def as_string(value: object) -> str:
@@ -1726,9 +1724,7 @@ def is_junk_path(p: Path) -> bool:
     if p.suffix.lower() in JUNK_EXTS:
         return True
     parts = [part.lower() for part in p.parts]
-    if any(k in parts for k in ["backup", "tmp", "old", "redundant"]):
-        return True
-    return False
+    return bool(any(k in parts for k in ["backup", "tmp", "old", "redundant"]))
 
 
 def iter_media_files(root: Path) -> Iterator[Path]:
@@ -2446,7 +2442,7 @@ def probe_static_image(path: Path) -> tuple[StaticImageProbe | None, str | None]
         entropy = float(result["entropy"])
     except (KeyError, TypeError, ValueError):
         return None, "tier probe returned malformed width/height/entropy payload"
-    if width <= 0 or height <= 0 or not (entropy == entropy):
+    if width <= 0 or height <= 0 or math.isnan(entropy):
         return (
             None,
             f"tier probe returned invalid geometry/entropy width={width} height={height} entropy={entropy!r}",
@@ -2492,7 +2488,7 @@ def open_tier_audit_stream() -> Path | None:
         return _tier_audit_stream_path
     out = default_tier_audit_path()
     out.parent.mkdir(parents=True, exist_ok=True)
-    _tier_audit_stream = open(out, "a", encoding="utf-8")
+    _tier_audit_stream = out.open("a", encoding="utf-8")
     _tier_audit_stream_path = out
     print(
         f"  [STATIC-TIER] audit_stream={out} "
@@ -3315,7 +3311,7 @@ def sample_complexity_score(sample: Sample) -> float | None:
             value = probe.get("complexity")
             try:
                 parsed = float(value)
-                return parsed if parsed == parsed else None
+                return parsed if not math.isnan(parsed) else None
             except (TypeError, ValueError):
                 return None
     return None

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load dev JSON configs with mandatory ``_consumer`` validation (fail-closed)."""
+"""Load dev JSON configs with mandatory ``_consumer`` validation (fail-closed)."""  # noqa: EXE001
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def load_consumer_json(path: Path, *, expected_consumer: str) -> JsonObject:
     with open(path, encoding="utf-8") as handle:
         root = json.load(handle)
     if not isinstance(root, dict):
-        raise ValueError(f"{path.name}: root must be a JSON object")
+        raise ValueError(f"{path.name}: root must be a JSON object")  # noqa: TRY004
     consumer = root.get("_consumer")
     if consumer != expected_consumer:
         raise ValueError(

@@ -29,6 +29,8 @@ SCRIPT_DIR = Path(__file__).parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from typing import Self
+
 from mfb_config_load import load_consumer_json
 from mfb_entry_guard import guard_main, run_delegated
 
@@ -44,7 +46,7 @@ DbRows = list[DbRow]
 
 
 class DbCursor(Protocol):
-    def __enter__(self) -> DbCursor: ...
+    def __enter__(self) -> Self: ...
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -160,7 +162,7 @@ def as_object_list(value: object) -> list[object]:
         return []
     parsed: list[object] = []
     for item in value:
-        parsed.append(item)
+        parsed.append(item)  # noqa: PERF402
     return parsed
 
 
@@ -181,7 +183,7 @@ def as_int(value: object, context: str) -> int:
 
 def as_float(value: object, context: str) -> float:
     if isinstance(value, bool):
-        raise RuntimeError(f"{context} is not a float: {value!r}")
+        raise RuntimeError(f"{context} is not a float: {value!r}")  # noqa: TRY004
     if isinstance(value, (int, float)):
         return float(value)
     try:

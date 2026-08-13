@@ -30,7 +30,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, cast
+from typing import Protocol, Self, cast
 
 from fastmode_paths import default_mfb_state_root
 from mfb_corpus_thresholds import (
@@ -71,7 +71,7 @@ REPLICA_SOURCE_PATTERN = "%mfb_training_replica_%"
 
 
 class DbCursor(Protocol):
-    def __enter__(self) -> DbCursor: ...
+    def __enter__(self) -> Self: ...
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -242,13 +242,13 @@ def as_int(value: object, context: str) -> int:
 
 def as_float(value: object, context: str) -> float:
     if isinstance(value, bool):
-        raise RuntimeError(f"{context} is not a float: {value!r}")
+        raise TypeError(f"{context} is not a float: {value!r}")
     if isinstance(value, (int, float)):
         return float(value)
     try:
         return float(str(value))
     except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{context} is not a float: {value!r}") from exc
+        raise TypeError(f"{context} is not a float: {value!r}") from exc
 
 
 def as_optional_float(value: object, context: str) -> float | None:

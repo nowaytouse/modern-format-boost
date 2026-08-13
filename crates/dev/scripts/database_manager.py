@@ -17,7 +17,7 @@ Training Integration:
   - Loop-clustering verification
   - Loop-stat refresh
   - Dataset reporting
-"""
+"""  # noqa: EXE001
 
 import platform
 import shutil

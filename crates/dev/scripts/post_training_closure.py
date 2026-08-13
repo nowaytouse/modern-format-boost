@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """After four-lane training: aggregate ingest evidence and run verify-stack-readiness.
 
 Does NOT run cargo test / check_all (CI). Fills runtime closure artifacts only.
@@ -134,7 +133,7 @@ def run_verify_stack(conn_str: str, repo_root: Path, stamp: str) -> int:
     log_root.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log_f:
         proc = subprocess.run(
-            cmd, cwd=str(ROOT), stdout=log_f, stderr=subprocess.STDOUT
+            cmd, cwd=str(ROOT), stdout=log_f, stderr=subprocess.STDOUT, check=False
         )
     status = "PASS" if proc.returncode == 0 else "FAIL"
     verify = repo_root / "RUNTIME_VERIFY.md"
@@ -165,7 +164,7 @@ def finalize_image_quality_model(conn_str: str, repo_root: Path, stamp: str) -> 
     log_root.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log_f:
         proc = subprocess.run(
-            cmd, cwd=str(ROOT), stdout=log_f, stderr=subprocess.STDOUT
+            cmd, cwd=str(ROOT), stdout=log_f, stderr=subprocess.STDOUT, check=False
         )
     block = (
         f"\n## Auto-run {datetime.now(timezone.utc).strftime('%Y-%m-%d')} stamp {stamp}\n\n"

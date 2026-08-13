@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys as _sys
 import time
@@ -54,7 +55,7 @@ CLUSTER_LOAD_HEARTBEAT_SECS: Final = 10.0
 
 
 class DbCursor(Protocol):
-    def __enter__(self) -> DbCursor: ...
+    def __enter__(self) -> DbCursor: ...  # noqa: PYI034
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -267,7 +268,8 @@ def load_loop_embeddings(conn: DbConnection) -> LoopEmbeddingLoadResult:
             if len(embedding) != expected_dim:
                 rejected_unexpected_dim += 1
             elif not all(
-                value == value and abs(value) != float("inf") for value in embedding
+                not math.isnan(value) and abs(value) != float("inf")
+                for value in embedding
             ):
                 rejected_non_finite += 1
             else:

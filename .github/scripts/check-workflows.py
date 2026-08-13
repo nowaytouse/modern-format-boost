@@ -35,7 +35,7 @@ def check_workflow_syntax(workflow_files):
 
     for file in workflow_files:
         if yamllint_path:
-            res = subprocess.run(
+            res = subprocess.run(  # noqa: PLW1510
                 [yamllint_path, str(file)], capture_output=True, text=True
             )
             if res.returncode != 0:
@@ -51,7 +51,7 @@ def check_workflow_syntax(workflow_files):
                 "require 'yaml'; YAML.load_file(ARGV.fetch(0))",
                 str(file),
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = subprocess.run(cmd, capture_output=True, text=True)  # noqa: PLW1510
             if res.returncode != 0:
                 print_status(RED, f"❌ YAML syntax error in {file}")
                 print(res.stderr, file=sys.stderr)
@@ -110,7 +110,7 @@ def check_action_versions(workflow_files):
                     f"⚠️  Missing FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 in {file.name}",
                 )
                 outdated_actions += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading {file.name}: {e}")
     if outdated_actions == 0:
         print_status(GREEN, "✅ All action versions look up to date")
@@ -138,7 +138,7 @@ def check_permissions(workflow_files):
                     f"⚠️  Workflow needs write permissions but permissions block missing in {file.name}",
                 )
                 permission_issues += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading {file.name}: {e}")
     if permission_issues == 0:
         print_status(GREEN, "✅ Permissions look good")
@@ -181,7 +181,7 @@ def check_anti_patterns(workflow_files):
                     f"⚠️  Network operations in {file.name} may need fail-fast retry handling",
                 )
                 anti_patterns += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading {file.name}: {e}")
     if anti_patterns == 0:
         print_status(GREEN, "✅ No common anti-patterns found")
@@ -203,7 +203,7 @@ def check_rust_specific(workflow_files):
                 rust_issues += 1
             else:
                 print_status(GREEN, "✅ rust-toolchain.toml looks good")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading rust-toolchain.toml: {e}")
             rust_issues += 1
     else:
@@ -218,7 +218,7 @@ def check_rust_specific(workflow_files):
         try:
             with open(file) as f:
                 content = f.read()
-            if "dtolnay/rust-toolchain" in content:
+            if "dtolnay/rust-toolchain" in content:  # noqa: SIM102
                 if (
                     "channel" in content
                     and "nightly" in content
@@ -229,7 +229,7 @@ def check_rust_specific(workflow_files):
                         f"⚠️  Using nightly Rust in {file.name} (consider stable for reliability)",
                     )
                     toolchain_inconsistency += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading {file.name}: {e}")
 
     if toolchain_inconsistency == 0:

@@ -2756,7 +2756,6 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// return it), or `None` if the output passes the size check.
 #[derive(Debug, Clone, Copy)]
 struct SizeDeltaSummary {
-    increase_bytes: u64,
     increase_kb: f64,
     increase_mb: f64,
     change_pct: f64,
@@ -2770,7 +2769,6 @@ impl SizeDeltaSummary {
         let output_size_f64 = crate::numeric_cast::u64_to_f64(output_size);
 
         Self {
-            increase_bytes,
             increase_kb: increase_bytes_f64 / crate::constants::KB_DIVISOR,
             increase_mb: increase_bytes_f64 / crate::constants::MB_DIVISOR,
             change_pct: if input_size == 0 {

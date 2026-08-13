@@ -48,7 +48,7 @@ class TestFastModePaths(unittest.TestCase):
             )
 
     def test_fastmode_state_root_defaults_to_user_home_for_app_launch(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home:  # noqa: SIM117
             with patch.dict(os.environ, {"HOME": home, "FROM_APP": "1"}, clear=True):
                 self.assertEqual(
                     fastmode_paths.default_mfb_state_root(),
