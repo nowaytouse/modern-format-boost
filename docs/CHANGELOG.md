@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **FastImg production verification**: JXL and AVIF local delivery were verified
+  with release-binary smoke runs on synthetic and healthy public media, plus a
+  controlled AVIF import into the dedicated debug Photos library. Content-based
+  decoding handles mislabeled files correctly, AVIF/JXL share an accurately
+  named final-delivery proof, marker-writing tests isolate their state roots,
+  and Gate 3 logs report Photos-local versus uploaded custody counts instead of
+  the misleading zero-failure-only summary.
 - **CLI-only GUI surface**: Removed the non-CLI mock-processing and decorative
   drop-zone path; the bundled UI now exposes only the real CLI command,
   terminal execution, logs, and explicit resume/fresh decisions.

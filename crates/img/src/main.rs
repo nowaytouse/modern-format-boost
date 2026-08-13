@@ -8057,14 +8057,26 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    fn write_avif_ftyp_stub(path: &std::path::Path) -> anyhow::Result<()> {
+        let mut bytes = vec![
+            0, 0, 0, 20, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f', 0, 0, 0, 0, b'a', b'v',
+            b'i', b'f',
+        ];
+        bytes.resize(64, 0);
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
     #[test]
     fn fast_static_preflight_fails_closed_when_modern_compression_is_unknown() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("truncated.jpg");
-        std::fs::write(&path, b"\x00\x00\x00\x0cftypavif").unwrap();
-        let detected = foundation::image_detection::detect_format_from_bytes(&path).unwrap();
-        let err = fast_static_modern_compression(&path, &detected)
-            .expect_err("unknown modern compression must not fall through to re-encoding");
+        write_avif_ftyp_stub(&path).unwrap();
+        let err = fast_static_modern_compression(
+            &path,
+            &foundation::image_detection::DetectedFormat::AVIF,
+        )
+        .expect_err("unknown modern compression must not fall through to re-encoding");
         assert!(
             err.to_string().contains("compression"),
             "unexpected error: {err}"
@@ -8808,6 +8820,7 @@ mod fast_img_hardening_tests {
             return Ok(());
         }
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let src_root = root.path().join("Photos");
         let wc = root.path().join("Photos_");
         let src = src_root.join("a.jpg");
@@ -9453,7 +9466,7 @@ mod fast_img_hardening_tests {
 
         let (deleted, already_deleted) =
             fast_img_delete_verified_source_jpegs_with(&marker, &src_root, |_source, _output| {
-                Ok(IntegrityResult::FinalJxlDelivery {
+                Ok(IntegrityResult::FinalModernDelivery {
                     source_hash: source_hash.clone(),
                     output_hash: output_hash.clone(),
                 })
@@ -10122,7 +10135,7 @@ mod fast_img_hardening_tests {
 
         let (deleted, already_deleted) =
             fast_img_delete_verified_source_jpegs_with(&marker, &src_root, |_source, _output| {
-                Ok(IntegrityResult::FinalJxlDelivery {
+                Ok(IntegrityResult::FinalModernDelivery {
                     source_hash: source_hash.clone(),
                     output_hash: output_hash.clone(),
                 })
@@ -10162,7 +10175,7 @@ mod fast_img_hardening_tests {
 
         let (deleted, already_deleted) =
             fast_img_delete_verified_source_jpegs_with(&marker, &src_root, |_source, _output| {
-                Ok(IntegrityResult::FinalJxlDelivery {
+                Ok(IntegrityResult::FinalModernDelivery {
                     source_hash: source_hash.clone(),
                     output_hash: output_hash.clone(),
                 })
@@ -10202,7 +10215,7 @@ mod fast_img_hardening_tests {
             &marker,
             &src_root,
             |_source, _output| {
-                Ok(IntegrityResult::FinalJxlDelivery {
+                Ok(IntegrityResult::FinalModernDelivery {
                     source_hash: "hash-a".to_string(),
                     output_hash: "out-a".to_string(),
                 })
@@ -10246,7 +10259,7 @@ mod fast_img_hardening_tests {
             &marker,
             &src_root,
             |_source, _output| {
-                Ok(IntegrityResult::FinalJxlDelivery {
+                Ok(IntegrityResult::FinalModernDelivery {
                     source_hash: "hash-a".to_string(),
                     output_hash: "out-a".to_string(),
                 })
@@ -10498,7 +10511,7 @@ mod fast_img_hardening_tests {
         let jpeg = wc.join("spoof.AVIF");
         let avif = wc.join("actual.bin");
         write_jpeg(&jpeg, b"source")?;
-        std::fs::write(&avif, b"\x00\x00\x00\x0cftypavif")?;
+        write_avif_ftyp_stub(&avif)?;
 
         fast_img_strip_non_target_files(&wc, "avif")?;
 
@@ -10516,7 +10529,7 @@ mod fast_img_hardening_tests {
         let root = TempDir::new()?;
         let avif = root.path().join("actual.jxl");
         let spoof = root.path().join("spoof.avif");
-        std::fs::write(&avif, b"\x00\x00\x00\x0cftypavif")?;
+        write_avif_ftyp_stub(&avif)?;
         write_jpeg(&spoof, b"not avif")?;
 
         assert_eq!(
@@ -11232,7 +11245,11 @@ mod fast_img_hardening_tests {
         let marker_files = std::fs::read_dir(&marker_dir)?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(marker_files.len(), 1, "failed scan must leave one marker");
+        assert_eq!(
+            marker_files.len(),
+            1,
+            "failed scan must leave one marker: {marker_files:?}"
+        );
         let marker_json = std::fs::read_to_string(&marker_files[0])?;
         assert!(
             marker_json.contains("static-container metadata"),
@@ -11723,6 +11740,7 @@ mod fast_img_hardening_tests {
     fn test_resume_preserves_valid_entries_and_only_requeues_drifted_output() -> anyhow::Result<()>
     {
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let src_dir = root.path().join("src");
         let wc = root.path().join("wc");
         std::fs::create_dir_all(&src_dir)?;

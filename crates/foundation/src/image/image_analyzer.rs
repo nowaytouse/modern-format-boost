@@ -66,64 +66,16 @@ macro_rules! info_detail {
 pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 =
     crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
 
-/// Opens an image reader with magic bytes detection to handle non-standard
-/// extensions. Falls back to extension-based detection if magic bytes detection
-/// fails.
+/// Opens an image reader with magic-byte detection to handle non-standard
+/// extensions.
 ///
 /// # Errors
 /// Returns `ImageError` if the file cannot be opened or format cannot be
-/// determined. The error message includes details about whether magic bytes
-/// detection or extension-based detection failed.
+/// determined from the file contents.
 fn open_image_reader_with_magic_bytes(
     path: &Path,
-) -> std::result::Result<image::ImageReader<'_>, image::ImageError> {
-    // Use magic bytes detection instead of relying on file extension
-    // This handles cases like .jpe, missing extensions, or incorrect extensions
-    let _format = match infer::get_from_path(path) {
-        Ok(Some(kind)) => match kind.mime_type() {
-            // Standard formats supported by image crate
-            "image/jpeg" => Some(image::ImageFormat::Jpeg),
-            "image/png" => Some(image::ImageFormat::Png),
-            "image/gif" => Some(image::ImageFormat::Gif),
-            "image/webp" => Some(image::ImageFormat::WebP),
-            "image/tiff" => Some(image::ImageFormat::Tiff),
-            "image/bmp" => Some(image::ImageFormat::Bmp),
-            "image/x-icon" => Some(image::ImageFormat::Ico),
-            // Modern formats (if image crate supports them)
-            "image/avif" => Some(image::ImageFormat::Avif),
-            // Note: HEIC/HEIF are handled separately via libheif-rs, not through image crate
-            // Note: JXL is handled separately via djxl/cjxl, not through image crate
-            // Note: OpenEXR, JPEG 2000, PSD, etc. may need special handling
-            _ => {
-                // Log unsupported MIME type for debugging
-                probe_audit!(
-                    "mime_unsupported_for_pixel_analysis",
-                    path,
-                    "format not supported for deep pixel analysis: {mime}",
-                    mime = kind.mime_type(),
-                );
-                None
-            }
-        },
-        Ok(None) => None, // No magic bytes detected, fall back to extension
-        Err(e) => {
-            // Log the magic bytes detection failure but continue with extension-based
-            // detection
-            probe_audit!(
-                "magic_bytes_identify_failed",
-                path,
-                "magic number identification failed: {e}",
-                e = e,
-            );
-            None
-        }
-    };
-
-    let reader = image::ImageReader::open(path)?;
-
-    // Note: set_format and with_guessed_format are not available in new image crate
-    // API Format detection is now handled automatically during decode
-    Ok(reader)
+) -> std::io::Result<image::ImageReaderOptions<std::io::BufReader<std::fs::File>>> {
+    image::ImageReaderOptions::open(path)?.with_guessed_format()
 }
 
 fn image_dimensions_with_magic_bytes(path: &Path) -> std::result::Result<(u32, u32), String> {
@@ -560,20 +512,18 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         use image::Limits;
         let mut limits = Limits::default();
         limits.max_alloc = Some(crate::constants::IMAGE_DECODE_MAX_ALLOC_BYTES);
-        let _ = reader.set_limits(limits);
+        reader.limits(limits);
     }
 
-    let (img, _metadata) = reader
-        .decode()
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {e}")))?;
-
-    // Format detection - use extension as fallback since infer was used earlier
-    let format = image::ImageFormat::from_path(path).map_err(|_| {
+    let format = reader.format().ok_or_else(|| {
         ImgQualityError::image_not_supported(format!(
-            "Could not detect format for {}",
+            "Could not detect content format for {}",
             path.display()
         ))
     })?;
+    let img = reader
+        .decode()
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {e}")))?;
     let format_str = format_to_string(format);
 
     let mut extension_mismatch = false;
@@ -1458,8 +1408,8 @@ fn extract_universal_physics_and_perception(
 ) -> Result<(Visual, Option<Vec<f32>>, Option<f64>)> {
     // Attempt 1: Native decode (fastest, most accurate)
     match open_image_reader_with_magic_bytes(path) {
-        Ok(mut reader) => match reader.decode() {
-            Ok((img, _)) => {
+        Ok(reader) => match reader.decode() {
+            Ok(img) => {
                 return Ok((
                     extract_visual_perception(&img),
                     Some(crate::real_physics::extract_image_physics_225(&img)),

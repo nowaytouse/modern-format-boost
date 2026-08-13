@@ -271,6 +271,16 @@ impl VerificationGate for Gate3Deep {
             .filter(|asset| !photos_library_sync_status_is_accepted(&asset.sync_status))
             .map(|asset| ctx.working_copy.join(&asset.rel_path))
             .collect::<Vec<_>>();
+        let local_custody_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "photos_local")
+            .count();
+        let uploaded_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "uploaded")
+            .count();
         let quarantine_failures = library
             .imported_assets
             .iter()
@@ -323,7 +333,10 @@ impl VerificationGate for Gate3Deep {
                 "sync",
                 sync_failures.is_empty(),
                 "Photos local custody or uploaded".to_string(),
-                format!("{} without accepted custody proof", sync_failures.len()),
+                format!(
+                    "{local_custody_count} Photos-local, {uploaded_count} uploaded, {} without accepted custody proof",
+                    sync_failures.len()
+                ),
                 sync_failures,
             ),
             detail(
@@ -1057,6 +1070,44 @@ mod tests {
 
         assert!(!result.passed);
         assert_eq!(result.checks.len(), 4);
+    }
+
+    #[test]
+    fn gate3_sync_detail_reports_accepted_custody_counts() {
+        let ctx = ctx_with_library(
+            2,
+            vec![
+                LibraryAssetRecord {
+                    rel_path: "a.AVIF".to_string(),
+                    blake3: "a".to_string(),
+                    sync_status: "photos_local".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                },
+                LibraryAssetRecord {
+                    rel_path: "b.AVIF".to_string(),
+                    blake3: "b".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                },
+            ],
+        );
+
+        let result = Gate3Deep.run(&ctx);
+        let sync = result
+            .checks
+            .iter()
+            .find(|check| check.name == "sync")
+            .expect("sync check");
+
+        assert!(sync.passed);
+        assert_eq!(
+            sync.actual,
+            "1 Photos-local, 1 uploaded, 0 without accepted custody proof"
+        );
     }
 
     #[test]

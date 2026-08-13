@@ -390,7 +390,7 @@ pub fn verify_final_delivery_integrity(
         "final modern format delivery integrity check"
     );
 
-    Ok(IntegrityResult::FinalJxlDelivery {
+    Ok(IntegrityResult::FinalModernDelivery {
         source_hash,
         output_hash,
     })
@@ -478,9 +478,9 @@ pub enum IntegrityResult {
         source_hash: String,
         output_hash: String,
     },
-    /// Final delivery JXL passed source/output hash, decode, metadata, and
-    /// orientation proofs.
-    FinalJxlDelivery {
+    /// Final modern-format delivery passed source/output hash, decode,
+    /// metadata, and orientation proofs.
+    FinalModernDelivery {
         source_hash: String,
         output_hash: String,
     },
@@ -527,7 +527,7 @@ pub fn safe_delete_jpeg_source(
             );
             (source_hash, output_hash)
         }
-        IntegrityResult::FinalJxlDelivery {
+        IntegrityResult::FinalModernDelivery {
             source_hash,
             output_hash,
         } => {
@@ -558,7 +558,7 @@ pub fn safe_delete_jpeg_source(
                 "delete-gate 1 FAIL: decode-probe-only integrity is not sufficient for deletion"
             );
             return Err(ImgQualityError::AnalysisError(
-                "delete-gate 1 FAIL: final JXL delivery proof or raw roundtrip proof is required \
+                "delete-gate 1 FAIL: final modern-format delivery proof or raw roundtrip proof is required \
                  before deleting source JPEG"
                     .to_string(),
             ));
@@ -7120,7 +7120,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("final JXL delivery proof or raw roundtrip proof is required"),
+                .contains("final modern-format delivery proof or raw roundtrip proof is required"),
             "unexpected: {err}"
         );
         assert!(src.path().exists());
@@ -7174,7 +7174,7 @@ mod tests {
         let source_hash = crate::common_utils::calculate_blake3_hash(src.path()).unwrap();
         let output_hash = crate::common_utils::calculate_blake3_hash(out.path()).unwrap();
         let src_path = src.path().to_path_buf();
-        let integrity = IntegrityResult::FinalJxlDelivery {
+        let integrity = IntegrityResult::FinalModernDelivery {
             source_hash,
             output_hash,
         };
