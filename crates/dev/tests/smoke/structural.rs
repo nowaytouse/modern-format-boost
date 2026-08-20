@@ -5,6 +5,19 @@ use foundation::image_heic_analysis::{
 use foundation::image_jpeg_analysis::is_jpeg_complete;
 
 #[test]
+fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
+    for source in [
+        include_str!("../../../../.github/workflows/ci-quality.yml"),
+        include_str!("../../../../.github/workflows/cd-nightly.yml"),
+        include_str!("../../../../.github/workflows/cd-stable.yml"),
+        include_str!("../../src/bin/install_media_dependencies.rs"),
+    ] {
+        assert!(source.contains("libheif-1.23.1"));
+        assert!(!source.contains("libheif-1.21.0"));
+    }
+}
+
+#[test]
 fn smoke_heic_bit_depth_parsing_honest() {
     let mut hvcc = vec![0u8; 20];
     // Byte 17: bit_depth_luma_minus8 (bits 0-2)

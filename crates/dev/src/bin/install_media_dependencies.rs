@@ -407,10 +407,10 @@ fn main() -> Result<()> {
         require_output(&encoders, encoder, "ffmpeg -encoders")?;
     }
 
-    println!("--- Building libheif 1.21.0 ---");
+    println!("--- Building libheif 1.23.1 ---");
     let libheif_archive = workdir.join("libheif-src.tar.gz");
     download(
-        "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz",
+        "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz",
         &libheif_archive,
         workdir,
     )?;
@@ -423,7 +423,7 @@ fn main() -> Result<()> {
         "cmake",
         [
             "-S",
-            "libheif-1.21.0",
+            "libheif-1.23.1",
             "-B",
             "libheif-build",
             "-G",

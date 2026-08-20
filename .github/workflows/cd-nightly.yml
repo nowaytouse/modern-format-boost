@@ -189,9 +189,9 @@ jobs:
           sudo ldconfig
 
           cd /tmp
-          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz" libheif.tar.gz
+          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz" libheif.tar.gz
           tar xzf libheif.tar.gz
-          cd libheif-1.21.0
+          cd libheif-1.23.1
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
