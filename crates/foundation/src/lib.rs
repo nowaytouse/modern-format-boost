@@ -315,8 +315,8 @@ pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 pub use path_safety::safe_path_arg;
 pub use tool_builders::{
-    HostnameBuilder, KillBuilder, PsBuilder, RsyncBuilder, VmafBuilder, X265Builder,
-    X265EncodingFlags, X265Flags, X265IoFlags,
+    HostnameBuilder, KillBuilder, PsBuilder, RsyncBuilder, SiegfriedBuilder, VmafBuilder,
+    X265Builder, X265EncodingFlags, X265Flags, X265IoFlags,
 };
 pub use unified_progress::Bar as UnifiedProgressBar;
 pub use video_detection::{
@@ -529,6 +529,7 @@ pub use types::{
 
 pub use app_error::AppError;
 
+pub use convert::file_copier::collect_unsupported_files;
 pub use file_copier::{
     CopyResult, FileStats, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
     SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, VerifyDomain,
@@ -547,7 +548,7 @@ pub use image::fast_img::{
     prune_empty_source_dirs_for_tier2_assets, safe_delete_modern_lossy_static_source,
 };
 pub use image::modern_lossy_static::{
-    ModernLossyStaticCandidate, scan_modern_lossy_static_candidates,
+    ModernLossyStaticCandidate, ModernLossyStaticScan, scan_modern_lossy_static_candidates,
 };
 pub use image::png_validation::{PNG_LOSSLESS_JXL_EFFORT, is_true_png, png_heuristic_enabled};
 pub use live_photo::is_live as is_live_photo;

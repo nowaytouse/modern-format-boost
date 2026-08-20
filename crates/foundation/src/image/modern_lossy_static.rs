@@ -5,6 +5,7 @@
 
 use crate::image_detection::{CompressionType, DetectedFormat, detect_compression};
 use crate::unified_error::{ImgQualityError, Result};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::format_detect::{FormatKind, detect_true_format, validate_format_forensic};
@@ -55,6 +56,15 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
         return Ok(None);
     }
 
+    // Bind every classification decision to the exact bytes later offered to
+    // Photos. A path may be replaced while external/container probes run.
+    let before_blake3 = crate::common_utils::calculate_blake3_hash(path).map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "modern lossy static pre-probe BLAKE3 failed for {}: {err}",
+            path.display()
+        ))
+    })?;
+
     let detected = detected_format_from_kind(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "modern lossy static probe missing DetectedFormat mapping for {format:?}: {}",
@@ -73,8 +83,52 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
     }
 
     let compression = detect_modern_compression_authoritative(path, format, &detected)?;
-    if compression == CompressionType::Lossless {
-        return Ok(None);
+    match compression {
+        CompressionType::Lossy => {}
+        CompressionType::Lossless => {
+            tracing::debug!(
+                target: "modern_lossy_static",
+                path = %path.display(),
+                format = ?format,
+                "skipping lossless modern format (not eligible for tier-2 lossy import)"
+            );
+            return Ok(None);
+        }
+        CompressionType::JpegReconstruction => {
+            tracing::debug!(
+                target: "modern_lossy_static",
+                path = %path.display(),
+                format = ?format,
+                "skipping jbrd JPEG-reconstruction JXL (reversible-JPEG route, not a lossy modern source)"
+            );
+            return Ok(None);
+        }
+        // Unproven compression semantics: admitting the file as "lossy" would
+        // be a fabricated verdict; tier-2 direct import requires the positive
+        // ConfirmedLossy proof.
+        CompressionType::Unknown => {
+            tracing::debug!(
+                target: "modern_lossy_static",
+                path = %path.display(),
+                format = ?format,
+                "skipping modern format with unproven compression semantics (fail-closed)"
+            );
+            return Ok(None);
+        }
+    }
+
+    let after_blake3 = crate::common_utils::calculate_blake3_hash(path).map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "modern lossy static post-probe BLAKE3 failed for {}: {err}",
+            path.display()
+        ))
+    })?;
+    let final_format = detect_true_format(path)?;
+    if before_blake3 != after_blake3 || final_format != format {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "modern lossy static source changed during classification: {}",
+            path.display()
+        )));
     }
 
     let rel_path = path
@@ -82,40 +136,78 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_string();
-    let blake3 = crate::common_utils::calculate_blake3_hash(path).map_err(|err| {
-        ImgQualityError::AnalysisError(format!(
-            "modern lossy static probe BLAKE3 failed for {}: {err}",
-            path.display()
-        ))
-    })?;
-
     Ok(Some(ModernLossyStaticCandidate {
         path: path.to_path_buf(),
         rel_path,
         format,
-        blake3,
+        blake3: after_blake3,
     }))
 }
 
-/// Scan `file_paths` under `src_root` and return tier-2 import candidates.
+/// Result of a tier-2 scan: admitted candidates plus per-file probe failures.
+///
+/// A probe failure (unreadable or non-standard modern media) quarantines that
+/// file with an explicit reason instead of aborting the whole scan — the same
+/// retention doctrine as the fast-img source scan.
+#[derive(Debug, Default)]
+pub struct ModernLossyStaticScan {
+    pub candidates: Vec<ModernLossyStaticCandidate>,
+    pub probe_failures: Vec<(PathBuf, String)>,
+}
+
+impl ModernLossyStaticScan {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.candidates.is_empty() && self.probe_failures.is_empty()
+    }
+}
+
+/// Scan `file_paths` under `src_root` for tier-2 import candidates.
+///
+/// Files that are not eligible (wrong format, animated, lossless) are skipped.
+/// Files whose probe fails (parse/decode/hash errors) are quarantined in
+/// `probe_failures` with the failure reason; they never abort the scan and
+/// never masquerade as candidates.
 pub fn scan_modern_lossy_static_candidates(
     src_root: &Path,
     file_paths: &[PathBuf],
-) -> Result<Vec<ModernLossyStaticCandidate>> {
-    let mut candidates = Vec::new();
+) -> Result<ModernLossyStaticScan> {
+    let mut scan = ModernLossyStaticScan::default();
+    let mut relative_paths = BTreeSet::new();
     for path in file_paths {
-        if let Some(mut candidate) = probe_modern_lossy_static(path)? {
-            let rel = crate::media_conversion_gate::strip_prefix_or_self(
-                path,
-                src_root,
-                "modern_lossy_static_rel",
-            );
-            candidate.rel_path = rel.to_string_lossy().to_string();
-            candidates.push(candidate);
+        match probe_modern_lossy_static(path) {
+            Ok(Some(candidate)) => {
+                let rel = crate::media_conversion_gate::strip_prefix_or_self(
+                    path,
+                    src_root,
+                    "modern_lossy_static_rel",
+                );
+                let rel_path = rel.to_string_lossy().to_string();
+                if !relative_paths.insert(rel_path.clone()) {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "modern lossy static scan produced duplicate relative path {rel_path}"
+                    )));
+                }
+                scan.candidates.push(ModernLossyStaticCandidate {
+                    rel_path,
+                    ..candidate
+                });
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    target: "modern_lossy_static",
+                    path = %path.display(),
+                    error = %err,
+                    "modern lossy static probe failed; quarantining file"
+                );
+                scan.probe_failures.push((path.clone(), err.to_string()));
+            }
         }
     }
-    candidates.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(candidates)
+    scan.candidates.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    scan.probe_failures.sort();
+    Ok(scan)
 }
 
 fn confirmed_static_only(path: &Path, detected: &DetectedFormat) -> Result<bool> {
@@ -138,6 +230,13 @@ fn detect_modern_compression_authoritative(
     let tool_available = forensic_tool
         .and_then(crate::common_utils::resolve_tool_path)
         .is_some();
+
+    // JXL's compression classifier already performs an in-process structural
+    // decode and, for Modular streams, one bounded jxlinfo query. Avoid a
+    // duplicate jxlinfo spawn here.
+    if format == FormatKind::Jxl {
+        return detect_compression(detected, path);
+    }
 
     match validate_format_forensic(path, format) {
         Ok(check) => {
@@ -197,8 +296,43 @@ mod tests {
         let jpeg_path = tempdir.path().join("photo.jpg");
         std::fs::write(&jpeg_path, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]).unwrap();
 
-        let candidates = scan_modern_lossy_static_candidates(tempdir.path(), &[jpeg_path])?;
-        assert!(candidates.is_empty());
+        let scan = scan_modern_lossy_static_candidates(tempdir.path(), &[jpeg_path])?;
+        assert!(scan.candidates.is_empty());
+        assert!(
+            scan.probe_failures.is_empty(),
+            "non-modern media is a skip, never a probe failure"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_scan_quarantines_unparseable_modern_media_instead_of_aborting() -> Result<()> {
+        let tempdir = tempfile::tempdir().unwrap();
+        // RIFF/WEBP magic (so detect_true_format says WebP) with a RIFF size
+        // declaring far more bytes than exist: structurally invalid.
+        let broken_webp = tempdir.path().join("broken.webp");
+        std::fs::write(&broken_webp, b"RIFF\x99\x00\x00\x00WEBP")?;
+        // A second, healthy non-modern file must still be scanned even though
+        // the first file's probe fails.
+        let jpeg_path = tempdir.path().join("photo.jpg");
+        std::fs::write(&jpeg_path, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])?;
+
+        let scan =
+            scan_modern_lossy_static_candidates(tempdir.path(), &[broken_webp.clone(), jpeg_path])?;
+        assert!(scan.candidates.is_empty());
+        assert_eq!(
+            scan.probe_failures.len(),
+            1,
+            "broken WebP must be quarantined"
+        );
+        assert_eq!(scan.probe_failures[0].0, broken_webp);
+        assert!(
+            scan.probe_failures[0]
+                .1
+                .chars()
+                .any(|ch| !ch.is_whitespace()),
+            "quarantined probe failure must carry a non-blank reason"
+        );
         Ok(())
     }
 }

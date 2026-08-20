@@ -1387,10 +1387,14 @@ mod fast_gif_tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Structurally exact ftyp box: size 0x14 = 8-byte header + major/minor/
+        // compatible brands (3×4 bytes). The previous 0x18 length declared
+        // 4 bytes beyond EOF, which made detect_true_format fail closed to
+        // Unknown before the brand check could run.
         std::fs::write(
             path,
             [
-                0x00, 0x00, 0x00, 0x18, b'f', b't', b'y', b'p', b'a', b'v', b'i', b's', 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x14, b'f', b't', b'y', b'p', b'a', b'v', b'i', b's', 0x00, 0x00,
                 0x00, 0x00, b'a', b'v', b'i', b's',
             ],
         )?;

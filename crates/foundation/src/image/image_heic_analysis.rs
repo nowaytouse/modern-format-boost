@@ -55,23 +55,37 @@ pub fn extract_hevc_bit_depths(hvcc_data: &[u8]) -> Result<(u8, u8)> {
     Ok((bit_depth_luma, bit_depth_chroma))
 }
 
-/// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
+/// Classify HEIC/HEIF compression from positive codec evidence.
 ///
-/// Dimensions checked (in priority order):
-/// 1. **hvcC `profile_idc`**: Main(1)/Main10(2)/MainStillPicture(3) →
-///    definitely lossy (4:2:0 only)
-/// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check `chroma_format_idc`
-/// 3. **hvcC `chroma_format_idc`**: < 3 (not 4:4:4) → lossy; == 3 → lossless capable (move to PPS check)
-/// 4. **PPS `transquant_bypass_enabled_flag`**: if 0 → lossy. If 1 → ambiguous (permits lossless CUs, requires CABAC)
+/// Evidence ladder (positive proof only):
+/// 1. **hvcC `chroma_format_idc` 4:2:0 / 4:2:2** → `Lossy` (subsampling
+///    discards chroma information).
+/// 2. **hvcC `profile_idc` Main(1)/Main10(2)/MainStillPicture(3)** → `Lossy`
+///    (these profiles are 4:2:0-only by spec).
+/// 3. **hvcC RExt(4)/SCC(9) + non-4:4:4 chroma** → `Lossy`.
+/// 4. **RExt/SCC + 4:4:4 + PPS `transquant_bypass_enabled_flag == 0`** →
+///    `Lossy` (quantization bypass disabled: every CU is quantized).
+/// 5. **RExt/SCC + 4:4:4 + PPS bypass == 1** → `Unknown`: the flag only
+///    permits per-CU bypass; it does not prove every coded unit used it.
+/// 6. **RExt/SCC + 4:4:4 but PPS unparsable** → `Unknown` (insufficient
+///    evidence; previously fabricated as an error or lossy).
+/// 7. **`profile_idc` outside 1-4/9** (reserved profiles) → `Unknown`
+///    (previously silently defaulted to lossy).
 ///
-/// Detect if an HEIC file is lossless (using libheif).
+/// Missing/truncated hvcC → `Err` (malformed still HEIC).
 ///
 /// # Errors
-/// Returns an error if the file cannot be read or libheif fails.
+/// Returns an error if the hvcC box is missing or truncated, or heif-info
+/// authoritative validation rejects a structurally suspicious file.
 // Rationale: This function handles complex, sequential initialization or
 // business logic where further fragmentation would hinder readability and
 // maintainability.
-pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
+pub fn classify_heic_compression(
+    data: &[u8],
+    path: &Path,
+) -> Result<crate::image_detection::CompressionType> {
+    use crate::image_detection::CompressionType;
+
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with
     // version/flags)
@@ -145,7 +159,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             if chroma_format_idc == crate::constants::HEIC_CHROMA_420
                 || chroma_format_idc == crate::constants::HEIC_CHROMA_422
             {
-                return Ok(false);
+                return Ok(CompressionType::Lossy);
             }
 
             // Dimension 1: Main/Main10/MainStillPicture → always 4:2:0 → always lossy
@@ -153,7 +167,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 || profile_idc == crate::constants::HEIC_PROFILE_MAIN10
                 || profile_idc == crate::constants::HEIC_PROFILE_MAIN_STILL
             {
-                return Ok(false);
+                return Ok(CompressionType::Lossy);
             }
 
             // Dimension 2: RExt (4) or SCC (9) profiles can be lossless
@@ -181,39 +195,26 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 // True lossless MUST be 4:4:4. If chroma_format_idc is NOT 3 (4:4:4), it's definitely lossy.
                 // This filters out 99%+ of consumer HEIC files instantly.
                 if chroma_format_idc != crate::constants::HEIC_CHROMA_444 {
-                    return Ok(false);
+                    return Ok(CompressionType::Lossy);
                 }
 
                 // LAYER 2: PPS transquant_bypass_enabled_flag Check
                 // If it IS 4:4:4, we check the PPS flag. If this flag is 0, it's definitely lossy.
-                // If it's 1, it PERMITS lossless CU coding. We use a smart heuristic:
-                //   - If sign_data_hiding_enabled=0 → likely lossless (Apple/professional camera default)
-                //   - If sign_data_hiding_enabled=1 → treat as lossy (rounding errors probable)
+                // If it is 1, it only PERMITS per-CU lossless coding. A PPS flag
+                // cannot prove that every CU/slice used bypass, regardless of
+                // sign-data-hiding or encoder profile.
                 let pps_flags = check_heic_pps_transquant_bypass_flag(data);
                 if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) = pps_flags {
                     if transquant_bypass_enabled {
-                        if sign_data_hiding_enabled {
-                            crate::log_debug!(
-                                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                                &format!(
-                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 and \
-                                     sign_data_hiding_enabled_flag=1 for '{}'; treating as lossless (standard x265 pattern)",
-                                    path.display()
-                                )
-                            );
-                        } else {
-                            // transquant_bypass=1 AND sign_data_hiding=0 → strong lossless indicator
-                            // This is the standard configuration for Apple HEIC lossless captures
-                            crate::log_debug!(
-                                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                                &format!(
-                                    "HEVC PPS analysis | Forensic: transquant_bypass_enabled_flag=1 AND \
-                                     sign_data_hiding_enabled_flag=0 for '{}'; inferring lossless based on \
-                                     professional encoder profile (RExt/SCC 4:4:4 with bypass enabled)",
-                                    path.display()
-                                )
-                            );
-                        }
+                        crate::log_debug!(
+                            crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
+                            &format!(
+                                "HEVC PPS analysis | transquant_bypass_enabled_flag=1, \
+                                 sign_data_hiding_enabled_flag={} for '{}'; per-CU usage is unknown",
+                                u8::from(sign_data_hiding_enabled),
+                                path.display()
+                            )
+                        );
                         // Attempt heif-info validation if available
                         if let Some(validation_result) = try_heif_info_validation(path) {
                             crate::log_debug!(
@@ -229,17 +230,20 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                                     "probe_heic",
                                     format!(
                                         "heif-info validation failed for '{}' despite favorable PPS flags; \
-                                         treating as lossy for safety",
+                                         failing closed as malformed",
                                         path.display()
                                     ),
                                 );
-                                return Ok(false);
+                                return Err(ImgQualityError::AnalysisError(format!(
+                                    "HEIC: heif-info rejected file with lossless PPS evidence — {}",
+                                    path.display()
+                                )));
                             }
                         }
-                        return Ok(true);
+                        return Ok(CompressionType::Unknown);
                     }
                     // Flag is 0 -> definitely lossy
-                    return Ok(false);
+                    return Ok(CompressionType::Lossy);
                 }
 
                 let matrix_warning = if has_rgb_identity_matrix {
@@ -252,37 +256,47 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     format!(
                         "Ambiguous RExt/SCC profile detected | Forensic: profile_idc={} is \
                                  4:4:4 but PPS transquant_bypass_enabled_flag could not be parsed for '{}'{}; \
-                                 precision detection is inconclusive",
+                                 compression evidence is inconclusive",
                         profile_idc,
                         path.display(),
                         matrix_warning
                     ),
                 );
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: RExt/SCC profile ({}) is 4:4:4 but PPS could not be parsed{}; cannot determine — {}",
-                    profile_idc,
-                    matrix_warning,
-                    path.display()
-                )));
+                // 4:4:4 RExt/SCC with unparsable PPS: insufficient evidence —
+                // Unknown, never a fabricated lossy/lossless verdict.
+                return Ok(CompressionType::Unknown);
             }
 
-            // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
-            // Most are lossy variants; treat as lossy rather than Err (safe default)
-            if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
-                crate::log_debug!(
-                    crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                    &format!(
-                        "Forensic: Unknown profile IDC {profile_idc} detected; defaulting to \
-                         lossy conversion logic for structural safety"
-                    )
-                );
-            }
-            return Ok(false);
+            // Unknown profile but hvcC exists — profiles 5-8, 10+ are reserved
+            // by the HEVC spec: no codec-evidence ladder applies, so the
+            // compression semantics are unproven. Unknown, never a fabricated
+            // "safe default lossy".
+            crate::media_conversion_gate::probe_image_format_batch_audit(
+                "probe_heic",
+                format!(
+                    "Reserved HEVC profile_idc={} for '{}': compression evidence unavailable",
+                    profile_idc,
+                    path.display()
+                ),
+            );
+            return Ok(CompressionType::Unknown);
         }
+
+        // hvcC present but shorter than the fixed HEVCDecoderConfigurationRecord
+        // fields we parse: truncated container, not a "lossy" verdict.
+        return Err(ImgQualityError::AnalysisError(format!(
+            "HEIC: hvcC box is {} bytes (minimum 20 required); cannot determine compression — {}",
+            hvcc_data.len(),
+            path.display()
+        )));
     }
 
-    // No hvcC box — fallback to lossy (safe default for HEIC)
-    Ok(false)
+    // No hvcC box: a HEIC without an HEVC configuration record is malformed
+    // (AVIF's equivalent probe errs the same way). Refuse to fabricate "lossy".
+    Err(ImgQualityError::AnalysisError(format!(
+        "HEIC: no hvcC configuration box found; cannot determine compression — {}",
+        path.display()
+    )))
 }
 
 /// Try to validate HEIC file using heif-info tool (authoritative libheif-based validator).
@@ -741,14 +755,15 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let has_alpha = handle.has_alpha_channel();
     let bit_depth = handle.luma_bits_per_pixel();
 
-    let is_lossless_result = detect_heic_is_lossless(&data, path);
+    let compression_result = classify_heic_compression(&data, path);
     if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
         crate::log_debug!(
             crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-            &format!("detect_heic_is_lossless result: {is_lossless_result:?}")
+            &format!("classify_heic_compression result: {compression_result:?}")
         );
     }
-    let is_lossless = is_lossless_result?;
+    let compression = compression_result?;
+    let is_lossless = compression == crate::image_detection::CompressionType::Lossless;
 
     // Detect HDR and Dolby Vision
     let mut is_hdr = false;

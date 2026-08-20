@@ -280,40 +280,48 @@ pub mod webp {
         estimate_quality_from_bytes(&bytes)
     }
 
-    #[must_use]
-    pub fn is_lossless_from_bytes(data: &[u8]) -> bool {
-        let Ok(end) = validated_webp_end(data) else {
-            return false;
-        };
+    /// Determine whether a WebP bitstream is lossless (VP8L).
+    ///
+    /// Fail-closed: an unparseable RIFF structure or a stream with no
+    /// VP8/VP8L bitstream yields `Err` instead of a silent "lossy" guess —
+    /// callers must never re-encode a possibly-lossless file based on a
+    /// forged default. Static and animated streams are both covered.
+    ///
+    /// # Errors
+    /// Returns an error if the RIFF/WebP structure is invalid, truncated, or
+    /// carries no decodable VP8/VP8L bitstream.
+    pub fn is_lossless_from_bytes(data: &[u8]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
         if let Some(features) = ::webp::BitstreamFeatures::new(data) {
             if features.has_animation() {
-                return detect_webp_animation_is_lossless(data).unwrap_or(false);
+                return detect_webp_animation_is_lossless(data);
             }
             if let Some(format) = features.format() {
                 match format {
-                    ::webp::BitstreamFormat::Lossless => return true,
-                    ::webp::BitstreamFormat::Lossy => return false,
+                    ::webp::BitstreamFormat::Lossless => return Ok(true),
+                    ::webp::BitstreamFormat::Lossy => return Ok(false),
                     ::webp::BitstreamFormat::Undefined => {}
                 }
             }
         }
         let mut pos = 12;
         while pos < end {
-            let Ok((chunk, next)) = parse_chunk(data, pos, end, "RIFF") else {
-                return false;
-            };
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
             if chunk.id == *b"VP8L" {
-                return true;
+                return Ok(true);
             }
             if chunk.id == *b"VP8 " {
-                return false;
+                return Ok(false);
             }
             if chunk.id == *b"ANMF" {
-                return detect_webp_animation_is_lossless(data).unwrap_or(false);
+                return detect_webp_animation_is_lossless(data);
             }
             pos = next;
         }
-        false
+        Err(ImgQualityError::AnalysisError(format!(
+            "WebP: no VP8/VP8L bitstream chunk found in {} bytes; cannot determine losslessness",
+            data.len()
+        )))
     }
 
     #[must_use]
@@ -468,11 +476,12 @@ pub mod webp {
     /// Detects if a WebP file is lossless by reading it from disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read or if the WebP header is
-    /// corrupted.
+    /// Returns an error if the file cannot be read or if the WebP stream is
+    /// invalid, truncated, or carries no VP8/VP8L bitstream (fail-closed; no
+    /// silent "lossy" default).
     pub fn is_lossless(path: &Path) -> Result<bool> {
         let b = fs::read(path)?;
-        Ok(is_lossless_from_bytes(&b))
+        is_lossless_from_bytes(&b)
     }
 
     /// Detects if a WebP file is animated by reading it from disk.
@@ -715,129 +724,73 @@ pub mod avif {
     use std::fs;
     use std::path::Path;
 
-    pub(crate) fn parse_pixi_max_depth(pixi_data: &[u8]) -> Result<Option<u8>> {
-        if pixi_data.len() < 5 {
-            return Ok(None);
-        }
-
-        let num_ch = crate::numeric_cast::u8_to_usize_strict(pixi_data[4], "avif_pixi_num_ch")
-            .ok_or_else(|| {
-                ImgQualityError::AnalysisError("AVIF pixi num_ch overflow".to_string())
-            })?;
-        if num_ch == 0 || pixi_data.len() < 5 + num_ch {
-            return Ok(None);
-        }
-
-        Ok(pixi_data
-            .get(5..5 + num_ch)
-            .and_then(|slice| slice.iter().copied().max()))
-    }
-
-    /// Detect AVIF lossless encoding — multi-dimension analysis.
+    /// Classify AVIF compression from container/codec evidence.
     ///
-    /// Dimensions checked (in priority order):
-    /// 1. **av1C chroma subsampling**: 4:2:0 / 4:2:2 → definitely lossy
-    /// 2. **av1C 4:4:4 + colr Identity matrix (MC=0)** → lossless
-    /// 3. **av1C 4:4:4 + `high_bitdepth` / `twelve_bit`** → lossless
-    /// 4. **av1C `seq_profile`**: Profile 0 + 4:4:4 → treat as lossless
-    /// 5. **pixi box**: bit depth ≥ 12 with 4:4:4 → lossless indicator
-    ///
-    /// Check if the image bytes represent a lossless encoding.
+    /// Evidence rules (positive proof only):
+    /// - `av1C` chroma subsampling 4:2:0 / 4:2:2 → `Lossy`. Subsampling
+    ///   discards chroma information; that is positive evidence of loss
+    ///   regardless of how the AV1 bitstream itself is coded.
+    /// - 4:4:4 (and monochrome without subsampling flags) → `Unknown`.
+    ///   Pixel-format properties — 4:4:4, 8/10/12-bit depth, identity `colr`
+    ///   matrix, `pixi` depths — describe the pixel format, not AV1
+    ///   quantization. A 4:4:4 12-bit AVIF can still be lossy, and a true
+    ///   lossless AVIF carries no container-level proof. The AV1 frame-level
+    ///   `coded_lossless` derivation is not recoverable from `av1C`, so
+    ///   compression semantics stay unproven.
     ///
     /// # Errors
-    /// Returns an error if the format cannot be identified or parsed.
-    /// # Panics
-    /// Panics if the AVIF container is corrupted during lossless detection.
-    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
-        if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C")
-            && av1c_data.len() >= 3
-        {
-            let byte1 = av1c_data[1];
-            let byte2 = av1c_data[2];
+    /// Returns an error if no `av1C` box exists (malformed still AVIF) or the
+    /// box walker cannot parse the container.
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
 
-            let seq_profile = (byte1 >> 5_i32) & 0x07;
-            let high_bitdepth = (byte2 >> 6_i32) & 0x01;
-            let twelve_bit = (byte2 >> 5_i32) & 0x01;
-            let monochrome = (byte2 >> 4_i32) & 0x01;
-            let chroma_subsampling_x = (byte2 >> 3_i32) & 0x01;
-            let chroma_subsampling_y = (byte2 >> 2_i32) & 0x01;
-
-            let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
-            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
-            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
-
-            if is_420 || is_422 {
-                return Ok(false);
-            }
-
-            if monochrome == 1 && !is_444 {
-                return Ok(false);
-            }
-
-            // Dimension 2: colr Identity matrix (MC=0)
-            if let Some(colr_data) = find_box_data_recursive(data, *b"colr")
-                && colr_data.len() >= 11
-                && colr_data.get(0..4) == Some(b"nclx")
-            {
-                let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                if matrix_coefficients == 0 {
-                    return Ok(true);
-                } else if is_444 {
-                    return Ok(false);
-                }
-            }
-
-            // Dimension 3: high_bitdepth/twelve_bit
-            if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
-                return Ok(true);
-            }
-
-            // NOTE: Dimension 4 (Profile 0 + 4:4:4) removed.
-            // AV1 Profile 0 (Main) is 4:2:0 only per spec — the combination
-            // (is_444 && seq_profile == 0) is unreachable for valid AVIF files
-            // and would be a guess for malformed data.
-
-            // Dimension 4: pixi box
-            if is_444 && let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
-                if let Some(max_depth) = parse_pixi_max_depth(pixi_data)? {
-                    if max_depth >= 12 {
-                        return Ok(true);
-                    }
-                } else {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        "AVIF Analysis: pixi depth unavailable; preserving unknown precision \
-                         instead of defaulting to 8-bit for lossless detection",
-                    );
-                }
-            }
-
-            if is_444 && monochrome == 1 {
-                return Ok(true);
-            }
-
-            if is_444 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "AVIF: 4:4:4 without definitive lossless indicators; refusing to guess — {}",
-                    path.display()
-                )));
-            }
+        let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "AVIF: no av1C configuration box found; cannot determine compression — {}",
+                path.display()
+            )));
+        };
+        if av1c_data.len() < 3 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "AVIF: av1C box is {} bytes (minimum 3 required); cannot determine compression — {}",
+                av1c_data.len(),
+                path.display()
+            )));
         }
 
-        Err(ImgQualityError::AnalysisError(format!(
-            "AVIF: no av1C box found; cannot determine compression — {}",
-            path.display()
-        )))
+        let byte2 = av1c_data[2];
+        let chroma_subsampling_x = (byte2 >> 3) & 0x01;
+        let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+
+        let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+        let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+
+        if is_420 || is_422 {
+            return Ok(CompressionType::Lossy);
+        }
+
+        if chroma_subsampling_x == 1 || chroma_subsampling_y == 1 {
+            // Reserved/subset combinations that still declare subsampled
+            // chroma: information is discarded, same positive-loss evidence.
+            return Ok(CompressionType::Lossy);
+        }
+
+        Ok(CompressionType::Unknown)
     }
 
-    /// Detects if an AVIF file is lossless by reading it from disk.
+    /// Classifies the compression of an AVIF file on disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read, or if the AVIF header is
-    /// missing critical property markers.
-    pub fn is_lossless(path: &Path) -> Result<bool> {
+    /// Returns an error if the file cannot be read, or if the AVIF container
+    /// is missing the `av1C` configuration box.
+    pub fn classify_compression_from_path(
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
         let b = fs::read(path)?;
-        is_lossless_from_bytes(&b, path)
+        classify_compression(&b, path)
     }
 }
 
@@ -847,12 +800,29 @@ pub mod jxl {
     use std::fs;
     use std::path::Path;
 
-    /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
-    /// Check if the image bytes represent a lossless encoding.
+    /// Classify JXL compression from codestream evidence.
+    ///
+    /// Evidence rules (positive proof only):
+    /// - `jbrd` box → `JpegReconstruction`: the container stores the original
+    ///   JPEG bitstream for bit-exact reconstruction. Its own semantics — not
+    ///   plain `Lossless`.
+    /// - `xyb_encoded` (XYB color transform, `VarDCT` path) → `Lossy`. The XYB
+    ///   transform itself is not information-preserving.
+    /// - Any `VarDCT` frame with `xyb_encoded == false` → `Lossy` (`VarDCT`
+    ///   quantizes DCT coefficients).
+    /// - All-`Modular` with `xyb_encoded == false` → `Unknown`. `Modular` mode
+    ///   covers both true lossless and `Modular`-lossy (quantized modular
+    ///   streams); the available parsers expose no field that separates them,
+    ///   so compression semantics stay unproven instead of guessed.
     ///
     /// # Errors
-    /// Returns an error if the format cannot be identified or parsed.
-    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
+    /// Returns an error if the data is too short or jxl-oxide cannot parse
+    /// the codestream (malformed/truncated).
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
         use std::io::Cursor;
 
         if data.len() < 4 {
@@ -864,16 +834,26 @@ pub mod jxl {
 
         let is_naked = data.get(0..2) == Some(b"\xFF\x0A");
 
-        // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
         if !is_naked && find_any_box_recursive(data, *b"jbrd") {
-            return Ok(true);
+            return Ok(CompressionType::JpegReconstruction);
         }
 
-        // Dimension 2: Use jxl-oxide to parse the codestream and check xyb_encoded
         match ::jxl_oxide::JxlImage::builder().read(Cursor::new(data)) {
             Ok(image) => {
-                let is_lossy = image.image_header().metadata.xyb_encoded;
-                Ok(!is_lossy)
+                if image.image_header().metadata.xyb_encoded {
+                    return Ok(CompressionType::Lossy);
+                }
+                // Include non-displayed frames (LF/reference-only): a single
+                // VarDCT frame anywhere in the codestream is lossy evidence.
+                for frame_index in 0..image.num_loaded_frames() {
+                    let Some(frame) = image.frame(frame_index) else {
+                        return Ok(CompressionType::Unknown);
+                    };
+                    if frame.header().encoding == ::jxl_oxide::frame::Encoding::VarDct {
+                        return Ok(CompressionType::Lossy);
+                    }
+                }
+                Ok(CompressionType::Unknown)
             }
             Err(e) => Err(ImgQualityError::AnalysisError(format!(
                 "JXL: jxl-oxide failed to parse — {} ({})",
@@ -1130,7 +1110,21 @@ pub mod tiff_family {
                 let bytes_read = f.read(&mut buffer)?;
                 buffer.truncate(bytes_read);
 
-                crate::image_formats::jxl::is_lossless_from_bytes(&buffer, path)
+                match crate::image_formats::jxl::classify_compression(&buffer, path)? {
+                    // A reversible (jbrd) or proven-lossless embedded codestream
+                    // keeps the TIFF strip pixel-exact.
+                    crate::image_detection::CompressionType::Lossless
+                    | crate::image_detection::CompressionType::JpegReconstruction => Ok(true),
+                    crate::image_detection::CompressionType::Lossy => Ok(false),
+                    // Modular-but-unproven embedded JXL: refuse to fabricate a
+                    // TIFF lossless/lossy verdict from unproven semantics.
+                    crate::image_detection::CompressionType::Unknown => {
+                        Err(ImgQualityError::AnalysisError(format!(
+                            "TIFF-embedded JPEG XL compression semantics unproven — {}",
+                            path.display()
+                        )))
+                    }
+                }
             }
             _ => {
                 // Conservative fallback for unknown compressions
@@ -1175,9 +1169,99 @@ mod tests {
     }
 
     #[test]
-    fn test_avif_pixi_max_depth_preserves_unknown_when_channels_missing() {
-        let pixi = [0, 0, 0, 0, 3, 8];
-        assert_eq!(avif::parse_pixi_max_depth(&pixi).unwrap(), None);
+    fn test_webp_lossless_probe_fails_closed_on_truncated_riff() {
+        // RIFF size declares 0x99 bytes but the payload stops after "WEBP":
+        // structurally invalid → Err, never a silent "lossy" verdict.
+        let truncated = b"RIFF\x99\x00\x00\x00WEBP";
+        let err =
+            webp::is_lossless_from_bytes(truncated).expect_err("truncated RIFF must fail closed");
+        assert!(
+            err.to_string().contains("RIFF"),
+            "error should name the RIFF structure problem: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_lossless_probe_fails_closed_without_vp8_bitstream() {
+        // Valid RIFF structure carrying only an unknown chunk: no VP8/VP8L
+        // bitstream → inconclusive → Err instead of guessing lossy.
+        let mut data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
+        let body = b"XXXX\x04\x00\x00\x00junk";
+        let riff_size = u32::try_from(body.len() + 4).unwrap();
+        data[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        data.extend_from_slice(body);
+
+        let err =
+            webp::is_lossless_from_bytes(&data).expect_err("bitstream-less WebP must fail closed");
+        assert!(
+            err.to_string().contains("no VP8/VP8L"),
+            "error should state the missing bitstream: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossless_probe_uses_frame_codecs() {
+        // All-VP8L animation frames → lossless animation (positive evidence).
+        let animated = webp::synthetic_two_frame_animated_webp_for_test();
+        assert!(
+            webp::detect_webp_animation_is_lossless(&animated).expect("VP8L animation must parse"),
+            "all-VP8L ANMF frames must classify as lossless animation"
+        );
+        assert!(
+            webp::is_lossless_from_bytes(&animated).expect("VP8L animation must parse"),
+            "lossless animation routes through the same positive evidence"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossy_probe_detects_vp8_frame() {
+        // One VP8 (lossy) frame in an otherwise VP8L animation → lossy.
+        let mut animated = webp::synthetic_two_frame_animated_webp_for_test();
+        // Replace the first VP8L sub-chunk marker inside the first ANMF
+        // payload with VP8 (lossy). Locate "VP8L" after the ANMF header.
+        let Some(idx) = animated.windows(4).position(|window| window == b"VP8L") else {
+            panic!("synthetic animation must contain a VP8L sub-chunk");
+        };
+        animated[idx + 3] = b' ';
+
+        assert!(
+            !webp::detect_webp_animation_is_lossless(&animated)
+                .expect("mixed-codec animation must parse"),
+            "any VP8 frame makes the animation lossy"
+        );
+    }
+
+    #[test]
+    fn test_jxl_jbrd_container_classifies_as_jpeg_reconstruction() {
+        // JXL container signature box + jbrd box: reversible-to-JPEG semantics.
+        let mut data = Vec::new();
+        data.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+        ]);
+        let jbrd_payload = [0u8; 4];
+        let size = u32::try_from(jbrd_payload.len() + 8).expect("jbrd size fits u32");
+        data.extend_from_slice(&size.to_be_bytes());
+        data.extend_from_slice(b"jbrd");
+        data.extend_from_slice(&jbrd_payload);
+
+        assert_eq!(
+            jxl::classify_compression(&data, std::path::Path::new("jbrd.jxl"))
+                .expect("jbrd container must parse"),
+            crate::image_detection::CompressionType::JpegReconstruction,
+            "jbrd must keep its own reconstruction semantics, not plain lossless"
+        );
+    }
+
+    #[test]
+    fn test_jxl_truncated_codestream_fails_closed() {
+        let error =
+            jxl::classify_compression(&[0xFF, 0x0A, 0x00], std::path::Path::new("truncated.jxl"))
+                .expect_err("truncated JXL codestream must not fabricate a verdict");
+        assert!(
+            error.to_string().contains("jxl-oxide failed")
+                || error.to_string().contains("too short"),
+            "error should name the parse failure: {error}"
+        );
     }
 
     #[test]

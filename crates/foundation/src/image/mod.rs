@@ -42,10 +42,14 @@ pub mod fast_img;
 
 pub mod format_detect;
 
+pub mod format_identity;
+
 pub mod modern_lossy_static;
 
 pub mod png_validation;
 
 pub mod orientation;
+
+pub mod siegfried;
 
 pub mod static_payload;

@@ -2520,7 +2520,7 @@ fn main() -> Result<()> {
 
     session.rename_log_to_project(&args.inputs[0])?;
 
-    if args.in_place {
+    if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
         dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
     }
 

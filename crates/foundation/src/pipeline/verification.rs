@@ -3,6 +3,7 @@
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitStatus;
 
@@ -25,6 +26,8 @@ pub struct SkippedSourceEntry {
 
 pub type SkippedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 pub type FailedSourceLog = BTreeMap<String, SkippedSourceEntry>;
+
+const FAST_IMG_MARKER_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LibraryAssetRecord {
@@ -1813,6 +1816,10 @@ pub struct WorkingCopyMarker {
     /// Tier-2 lossy modern static assets imported directly into Photos.
     #[serde(default)]
     pub tier2_imported_assets: Vec<LibraryAssetRecord>,
+    /// A tier-2 import/delete transaction was durably started but has not yet
+    /// completed its final Photos custody recheck and source cleanup.
+    #[serde(default)]
+    pub tier2_in_progress: bool,
     /// Primary fast-img Photos assets, including UUIDs needed for fresh resume verification.
     #[serde(default)]
     pub photos_imported_assets: Vec<LibraryAssetRecord>,
@@ -1876,7 +1883,7 @@ impl WorkingCopyMarker {
     #[must_use]
     pub fn new(src_dir: PathBuf, working_copy: PathBuf, src_jpeg_count: usize) -> Self {
         Self {
-            schema: 1,
+            schema: FAST_IMG_MARKER_SCHEMA_VERSION,
             src_dir,
             working_copy,
             started_at: chrono::Utc::now().to_rfc3339(),
@@ -1890,6 +1897,7 @@ impl WorkingCopyMarker {
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),
+            tier2_in_progress: false,
             photos_imported_assets: Vec::new(),
             error: None,
             strategy: "jxl".to_string(),
@@ -2194,8 +2202,13 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     std::fs::create_dir_all(marker_dir)?;
     let tmp = path.with_extension("json.tmp");
     let data = serde_json::to_vec_pretty(marker).map_err(std::io::Error::other)?;
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(tmp, &path)?;
+    let mut tmp_file = std::fs::File::create(&tmp)?;
+    tmp_file.write_all(&data)?;
+    tmp_file.sync_all()?;
+    drop(tmp_file);
+    std::fs::rename(&tmp, &path)?;
+    #[cfg(unix)]
+    std::fs::File::open(marker_dir)?.sync_all()?;
     for legacy in [
         marker.working_copy.join(".mfb_wc"),
         marker.working_copy.join(".mfb_wc.tmp"),
@@ -2214,6 +2227,12 @@ fn parse_marker_for_working_copy(
     working_copy: &Path,
 ) -> std::io::Result<WorkingCopyMarker> {
     let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    if marker.schema != FAST_IMG_MARKER_SCHEMA_VERSION {
+        return Err(std::io::Error::other(format!(
+            "unsupported fast-img marker schema {}; expected {}",
+            marker.schema, FAST_IMG_MARKER_SCHEMA_VERSION
+        )));
+    }
     marker
         .validate_checkpoint_path_contract(working_copy)
         .map_err(std::io::Error::other)?;
@@ -2430,10 +2449,10 @@ pub fn marker_checks_from_result(result: &GateResult) -> String {
 #[cfg(test)]
 mod working_copy_tests {
     use super::{
-        Blake3Entry, FastImgStageName, SkippedSourceEntry, WorkingCopyMarker,
-        marker_path_for_working_copy, prepare_jxl_output_dir, read_marker,
-        resolve_fresh_working_copy_dir, resolve_working_copy_dir, working_copy_dir,
-        write_marker_atomic,
+        Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, SkippedSourceEntry,
+        WorkingCopyMarker, marker_path_for_working_copy, parse_marker_for_working_copy,
+        prepare_jxl_output_dir, read_marker, resolve_fresh_working_copy_dir,
+        resolve_working_copy_dir, working_copy_dir, write_marker_atomic,
     };
     use crate::common_utils::EnvGuard;
     use serial_test::serial;
@@ -2574,6 +2593,24 @@ mod working_copy_tests {
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&marker.working_copy).exists());
+    }
+
+    #[test]
+    fn marker_reader_rejects_unknown_schema() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.schema = FAST_IMG_MARKER_SCHEMA_VERSION + 1;
+        let data = serde_json::to_vec(&marker).unwrap();
+
+        let err = parse_marker_for_working_copy(&data, &wc)
+            .expect_err("future marker schema must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unsupported fast-img marker schema")
+        );
     }
 
     #[test]

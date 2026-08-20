@@ -95,10 +95,12 @@ fn smoke_extract_xmp_from_heic_data_precise() {
 
 #[test]
 fn smoke_webp_structural_defense_collision() {
-    // Lossy WebP with "VP8L" hidden in pixel data
+    // Lossy WebP with "VP8L" hidden in pixel data. RIFF size must be
+    // structurally exact (24 = "WEBP" + 8-byte chunk header + 12-byte payload)
+    // so the probe classifies via the real VP8 chunk, not a fail-open default.
     let mut data = Vec::new();
     data.extend_from_slice(b"RIFF");
-    data.extend_from_slice(&(40u32.to_le_bytes())); // Size
+    data.extend_from_slice(&(24u32.to_le_bytes())); // Size
     data.extend_from_slice(b"WEBP");
 
     // Real lossy chunk
@@ -107,7 +109,7 @@ fn smoke_webp_structural_defense_collision() {
     data.extend_from_slice(&[0x56, 0x50, 0x38, 0x4C, 0, 0, 0, 0, 0, 0, 0, 0]); // Contains "VP8L" bytes
 
     assert!(
-        !is_lossless_from_bytes(&data),
+        !is_lossless_from_bytes(&data).expect("lossy WebP with decoy bytes must parse"),
         "WebP parser was fooled by fake VP8L bytes in pixel data"
     );
 }

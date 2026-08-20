@@ -244,6 +244,22 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                 expected_reduction: foundation::constants::EXPECTED_REDUCTION_AVIF_LOSSY_STATIC,
             })
         }
+
+        // Unproven compression semantics must not unlock a lossy re-encode:
+        // a possibly-lossless source could suffer a second-generation loss.
+        // Same for jbrd JXL sources — they belong to the reversible-JPEG
+        // route, not a lossy AVIF strategy.
+        (ImageType::Static, CompressionType::Unknown | CompressionType::JpegReconstruction, _) => {
+            Ok(ConversionStrategy {
+                target: TargetFormat::NoConversion,
+                reason: format!(
+                    "Compression semantics unproven for {}; refusing lossy re-encode (fail-closed)",
+                    detection.format.as_str()
+                ),
+                command: String::new(),
+                expected_reduction: 0.0,
+            })
+        }
     }
 }
 

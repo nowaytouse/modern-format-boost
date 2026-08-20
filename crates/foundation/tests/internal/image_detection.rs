@@ -249,9 +249,17 @@ fn static_avif_brand_is_not_misclassified_as_animation() {
     let mut temp = NamedTempFile::new().expect("temp avif");
     temp.write_all(&bytes).expect("write avif header");
 
-    assert_eq!(
-        detect_animation(temp.path(), &DetectedFormat::AVIF).expect("detect static AVIF"),
-        (false, Some(1), None)
+    let (is_animated, frame_count, _fps) =
+        detect_animation(temp.path(), &DetectedFormat::AVIF).expect("detect static AVIF");
+    assert!(
+        !is_animated,
+        "static AVIF brands must not be misclassified as animation"
+    );
+    // The fabricated frame_count=Some(1) fast path was removed (M248):
+    // a header-only stub has no evidence for any frame count.
+    assert!(
+        frame_count.is_none() || frame_count == Some(1),
+        "no fabricated frame count for header-only AVIF stub (got {frame_count:?})"
     );
 }
 
@@ -487,4 +495,272 @@ fn test_all_control_groups_lossless_lossy() {
             );
         }
     }
+}
+
+/// Minimal raw JPEG 2000 codestream: SOC + SIZ + COD(transform) + SOD.
+/// `transform`: 0 = 9/7 irreversible (lossy), 1 = 5/3 reversible (losslessness
+/// still depends on other codestream markers).
+///
+/// Marker-segment lengths follow the spec convention `Lxxx` counts from the
+/// length field itself (marker not included), and the walker advances
+/// `marker(2) + Lxxx`, so every filler span below is sized to keep the next
+/// marker aligned.
+fn synthetic_jp2_raw_codestream(transform: Option<u8>) -> Vec<u8> {
+    let mut cs = vec![0xFF, 0x4F]; // SOC
+    cs.extend_from_slice(&[0xFF, 0x51, 0x00, 0x0C]); // SIZ, Lsiz=12
+    cs.extend_from_slice(&[0; 10]); // SIZ payload filler (skipped by length)
+    if let Some(transform) = transform {
+        cs.extend_from_slice(&[0xFF, 0x52, 0x00, 0x0C]); // COD, Lcod=12
+        // Scod(1) + SGcod(4) + SPcod: NL, cb_w, cb_h, cb_style, transform
+        cs.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, transform]);
+    }
+    cs.extend_from_slice(&[0xFF, 0x93]); // SOD
+    cs.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]); // tile data filler
+    cs
+}
+
+#[test]
+fn jp2_compression_uses_cod_wavelet_transform() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let lossy_path = dir.path().join("lossy.j2k");
+    std::fs::write(&lossy_path, synthetic_jp2_raw_codestream(Some(0))).expect("write lossy jp2");
+    assert_eq!(
+        detect_compression(&DetectedFormat::JP2, &lossy_path).expect("lossy jp2 codestream"),
+        CompressionType::Lossy,
+        "COD 9/7 irreversible transform must classify as lossy"
+    );
+
+    let reversible_path = dir.path().join("reversible-wavelet.j2k");
+    std::fs::write(&reversible_path, synthetic_jp2_raw_codestream(Some(1)))
+        .expect("write reversible-wavelet jp2");
+    assert_eq!(
+        detect_compression(&DetectedFormat::JP2, &reversible_path)
+            .expect("reversible-wavelet jp2 codestream"),
+        CompressionType::Unknown,
+        "COD 5/3 alone must not fabricate a lossless verdict without quantization and MCT proof"
+    );
+}
+
+#[test]
+fn jp2_compression_fails_closed_without_cod_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("codless.j2k");
+    std::fs::write(&path, synthetic_jp2_raw_codestream(None)).expect("write codless jp2");
+
+    let error = detect_compression(&DetectedFormat::JP2, &path)
+        .expect_err("missing COD marker must not fabricate a lossy verdict");
+    assert!(
+        error.to_string().contains("no COD"),
+        "error should name the missing COD marker: {error}"
+    );
+}
+
+#[test]
+fn jp2_compression_fails_closed_on_tiny_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("tiny.j2k");
+    std::fs::write(&path, [0xFF, 0x4F, 0xFF]).expect("write tiny jp2");
+
+    let error = detect_compression(&DetectedFormat::JP2, &path)
+        .expect_err("too-short codestream must fail closed");
+    assert!(
+        error.to_string().contains("too short"),
+        "error should state the short file: {error}"
+    );
+}
+
+#[test]
+fn detect_compression_is_explicit_for_jpeg_and_fails_closed_for_non_still_media() {
+    assert_eq!(
+        detect_compression(&DetectedFormat::JPEG, std::path::Path::new("any.jpg"))
+            .expect("JPEG compression is lossy by route definition"),
+        CompressionType::Lossy,
+    );
+
+    for format in [
+        DetectedFormat::MP4,
+        DetectedFormat::MOV,
+        DetectedFormat::MKV,
+        DetectedFormat::WEBM,
+        DetectedFormat::Unknown("garbage".to_string()),
+    ] {
+        let error = detect_compression(&format, std::path::Path::new("media.bin"))
+            .expect_err("video/unknown media must not receive a fabricated compression verdict");
+        assert!(
+            error.to_string().contains("still-image format"),
+            "error should reject non-still media explicitly: {error}"
+        );
+    }
+}
+
+#[test]
+fn static_by_spec_formats_are_confirmed_static_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("image.j2k");
+    std::fs::write(&path, synthetic_jp2_raw_codestream(Some(0))).expect("write jp2");
+
+    // JP2 carries no animation capability in-spec: admission paths (tier-2
+    // modern lossy import) must confirm it static instead of silently
+    // excluding it via a conservative catch-all.
+    assert!(
+        animatable_format_confirmed_static_only(&path, &DetectedFormat::JP2, false, None)
+            .expect("JP2 static confirmation"),
+        "JP2 must be confirmed static-only by format definition"
+    );
+    assert!(
+        !animatable_format_confirmed_static_only(&path, &DetectedFormat::MP4, false, None)
+            .expect("MP4 static confirmation"),
+        "video containers stay non-static"
+    );
+    assert!(
+        !animatable_format_confirmed_static_only(
+            &path,
+            &DetectedFormat::Unknown("x".to_string()),
+            false,
+            None,
+        )
+        .expect("unknown media static confirmation"),
+        "unknown media stays fail-closed non-static"
+    );
+}
+
+/// Synthetic still AVIF: `ftyp` (major brand avif) + `av1C` with `flags`.
+fn synthetic_avif_with_av1c(av1c_flags: u8) -> Vec<u8> {
+    fn push_box(out: &mut Vec<u8>, box_type: [u8; 4], payload: &[u8]) {
+        let size = u32::try_from(payload.len() + 8).expect("box size fits u32");
+        out.extend_from_slice(&size.to_be_bytes());
+        out.extend_from_slice(&box_type);
+        out.extend_from_slice(payload);
+    }
+
+    let mut data = Vec::new();
+    push_box(&mut data, *b"ftyp", b"avif\0\0\0\0");
+    // av1C: marker/version byte, seq_profile/level byte, flags byte.
+    push_box(&mut data, *b"av1C", &[0x81, 0x00, av1c_flags]);
+    data
+}
+
+#[test]
+fn avif_compression_requires_positive_evidence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let write = |name: &str, data: &[u8]| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, data).expect("write synthetic avif");
+        path
+    };
+
+    // 4:2:0 (subsampling_x=1, subsampling_y=1): positive loss evidence.
+    let path = write("avif_420.avif", &synthetic_avif_with_av1c(0x0C));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("420 avif"),
+        CompressionType::Lossy
+    );
+
+    // 4:2:2 (subsampling_x=1, subsampling_y=0): positive loss evidence.
+    let path = write("avif_422.avif", &synthetic_avif_with_av1c(0x08));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("422 avif"),
+        CompressionType::Lossy
+    );
+
+    // 4:4:4 8-bit: pixel format proves nothing about AV1 quantization.
+    let path = write("avif_444_8.avif", &synthetic_avif_with_av1c(0x00));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("444 8-bit avif"),
+        CompressionType::Unknown,
+        "4:4:4 8-bit must not be guessed lossy or lossless"
+    );
+
+    // 4:4:4 10-bit (high_bitdepth): previously guessed lossless.
+    let path = write("avif_444_10.avif", &synthetic_avif_with_av1c(0x40));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("444 10-bit avif"),
+        CompressionType::Unknown,
+        "4:4:4 10-bit can still be a lossy AVIF; must stay Unknown"
+    );
+
+    // 4:4:4 12-bit (high_bitdepth|twelve_bit): previously guessed lossless.
+    let path = write("avif_444_12.avif", &synthetic_avif_with_av1c(0x60));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("444 12-bit avif"),
+        CompressionType::Unknown,
+        "4:4:4 12-bit can still be a lossy AVIF; must stay Unknown"
+    );
+
+    // Monochrome without subsampling: no proof either way.
+    let path = write("avif_mono.avif", &synthetic_avif_with_av1c(0x10));
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("monochrome avif"),
+        CompressionType::Unknown
+    );
+}
+
+#[test]
+fn avif_compression_identity_colr_is_not_lossless_proof() {
+    let mut data = synthetic_avif_with_av1c(0x00);
+    // Append an nclx colr box with identity matrix coefficients (MC=0):
+    // a color description, not a quantization proof.
+    let colr_payload = [
+        b'n', b'c', b'l', b'x', 0, 1, 0, 0, 0, 0, 0, 0,
+    ];
+    let size = u32::try_from(colr_payload.len() + 8).expect("colr size fits u32");
+    data.extend_from_slice(&size.to_be_bytes());
+    data.extend_from_slice(b"colr");
+    data.extend_from_slice(&colr_payload);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("identity_colr.avif");
+    std::fs::write(&path, &data).expect("write identity-colr avif");
+
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &path).expect("identity-colr avif"),
+        CompressionType::Unknown,
+        "identity matrix is a pixel-format property, not lossless proof"
+    );
+}
+
+#[test]
+fn avif_compression_fails_closed_without_av1c() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut data = Vec::new();
+    let size = 16u32.to_be_bytes();
+    data.extend_from_slice(&size);
+    data.extend_from_slice(b"ftypavif\0\0\0\0");
+
+    let path = dir.path().join("no_av1c.avif");
+    std::fs::write(&path, &data).expect("write av1c-less avif");
+
+    let error = detect_compression(&DetectedFormat::AVIF, &path)
+        .expect_err("missing av1C must not fabricate a compression verdict");
+    assert!(
+        error.to_string().contains("av1C"),
+        "error should name the missing av1C box: {error}"
+    );
+}
+
+#[test]
+fn jxlinfo_only_promotes_explicit_lossy_summary() {
+    assert_eq!(
+        parse_jxlinfo_compression_hint(
+            "JPEG XL image, 64x64, lossy, 8-bit RGB\n"
+        ),
+        Some(CompressionType::Lossy)
+    );
+    assert_eq!(
+        parse_jxlinfo_compression_hint(
+            "JPEG XL image, 64x64, (possibly) lossless, 8-bit RGB\n"
+        ),
+        None,
+        "jxlinfo's hedged lossless text is not proof"
+    );
+}
+
+#[test]
+fn jxlinfo_diagnostic_text_cannot_fabricate_lossy() {
+    assert_eq!(
+        parse_jxlinfo_compression_hint("error: lossy keyword in unrelated diagnostic"),
+        None
+    );
 }

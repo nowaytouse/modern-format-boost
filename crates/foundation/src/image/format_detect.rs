@@ -7,6 +7,10 @@
 
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
+use std::time::Duration;
+
+const FORENSIC_SOFT_TIMEOUT: Duration = Duration::from_mins(2);
+const FORENSIC_HARD_TIMEOUT: Duration = Duration::from_mins(15);
 
 /// Format identified from magic bytes only — never from file extension.
 // @ANCHOR:format-magic-only — detect_true_format reads magic bytes only; file extension never used
@@ -414,17 +418,23 @@ fn validate_format_with_tool(
         )));
     }
 
-    let output = std::process::Command::new(tool)
+    let mut command = std::process::Command::new(tool);
+    command
         .args(policy.args_before_path)
-        .arg(crate::safe_path_arg(path).as_ref())
-        .output()
-        .map_err(|err| {
-            forensic_validation_error(format!(
-                "forensic validation failed to execute {} for {}: {err}",
-                tool.display(),
-                path.display()
-            ))
-        })?;
+        .arg(crate::safe_path_arg(path).as_ref());
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        FORENSIC_SOFT_TIMEOUT,
+        FORENSIC_HARD_TIMEOUT,
+        policy.purpose,
+    )
+    .map_err(|err| {
+        forensic_validation_error(format!(
+            "forensic validation failed to execute {} for {}: {err}",
+            tool.display(),
+            path.display()
+        ))
+    })?;
 
     if output.status.success() {
         // Per-file success is retained in debug logs; printing thousands of lines in

@@ -2,9 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-12
+## [Unreleased] - 2026-08-20
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
+
+- **Modern lossy static delivery**: FastImg JXL mode now discovers static WebP,
+  JXL, AVIF, HEIC/HEIF, and JP2 by content identity, admits only positively
+  proven lossy sources, and preserves unknown, lossless, animated, or JPEG-
+  reconstruction inputs. Photos custody is reconciled by content proof before
+  resumable source cleanup; partial imports and deletes retain durable state.
+- **Four-state compression safety**: AVIF Meme Mode no longer collapses unknown
+  compression into `lossy`. JP2's reversible 5/3 wavelet is treated as
+  insufficient lossless evidence until quantization and component transforms
+  are proven, so uncertain inputs stay untouched.
+- **Linux cjxl compatibility**: JPEG reconstruction still uses expert e11 when
+  supported. If an installed official `cjxl` explicitly rejects the expert
+  option, the same reversible encode is retried once at compatible e8; unrelated
+  encoder failures are not retried or hidden.
+- **Dependency security refresh**: The GUI lock now contains patched
+  `brace-expansion`, `nanoid`, and `postcss`; the obsolete Tauri/GTK dependency
+  tree and unused `libavif` binding were removed, eliminating the stale `glib`
+  and duplicate native AV1 dependency chains.
 
 - **FFmpeg 9.0.1 compatibility**: Animated WebP conversion now verifies the
   dedicated `webp_anim` demuxer before relying on FFmpeg canvas coalescing, so a

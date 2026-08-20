@@ -154,8 +154,6 @@ image = { git = "https://github.com/image-rs/image", default-features = false, f
 libheif-rs = { git = "https://github.com/Cykooz/libheif-rs", features = [
   "v1_21",
 ], version = ">= 2.0" }
-libavif = { version = "0.14", features = ["codec-dav1d"] }
-
 # Testing and compression
 tempfile = { git = "https://github.com/Stebalien/tempfile" }
 proptest = { git = "https://github.com/proptest-rs/proptest" }

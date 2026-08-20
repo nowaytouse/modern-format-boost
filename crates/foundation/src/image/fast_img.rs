@@ -212,7 +212,7 @@ pub fn verify_pixel_equivalence_integrity(
 ) -> Result<IntegrityResult> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
-        PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
+        PixelDiffResult, pixel_equivalence_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
     let out_meta = std::fs::metadata(output).map_err(|e| {
@@ -228,7 +228,7 @@ pub fn verify_pixel_equivalence_integrity(
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+    let tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "pixel-equivalence: missing {format:?} orientation policy"
         ))
@@ -318,7 +318,7 @@ pub fn verify_final_delivery_integrity(
 ) -> Result<IntegrityResult> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
-        PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
+        PixelDiffResult, pixel_equivalence_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
     let out_meta = std::fs::metadata(output).map_err(|e| {
@@ -344,7 +344,7 @@ pub fn verify_final_delivery_integrity(
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+    let tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "final-integrity: missing {format:?} orientation policy"
         ))
@@ -861,20 +861,16 @@ pub fn reverify_modern_lossy_static_photos_custody(
 }
 
 fn preflight_modern_lossy_static_source_deletion(
+    src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
-    gate3_passed: bool,
 ) -> Result<()> {
-    if !gate3_passed {
-        return Err(ImgQualityError::AnalysisError(
-            "tier-2 source delete gate requires Gate 3 passed".to_string(),
-        ));
-    }
     if library_handle.import_error_count != 0 {
         return Err(ImgQualityError::AnalysisError(format!(
             "tier-2 source delete gate refuses import errors: {}",
             library_handle.import_error_count
         )));
     }
+    let mut seen = BTreeSet::new();
     for asset in &library_handle.imported_assets {
         if asset.rel_path.trim().is_empty() || asset.blake3.trim().is_empty() {
             return Err(ImgQualityError::AnalysisError(
@@ -887,6 +883,44 @@ fn preflight_modern_lossy_static_source_deletion(
                 asset.rel_path
             )));
         }
+        let rel = Path::new(&asset.rel_path);
+        if rel
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || !seen.insert(asset.rel_path.as_str())
+        {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete gate rejects unsafe or duplicate relative path: {}",
+                asset.rel_path
+            )));
+        }
+        let source = src_dir.join(rel);
+        if source.exists() {
+            let metadata = std::fs::metadata(&source).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight cannot stat {}: {err}",
+                    source.display()
+                ))
+            })?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight requires a non-empty file: {}",
+                    source.display()
+                )));
+            }
+            let current = crate::common_utils::calculate_blake3_hash(&source).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight BLAKE3 failed for {}: {err}",
+                    source.display()
+                ))
+            })?;
+            if current != asset.blake3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight detected source drift: {}",
+                    source.display()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -895,12 +929,11 @@ fn preflight_modern_lossy_static_source_deletion(
 pub fn delete_verified_modern_lossy_static_sources(
     src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
-    gate3_passed: bool,
 ) -> Result<(usize, usize)> {
     if library_handle.imported_assets.is_empty() {
         return Ok((0, 0));
     }
-    preflight_modern_lossy_static_source_deletion(library_handle, gate3_passed)?;
+    preflight_modern_lossy_static_source_deletion(src_dir, library_handle)?;
     reverify_modern_lossy_static_photos_custody(library_handle)?;
 
     let mut deleted = 0usize;
@@ -938,9 +971,15 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
+    for asset in &library.imported_assets {
+        marker
+            .tier2_imported_assets
+            .retain(|persisted| persisted.rel_path != asset.rel_path);
+        marker.tier2_imported_assets.push(asset.clone());
+    }
     marker
         .tier2_imported_assets
-        .clone_from(&library.imported_assets);
+        .sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     Ok(())
 }
 
@@ -1131,6 +1170,7 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let output_paths = fast_img_marker_output_paths(marker)?;
+    validate_fast_img_marker_output_hashes(marker)?;
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
@@ -1289,7 +1329,207 @@ pub fn import_modern_lossy_static_tier(
         return Ok(LibraryHandle::default());
     }
     let import_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
-    import_media_outputs_with_library_verifier(&import_candidates)
+    import_or_reconcile_modern_lossy_static_candidates(&import_candidates)
+}
+
+fn import_or_reconcile_modern_lossy_static_candidates(
+    candidates: &[PhotosImportCandidate],
+) -> Result<LibraryHandle> {
+    let _photos_import_lock = acquire_photos_import_lock()?;
+    validate_photos_import_candidates(candidates)?;
+    let mut imported_assets = Vec::new();
+    let mut failed_count = 0usize;
+    for candidate in candidates {
+        let handle = import_or_reconcile_single_modern_lossy_candidate(candidate)?;
+        imported_assets.extend(handle.imported_assets);
+        failed_count = failed_count
+            .checked_add(handle.import_error_count)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "tier-2 Photos import failure count overflowed".to_string(),
+                )
+            })?;
+    }
+    imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    Ok(LibraryHandle {
+        imported_assets,
+        import_error_count: failed_count,
+    })
+}
+
+fn reconcile_single_modern_lossy_candidate(
+    candidate: &PhotosImportCandidate,
+) -> Result<Option<LibraryAssetRecord>> {
+    let candidates = std::slice::from_ref(candidate);
+    let manifest_entries = photos_import_candidate_manifest_entries(candidates);
+    let stdout = run_photos_import_applescript_session_mode(
+        "tier-2 media reconciliation",
+        &manifest_entries,
+        "reconcile_all",
+    )?;
+    let candidate_ids = photos_reconciled_candidate_ids(candidates, &stdout)?;
+    if candidate_ids[0].is_empty() {
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    let quarantine_probe = path_has_quarantine_xattr;
+    #[cfg(not(target_os = "macos"))]
+    let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+    for identifier in &candidate_ids[0] {
+        let report_pair = vec![(candidate.rel_path.clone(), identifier.clone())];
+        match library_handle_from_media_output_probes(
+            candidates,
+            &report_pair,
+            query_osxphotos_asset_probes,
+            quarantine_probe,
+        ) {
+            Ok(mut handle) => return Ok(handle.imported_assets.pop()),
+            Err(err) if photos_reconciliation_content_mismatch(&err.to_string()) => {
+                tracing::warn!(
+                    target: "photos_import",
+                    rel_path = %candidate.rel_path,
+                    photos_uuid = %identifier,
+                    error = %err,
+                    "tier-2 filename match had different content; checking remaining matches"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(None)
+}
+
+fn reconcile_single_modern_lossy_candidate_with_recovery(
+    candidate: &PhotosImportCandidate,
+) -> Result<Option<LibraryAssetRecord>> {
+    let mut poisoned_attempts = 0usize;
+    loop {
+        match reconcile_single_modern_lossy_candidate(candidate) {
+            Ok(asset) => return Ok(asset),
+            Err(err) => {
+                let detail = err.to_string();
+                let Some(reason) = photos_import_retry_reason(&detail) else {
+                    return Err(err);
+                };
+                if poisoned_attempts >= FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT {
+                    return Err(err);
+                }
+                handle_photos_import_recovery(
+                    reason,
+                    &mut relaunch_photos_for_import_recovery,
+                    &mut probe_photos_import_session_health,
+                )?;
+                poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "tier-2 Photos reconciliation retry counter overflowed".to_string(),
+                    )
+                })?;
+            }
+        }
+    }
+}
+
+fn photos_reconciliation_content_mismatch(detail: &str) -> bool {
+    detail.contains("Photos verifier pixel-equivalence: mismatch")
+        || detail.contains("Photos verifier BLAKE3 mismatch")
+}
+
+fn import_or_reconcile_single_modern_lossy_candidate(
+    candidate: &PhotosImportCandidate,
+) -> Result<LibraryHandle> {
+    if let Some(asset) = reconcile_single_modern_lossy_candidate_with_recovery(candidate)? {
+        return Ok(LibraryHandle {
+            imported_assets: vec![asset],
+            import_error_count: 0,
+        });
+    }
+
+    let candidates = std::slice::from_ref(candidate);
+    let mut attempt = 0usize;
+    loop {
+        let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
+            run_photos_import_applescript_session("media", manifest_entries)
+        };
+        match import_media_outputs_with_photos_applescript_with(
+            candidates,
+            true,
+            &mut run_import_batch,
+        ) {
+            Ok(report) => {
+                #[cfg(target_os = "macos")]
+                let quarantine_probe = path_has_quarantine_xattr;
+                #[cfg(not(target_os = "macos"))]
+                let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+                return library_handle_from_media_output_probes(
+                    candidates,
+                    &report.report_pairs,
+                    query_osxphotos_asset_probes,
+                    quarantine_probe,
+                );
+            }
+            Err(err) => {
+                // A timed-out AppleEvent may have committed. Reconcile content
+                // before every retry so an ambiguous result cannot duplicate it.
+                if let Some(asset) =
+                    reconcile_single_modern_lossy_candidate_with_recovery(candidate)?
+                {
+                    return Ok(LibraryHandle {
+                        imported_assets: vec![asset],
+                        import_error_count: 0,
+                    });
+                }
+                let detail = err.to_string();
+                let retry_reason = photos_import_retry_reason(&detail);
+                if let Some(reason) = retry_reason
+                    && attempt < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                {
+                    handle_photos_import_recovery(
+                        reason,
+                        &mut relaunch_photos_for_import_recovery,
+                        &mut probe_photos_import_session_health,
+                    )?;
+                    attempt = attempt.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "tier-2 Photos retry counter overflowed".to_string(),
+                        )
+                    })?;
+                    continue;
+                }
+                if photos_import_controllable_item_failure(&detail) {
+                    return Ok(LibraryHandle {
+                        imported_assets: Vec::new(),
+                        import_error_count: 1,
+                    });
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+fn photos_reconciled_candidate_ids(
+    candidates: &[PhotosImportCandidate],
+    stdout: &str,
+) -> Result<Vec<Vec<String>>> {
+    let lines = stdout.lines().map(str::trim).collect::<Vec<_>>();
+    if lines.len() != candidates.len() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 Photos reconciliation returned {} row(s) for {} candidate(s)",
+            lines.len(),
+            candidates.len()
+        )));
+    }
+    Ok(lines
+        .into_iter()
+        .map(|identifiers| {
+            identifiers
+                .split('|')
+                .map(str::trim)
+                .filter(|identifier| !identifier.is_empty() && *identifier != "MFB_NOT_FOUND")
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .collect())
 }
 
 const FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT: &str = r#"
@@ -1320,7 +1560,17 @@ on run argv
     if ((count of manifestLines) mod 2) is not 0 then
         error "Photos import manifest expected path/album line pairs"
     end if
-    if operationMode is "reconcile" then
+    if operationMode is "reconcile_all" then
+        set reconciledIds to {}
+        repeat with lineIndex from 1 to (count of manifestLines) by 2
+            set rawPath to item lineIndex of manifestLines
+            set albumName to item (lineIndex + 1) of manifestLines
+            set end of reconciledIds to my mfbFindExistingImportIds(contents of rawPath, contents of albumName)
+        end repeat
+        set resultText to reconciledIds as text
+        set AppleScript's text item delimiters to oldDelimiters
+        return resultText
+    else if operationMode is "reconcile" then
         set reconciledIds to {}
         repeat with lineIndex from 1 to (count of manifestLines) by 2
             set rawPath to item lineIndex of manifestLines
@@ -1457,6 +1707,29 @@ on mfbFindExistingImportId(rawPath, albumPath)
         end try
     end tell
 end mfbFindExistingImportId
+
+on mfbFindExistingImportIds(rawPath, albumPath)
+    set targetAlbumId to my mfbFindExistingAlbumId(albumPath)
+    if targetAlbumId is missing value then return "MFB_NOT_FOUND"
+    set expectedFilename to my mfbPathBasename(rawPath)
+    tell application "Photos"
+        try
+            set matchingItems to every media item of album id targetAlbumId whose filename is expectedFilename
+            if (count of matchingItems) is 0 then return "MFB_NOT_FOUND"
+            set matchingIds to {}
+            repeat with matchingItem in matchingItems
+                set end of matchingIds to (id of matchingItem as text)
+            end repeat
+            set savedDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to "|"
+            set resultText to matchingIds as text
+            set AppleScript's text item delimiters to savedDelimiters
+            return resultText
+        on error
+            return "MFB_NOT_FOUND"
+        end try
+    end tell
+end mfbFindExistingImportIds
 
 on mfbEnsureTopLevelFolder(folderName)
     tell application "Photos"
@@ -1947,8 +2220,14 @@ where
     Ok(Some(recovered_assets))
 }
 
+// `marker` is only mutated by the macOS production recovery branch; the
+// test/non-macOS cfg leaves it read-only, which trips needless_pass_by_ref_mut.
+#[cfg_attr(
+    any(not(target_os = "macos"), test),
+    allow(clippy::needless_pass_by_ref_mut)
+)]
 fn import_photos_batch_with_recovery<Q, P, R>(
-    _marker: &mut WorkingCopyMarker,
+    marker: &mut WorkingCopyMarker,
     batch_entries: &[PhotosImportPendingEntry],
     fail_fast: bool,
     window_start: usize,
@@ -2028,13 +2307,18 @@ where
                     );
                     #[cfg(all(target_os = "macos", not(test)))]
                     if let Some(recovered_assets) = reconcile_photos_batch_after_session_failure(
-                        _marker,
+                        marker,
                         batch_entries,
                         query_assets,
                         is_quarantined,
                     )? {
                         return Ok(PhotosImportBatchOutcome::Imported(recovered_assets));
                     }
+                    // Non-macOS/test builds never take the marker-based
+                    // recovery branch above; the parameter exists for the
+                    // contract shared with those builds.
+                    #[cfg(any(not(target_os = "macos"), test))]
+                    let _ = marker;
                     continue;
                 }
                 if batch_entries.len() == 1 && photos_import_controllable_item_failure(&detail) {
@@ -3364,6 +3648,22 @@ fn validate_photos_import_candidates(candidates: &[PhotosImportCandidate]) -> Re
                 candidate.path.display()
             )));
         }
+        let current_hash =
+            crate::common_utils::calculate_blake3_hash(&candidate.path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos import preflight BLAKE3 failed for {} ({}): {err}",
+                    candidate.rel_path,
+                    candidate.path.display()
+                ))
+            })?;
+        if current_hash != candidate.blake3 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import preflight BLAKE3 mismatch for {} ({}): expected={} actual={current_hash}",
+                candidate.rel_path,
+                candidate.path.display(),
+                candidate.blake3
+            )));
+        }
         #[cfg(target_os = "macos")]
         clear_quarantine_xattr(&candidate.path).map_err(|err| {
             ImgQualityError::AnalysisError(format!(
@@ -3374,6 +3674,28 @@ fn validate_photos_import_candidates(candidates: &[PhotosImportCandidate]) -> Re
         })?;
         #[cfg(not(target_os = "macos"))]
         clear_quarantine_xattr(&candidate.path);
+    }
+    Ok(())
+}
+
+fn validate_fast_img_marker_output_hashes(marker: &WorkingCopyMarker) -> Result<()> {
+    for (source_rel, entry) in &marker.blake3_log {
+        let rel_path = marker_entry_out_rel(source_rel, entry);
+        let output_path = marker.working_copy.join(&rel_path);
+        let current_hash =
+            crate::common_utils::calculate_blake3_hash(&output_path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos import preflight BLAKE3 failed for {rel_path} ({}): {err}",
+                    output_path.display()
+                ))
+            })?;
+        if current_hash != entry.out {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import preflight BLAKE3 mismatch for {rel_path} ({}): expected={} actual={current_hash}",
+                output_path.display(),
+                entry.out
+            )));
+        }
     }
     Ok(())
 }
@@ -3710,7 +4032,7 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
         if library_blake3 != candidate.blake3 {
             let fmt = crate::image::format_detect::detect_true_format(&candidate.path)?;
             if let Some(tolerance) =
-                crate::image::orientation::orientation_diff_tolerance_for_format(fmt)
+                crate::image::orientation::pixel_equivalence_diff_tolerance_for_format(fmt)
             {
                 match verify_pixel_diff(&candidate.path, &probe.path, fmt, tolerance) {
                     Ok(crate::image::orientation::PixelDiffResult::Match) => {
@@ -3737,16 +4059,6 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
                             "Photos verifier pixel-equivalence: mismatch for {} (uuid={}): max_delta={max_delta} channel={channel:?}",
                             target.rel_path, probe.uuid
                         )));
-                    }
-                    Err(ImgQualityError::AnalysisError(msg))
-                        if msg.contains("dimension mismatch") =>
-                    {
-                        tracing::warn!(
-                            target: "photos_import",
-                            rel_path = %target.rel_path,
-                            "Photos verifier pixel-equivalence: {msg} (allowed for modern format due to Apple Photos original/cropped de-duplication)"
-                        );
-                        final_library_blake3 = Some(library_blake3);
                     }
                     Err(err) => return Err(err),
                 }
@@ -4085,7 +4397,7 @@ const MACOS_PS_PATH: &str = "/bin/ps";
 const MACOS_VM_STAT_PATH: &str = "/usr/bin/vm_stat";
 const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
 const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
-const FAST_IMG_MEDIA_PROBE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const FAST_IMG_MEDIA_PROBE_TIMEOUT: Duration = Duration::from_mins(5);
 #[cfg(target_os = "macos")]
 const MACOS_OPEN_PATH: &str = "/usr/bin/open";
 #[cfg(target_os = "macos")]
@@ -5223,6 +5535,105 @@ mod tests {
     }
 
     #[test]
+    fn photos_import_preflight_rejects_candidate_hash_drift() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("candidate.webp");
+        std::fs::write(&path, b"original").unwrap();
+        let original_hash = crate::common_utils::calculate_blake3_hash(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        let candidate = PhotosImportCandidate {
+            rel_path: "candidate.webp".to_string(),
+            path,
+            blake3: original_hash,
+            album_name: "tier2".to_string(),
+        };
+
+        let err = validate_photos_import_candidates(&[candidate])
+            .expect_err("changed candidate must not reach Photos");
+        assert!(
+            err.to_string()
+                .contains("Photos import preflight BLAKE3 mismatch"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn checkpointed_import_preflight_rejects_marker_output_hash_drift() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let src_root = temp_dir.path().join("src");
+        let working_copy = temp_dir.path().join("src_optimized");
+        std::fs::create_dir_all(&working_copy).unwrap();
+        let output = working_copy.join("a.AVIF");
+        std::fs::write(&output, b"original").unwrap();
+        let original_hash = crate::common_utils::calculate_blake3_hash(&output).unwrap();
+        let mut marker =
+            WorkingCopyMarker::new(src_root, working_copy, 1).with_strategy("avif".to_string());
+        marker.blake3_log.insert(
+            "a.png".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.AVIF".to_string()),
+                src: "source-hash".to_string(),
+                out: original_hash,
+                library_asset: None,
+            },
+        );
+        std::fs::write(&output, b"replacement").unwrap();
+
+        let err = validate_fast_img_marker_output_hashes(&marker)
+            .expect_err("changed output must not reach Photos");
+        assert!(
+            err.to_string()
+                .contains("Photos import preflight BLAKE3 mismatch"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn tier2_marker_proofs_merge_across_cleanup_resume() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut marker = WorkingCopyMarker::new(
+            temp_dir.path().join("src"),
+            temp_dir.path().join("src_optimized"),
+            0,
+        );
+        let asset = |rel_path: &str, blake3: &str, uuid: &str| LibraryAssetRecord {
+            rel_path: rel_path.to_string(),
+            blake3: blake3.to_string(),
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: Some(uuid.to_string()),
+            library_blake3: None,
+        };
+        apply_tier2_library_assets_to_marker(
+            &mut marker,
+            &LibraryHandle {
+                imported_assets: vec![asset("a.webp", "hash-a", "UUID-A")],
+                import_error_count: 0,
+            },
+        )?;
+        apply_tier2_library_assets_to_marker(
+            &mut marker,
+            &LibraryHandle {
+                imported_assets: vec![
+                    asset("a.webp", "hash-a-new", "UUID-A2"),
+                    asset("b.jxl", "hash-b", "UUID-B"),
+                ],
+                import_error_count: 0,
+            },
+        )?;
+
+        assert_eq!(marker.tier2_imported_assets.len(), 2);
+        assert_eq!(marker.tier2_imported_assets[0].rel_path, "a.webp");
+        assert_eq!(marker.tier2_imported_assets[0].blake3, "hash-a-new");
+        assert_eq!(
+            marker.tier2_imported_assets[0].photos_uuid.as_deref(),
+            Some("UUID-A2")
+        );
+        assert_eq!(marker.tier2_imported_assets[1].rel_path, "b.jxl");
+        Ok(())
+    }
+
+    #[test]
     fn generic_media_import_handle_records_library_blake3_after_pixel_proof() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let out = temp_dir.path().join("tier2/a.webp");
@@ -5281,6 +5692,33 @@ mod tests {
             handle.imported_assets[0].photos_uuid.as_deref(),
             Some("UUID-A")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_reconciliation_keeps_all_filename_matches_for_content_proof() -> Result<()> {
+        let candidates = vec![
+            PhotosImportCandidate {
+                rel_path: "a.webp".to_string(),
+                path: PathBuf::from("a.webp"),
+                blake3: "a".to_string(),
+                album_name: "album".to_string(),
+            },
+            PhotosImportCandidate {
+                rel_path: "b.jxl".to_string(),
+                path: PathBuf::from("b.jxl"),
+                blake3: "b".to_string(),
+                album_name: "album".to_string(),
+            },
+        ];
+        assert_eq!(
+            photos_reconciled_candidate_ids(&candidates, "UUID-WRONG|UUID-A\nMFB_NOT_FOUND\n")?,
+            vec![
+                vec!["UUID-WRONG".to_string(), "UUID-A".to_string()],
+                Vec::<String>::new(),
+            ]
+        );
+        assert!(photos_reconciled_candidate_ids(&candidates, "UUID-A\n").is_err());
         Ok(())
     }
 
@@ -7217,6 +7655,25 @@ mod tests {
             err.to_string().contains("does not exist"),
             "unexpected: {err}"
         );
+    }
+
+    #[test]
+    fn tier2_batch_delete_rejects_path_traversal_before_photos_query() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let handle = crate::pipeline::verification::LibraryHandle {
+            imported_assets: vec![crate::pipeline::verification::LibraryAssetRecord {
+                rel_path: "../escape.webp".to_string(),
+                blake3: "claimed".to_string(),
+                sync_status: "local".to_string(),
+                quarantined: false,
+                photos_uuid: Some("uuid".to_string()),
+                library_blake3: None,
+            }],
+            import_error_count: 0,
+        };
+        let error = delete_verified_modern_lossy_static_sources(src_dir.path(), &handle)
+            .expect_err("unsafe relative path must fail before external verification");
+        assert!(error.to_string().contains("unsafe or duplicate"));
     }
 
     #[test]

@@ -910,7 +910,6 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                     name
                 ),
             );
-            None
         }
         Err(e) => {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
@@ -919,9 +918,9 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                     "tool lookup failed for {name}: stable paths and PATH lookup exhausted: {e}"
                 ),
             );
-            None
         }
     }
+    None
 }
 
 /// Resolved external tool path, or bare `name` for `PATH` lookup (strict-gated

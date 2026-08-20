@@ -1024,6 +1024,10 @@ pub const TOOL_PNGCHECK: &str = "pngcheck";
 pub const TOOL_DWEBP: &str = "dwebp";
 pub const TOOL_AVIFDEC: &str = "avifdec";
 pub const TOOL_HEIF_INFO: &str = "heif-info";
+/// Siegfried format-identification sidecar (PRONOM signatures). Optional
+/// capability: an absent `sf` only disables external identification, never
+/// the internal detectors.
+pub const TOOL_SIEGFRIED: &str = "sf";
 pub const TOOL_X265: &str = "x265";
 pub const TOOL_AVIFENC: &str = "avifenc";
 pub const TOOL_DOVI: &str = "dovi_tool";

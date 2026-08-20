@@ -26,6 +26,8 @@ Thumbs.db
 
 # AI Tools & IDE Configuration (Privacy - Never commit)
 .agent/
+.agents-inside/
+.mimosa/
 .cache/
 .claude/
 .codebuddy/

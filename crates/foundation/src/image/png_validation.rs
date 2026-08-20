@@ -38,6 +38,8 @@ fn invalid_png(message: impl Into<String>) -> ImgQualityError {
 ///
 /// # Errors
 /// Returns an error when PNG or APNG structure is malformed.
+// `saw_idat`/`saw_fdat` intentionally mirror the spec chunk names IDAT/fdAT.
+#[allow(clippy::similar_names)]
 pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
     if data.get(..8) != Some(PNG_SIGNATURE) {
         return Err(invalid_png("Invalid PNG signature"));
@@ -50,7 +52,7 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
     let mut next_sequence = 0u32;
     let mut duration_secs = 0.0f64;
     let mut saw_idat = false;
-    let mut left_idat = false;
+    let mut idat_section_closed = false;
     let mut saw_fdat = false;
     let mut frame_has_data = false;
     let mut first_frame_uses_idat = false;
@@ -140,7 +142,7 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
         }
 
         if saw_idat && chunk_type != *b"IDAT" {
-            left_idat = true;
+            idat_section_closed = true;
         }
         match &chunk_type {
             b"acTL" => {
@@ -225,7 +227,7 @@ pub fn parse_apng_animation(data: &[u8]) -> Result<Option<ApngAnimationInfo>> {
                 frame_has_data = true;
             }
             b"IDAT" => {
-                if left_idat || saw_fdat {
+                if idat_section_closed || saw_fdat {
                     return Err(invalid_png("PNG IDAT chunks are not consecutive"));
                 }
                 saw_idat = true;
@@ -309,10 +311,11 @@ pub fn png_heuristic_enabled() -> bool {
     }
 }
 
-/// Hierarchical PNG validation: pngcheck → libpng/image decode → magic bytes.
+/// Hierarchical PNG validation: pngcheck → libpng/image decode.
 ///
-/// Returns `false` when magic indicates PNG but authoritative validation rejects
-/// the file. Returns `true` only for structurally valid PNG media.
+/// Returns `false` when magic indicates PNG but authoritative validation
+/// rejects the file. Returns `true` only for structurally valid PNG media.
+/// Magic bytes alone never admit a PNG whose decode/structure check failed.
 pub fn is_true_png(path: &Path) -> Result<bool> {
     if detect_true_format(path)? != FormatKind::Png {
         return Ok(false);
@@ -321,17 +324,19 @@ pub fn is_true_png(path: &Path) -> Result<bool> {
     match try_pngcheck_validation(path) {
         PngValidationOutcome::Confirmed => Ok(true),
         PngValidationOutcome::Rejected => Ok(false),
+        // Authoritative tool unavailable: the decoder probe is the remaining
+        // structural validator. A failed decode is a rejected/malformed PNG —
+        // magic bytes must never re-admit it.
         PngValidationOutcome::ToolUnavailable => match png_libpng_decode_probe(path) {
-            Ok(true) => Ok(true),
-            Ok(false) => Ok(false),
+            Ok(()) => Ok(true),
             Err(err) => {
-                tracing::warn!(
+                tracing::debug!(
                     target: "png_validation",
                     path = %path.display(),
                     error = %err,
-                    "PNG decode probe failed; falling back to magic-bytes admission"
+                    "PNG decode probe failed; rejecting magic-only admission (fail-closed)"
                 );
-                Ok(true)
+                Ok(false)
             }
         },
     }
@@ -376,14 +381,15 @@ fn try_pngcheck_validation(path: &Path) -> PngValidationOutcome {
     }
 }
 
-fn png_libpng_decode_probe(path: &Path) -> Result<bool> {
-    image::open(path).map_err(|err| {
+/// Structural decode probe: `Ok(())` when the PNG decodes, `Err` with the
+/// decoder failure otherwise. There is no "decoded but invalid" middle state.
+fn png_libpng_decode_probe(path: &Path) -> Result<()> {
+    image::open(path).map(|_| ()).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "PNG decode probe failed for {}: {err}",
             path.display()
         ))
-    })?;
-    Ok(true)
+    })
 }
 
 #[cfg(test)]
@@ -510,6 +516,44 @@ mod tests {
         let mut file = NamedTempFile::new().expect("temp fake png");
         file.write_all(b"not a png file").expect("write junk");
         assert!(!is_true_png(file.path())?);
+        Ok(())
+    }
+
+    #[test]
+    fn true_png_fails_closed_on_broken_idat() -> Result<()> {
+        // Corrupt the IDAT payload: pngcheck rejects (CRC/data) when present,
+        // and the decoder probe fails otherwise — both must reject. The old
+        // fail-open path re-admitted decode failures via magic bytes.
+        let mut bytes = ONE_BY_ONE_RGBA_PNG.to_vec();
+        let idat = bytes
+            .windows(4)
+            .position(|window| window == b"IDAT")
+            .expect("fixture has an IDAT chunk");
+        bytes[idat + 8] ^= 0xFF;
+
+        let mut file = NamedTempFile::new().expect("temp broken png");
+        file.write_all(&bytes).expect("write broken png");
+        assert!(
+            !is_true_png(file.path())?,
+            "broken IDAT must be rejected regardless of validator availability"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn true_png_fails_closed_on_png_magic_over_garbage() -> Result<()> {
+        // Valid PNG signature followed by undecodable garbage: never a valid
+        // PNG just because the magic bytes match.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        bytes.extend_from_slice(&[0xA5; 64]);
+
+        let mut file = NamedTempFile::new().expect("temp garbage png");
+        file.write_all(&bytes).expect("write garbage png");
+        assert!(
+            !is_true_png(file.path())?,
+            "magic bytes over garbage must not be admitted as valid PNG"
+        );
         Ok(())
     }
 }

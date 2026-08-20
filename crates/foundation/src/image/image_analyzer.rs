@@ -2365,7 +2365,7 @@ fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
 
 fn check_webp_lossless(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
-    Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
+    crate::image_formats::webp::is_lossless_from_bytes(&bytes)
 }
 
 /// Returns `true` when `MFB_ENABLE_PIXEL_HEURISTIC` is set to a truthy value.

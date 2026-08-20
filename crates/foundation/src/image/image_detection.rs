@@ -36,15 +36,15 @@
 //! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy,
 //!   others→lossless. Supports both standard TIFF and `BigTIFF` (0x002B). No
 //!   tag → assumed lossless.
-//! - **AVIF**: Multi-dimension (av1C chroma 4:2:0/4:2:2→lossy; 4:4:4 + colr
-//!   Identity MC u16[8..9]/pixi/high bit depth→lossless; 4:4:4 ambiguous→Err).
-//!   Err when av1C missing or 4:4:4 without definitive indicators.
+//! - **AVIF**: av1C chroma 4:2:0/4:2:2→lossy; 4:4:4/monochrome remains
+//!   unknown because pixel format does not prove AV1 quantization state.
+//!   Err only when required structure is missing/malformed.
 //! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy;
-//!   Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; `RExt` without
-//!   4:4:4→Err). Err when hvcC missing.
-//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan);
-//!   codestream `xyb_encoded→lossy/modular`; Err only when no jbrd and header
-//!   unparseable.
+//!   Main/Main10/MSP→lossy; RExt/SCC + 4:4:4 + PPS bypass merely permits
+//!   lossless CUs and therefore remains unknown). Err when hvcC is malformed.
+//! - **JXL**: Container jbrd box→JPEG-reconstruction semantics; VarDCT/XYB
+//!   and jxlinfo-confirmed Modular lossy→lossy; hedged "possibly lossless"
+//!   Modular streams remain unknown.
 //! - **JPEG**: Always lossy; JXL transcoding does not require quality judgment.
 //! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless;
 //!   PXR24/B44/B44A/DWAA/DWAB→lossy).
@@ -70,9 +70,9 @@
 //! | WebP   | High        | Yes (VP8L/VP8)| Animated: traverses all ANMF frames. |
 //! | TIFF   | High        | Yes (tag 259) | All IFDs + `BigTIFF`. No tag → lossless. |
 //! | JPEG   | N/A         | Yes (always)  | Always lossy. |
-//! | AVIF   | High        | Multi (av1C)  | Err if no av1C or ambiguous 4:4:4. colr MC u16 fix. |
-//! | HEIC   | High        | Multi (hvcC)  | chromaFormatIdc + profile. Err if no hvcC or `RExt` w/o 4:4:4. |
-//! | JXL    | High        | Multi (jbrd/xyb)| Container-only jbrd. Err if unparseable. |
+//! | AVIF   | High        | Multi (av1C)  | 4:4:4 without coded-lossless proof → Unknown. |
+//! | HEIC   | High        | Multi (hvcC/PPS) | PPS bypass permission without all-CU proof → Unknown. |
+//! | JXL    | High        | Multi (jbrd/VarDCT/jxlinfo)| Modular "possibly lossless" → Unknown. |
 //! | GIF    | Assumed     | N/A           | Treated as lossless. |
 //! | EXR    | High        | Yes (attr)    | Parses compression attr. No attr → lossless. |
 //! | QOI/FLIF/PNM | Assumed | N/A        | Treated as lossless. |
@@ -98,6 +98,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::process::Output;
+use std::time::Duration;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
 ///
@@ -186,6 +188,17 @@ pub enum ImageType {
 pub enum CompressionType {
     Lossless,
     Lossy,
+    /// Structure parsed, but the codec evidence available to this project
+    /// cannot prove either lossless or lossy semantics. `Unknown` is a
+    /// third state: it must never be consumed as `Lossy` or `Lossless`.
+    /// Admission to lossy-re-encode or lossless/copy routes requires
+    /// positive evidence; unproven compression stays fail-closed.
+    Unknown,
+    /// JPEG XL carrying a `jbrd` JPEG bitstream reconstruction box: reversible
+    /// to the exact original JPEG. Its own semantics — not plain `Lossless`
+    /// (the reconstructed JPEG is usually lossy) and never `Lossy` as a
+    /// source claim (the transcode itself is bit-exact).
+    JpegReconstruction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -556,7 +569,31 @@ pub fn detect_animation(
                 return Ok((true, None, fps));
             }
 
-            return Ok((false, Some(1), None));
+            // Sequence brands absent is necessary but not sufficient: verify
+            // the item structure with the authoritative libheif reader (same
+            // strategy as HEIC below) instead of declaring static from brands
+            // alone. Do not fabricate frame_count=1 (M248).
+            let data = std::fs::read(path)?;
+            match libheif_rs::HeifContext::read_from_bytes(&data) {
+                Ok(ctx) => {
+                    let ids = ctx.image_ids();
+                    if ids.len() > 1 {
+                        let fc =
+                            crate::numeric_cast::usize_to_u32_strict(ids.len(), "avif_item_count");
+                        return Ok((true, fc, None));
+                    }
+                    return Ok((false, None, None));
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "libheif_probe",
+                        path = %path.display(),
+                        error = %err,
+                        "libheif-rs failed to read AVIF for animation detection; falling through to ffprobe"
+                    );
+                    // Fall through to Stage 2 (ffprobe) for ambiguous/malformed containers.
+                }
+            }
         }
         DetectedFormat::HEIC | DetectedFormat::HEIF => {
             // libheif-rs is the authoritative HEIC/HEIF library — use it
@@ -864,7 +901,12 @@ pub fn animatable_format_confirmed_static_only(
             }
             Ok(false)
         }
-        _ => Ok(false),
+        // Formats with no animation capability in-spec (JP2, BMP, QOI, ICO,
+        // TGA, EXR, FLIF, PSD, PNM, DDS, JPEG) are confirmed static by
+        // definition — returning false here would silently bar them from
+        // static-only admission paths (e.g. tier-2 modern lossy import).
+        // Video containers and unknown bytes stay fail-closed at false.
+        _ => Ok(is_definitely_static_non_animated_format(format)),
     }
 }
 
@@ -1115,17 +1157,7 @@ fn detect_jxl_animation_via_jxlinfo(path: &Path) -> Result<Option<bool>> {
         return Ok(None);
     }
 
-    let output = JxlinfoBuilder::new()
-        .input(path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!(
-                "JXL animation detection via jxlinfo failed for {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+    let output = run_jxlinfo_bounded(path, "JXL animation detection")?;
 
     let combined = format!(
         "{}\n{}",
@@ -1153,7 +1185,7 @@ fn jxlinfo_refine_jxl_animation(path: &Path, oxide_fps: Option<f32>) -> (Option<
         return (None, oxide_fps);
     }
 
-    let output = match JxlinfoBuilder::new().input(path).build().output() {
+    let output = match run_jxlinfo_bounded(path, "JXL frame-count refinement") {
         Ok(o) => o,
         Err(err) => {
             tracing::debug!(
@@ -1183,6 +1215,38 @@ fn jxlinfo_refine_jxl_animation(path: &Path, oxide_fps: Option<f32>) -> (Option<
     let (frame_count, jxlinfo_fps) = parse_jxlinfo_full_info(&combined);
     let fps = jxlinfo_fps.or(oxide_fps);
     (frame_count, fps)
+}
+
+const JXLINFO_SOFT_TIMEOUT: Duration = Duration::from_mins(2);
+const JXLINFO_HARD_TIMEOUT: Duration = Duration::from_mins(10);
+
+fn run_jxlinfo_bounded(path: &Path, context: &str) -> Result<Output> {
+    let mut command = JxlinfoBuilder::new().input(path).build();
+    crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        JXLINFO_SOFT_TIMEOUT,
+        JXLINFO_HARD_TIMEOUT,
+        context,
+    )
+    .map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "{context} via jxlinfo failed for {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn parse_jxlinfo_compression_hint(output: &str) -> Option<CompressionType> {
+    output.lines().find_map(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        if line.starts_with("jpeg xl image") && line.contains(", lossy") {
+            Some(CompressionType::Lossy)
+        } else {
+            // jxlinfo deliberately says "(possibly) lossless" for streams it
+            // cannot prove lossless. Never upgrade that hedge to a verdict.
+            None
+        }
+    })
 }
 
 /// Parse `jxlinfo` stdout/stderr for frame count and FPS.
@@ -1417,7 +1481,7 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
                 return detect_webp_animation_compression(&data);
             }
 
-            let is_lossless = crate::image_formats::webp::is_lossless_from_bytes(&data);
+            let is_lossless = crate::image_formats::webp::is_lossless_from_bytes(&data)?;
             Ok(if is_lossless {
                 CompressionType::Lossless
             } else {
@@ -1435,7 +1499,22 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
         DetectedFormat::EXR => detect_exr_compression(path),
         DetectedFormat::JP2 => detect_jp2_compression(path),
 
-        _ => Ok(CompressionType::Lossy),
+        // Baseline/progressive JPEG is lossy by definition of the route that
+        // reaches this probe; reversible-JPEG handling lives in the dedicated
+        // JPEG analysis path, not here.
+        DetectedFormat::JPEG => Ok(CompressionType::Lossy),
+
+        // Video containers and unknown bytes are not still images; answering
+        // "lossy" would fabricate a compression verdict that no caller of this
+        // API is allowed to consume.
+        DetectedFormat::MP4
+        | DetectedFormat::MOV
+        | DetectedFormat::MKV
+        | DetectedFormat::WEBM
+        | DetectedFormat::Unknown(_) => Err(ImgQualityError::AnalysisError(format!(
+            "detect_compression requires a still-image format, got {format:?}: {}",
+            path.display()
+        ))),
     }
 }
 
@@ -2345,6 +2424,8 @@ fn decompress_png_text_bounded(data: &[u8], remaining_budget: &mut usize) -> Res
 /// corrupted. Specifically, `ImgQualityError::IoError` for file operations and
 /// `ImgQualityError::AnalysisError` for parsing issues.
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
+    const PNG_DIMENSION_MAX: u32 = 0x7FFF_FFFF;
+
     fn skip_bytes<R: Seek>(
         reader: &mut R,
         bytes: u64,
@@ -2422,7 +2503,6 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     let compression_method = ihdr_data[10];
     let filter_method = ihdr_data[11];
     let interlace_method = ihdr_data[12];
-    const PNG_DIMENSION_MAX: u32 = 0x7FFF_FFFF;
     if width == 0 || height == 0 || width > PNG_DIMENSION_MAX || height > PNG_DIMENSION_MAX {
         return Err(ImgQualityError::AnalysisError(
             "PNG IHDR dimensions are outside the valid range".to_string(),
@@ -3578,7 +3658,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 precision.is_lossless_deterministic = comp == CompressionType::Lossless;
             } else {
                 precision.is_lossless_deterministic =
-                    crate::image_formats::webp::is_lossless_from_bytes(&data);
+                    crate::image_formats::webp::is_lossless_from_bytes(&data)?;
             }
         }
         DetectedFormat::JPEG => {
@@ -4191,7 +4271,7 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
     }
 }
 
-/// Detect AVIF lossless encoding — multi-dimension analysis.
+/// Detect AVIF compression from positive codec evidence.
 fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4200,14 +4280,10 @@ fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_formats::avif::is_lossless_from_bytes(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
-    }
+    crate::image_formats::avif::classify_compression(&data, path)
 }
 
-/// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
+/// Detect HEIC/HEIF compression from positive codec evidence.
 fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4216,11 +4292,7 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_heic_analysis::detect_heic_is_lossless(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
-    }
+    crate::image_heic_analysis::classify_heic_compression(&data, path)
 }
 
 /// Detect ICO compression by inspecting embedded image entries.
@@ -4519,12 +4591,12 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     Ok(CompressionType::Lossless)
 }
 
-/// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.
+/// Detect positive JPEG 2000 lossy evidence by parsing COD and COC markers.
 ///
 /// COD (Coding style Default, FF 52) contains default `SPcod` parameters; the
 /// last byte is the wavelet transform type:
 ///   - 0 = 9/7 irreversible (lossy)
-///   - 1 = 5/3 reversible (lossless)
+///   - 1 = 5/3 reversible (necessary but insufficient evidence for lossless)
 ///
 /// COC (Component-specific coding style, FF 53) can override COD for specific
 /// components. For multi-component images (e.g. DICOM-JP2), if COD=9/7 but COC
@@ -4542,7 +4614,11 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
 
     let data = std::fs::read(path)?;
     if data.len() < 4 {
-        return Ok(CompressionType::Lossy);
+        return Err(ImgQualityError::AnalysisError(format!(
+            "JP2: file is too short ({len} bytes) to contain a codestream — {}",
+            path.display(),
+            len = data.len()
+        )));
     }
 
     // Determine where the codestream starts
@@ -4575,7 +4651,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 "   📊 JP2 COD wavelet: {} ({})",
                 wavelet,
                 if wavelet == 1 {
-                    "5/3 reversible — lossless"
+                    "5/3 reversible — losslessness unproven"
                 } else {
                     "9/7 irreversible — lossy"
                 }
@@ -4595,7 +4671,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 component,
                 wavelet,
                 if *wavelet == 1 {
-                    "5/3 reversible — lossless"
+                    "5/3 reversible — losslessness unproven"
                 } else {
                     "9/7 irreversible — lossy"
                 }
@@ -4607,13 +4683,22 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
         }
     }
 
-    // All components are lossless (or only COD found and it's lossless)
+    // A reversible wavelet alone does not prove a lossless codestream: QCD/QCC
+    // quantization and component transforms must also be reversible. Until the
+    // complete main header is proven, retain the source rather than fabricating
+    // a Lossless verdict.
     if cod_wavelet == Some(1) || !coc_wavelets.is_empty() {
-        return Ok(CompressionType::Lossless);
+        return Ok(CompressionType::Unknown);
     }
 
-    // Couldn't find COD — default to lossy (safer assumption for JP2)
-    Ok(CompressionType::Lossy)
+    // No COD marker: the JPEG 2000 main header always carries one, so a
+    // missing COD means a malformed or unparseable codestream. Refuse to
+    // guess "lossy" — that would green-light lossy re-encode of unknown data.
+    Err(ImgQualityError::AnalysisError(format!(
+        "JP2: no COD coding-style marker found before the first tile-part; \
+         cannot determine compression — {}",
+        path.display()
+    )))
 }
 
 /// Find the offset of the jp2c (contiguous codestream) box payload in a JP2
@@ -4658,7 +4743,7 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
 /// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform
 /// types. Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
 /// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible
-/// (lossless). COC: component-specific overrides.
+/// (not by itself proof of losslessness). COC: component-specific overrides.
 fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
     let mut cod_wavelet: Option<u8> = None;
     let mut coc_wavelets: Vec<(u16, u8)> = Vec::new();
@@ -4772,11 +4857,27 @@ fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_formats::jxl::is_lossless_from_bytes(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
+    let internal = crate::image_formats::jxl::classify_compression(&data, path)?;
+    if internal != CompressionType::Unknown || !JxlinfoBuilder::new().check_available() {
+        return Ok(internal);
     }
+
+    let output = run_jxlinfo_bounded(path, "JXL Modular compression classification")?;
+    if !output.status.success() {
+        tracing::debug!(
+            target: "jxlinfo_probe",
+            path = %path.display(),
+            status = %output.status,
+            "jxlinfo could not refine JXL compression; retaining Unknown"
+        );
+        return Ok(CompressionType::Unknown);
+    }
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(parse_jxlinfo_compression_hint(&combined).unwrap_or(CompressionType::Unknown))
 }
 
 #[cfg(test)]

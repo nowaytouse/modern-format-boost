@@ -328,16 +328,15 @@ fn calculate_ms_ssim_channel_sampled(
                     }
                 }
             }
-            None
         }
         Err(e) => {
             crate::log_failure!(
                 crate::infra::static_logs::messages::LABEL_MS_SSIM,
                 &format!("Channel {} command failed: {e}", channel.to_uppercase())
             );
-            None
         }
     }
+    None
 }
 
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> anyhow::Result<Option<f64>> {

@@ -1085,12 +1085,20 @@ const fn classify_jxl_source_semantics(
         | DetectedFormat::HEIF => match compression {
             Some(CompressionType::Lossless) => JxlSourceSemantics::ConfirmedLossless,
             Some(CompressionType::Lossy) => JxlSourceSemantics::ModernLossy,
-            None => JxlSourceSemantics::Unknown,
+            // jbrd JXL is reversible to its original JPEG: same semantics as a
+            // JPEG source (reconstruction route), never a lossy-distance
+            // re-encode candidate.
+            Some(CompressionType::JpegReconstruction) => JxlSourceSemantics::JpegReconstruction,
+            // Unproven compression semantics never unlock lossy distance
+            // exploration; encode stays lossless (fail-closed).
+            Some(CompressionType::Unknown) | None => JxlSourceSemantics::Unknown,
         },
         _ => match compression {
-            Some(CompressionType::Lossless) => JxlSourceSemantics::ConfirmedLossless,
+            Some(CompressionType::Lossless | CompressionType::JpegReconstruction) => {
+                JxlSourceSemantics::ConfirmedLossless
+            }
             Some(CompressionType::Lossy) => JxlSourceSemantics::ConfirmedLossy,
-            None => JxlSourceSemantics::Unknown,
+            Some(CompressionType::Unknown) | None => JxlSourceSemantics::Unknown,
         },
     }
 }
@@ -1762,26 +1770,67 @@ fn run_cjxl_jpeg_encode_with_effort(
     allow_jpeg_reconstruction: Option<u8>,
     effort: u8,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut builder = foundation::CjxlBuilder::new();
-    builder
-        .input(input)
-        .output(temp_output)
-        .lossless_jpeg(true)
-        .allow_expert_options(options.allow_expert_options())
-        .effort(effort)
-        .threads(max_threads)
-        .apple_compat(options.apple_compat());
+    let run = |selected_effort: u8,
+               allow_expert: bool|
+     -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+        let mut builder = foundation::CjxlBuilder::new();
+        builder
+            .input(input)
+            .output(temp_output)
+            .lossless_jpeg(true)
+            .allow_expert_options(allow_expert)
+            .effort(selected_effort)
+            .threads(max_threads)
+            .apple_compat(options.apple_compat());
 
-    if let Some(v) = allow_jpeg_reconstruction {
-        builder.allow_jpeg_reconstruction(v != 0);
+        if let Some(v) = allow_jpeg_reconstruction {
+            builder.allow_jpeg_reconstruction(v != 0);
+        }
+
+        let mut command = builder.build();
+        foundation::process_runner::ManagedProcess::spawn(&mut command)?.wait_liveness_timeout(
+            cjxl_timeout()?,
+            foundation::process_runner::image_process_hard_timeout(),
+            "cjxl JPEG lossless transcode",
+        )
+    };
+
+    let first = run(effort, options.allow_expert_options())?;
+    if first.status.success() || !cjxl_rejected_expert_option(effort, &first.stderr) {
+        return Ok(first);
     }
 
-    let mut command = builder.build();
-    foundation::process_runner::ManagedProcess::spawn(&mut command)?.wait_liveness_timeout(
-        cjxl_timeout()?,
-        foundation::process_runner::image_process_hard_timeout(),
-        "cjxl JPEG lossless transcode",
-    )
+    foundation::media_conversion_gate::delivery_remove_file_or_audit(
+        "cjxl_expert_compat_retry",
+        temp_output,
+    );
+    foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+        "cjxl_expert_option_unsupported",
+        input,
+        format!(
+            "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
+            foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
+            foundation::constants::JXL_DEEP_EFFORT,
+        ),
+    );
+    run(foundation::constants::JXL_DEEP_EFFORT, false)
+}
+
+fn cjxl_rejected_expert_option(effort: u8, stderr: &str) -> bool {
+    if effort != foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT {
+        return false;
+    }
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains(foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
+        && [
+            "unknown argument",
+            "unknown option",
+            "unrecognized argument",
+            "unrecognized option",
+            "invalid option",
+        ]
+        .iter()
+        .any(|needle| stderr.contains(needle))
 }
 
 pub const JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON: &str =
@@ -1817,7 +1866,7 @@ fn jpeg_lossless_encode_plan(
     options: &ConvertOptions,
 ) -> Vec<JxlEffortPlan> {
     match mode {
-        JpegLosslessTranscodePlanMode::Policy => {
+        JpegLosslessTranscodePlanMode::Policy | JpegLosslessTranscodePlanMode::StandardFallback => {
             foundation::jxl_effort_policy::effort_plan_for_mode(
                 foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
                 options.ultimate(),
@@ -1828,13 +1877,6 @@ fn jpeg_lossless_encode_plan(
             vec![JxlEffortPlan::Single(
                 foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             )]
-        }
-        JpegLosslessTranscodePlanMode::StandardFallback => {
-            foundation::jxl_effort_policy::effort_plan_for_mode(
-                foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
-                options.ultimate(),
-                options.archive(),
-            )
         }
     }
 }
@@ -4485,6 +4527,9 @@ fn encode_direct_jxl_probe_with_effort(
     }
 }
 
+// Probe plumbing carries the full encode context per the shared verifier
+// contract; grouping it into a struct would fork the type per call site.
+#[allow(clippy::too_many_arguments)]
 fn encode_jxl_probe_to_output(
     input: &Path,
     actual_input: &Path,
@@ -4981,6 +5026,10 @@ fn try_explore_ultimate_jxl_distance(
         accepted_distance,
         output_size: fs::metadata(temp_output)?.len(),
         iterations: total_iterations,
+        // Exact equality is intentional: `accepted_distance` originates from
+        // this same `best_candidate.distance` value (copied, not recomputed),
+        // so identity comparison identifies the accepted ladder finalist.
+        #[allow(clippy::float_cmp)]
         ladder_phase: accepted_distance == best_candidate.distance && best_candidate.ladder_phase,
         screened_best_distance: screening.best_distance,
         screened_best_size: screening.best_output_size,
@@ -6007,6 +6056,27 @@ mod tests {
             .unwrap_or_else(|err| panic!("spawn shell: {err:?}"));
 
         assert_eq!(cjxl_exit_summary(status), "exit code 7");
+    }
+
+    #[test]
+    fn cjxl_expert_compat_retry_only_matches_the_exact_unsupported_option() {
+        let e11 = foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
+        assert!(cjxl_rejected_expert_option(
+            e11,
+            "Unknown argument: --allow_expert_options"
+        ));
+        assert!(cjxl_rejected_expert_option(
+            e11,
+            "unrecognized option '--allow_expert_options'"
+        ));
+        assert!(!cjxl_rejected_expert_option(
+            foundation::constants::JXL_DEEP_EFFORT,
+            "Unknown argument: --allow_expert_options"
+        ));
+        assert!(!cjxl_rejected_expert_option(
+            e11,
+            "Error while decoding the JPEG image"
+        ));
     }
 
     #[test]
@@ -7367,9 +7437,12 @@ mod tests {
         };
 
         let gray_jpeg = root.path().join("synthetic_gray.jpg");
-        image::GrayImage::from_fn(192, 128, |x, y| image::Luma([((x + y * 3) % 256) as u8]))
-            .save(&gray_jpeg)
-            .expect("save synthetic grayscale JPEG");
+        image::GrayImage::from_fn(192, 128, |x, y| {
+            let luma = u8::try_from((x + y * 3) % 256).expect("modulo result fits u8");
+            image::Luma([luma])
+        })
+        .save(&gray_jpeg)
+        .expect("save synthetic grayscale JPEG");
         assert_eq!(
             super::detect_avif_input_color_model(&gray_jpeg),
             super::AvifencInputColorModel::Unknown,

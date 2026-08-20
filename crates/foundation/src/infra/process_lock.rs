@@ -241,6 +241,18 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
         .with_context(|| format!("Failed to canonicalize path: {}", dir_path.display()))?;
     let path_str = abs_path.to_string_lossy();
 
+    // 2. Generate a unique hash for this path using blake3
+    let hash = blake3::hash(path_str.as_bytes()).to_hex();
+
+    // 3. Prepare global lock directory (non-polluting)
+    let lock_dir = get_mfb_root()?.join("locks");
+    fs::create_dir_all(&lock_dir).context("Failed to create lock directory")?;
+
+    let lock_file_path = lock_dir.join(format!("{hash}.lock"));
+
+    // Register only after every fallible lock-directory setup step. Otherwise a
+    // transient MFB_HOME_ROOT failure poisons this process with a lock that was
+    // never acquired.
     {
         let mut held_locks = held_dir_locks_guard("process_lock_registry_acquire");
         if held_locks.contains(&abs_path) {
@@ -252,15 +264,6 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
         }
         held_locks.insert(abs_path.clone());
     }
-
-    // 2. Generate a unique hash for this path using blake3
-    let hash = blake3::hash(path_str.as_bytes()).to_hex();
-
-    // 3. Prepare global lock directory (non-polluting)
-    let lock_dir = get_mfb_root()?.join("locks");
-    fs::create_dir_all(&lock_dir).context("Failed to create lock directory")?;
-
-    let lock_file_path = lock_dir.join(format!("{hash}.lock"));
 
     // 4. Open/Create the lock file (use open+create+write without truncate to avoid
     //    breaking advisory locks held by other fds on the same inode)

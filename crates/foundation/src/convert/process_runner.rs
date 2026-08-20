@@ -16,7 +16,7 @@ fn capture_text_stream_bounded<R: Read>(
     stream: R,
     max_bytes: usize,
     stream_name: &'static str,
-    command_line: String,
+    command_line: &str,
     stream_verbose_stderr: bool,
 ) -> Result<String> {
     let mut reader = BufReader::new(stream);
@@ -59,7 +59,7 @@ fn capture_text_stream_bounded<R: Read>(
                 Ok(line) => {
                     if stream_verbose_stderr
                         && crate::progress_mode::is_verbose_mode()
-                        && should_stream_verbose_stderr_line(&command_line, line)
+                        && should_stream_verbose_stderr_line(command_line, line)
                     {
                         crate::progress_mode::emit_stderr(&format!("   [stderr] {line}"));
                     }
@@ -280,7 +280,7 @@ impl ManagedProcess {
                 stdout,
                 capture_max_bytes,
                 "stdout",
-                stdout_command_line,
+                &stdout_command_line,
                 false,
             )
         });
@@ -291,7 +291,7 @@ impl ManagedProcess {
                 stderr,
                 capture_max_bytes,
                 "stderr",
-                stderr_command_line,
+                &stderr_command_line,
                 stream_verbose_stderr,
             )
         });
@@ -717,31 +717,20 @@ mod tests {
     #[test]
     fn capture_text_stream_bounded_scopes_borrow_and_drains() {
         let data = b"line1\nline2\nline3\nline4\n";
-        let captured = capture_text_stream_bounded(
-            &data[..],
-            12,
-            "test_stream",
-            "mock_command".to_string(),
-            false,
-        );
+        let captured =
+            capture_text_stream_bounded(&data[..], 12, "test_stream", "mock_command", false);
         let err = captured.unwrap_err();
         assert!(err.to_string().contains("exceeded 12 captured bytes"));
     }
 
     #[test]
     fn media_hard_deadlines_match_design() {
-        assert_eq!(
-            image_process_hard_timeout(),
-            Duration::from_secs(7 * 24 * 60 * 60)
-        );
+        assert_eq!(image_process_hard_timeout(), Duration::from_hours(168));
         assert_eq!(
             animated_image_process_hard_timeout(),
-            Duration::from_secs(7 * 24 * 60 * 60)
+            Duration::from_hours(168)
         );
-        assert_eq!(
-            video_process_hard_timeout(),
-            Duration::from_secs(14 * 24 * 60 * 60)
-        );
+        assert_eq!(video_process_hard_timeout(), Duration::from_hours(336));
     }
 
     #[cfg(unix)]

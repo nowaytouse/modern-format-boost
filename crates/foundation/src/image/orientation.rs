@@ -25,6 +25,9 @@ pub enum DiffTolerance {
     /// roundtrip with BLAKE3, so this check verifies geometry/structure only
     /// and deliberately ignores decoder/color-management channel drift.
     JxlOrientation,
+    /// JXL proof used for final custody/source deletion. Unlike the
+    /// orientation-only check, this requires channel-level pixel equivalence.
+    JxlPixelEquivalent,
     /// Lossless HEIC/HEIF/WebP — one LSB per channel is allowed.
     LsbAvif,
     /// Lossy AVIF (meme mode) — structure must still correlate with the source.
@@ -34,18 +37,32 @@ pub enum DiffTolerance {
 impl DiffTolerance {
     const fn max_delta(self) -> u8 {
         match self {
-            Self::Exact => 0,
+            // Exact and LossyAvif both require bit-identical comparison
+            // results; only their correlation preconditions differ.
+            Self::Exact | Self::LossyAvif => 0,
             Self::JxlOrientation => u8::MAX,
-            Self::LossyAvif => 0,
-            Self::LsbAvif => 1,
+            Self::JxlPixelEquivalent | Self::LsbAvif => 1,
         }
+    }
+}
+
+#[must_use]
+pub const fn pixel_equivalence_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
+    match fmt {
+        FormatKind::Jxl => Some(DiffTolerance::JxlPixelEquivalent),
+        _ => orientation_diff_tolerance_for_format(fmt),
     }
 }
 
 const JXL_ORIENTATION_MIN_STRUCTURE_CORRELATION: f64 = 0.82;
 const JXL_ORIENTATION_LOW_VARIANCE_EPSILON: f64 = 1.0e-6;
+const JXL_PIXEL_EQUIVALENT_MIN_STRUCTURE_CORRELATION: f64 = 0.995;
+const JXL_PIXEL_EQUIVALENT_MAX_MEAN_RGB_DELTA: f64 = 2.0;
+const JXL_PIXEL_EQUIVALENT_MAX_SINGLE_CHANNEL_DELTA: u8 = 16;
 const LOSSY_AVIF_MIN_STRUCTURE_CORRELATION: f64 = 0.75;
 const LOSSY_AVIF_FLAT_MAX_DELTA: u8 = 32;
+const LOSSY_AVIF_MAX_MEAN_RGB_DELTA: f64 = 24.0;
+const LOSSY_AVIF_MAX_SINGLE_CHANNEL_DELTA: u8 = 160;
 
 #[must_use]
 pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
@@ -530,8 +547,10 @@ fn diff_orientation_images(
     let output_dims = (out_img.width(), out_img.height());
     let raw_dims = (raw_source.width(), raw_source.height());
 
-    if tol == DiffTolerance::JxlOrientation
-        && orientation_swaps_dimensions(src_orient)
+    if matches!(
+        tol,
+        DiffTolerance::JxlOrientation | DiffTolerance::JxlPixelEquivalent
+    ) && orientation_swaps_dimensions(src_orient)
         && oriented_dims != output_dims
         && raw_dims == output_dims
     {
@@ -573,6 +592,9 @@ fn diff_dynamic_images(
     if tol == DiffTolerance::JxlOrientation {
         return diff_jxl_orientation_structure(ref_img, out_img);
     }
+    if tol == DiffTolerance::JxlPixelEquivalent {
+        return diff_jxl_pixel_equivalence(ref_img, out_img);
+    }
     if tol == DiffTolerance::LossyAvif {
         return diff_lossy_avif_structure(ref_img, out_img);
     }
@@ -603,6 +625,28 @@ fn diff_dynamic_images(
     Ok(PixelDiffResult::Match)
 }
 
+fn diff_jxl_pixel_equivalence(
+    ref_img: &image::DynamicImage,
+    out_img: &image::DynamicImage,
+) -> Result<PixelDiffResult> {
+    let max_delta = max_rgb_delta(ref_img, out_img)?;
+    let mean_delta = mean_rgb_delta(ref_img, out_img)?;
+    let correlation = pearson_correlation(&luma_samples(ref_img), &luma_samples(out_img));
+    let structure_matches =
+        correlation.is_none_or(|score| score >= JXL_PIXEL_EQUIVALENT_MIN_STRUCTURE_CORRELATION);
+    if structure_matches
+        && mean_delta <= JXL_PIXEL_EQUIVALENT_MAX_MEAN_RGB_DELTA
+        && max_delta <= JXL_PIXEL_EQUIVALENT_MAX_SINGLE_CHANNEL_DELTA
+    {
+        Ok(PixelDiffResult::Match)
+    } else {
+        Ok(PixelDiffResult::Mismatch {
+            max_delta,
+            channel: 0,
+        })
+    }
+}
+
 fn diff_lossy_avif_structure(
     ref_img: &image::DynamicImage,
     out_img: &image::DynamicImage,
@@ -610,10 +654,13 @@ fn diff_lossy_avif_structure(
     let ref_visible = composite_on_black(ref_img);
     let out_visible = composite_on_black(out_img);
     let max_delta = max_rgb_delta(&ref_visible, &out_visible)?;
+    let mean_delta = mean_rgb_delta(&ref_visible, &out_visible)?;
     let correlation = pearson_correlation(&luma_samples(&ref_visible), &luma_samples(&out_visible));
-    let structure_matches = correlation
-        .is_some_and(|score| score >= LOSSY_AVIF_MIN_STRUCTURE_CORRELATION)
-        || (correlation.is_none() && max_delta <= LOSSY_AVIF_FLAT_MAX_DELTA);
+    let structure_matches = correlation.is_some_and(|score| {
+        score >= LOSSY_AVIF_MIN_STRUCTURE_CORRELATION
+            && mean_delta <= LOSSY_AVIF_MAX_MEAN_RGB_DELTA
+            && max_delta <= LOSSY_AVIF_MAX_SINGLE_CHANNEL_DELTA
+    }) || (correlation.is_none() && max_delta <= LOSSY_AVIF_FLAT_MAX_DELTA);
 
     if structure_matches {
         Ok(PixelDiffResult::Match)
@@ -623,6 +670,35 @@ fn diff_lossy_avif_structure(
             channel: 0,
         })
     }
+}
+
+fn mean_rgb_delta(ref_img: &image::DynamicImage, out_img: &image::DynamicImage) -> Result<f64> {
+    let ref_bytes = ref_img.to_rgb8();
+    let out_bytes = out_img.to_rgb8();
+    let mut total = 0u64;
+    let mut samples = 0u64;
+    for (reference, output) in ref_bytes.pixels().iter().zip(out_bytes.pixels()) {
+        for (left, right) in reference.0.iter().zip(output.0.iter()) {
+            total = total
+                .checked_add(u64::from(left.abs_diff(*right)))
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "pixel-diff: mean RGB delta accumulation overflowed".to_string(),
+                    )
+                })?;
+            samples = samples.checked_add(1).ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "pixel-diff: mean RGB sample count overflowed".to_string(),
+                )
+            })?;
+        }
+    }
+    if samples == 0 {
+        return Err(ImgQualityError::AnalysisError(
+            "pixel-diff: cannot compute mean RGB delta for an empty image".to_string(),
+        ));
+    }
+    Ok(crate::numeric_cast::u64_to_f64(total) / crate::numeric_cast::u64_to_f64(samples))
 }
 
 fn composite_on_black(img: &image::DynamicImage) -> image::DynamicImage {
@@ -1037,6 +1113,44 @@ mod tests {
     }
 
     #[test]
+    fn jxl_pixel_equivalence_rejects_flat_color_replacement() {
+        let ref_img = rgb_image([10, 20, 30]);
+        let out_img = rgb_image([210, 40, 90]);
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::JxlPixelEquivalent,
+            std::path::Path::new("out.jxl"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            PixelDiffResult::Mismatch {
+                max_delta: 200,
+                channel: 0
+            }
+        );
+    }
+
+    #[test]
+    fn jxl_pixel_equivalence_allows_one_lsb_decoder_drift() {
+        let ref_img = rgb_image([10, 20, 30]);
+        let out_img = rgb_image([11, 20, 30]);
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::JxlPixelEquivalent,
+            std::path::Path::new("out.jxl"),
+        )
+        .unwrap();
+
+        assert_eq!(result, PixelDiffResult::Match);
+    }
+
+    #[test]
     fn jxl_orientation_allows_large_color_drift_when_structure_matches() {
         let ref_img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(3, 2, |x, y| {
             let base = crate::numeric_cast::u32_shifted_byte_to_u8(x * 70 + y * 20, 0);
@@ -1108,6 +1222,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, PixelDiffResult::Match);
+    }
+
+    #[test]
+    fn lossy_avif_rejects_severe_monotonic_color_cast() {
+        let ref_img = patterned_image(8, 8);
+        let out_img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(8, 8, |x, y| {
+            let source = ref_img.to_rgb8().get_pixel(x, y).0;
+            Rgb([
+                source[0].saturating_add(96),
+                source[1].saturating_add(96),
+                source[2].saturating_add(96),
+            ])
+        }));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::LossyAvif,
+            std::path::Path::new("out.avif"),
+        )
+        .unwrap();
+
+        assert!(matches!(result, PixelDiffResult::Mismatch { .. }));
     }
 
     #[test]
