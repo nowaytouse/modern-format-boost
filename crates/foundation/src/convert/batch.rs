@@ -1421,7 +1421,10 @@ mod tests {
         assert_eq!(result.succeeded, 0);
         assert_eq!(result.failed, 0);
         assert_eq!(result.skipped, 0);
-        assert!(result.errors.is_empty());
+        assert_eq!(
+            result.errors,
+            [] as [(std::path::PathBuf, std::string::String); 0]
+        );
     }
 
     #[test]
@@ -1720,8 +1723,11 @@ mod tests {
         write_test_image(&root.join("png-disguised.txt"), 12, 12, ImageFormat::Png);
         write_test_image(&root.join("nested/no-extension"), 12, 12, ImageFormat::Jpeg);
         write_test_image(&root.join("gif-disguised.jpg"), 12, 12, ImageFormat::Gif);
-        fs::write(root.join("video-disguised.jpg"), b"\0\0\0\x18ftypisom")
-            .map_err(|e| anyhow::anyhow!("write video header: {e}"))?;
+        fs::write(
+            root.join("video-disguised.jpg"),
+            b"\0\0\0\x10ftypisom\0\0\0\0",
+        )
+        .map_err(|e| anyhow::anyhow!("write video header: {e}"))?;
 
         let files = scan_image_files(root, &["jpg", "png"], true)?;
         let rels = sorted_relative_paths(root, &files)?;

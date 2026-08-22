@@ -15,17 +15,15 @@
 //! Do not write directly to the final output.
 //!
 //! ## Compress mode (authoritative)
-//! When `options.compress` is true: **only** `output_size < input_size` is
-//! accepted. **Any** `output_size >= input_size` (including equal) is rejected
-//! — goal not achieved. All size checks use `>=` for this; do not change to
-//! `>`.
+//! Without size tolerance, `options.compress` accepts only
+//! `output pure-media size < input pure-media size`. Explicit size tolerance
+//! permits only the bounded growth described below.
 //!
 //! ## `allow_size_tolerance` (default false)
-//! When true: "oversized" threshold is `output size increase < 1_048_576 bytes`
-//! (accept). Video path may treat `video_compression_ratio < 1.01` as
-//! acceptable when `require_compression` is checked. Does **not** mean "accept
-//! up to `1_048_576` bytes larger as success" for compress goal — compress
-//! still requires output < input.
+//! When true: "oversized" threshold is `output pure-media size increase <= 524_288 bytes`
+//! (512 KiB = `DEFAULT_SIZE_TOLERANCE_BYTES`, inclusive). Video path may treat
+//! `video_compression_ratio < 1.01` as acceptable when `require_compression` is checked.
+//! This same bounded policy applies to exploration and final delivery.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -455,6 +453,10 @@ pub struct TaskResult {
     /// (`success_video_explored`).
     pub explore_final_crf: Option<f32>,
     pub explore_iterations: Option<u32>,
+    /// Detailed optimization disposition.  `None` is reserved for legacy or
+    /// intentionally ignored results whose product semantics are unknown.
+    #[serde(default)]
+    pub optimization_outcome: Option<crate::exploration_policy::ExplorationOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -589,6 +591,15 @@ impl TaskResult {
     }
 
     #[must_use]
+    pub const fn with_optimization_outcome(
+        mut self,
+        outcome: crate::exploration_policy::ExplorationOutcome,
+    ) -> Self {
+        self.optimization_outcome = Some(outcome);
+        self
+    }
+
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         // JPEG→JXL lossless transcode preserves DCT coefficients (true transcoding)
         self.message.contains("transcoding") || self.message.contains("JPEG lossless")
@@ -617,6 +628,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         })
     }
 
@@ -649,6 +663,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         })
     }
 
@@ -668,6 +685,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         }
     }
 
@@ -687,6 +707,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: None,
         }
     }
 
@@ -706,6 +727,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Failed),
         }
     }
 
@@ -728,6 +750,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         }
     }
 
@@ -752,6 +777,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         }
     }
 
@@ -820,6 +848,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::PreservedSource,
+            ),
         })
     }
 
@@ -887,6 +918,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Failed),
         })
     }
 
@@ -940,6 +972,7 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(crate::exploration_policy::ExplorationOutcome::Adopted),
         }
     }
 
@@ -988,13 +1021,17 @@ impl TaskResult {
         // Determine technically accurate verb:
         // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
         // - "encoding" for all other conversions from source pixels
-        let is_jpeg = input.extension().is_some_and(|e| {
-            let ext = e.to_string_lossy().to_lowercase();
-            matches!(
-                ext.as_str(),
-                "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" | "jxr"
-            )
-        }) || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
+        let is_jpeg = match crate::image::format_detect::detect_true_format(input) {
+            Ok(format) => format == crate::image::format_detect::FormatKind::Jpeg,
+            Err(error) => {
+                crate::media_conversion_gate::probe_layer_audit(
+                    "conversion_result_format_failed",
+                    input,
+                    format!("failed to detect source format for conversion result: {error}"),
+                );
+                false
+            }
+        } || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
 
         let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
             "transcoding"
@@ -1030,6 +1067,11 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
+                crate::exploration_policy::ExplorationOutcome::LosslessTranscoded
+            } else {
+                crate::exploration_policy::ExplorationOutcome::Adopted
+            }),
         }
     }
 
@@ -1075,6 +1117,9 @@ impl TaskResult {
             blake3: None,
             explore_final_crf: Some(metrics.crf),
             explore_iterations: Some(metrics.iterations),
+            optimization_outcome: Some(
+                crate::exploration_policy::ExplorationOutcome::ExploredOptimized,
+            ),
         }
     }
 }
@@ -1979,11 +2024,24 @@ fn strip_residual_orientation_tag_for_delivery(output: &Path) -> std::io::Result
             output.display()
         ))
     })?;
+    if matches!(format, FormatKind::Mkv | FormatKind::Webm) {
+        tracing::debug!(
+            target: "orientation_cleanup",
+            output = %output.display(),
+            format = ?format,
+            "Skipping ExifTool Orientation mutation for non-writable Matroska container"
+        );
+        return Ok(());
+    }
     if !matches!(
         format,
-        FormatKind::Jpeg | FormatKind::Avif | FormatKind::Heif | FormatKind::WebP
-    ) && !video_extension_needs_orientation_cleanup(output)
-    {
+        FormatKind::Jpeg
+            | FormatKind::Avif
+            | FormatKind::Heif
+            | FormatKind::WebP
+            | FormatKind::Mp4
+            | FormatKind::Mov
+    ) {
         return Ok(());
     }
 
@@ -2072,18 +2130,6 @@ fn delivery_orientation_diff_policy_for_output(
         crate::image::orientation::orientation_diff_tolerance_for_format(format)
             .map(|tolerance| (format, tolerance)),
     )
-}
-
-fn video_extension_needs_orientation_cleanup(output: &Path) -> bool {
-    output
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "mp4" | "m4v" | "mov" | "mkv" | "webm"
-            )
-        })
 }
 
 fn validate_temp_output_commit_paths(temp: &Path, output: &Path) -> std::io::Result<()> {
@@ -2699,7 +2745,7 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 ///
 /// **Two independent but coordinated flags:**
 /// - `allow_size_tolerance`: when true, allows bounded byte growth; when false,
-///   requires `output <= input`. This absolute byte allowance is fairer to all
+///   requires `output < input`. This absolute byte allowance is fairer to all
 ///   file sizes than percentage-based.
 /// - `compress`: when true, **goal is to make output smaller than input**.
 ///   **BUT: respects `allow_size_tolerance` when enabled** - if increase is
@@ -2718,7 +2764,6 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// return it), or `None` if the output passes the size check.
 #[derive(Debug, Clone, Copy)]
 struct SizeDeltaSummary {
-    increase_bytes: u64,
     increase_kb: f64,
     increase_mb: f64,
     change_pct: f64,
@@ -2732,7 +2777,6 @@ impl SizeDeltaSummary {
         let output_size_f64 = crate::numeric_cast::u64_to_f64(output_size);
 
         Self {
-            increase_bytes,
             increase_kb: increase_bytes_f64 / crate::constants::KB_DIVISOR,
             increase_mb: increase_bytes_f64 / crate::constants::MB_DIVISOR,
             change_pct: if input_size == 0 {
@@ -2772,10 +2816,6 @@ impl SizeToleranceCheck<'_> {
         SizeDeltaSummary::from_sizes(self.input_size, self.output_size)
     }
 
-    const fn allowed_growth_bytes() -> u64 {
-        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
-    }
-
     fn is_guard_active(&self) -> bool {
         let input_ext = crate::media_conversion_gate::path_extension_lowercase_or_empty(
             self.input,
@@ -2784,14 +2824,11 @@ impl SizeToleranceCheck<'_> {
         crate::quality_matcher::is_size_guard_active(&input_ext, self.options.apple_compat())
     }
 
-    fn max_allowed_size(&self) -> u64 {
-        if self.options.effective_allow_size_tolerance() && self.is_guard_active() {
-            self.input_size.saturating_add(Self::allowed_growth_bytes())
-        } else if self.is_guard_active() {
-            self.input_size
-        } else {
-            u64::MAX
-        }
+    fn active_size_policy(&self) -> crate::exploration_policy::SizePolicy {
+        crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+            self.options.effective_allow_size_tolerance(),
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        )
     }
 
     fn evaluate(&self) -> Option<SizeGuardFailure> {
@@ -2799,14 +2836,20 @@ impl SizeToleranceCheck<'_> {
             return None;
         }
 
-        if self.output_size >= self.max_allowed_size() {
+        let policy = self.active_size_policy();
+
+        // Primary size gate: candidate must fit within the active policy envelope.
+        // Uses SizePolicy::fits() as the single acceptance truth, consistent with
+        // the JXL explorer. AllowGrowth(512 KiB): +524288 fits, +524289 → oversize.
+        if self.is_guard_active() && !policy.fits(self.output_size, self.input_size) {
             return Some(SizeGuardFailure::ToleranceExceeded);
         }
 
+        // Compress goal: additionally requires output < input.
+        // Tolerance is permitted to override this for bounded growth within the policy.
         if self.options.compress() && self.output_size >= self.input_size {
-            let delta = self.delta();
             if self.options.effective_allow_size_tolerance()
-                && delta.increase_bytes < Self::allowed_growth_bytes()
+                && policy.fits(self.output_size, self.input_size)
             {
                 return None;
             }
@@ -3720,7 +3763,7 @@ mod tests {
             ],
         )
         .unwrap_or_else(|e| panic!("write jxl magic: {e:?}"));
-        std::fs::write(&avif_output, b"\x00\x00\x00\x18ftypavif")
+        std::fs::write(&avif_output, b"\x00\x00\x00\x10ftypavif\0\0\0\0")
             .unwrap_or_else(|e| panic!("write avif magic: {e:?}"));
 
         assert!(
@@ -3960,6 +4003,10 @@ mod tests {
             result.message
         );
         assert_eq!(result.outcome(), Outcome::Converted);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::Adopted)
+        );
     }
 
     #[test]
@@ -3973,6 +4020,10 @@ mod tests {
         assert_eq!(result.skip_reason, Some("size_increase".to_string()));
         assert!(result.message.contains("larger"));
         assert_eq!(result.outcome(), Outcome::Skipped);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::PreservedSource)
+        );
     }
 
     #[test]
@@ -3987,6 +4038,10 @@ mod tests {
         assert!(result.message.contains("unchanged"));
         assert!(result.message.contains("compression goal not achieved"));
         assert_eq!(result.outcome(), Outcome::Skipped);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::PreservedSource)
+        );
     }
 
     #[test]
@@ -4006,6 +4061,10 @@ mod tests {
         assert!(!result.success);
         assert!(!result.skipped);
         assert_eq!(result.outcome(), Outcome::Failed);
+        assert_eq!(
+            result.optimization_outcome,
+            Some(crate::exploration_policy::ExplorationOutcome::Failed)
+        );
         assert!(!crate::cli_runner::CliProcessingResult::is_skipped(&result));
         assert!(input.exists(), "failed conversion must retain its source");
     }
@@ -4236,6 +4295,67 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn test_size_tolerance_pure_media_independence() {
+        let _strict = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION,
+            "1",
+        );
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let input = temp_dir.path().join("input.mov");
+        let complete_larger = temp_dir.path().join("complete-larger.mp4");
+        let complete_smaller = temp_dir.path().join("complete-smaller.mp4");
+        std::fs::File::create(&input)
+            .and_then(|file| file.set_len(1_000_000))
+            .expect("create source fixture");
+        std::fs::File::create(&complete_larger)
+            .and_then(|file| file.set_len(2_000_000))
+            .expect("create larger complete-file fixture");
+        std::fs::File::create(&complete_smaller)
+            .and_then(|file| file.set_len(1))
+            .expect("create smaller complete-file fixture");
+
+        let options = ConvertOptions {
+            flags: ConvertFlags::ALLOW_SIZE_TOLERANCE,
+            output_dir: None,
+            base_dir: None,
+            codec: crate::conversion_types::SelectedCodec::Hevc,
+            child_threads: 1,
+            input_format: None,
+            quality_label: None,
+        };
+
+        let source_pure_media = 1_000_000;
+        let fits = SizeToleranceCheck {
+            input: &input,
+            output: &complete_larger,
+            input_size: source_pure_media,
+            output_size: source_pure_media + 400 * 1024,
+            options: &options,
+            format_label: "HEVC",
+        };
+        assert_eq!(
+            fits.evaluate(),
+            None,
+            "larger complete file is telemetry only"
+        );
+
+        let oversize = SizeToleranceCheck {
+            input: &input,
+            output: &complete_smaller,
+            input_size: source_pure_media,
+            output_size: source_pure_media + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES + 1,
+            options: &options,
+            format_label: "HEVC",
+        };
+        assert_eq!(
+            oversize.evaluate(),
+            Some(SizeGuardFailure::ToleranceExceeded),
+            "smaller complete file cannot hide an oversized pure-media payload"
+        );
+    }
+
+    #[test]
     fn test_success_input_size_zero_does_not_fabricate_size_reduction() {
         let input = Path::new("input.jpg");
         let output = Path::new("output.avif");
@@ -4406,19 +4526,10 @@ mod tests {
 
     #[test]
     fn test_dimensions_from_header_webp_vp8() {
-        // WebP VP8 (lossy): RIFF + size + WEBP + VP8 + chunk length + 3-byte frame tag
-        // + start code + 14-bit w/h
-        let mut bytes = b"RIFF".to_vec();
-        bytes.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // size (ignored by our reader)
-        bytes.extend_from_slice(b"WEBP");
-        bytes.extend_from_slice(b"VP8 ");
-        bytes.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // chunk length
-        bytes.extend_from_slice(&[0x00, 0x00, 0x00]); // 3-byte frame tag (key frame)
-        bytes.extend_from_slice(&[0x9D, 0x01, 0x2A]); // start code
-        // width = 640 (low 14 bits), height = 480
-        bytes.extend_from_slice(&[0x80, 0x02, 0xE0, 0x01]);
         let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), &bytes).unwrap();
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(640, 480));
+        img.save_with_format(tmp.path(), image::ImageFormat::WebP)
+            .unwrap();
         assert_eq!(
             dimensions_from_header(tmp.path()).unwrap(),
             Some((640, 480))

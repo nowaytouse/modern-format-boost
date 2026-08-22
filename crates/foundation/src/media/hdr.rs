@@ -138,8 +138,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
     archive: bool,
 ) -> Result<HdrArtifacts> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     let file_label = crate::media_conversion_gate::probe_hdr_heic_input_label(input);
 
@@ -326,8 +325,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
     archive: bool,
 ) -> Result<HdrArtifacts> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,
@@ -490,8 +488,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     archive: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
-    let actual_effort =
-        crate::jxl_effort_policy::direct_encode_effort_for_archive(archive, ultimate);
+    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,
@@ -633,7 +630,7 @@ fn is_display_p3(data: &[u8]) -> bool {
         && colr_data.len() >= 11
         && colr_data.get(0..4) == Some(b"nclx")
     {
-        let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+        let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
         return primaries == crate::constants::COLOR_PRIMARY_P3;
     }
     let search_limit = crate::constants::ICC_SEARCH_LIMIT_BYTES;
@@ -641,7 +638,6 @@ fn is_display_p3(data: &[u8]) -> bool {
     let slice =
         crate::media_conversion_gate::probe_buffer_prefix_or_empty(data, end, "hdr icc scan");
     slice.windows(10).any(|w| w == b"Display P3")
-        || slice.windows(2).any(|w| w == b"P3") && slice.windows(4).any(|w| w == b"colr")
 }
 
 fn parse_gainmap_params(handle: &ImageHandle) -> Result<Option<GainMapParams>> {
@@ -829,8 +825,10 @@ pub fn synthesize(
             let apply_gain = |val_raw: f32, max_val: f32| -> f32 {
                 let val_norm = val_raw / max_val;
                 let gain_px_corrected = val_norm.powf(1.0 / params.gamma.max(0.1));
-                let log2_gain = gain_px_corrected * (params.gain_map_max - params.gain_map_min)
-                    + params.gain_map_min;
+                let log2_gain = gain_px_corrected.mul_add(
+                    params.gain_map_max - params.gain_map_min,
+                    params.gain_map_min,
+                );
                 log2_gain.exp2()
             };
 
@@ -1631,6 +1629,30 @@ mod tests {
     }
 
     #[test]
+    fn display_p3_uses_nclx_primaries_not_matrix_coefficients() {
+        fn colr_box(primaries: u16, matrix: u16) -> Vec<u8> {
+            let mut payload = b"nclx".to_vec();
+            payload.extend_from_slice(&primaries.to_be_bytes());
+            payload.extend_from_slice(&1u16.to_be_bytes());
+            payload.extend_from_slice(&matrix.to_be_bytes());
+            payload.push(0);
+            let mut data = 19u32.to_be_bytes().to_vec();
+            data.extend_from_slice(b"colr");
+            data.extend(payload);
+            data
+        }
+
+        assert!(is_display_p3(&colr_box(
+            crate::constants::COLOR_PRIMARY_P3,
+            1
+        )));
+        assert!(!is_display_p3(&colr_box(
+            1,
+            crate::constants::COLOR_PRIMARY_P3
+        )));
+    }
+
+    #[test]
     fn test_ffmpeg_args() {
         let info = ColorInfo {
             color_primaries: Some("bt2020".to_string()),
@@ -1869,7 +1891,7 @@ mod tests {
             None,
         );
 
-        assert!(params.is_empty());
+        assert_eq!(params, "");
     }
 
     #[test]

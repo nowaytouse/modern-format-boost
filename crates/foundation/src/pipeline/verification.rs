@@ -3,7 +3,8 @@
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub struct SkippedSourceEntry {
 
 pub type SkippedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 pub type FailedSourceLog = BTreeMap<String, SkippedSourceEntry>;
+
+const FAST_IMG_MARKER_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LibraryAssetRecord {
@@ -88,26 +91,25 @@ impl VerificationGate for Gate1Local {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
-        let jxl_files =
-            match collect_output_files_multiple_extensions(&ctx.working_copy, &["jxl", "avif"]) {
-                Ok(files) => files,
-                Err(err) => {
-                    return gate_result(vec![detail(
-                        "count",
-                        false,
-                        ctx.expected_count.to_string(),
-                        format!("walkdir traversal failed: {err}"),
-                        vec![ctx.working_copy.clone()],
-                    )]);
-                }
-            };
+        let jxl_files = match collect_delivery_output_files(&ctx.working_copy, None) {
+            Ok(files) => files,
+            Err(err) => {
+                return gate_result(vec![detail(
+                    "count",
+                    false,
+                    ctx.expected_count.to_string(),
+                    format!("walkdir traversal failed: {err}"),
+                    vec![ctx.working_copy.clone()],
+                )]);
+            }
+        };
         let checks = vec![
             check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
             check_blake3_logged_outputs(ctx),
             check_metadata_policy(ctx),
             check_nonzero_size(ctx.expected_count, &jxl_files),
             check_orientation_absent(&jxl_files),
-            check_decode_probe(&jxl_files, ctx.output_format),
+            check_decode_probe(&jxl_files),
         ];
         gate_result(checks)
     }
@@ -211,11 +213,7 @@ impl VerificationGate for Gate3Deep {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
-        let ext = ctx
-            .output_format
-            .and_then(output_format_extension)
-            .unwrap_or_else(|| detect_output_extension(&ctx.working_copy));
-        let jxl_files = match collect_output_files(&ctx.working_copy, ext) {
+        let jxl_files = match collect_delivery_output_files(&ctx.working_copy, ctx.output_format) {
             Ok(files) => files,
             Err(err) => {
                 return gate_result(vec![detail(
@@ -276,6 +274,16 @@ impl VerificationGate for Gate3Deep {
             .filter(|asset| !photos_library_sync_status_is_accepted(&asset.sync_status))
             .map(|asset| ctx.working_copy.join(&asset.rel_path))
             .collect::<Vec<_>>();
+        let local_custody_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "photos_local")
+            .count();
+        let uploaded_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "uploaded")
+            .count();
         let quarantine_failures = library
             .imported_assets
             .iter()
@@ -328,7 +336,10 @@ impl VerificationGate for Gate3Deep {
                 "sync",
                 sync_failures.is_empty(),
                 "Photos local custody or uploaded".to_string(),
-                format!("{} without accepted custody proof", sync_failures.len()),
+                format!(
+                    "{local_custody_count} Photos-local, {uploaded_count} uploaded, {} without accepted custody proof",
+                    sync_failures.len()
+                ),
                 sync_failures,
             ),
             detail(
@@ -461,7 +472,6 @@ fn check_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
 
 fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     let mut failures = Vec::new();
-    let mut adopted = 0usize;
     let mut cleared = 0usize;
     let mut first_mismatch = None;
     for (rel_path, entry) in &ctx.blake3_log {
@@ -471,38 +481,20 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
             PathBuf::from,
         );
         let out = ctx.working_copy.join(out_rel);
-        match crate::image::format_detect::detect_true_format(&src) {
-            Ok(crate::image::format_detect::FormatKind::Avif) => {
-                adopted = adopted.saturating_add(1);
-                if entry.src != entry.out {
-                    failures.push(out);
-                }
-            }
-            Ok(_) => match crate::metadata::verify_output_embedded_metadata(
-                &src,
-                &out,
-                crate::metadata::MetadataOutputPolicy::Clear,
-            ) {
-                Ok(_) => cleared = cleared.saturating_add(1),
-                Err(err) => {
-                    if first_mismatch.is_none() {
-                        first_mismatch = Some(err.to_string());
-                    }
-                    crate::media_conversion_gate::delivery_pipeline_path_audit(
-                        "fast_img_gate1_meme_cleared_metadata",
-                        &out,
-                        format!(
-                            "Meme Mode cleared-metadata verification failed during Gate 1: {err}"
-                        ),
-                    );
-                    failures.push(out);
-                }
-            },
+        match crate::metadata::verify_output_embedded_metadata(
+            &src,
+            &out,
+            crate::metadata::MetadataOutputPolicy::Clear,
+        ) {
+            Ok(_) => cleared = cleared.saturating_add(1),
             Err(err) => {
+                if first_mismatch.is_none() {
+                    first_mismatch = Some(err.to_string());
+                }
                 crate::media_conversion_gate::delivery_pipeline_path_audit(
-                    "fast_img_gate1_meme_source_format",
-                    &src,
-                    format!("Meme Mode source format detection failed during Gate 1: {err}"),
+                    "fast_img_gate1_meme_cleared_metadata",
+                    &out,
+                    format!("Meme Mode cleared-metadata verification failed during Gate 1: {err}"),
                 );
                 failures.push(out);
             }
@@ -512,14 +504,14 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     let actual = first_mismatch.map_or_else(
         || {
             format!(
-                "{} checked, {adopted} adopted AVIF, {cleared} cleared, {} failed",
+                "{} checked, {cleared} cleared, {} failed",
                 ctx.blake3_log.len(),
                 failures.len()
             )
         },
         |detail| {
             format!(
-                "{} checked, {adopted} adopted AVIF, {cleared} cleared, {} failed; first {detail}",
+                "{} checked, {cleared} cleared, {} failed; first {detail}",
                 ctx.blake3_log.len(),
                 failures.len()
             )
@@ -528,10 +520,7 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     detail(
         "metadata",
         passed,
-        format!(
-            "{} Meme Mode cleared-metadata outputs; adopted AVIF sources byte-identical",
-            ctx.expected_count
-        ),
+        format!("{} Meme Mode cleared-metadata outputs", ctx.expected_count),
         actual,
         failures,
     )
@@ -732,20 +721,28 @@ where
     )
 }
 
-fn check_decode_probe(
-    files: &[PathBuf],
-    _output_format: Option<crate::format_detect::FormatKind>,
-) -> CheckDetail {
-    let has_avif = files.iter().any(|path| {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("avif"))
-    });
-    let has_jxl = files.iter().any(|path| {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
-    });
+fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
+    let mut detected = Vec::with_capacity(files.len());
+    for path in files {
+        match crate::image::format_detect::detect_true_format(path) {
+            Ok(format) => detected.push((path.clone(), format)),
+            Err(err) => {
+                return detail(
+                    "decode",
+                    false,
+                    "every output format is detected from content".to_string(),
+                    format!("format detection failed for {}: {err}", path.display()),
+                    vec![path.clone()],
+                );
+            }
+        }
+    }
+    let has_avif = detected
+        .iter()
+        .any(|(_, format)| *format == crate::image::format_detect::FormatKind::Avif);
+    let has_jxl = detected
+        .iter()
+        .any(|(_, format)| *format == crate::image::format_detect::FormatKind::Jxl);
 
     if has_avif && !is_command_available("avifdec") {
         return detail(
@@ -766,18 +763,15 @@ fn check_decode_probe(
         );
     }
 
-    let failures = files
-        .iter()
-        .filter_map(|path| {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let file_is_avif = ext.eq_ignore_ascii_case("avif");
-            if file_is_avif {
-                avifdec_decode_probe(path)
-                    .err()
-                    .map(|err| (path.clone(), err))
-            } else {
-                djxl_decode_probe(path).err().map(|err| (path.clone(), err))
-            }
+    let failures = detected
+        .into_iter()
+        .filter_map(|(path, format)| {
+            let error = match format {
+                crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(&path),
+                crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(&path),
+                _ => Err(format!("unsupported delivery output format: {format:?}")),
+            };
+            error.err().map(|err| (path, err))
         })
         .collect::<Vec<_>>();
     let failure_paths = failures
@@ -802,87 +796,34 @@ fn check_decode_probe(
     )
 }
 
-fn collect_output_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, walkdir::Error> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(root) {
-        let entry = entry?;
-        if entry.file_type().is_file()
-            && entry
-                .path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
-        {
-            files.push(entry.path().to_path_buf());
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-fn collect_output_files_multiple_extensions(
+fn collect_delivery_output_files(
     root: &Path,
-    extensions: &[&str],
-) -> Result<Vec<PathBuf>, walkdir::Error> {
+    expected_format: Option<crate::image::format_detect::FormatKind>,
+) -> anyhow::Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
     for entry in walkdir::WalkDir::new(root) {
         let entry = entry?;
-        if entry.file_type().is_file()
-            && entry
-                .path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| extensions.iter().any(|&e| ext.eq_ignore_ascii_case(e)))
-        {
-            files.push(entry.path().to_path_buf());
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-/// Convert a known output format to its canonical file extension.
-/// Returns `None` for formats that are not valid fast-img output targets.
-const fn output_format_extension(
-    fmt: crate::image::format_detect::FormatKind,
-) -> Option<&'static str> {
-    use crate::image::format_detect::FormatKind;
-    match fmt {
-        FormatKind::Jxl => Some("jxl"),
-        FormatKind::Avif => Some("avif"),
-        _ => None,
-    }
-}
-
-fn detect_output_extension(root: &Path) -> &'static str {
-    if !root.exists() {
-        return "jxl";
-    }
-    let mut has_jxl = false;
-    let mut has_avif = false;
-    for entry in walkdir::WalkDir::new(root).max_depth(2) {
-        let Ok(entry) = entry else { continue };
         if !entry.file_type().is_file() {
             continue;
         }
-        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
-            if ext.eq_ignore_ascii_case("jxl") {
-                has_jxl = true;
-            } else if ext.eq_ignore_ascii_case("avif") {
-                has_avif = true;
-            }
-        }
-        if has_jxl || has_avif {
-            break;
+        let format = crate::image::format_detect::detect_true_format(entry.path())?;
+        let is_delivery_output = match expected_format {
+            Some(expected) => format == expected,
+            None => matches!(
+                format,
+                crate::image::format_detect::FormatKind::Jxl
+                    | crate::image::format_detect::FormatKind::Avif
+            ),
+        };
+        if is_delivery_output {
+            files.push(entry.path().to_path_buf());
         }
     }
-    if has_avif { "avif" } else { "jxl" }
+    files.sort();
+    Ok(files)
 }
 
 fn orientation_tag_present(path: &Path) -> std::io::Result<bool> {
@@ -1035,7 +976,8 @@ fn sample_expected(expected_count: usize) -> String {
 mod tests {
     use super::{
         Blake3Entry, Blake3Log, Gate1Local, Gate2Import, Gate3Deep, GateResult, LibraryAssetRecord,
-        LibraryHandle, PipelineCtx, VerificationGate, ensure_exiftool_success,
+        LibraryHandle, PipelineCtx, VerificationGate, collect_delivery_output_files,
+        ensure_exiftool_success,
     };
     use crate::builder_base::ToolBuilder;
     use crate::common_utils::calculate_blake3_hash;
@@ -1059,6 +1001,24 @@ mod tests {
             }),
             output_format: None,
         }
+    }
+
+    #[test]
+    fn delivery_output_collection_uses_content_not_suffix() {
+        let root = tempfile::tempdir().expect("create working copy");
+        let jxl = root.path().join("actual.bin");
+        std::fs::write(&jxl, [0xFF, 0x0A, 0x00]).expect("write JXL signature");
+        let avif = root.path().join("actual.data");
+        std::fs::write(&avif, b"\0\0\0\x14ftypavif\0\0\0\0avif").expect("write AVIF signature");
+        std::fs::write(root.path().join("spoof.jxl"), [0xFF, 0xD8, 0xFF])
+            .expect("write spoofed JPEG");
+
+        let mut files = collect_delivery_output_files(root.path(), None)
+            .expect("collect delivery outputs by content");
+        files.sort();
+        let mut expected = vec![avif, jxl];
+        expected.sort();
+        assert_eq!(files, expected);
     }
 
     #[test]
@@ -1113,6 +1073,44 @@ mod tests {
 
         assert!(!result.passed);
         assert_eq!(result.checks.len(), 4);
+    }
+
+    #[test]
+    fn gate3_sync_detail_reports_accepted_custody_counts() {
+        let ctx = ctx_with_library(
+            2,
+            vec![
+                LibraryAssetRecord {
+                    rel_path: "a.AVIF".to_string(),
+                    blake3: "a".to_string(),
+                    sync_status: "photos_local".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                },
+                LibraryAssetRecord {
+                    rel_path: "b.AVIF".to_string(),
+                    blake3: "b".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                },
+            ],
+        );
+
+        let result = Gate3Deep.run(&ctx);
+        let sync = result
+            .checks
+            .iter()
+            .find(|check| check.name == "sync")
+            .expect("sync check");
+
+        assert!(sync.passed);
+        assert_eq!(
+            sync.actual,
+            "1 Photos-local, 1 uploaded, 0 without accepted custody proof"
+        );
     }
 
     #[test]
@@ -1362,7 +1360,7 @@ mod tests {
             .save(&src)
             .unwrap();
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF");
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
         let out = wc.join("a.avif");
         std::fs::copy(&fixture, &out).expect("copy cleared AVIF fixture");
         let mut ctx = PipelineCtx {
@@ -1394,22 +1392,28 @@ mod tests {
     }
 
     #[test]
-    fn gate1_meme_metadata_requires_adopted_avif_to_stay_byte_identical() {
+    fn gate1_meme_metadata_requires_adopted_avif_to_be_clean() {
         let root = tempfile::TempDir::new().unwrap();
         let src_dir = root.path().join("src");
         let wc = root.path().join("src_optimized");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::create_dir_all(&wc).unwrap();
-        std::fs::write(
-            src_dir.join("a.avif"),
-            [
-                0x00, 0x00, 0x00, 0x18, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f', 0x00, 0x00,
-                0x00, 0x00, b'a', b'v', b'i', b'f',
-            ],
-        )
-        .unwrap();
+        let src = src_dir.join("a.avif");
+        let out = wc.join("a.avif");
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&fixture, &src).expect("copy AVIF fixture");
+        let metadata = crate::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Description=private source metadata")
+            .arg(crate::path_safety::exiftool_path_arg(&src).as_ref())
+            .build()
+            .output()
+            .expect("write AVIF metadata");
+        assert!(metadata.status.success());
+        std::fs::copy(&src, &out).expect("adopt AVIF byte-identically");
+        let shared_hash = crate::common_utils::calculate_blake3_hash(&src).unwrap();
         let mut ctx = PipelineCtx {
-            working_copy: wc.clone(),
+            working_copy: wc,
             src_dir,
             blake3_log: BTreeMap::new(),
             expected_count: 1,
@@ -1420,8 +1424,8 @@ mod tests {
             "a.avif".to_string(),
             Blake3Entry {
                 out_rel: Some("a.avif".to_string()),
-                src: "source-hash".to_string(),
-                out: "changed-hash".to_string(),
+                src: shared_hash.clone(),
+                out: shared_hash,
                 library_asset: None,
             },
         );
@@ -1429,7 +1433,8 @@ mod tests {
         let result = super::check_metadata_policy(&ctx);
 
         assert!(!result.passed);
-        assert_eq!(result.affected_files, vec![wc.join("a.avif")]);
+        assert_eq!(result.affected_files, vec![out]);
+        assert!(result.actual.contains("Description"), "{result:?}");
     }
 
     #[test]
@@ -1660,6 +1665,7 @@ pub enum FastImgStageName {
     OutputPrepared,
     TranscodeComplete,
     Gate1Passed,
+    Importing,
     ImportComplete,
     Gate2Passed,
     DeepScanComplete,
@@ -1679,6 +1685,7 @@ impl FastImgStageName {
             Self::OutputPrepared => "output_prepared",
             Self::TranscodeComplete => "encode_complete",
             Self::Gate1Passed => "gate1_passed",
+            Self::Importing => "importing",
             Self::ImportComplete => "import_complete",
             Self::Gate2Passed => "gate2_passed",
             Self::DeepScanComplete => "deep_scan_complete",
@@ -1809,6 +1816,13 @@ pub struct WorkingCopyMarker {
     /// Tier-2 lossy modern static assets imported directly into Photos.
     #[serde(default)]
     pub tier2_imported_assets: Vec<LibraryAssetRecord>,
+    /// A tier-2 import/delete transaction was durably started but has not yet
+    /// completed its final Photos custody recheck and source cleanup.
+    #[serde(default)]
+    pub tier2_in_progress: bool,
+    /// Primary fast-img Photos assets, including UUIDs needed for fresh resume verification.
+    #[serde(default)]
+    pub photos_imported_assets: Vec<LibraryAssetRecord>,
     pub error: Option<String>,
     /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
     #[serde(default = "default_strategy")]
@@ -1821,11 +1835,55 @@ fn default_strategy() -> String {
     "jxl".to_string()
 }
 
+fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
+    let path = Path::new(rel);
+    if rel.is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "fast-img marker {kind} must be a non-empty normalized relative path: {rel:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_no_symlink_components(root: &Path, rel: &Path) -> Result<(), String> {
+    let mut current = root.to_path_buf();
+    for component in rel.components() {
+        let Component::Normal(name) = component else {
+            return Err(format!(
+                "fast-img marker output path is not normalized: {}",
+                rel.display()
+            ));
+        };
+        current.push(name);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "fast-img marker output path contains a symlink: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "fast-img marker output path inspection failed for {}: {err}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl WorkingCopyMarker {
     #[must_use]
     pub fn new(src_dir: PathBuf, working_copy: PathBuf, src_jpeg_count: usize) -> Self {
         Self {
-            schema: 1,
+            schema: FAST_IMG_MARKER_SCHEMA_VERSION,
             src_dir,
             working_copy,
             started_at: chrono::Utc::now().to_rfc3339(),
@@ -1839,6 +1897,8 @@ impl WorkingCopyMarker {
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),
+            tier2_in_progress: false,
+            photos_imported_assets: Vec::new(),
             error: None,
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,
@@ -1889,6 +1949,64 @@ impl WorkingCopyMarker {
             if self.failed_sources.contains_key(rel) {
                 return Err(format!("{rel} recorded as both skipped and failed"));
             }
+        }
+        Ok(())
+    }
+
+    pub fn validate_relative_path_contract(&self) -> Result<(), String> {
+        for rel in self
+            .blake3_log
+            .keys()
+            .chain(self.skipped_sources.keys())
+            .chain(self.failed_sources.keys())
+        {
+            validate_marker_relative_path("source path", rel)?;
+        }
+        for entry in self.blake3_log.values() {
+            if let Some(out_rel) = entry.out_rel.as_deref() {
+                validate_marker_relative_path("output path", out_rel)?;
+            }
+        }
+        for asset in self
+            .tier2_imported_assets
+            .iter()
+            .chain(&self.photos_imported_assets)
+        {
+            validate_marker_relative_path("library asset path", &asset.rel_path)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_checkpoint_path_contract(
+        &self,
+        expected_working_copy: &Path,
+    ) -> Result<(), String> {
+        self.validate_relative_path_contract()?;
+        let expected = expected_working_copy.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize expected fast-img working copy {} failed: {err}",
+                expected_working_copy.display()
+            )
+        })?;
+        let recorded = self.working_copy.canonicalize().map_err(|err| {
+            format!(
+                "canonicalize recorded fast-img working copy {} failed: {err}",
+                self.working_copy.display()
+            )
+        })?;
+        if recorded != expected {
+            return Err(format!(
+                "fast-img marker working copy mismatch: expected={} recorded={}",
+                expected.display(),
+                recorded.display()
+            ));
+        }
+        for (source_rel, entry) in &self.blake3_log {
+            let out_rel = entry.out_rel.as_deref().map_or_else(
+                || PathBuf::from(source_rel).with_extension("JXL"),
+                PathBuf::from,
+            );
+            validate_no_symlink_components(&expected, &out_rel)?;
         }
         Ok(())
     }
@@ -1966,6 +2084,16 @@ pub fn working_copy_dir(src: &Path) -> PathBuf {
 
 #[must_use]
 pub fn resolve_working_copy_dir(src: &Path) -> PathBuf {
+    resolve_working_copy_dir_inner(src, true)
+}
+
+/// Select a new adjacent working copy without consuming any prior marker.
+#[must_use]
+pub fn resolve_fresh_working_copy_dir(src: &Path) -> PathBuf {
+    resolve_working_copy_dir_inner(src, false)
+}
+
+fn resolve_working_copy_dir_inner(src: &Path, reuse_marked: bool) -> PathBuf {
     let base = working_copy_dir(src);
     let mut suffix = 0usize;
     loop {
@@ -1986,7 +2114,7 @@ pub fn resolve_working_copy_dir(src: &Path) -> PathBuf {
         };
         let has_marker =
             candidate.join(".mfb_wc").exists() || marker_path_for_working_copy(&candidate).exists();
-        if !candidate.exists() || has_marker {
+        if (!candidate.exists() && !has_marker) || (reuse_marked && has_marker) {
             return candidate;
         }
         suffix += 1;
@@ -2049,6 +2177,14 @@ pub fn marker_path_for_working_copy(working_copy: &Path) -> PathBuf {
 }
 
 pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    marker
+        .validate_relative_path_contract()
+        .map_err(std::io::Error::other)?;
+    if marker.working_copy.exists() {
+        marker
+            .validate_checkpoint_path_contract(&marker.working_copy)
+            .map_err(std::io::Error::other)?;
+    }
     if marker.working_copy == marker.src_dir || marker.working_copy.starts_with(&marker.src_dir) {
         return Err(std::io::Error::other(format!(
             "fast-img marker output must not be inside source tree: source={} output={}",
@@ -2066,8 +2202,13 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     std::fs::create_dir_all(marker_dir)?;
     let tmp = path.with_extension("json.tmp");
     let data = serde_json::to_vec_pretty(marker).map_err(std::io::Error::other)?;
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(tmp, &path)?;
+    let mut tmp_file = std::fs::File::create(&tmp)?;
+    tmp_file.write_all(&data)?;
+    tmp_file.sync_all()?;
+    drop(tmp_file);
+    std::fs::rename(&tmp, &path)?;
+    #[cfg(unix)]
+    std::fs::File::open(marker_dir)?.sync_all()?;
     for legacy in [
         marker.working_copy.join(".mfb_wc"),
         marker.working_copy.join(".mfb_wc.tmp"),
@@ -2081,15 +2222,31 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     Ok(())
 }
 
+fn parse_marker_for_working_copy(
+    data: &[u8],
+    working_copy: &Path,
+) -> std::io::Result<WorkingCopyMarker> {
+    let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    if marker.schema != FAST_IMG_MARKER_SCHEMA_VERSION {
+        return Err(std::io::Error::other(format!(
+            "unsupported fast-img marker schema {}; expected {}",
+            marker.schema, FAST_IMG_MARKER_SCHEMA_VERSION
+        )));
+    }
+    marker
+        .validate_checkpoint_path_contract(working_copy)
+        .map_err(std::io::Error::other)?;
+    Ok(marker)
+}
+
 pub fn read_marker(working_copy: &Path) -> std::io::Result<WorkingCopyMarker> {
     let marker_path = marker_path_for_working_copy(working_copy);
     match std::fs::read(&marker_path) {
-        Ok(data) => serde_json::from_slice(&data).map_err(std::io::Error::other),
+        Ok(data) => parse_marker_for_working_copy(&data, working_copy),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             let legacy_path = working_copy.join(".mfb_wc");
             let data = std::fs::read(&legacy_path)?;
-            let marker: WorkingCopyMarker =
-                serde_json::from_slice(&data).map_err(std::io::Error::other)?;
+            let marker = parse_marker_for_working_copy(&data, working_copy)?;
             write_marker_atomic(&marker)?;
             Ok(marker)
         }
@@ -2111,7 +2268,7 @@ pub const fn stage_requires_retry(stage: &FastImgStageName) -> bool {
 pub fn retry_resume_stage(stage: &FastImgStageName, retry: bool) -> FastImgStageName {
     match (stage, retry) {
         (FastImgStageName::Gate1Failed, true) => FastImgStageName::OutputPrepared,
-        (FastImgStageName::Gate2Failed, true) => FastImgStageName::Gate1Passed,
+        (FastImgStageName::Gate2Failed, true) => FastImgStageName::ImportComplete,
         (FastImgStageName::Gate3Failed, true) => FastImgStageName::Gate2Passed,
         (FastImgStageName::Aborted, _) => FastImgStageName::ScanComplete,
         _ => stage.clone(),
@@ -2125,6 +2282,7 @@ pub const fn output_prepared_or_later(stage: &FastImgStageName) -> bool {
         FastImgStageName::OutputPrepared
             | FastImgStageName::TranscodeComplete
             | FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
             | FastImgStageName::ImportComplete
             | FastImgStageName::Gate2Passed
             | FastImgStageName::DeepScanComplete
@@ -2139,6 +2297,7 @@ pub const fn encode_complete_or_later(stage: &FastImgStageName) -> bool {
         stage,
         FastImgStageName::TranscodeComplete
             | FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
             | FastImgStageName::ImportComplete
             | FastImgStageName::Gate2Passed
             | FastImgStageName::DeepScanComplete
@@ -2152,6 +2311,7 @@ pub const fn gate1_complete_or_later(stage: &FastImgStageName) -> bool {
     matches!(
         stage,
         FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
             | FastImgStageName::ImportComplete
             | FastImgStageName::Gate2Passed
             | FastImgStageName::DeepScanComplete
@@ -2218,6 +2378,7 @@ pub const fn resume_action(stage: &FastImgStageName) -> &'static str {
         FastImgStageName::OutputPrepared => "skip_prepare_then_encode",
         FastImgStageName::TranscodeComplete => "skip_encode_then_gate1",
         FastImgStageName::Gate1Passed => "skip_to_import",
+        FastImgStageName::Importing => "reconcile_photos_then_resume_import",
         FastImgStageName::ImportComplete => "skip_to_gate2",
         FastImgStageName::Gate2Passed => "skip_to_deep_scan",
         FastImgStageName::DeepScanComplete => "skip_to_gate3",
@@ -2288,8 +2449,9 @@ pub fn marker_checks_from_result(result: &GateResult) -> String {
 #[cfg(test)]
 mod working_copy_tests {
     use super::{
-        Blake3Entry, FastImgStageName, SkippedSourceEntry, WorkingCopyMarker,
-        marker_path_for_working_copy, prepare_jxl_output_dir, read_marker,
+        Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, SkippedSourceEntry,
+        WorkingCopyMarker, marker_path_for_working_copy, parse_marker_for_working_copy,
+        prepare_jxl_output_dir, read_marker, resolve_fresh_working_copy_dir,
         resolve_working_copy_dir, working_copy_dir, write_marker_atomic,
     };
     use crate::common_utils::EnvGuard;
@@ -2392,6 +2554,26 @@ mod working_copy_tests {
 
     #[test]
     #[serial]
+    fn fresh_working_copy_never_reuses_a_marked_directory() {
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        write_marker_atomic(&WorkingCopyMarker::new(src.clone(), wc, 1)).unwrap();
+
+        assert_eq!(
+            resolve_fresh_working_copy_dir(&src),
+            root.path().join("Photos_optimized_2")
+        );
+    }
+
+    #[test]
+    #[serial]
     fn marker_write_is_readable_after_atomic_rename() {
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
@@ -2401,6 +2583,7 @@ mod working_copy_tests {
         );
         let src = root.path().join("Photos");
         let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src, wc, 2);
         marker.stage = FastImgStageName::OutputPrepared;
 
@@ -2410,6 +2593,68 @@ mod working_copy_tests {
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&marker.working_copy).exists());
+    }
+
+    #[test]
+    fn marker_reader_rejects_unknown_schema() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.schema = FAST_IMG_MARKER_SCHEMA_VERSION + 1;
+        let data = serde_json::to_vec(&marker).unwrap();
+
+        let err = parse_marker_for_working_copy(&data, &wc)
+            .expect_err("future marker schema must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unsupported fast-img marker schema")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn marker_io_rejects_tampered_paths() {
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&wc).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("../escape.JXL".to_string()),
+                src: "src-hash".to_string(),
+                out: "out-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("normalized relative path"));
+
+        let outside_file = outside.join("outside.JXL");
+        std::fs::write(&outside_file, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside_file, wc.join("link.JXL")).unwrap();
+        marker.blake3_log.get_mut("a.jpg").unwrap().out_rel = Some("link.JXL".to_string());
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("contains a symlink"));
+
+        marker.working_copy = outside;
+        let marker_path = marker_path_for_working_copy(&wc);
+        std::fs::create_dir_all(marker_path.parent().unwrap()).unwrap();
+        std::fs::write(&marker_path, serde_json::to_vec_pretty(&marker).unwrap()).unwrap();
+        let err = read_marker(&wc).unwrap_err();
+        assert!(err.to_string().contains("working copy mismatch"));
     }
 
     #[test]
@@ -2567,14 +2812,14 @@ mod rev2_policy_tests {
     }
 
     #[test]
-    fn retry_maps_failed_stage_to_previous_successful_checkpoint() {
+    fn retry_maps_failed_stage_to_safe_durable_checkpoint() {
         assert_eq!(
             retry_resume_stage(&FastImgStageName::Gate1Failed, true),
             FastImgStageName::OutputPrepared
         );
         assert_eq!(
             retry_resume_stage(&FastImgStageName::Gate2Failed, true),
-            FastImgStageName::Gate1Passed
+            FastImgStageName::ImportComplete
         );
         assert_eq!(
             retry_resume_stage(&FastImgStageName::Gate3Failed, true),
@@ -2606,6 +2851,8 @@ mod rev2_policy_tests {
             &FastImgStageName::TranscodeComplete
         ));
         assert!(gate1_complete_or_later(&FastImgStageName::Gate1Passed));
+        assert!(gate1_complete_or_later(&FastImgStageName::Importing));
+        assert!(!import_complete_or_later(&FastImgStageName::Importing));
         assert!(import_complete_or_later(&FastImgStageName::ImportComplete));
         assert!(gate2_complete_or_later(&FastImgStageName::Gate2Passed));
         assert!(deep_scan_complete_or_later(
@@ -2647,7 +2894,7 @@ mod rev2_policy_tests {
 
 #[cfg(test)]
 mod meme_mode_tests {
-    use super::{WorkingCopyMarker, default_strategy};
+    use super::{WorkingCopyMarker, check_decode_probe, default_strategy};
     use std::path::PathBuf;
 
     #[test]
@@ -2743,5 +2990,14 @@ mod meme_mode_tests {
         assert_eq!(marker.encoded_count, 0, "encoded_count must default to 0");
         assert_eq!(marker.src_jpeg_count, 42);
         assert_eq!(marker.strategy, "jxl");
+    }
+
+    #[test]
+    fn check_decode_probe_fails_fast_on_invalid_file() {
+        let nonexistent = PathBuf::from("/nonexistent/file/path/that/does/not/exist.jpg");
+        let detail = check_decode_probe(&[nonexistent]);
+        assert_eq!(detail.name, "decode");
+        assert!(!detail.passed);
+        assert!(detail.actual.contains("format detection failed"));
     }
 }

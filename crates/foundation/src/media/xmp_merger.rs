@@ -105,12 +105,18 @@ pub struct XmpMerger {
 
 /// CONTRACT: JXL + `Apple` compat uses nuclear `-all=` before streaming XMP
 /// (Brotli-safe path).
-#[must_use]
-fn should_jxl_xmp_apple_nuclear_strip(media_path: &Path, apple_compat: bool) -> bool {
-    apple_compat
-        && media_path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
+fn should_jxl_xmp_apple_nuclear_strip(media_path: &Path, apple_compat: bool) -> Result<bool> {
+    if !apple_compat {
+        return Ok(false);
+    }
+    crate::image::format_detect::detect_true_format(media_path)
+        .map(|format| format == crate::image::format_detect::FormatKind::Jxl)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to detect media format before Apple-compatible XMP merge for {}: {error}",
+                media_path.display()
+            )
+        })
 }
 
 fn append_jxl_apple_nuclear_xmp_merge(builder: &mut ExiftoolBuilder) {
@@ -896,7 +902,7 @@ impl XmpMerger {
 
         let apple_compat = std::env::var(crate::constants::ENV_APPLE_COMPAT).is_ok();
 
-        if should_jxl_xmp_apple_nuclear_strip(media_path, apple_compat) {
+        if should_jxl_xmp_apple_nuclear_strip(media_path, apple_compat)? {
             append_jxl_apple_nuclear_xmp_merge(&mut builder);
         }
 

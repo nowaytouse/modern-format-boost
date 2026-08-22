@@ -2,18 +2,172 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.11.3] - 2026-07-22
+## [Unreleased] - 2026-08-22
+
+### Production Hardening: AVIF Meme Search & Trust Boundaries
+
+- **Modern lossy static delivery**: FastImg JXL mode now discovers static WebP,
+  JXL, AVIF, HEIC/HEIF, and JP2 by content identity, admits only positively
+  proven lossy sources, and preserves unknown, lossless, animated, or JPEG-
+  reconstruction inputs. Photos custody is reconciled by content proof before
+  resumable source cleanup; partial imports and deletes retain durable state.
+- **Exact destructive admission**: AVIF and HEIC inspect every codec
+  configuration instead of trusting one auxiliary item, while JP2 evaluates
+  first-tile COD/COC wavelet overrides through the shared bounded parser. Mixed,
+  malformed, generic HEIF, monochrome-only, and otherwise inconclusive evidence
+  stays `unknown` and cannot enter Tier 2 cleanup.
+- **Explicit task identity and resume**: FastImg binds checkpoints to relative
+  source paths and BLAKE3 identities. Matching interrupted work requires an
+  explicit interactive resume or `--retry`; changed, restored, or newly
+  reappeared inputs require a fresh-run decision and cannot silently inherit an
+  old task. Non-interactive sessions fail closed instead of waiting forever.
+- **Four-state compression safety**: AVIF Meme Mode no longer collapses unknown
+  compression into `lossy`. JP2's reversible 5/3 wavelet is treated as
+  insufficient lossless evidence until quantization and component transforms
+  are proven, so uncertain inputs stay untouched.
+- **Linux cjxl compatibility**: JPEG reconstruction still uses expert e11 when
+  supported. If an installed official `cjxl` explicitly rejects the expert
+  option, the same reversible encode is retried once at compatible e8; unrelated
+  encoder failures are not retried or hidden. Older official builds that reject
+  `--compress_boxes=0` receive one additional bounded retry without that optional
+  box-control flag, preserving the encoded media semantics.
+- **Dependency security refresh**: The GUI lock now contains patched
+  `brace-expansion`, `nanoid`, and `postcss`; the obsolete Tauri/GTK dependency
+  tree and unused `libavif` binding were removed, eliminating the stale `glib`
+  and duplicate native AV1 dependency chains.
+
+- **FFmpeg 9.0.1 compatibility**: Animated WebP conversion now verifies the
+  dedicated `webp_anim` demuxer before relying on FFmpeg canvas coalescing, so a
+  build without the required FFmpeg 9 surface fails explicitly instead of
+  losing frame offsets or blend/dispose semantics. WebP RIFF timing parse
+  errors are propagated rather than collapsed into a missing duration, and the
+  tool-version parser is locked against the Homebrew 9.0.1 version format.
+- **Explicit probe failures**: Content-format, animation, container-overhead,
+  model-script, environment, XMP, and output-size probes no longer discard
+  errors through boolean/optional shortcuts or forged numeric defaults. Test
+  media now uses the project-owned scratch gateway.
+- **FastImg production verification**: JXL and AVIF local delivery were verified
+  with release-binary smoke runs on synthetic and healthy public media, plus a
+  controlled AVIF import into the dedicated debug Photos library. Content-based
+  decoding handles mislabeled files correctly, AVIF/JXL share an accurately
+  named final-delivery proof, marker-writing tests isolate their state roots,
+  and Gate 3 logs report Photos-local versus uploaded custody counts instead of
+  the misleading zero-failure-only summary.
+- **CLI-only GUI surface**: Removed the non-CLI mock-processing and decorative
+  drop-zone path; the bundled UI now exposes only the real CLI command,
+  terminal execution, logs, and explicit resume/fresh decisions.
+- **Fail-closed workspace fixer**: `check_all --fix` now stops on the first
+  formatter or fixer failure instead of discarding child exit statuses. A real
+  Ruff failure therefore remains visible and cannot be reported as a clean fix.
+- **Domain-correct AVIF exploration**: Meme Mode uses fast speed 6 only as a
+  bounded locator, then re-establishes the quality bracket and refinement at
+  final speed 0. Locator candidates cannot become final evidence, preventing
+  quality values from being compared across non-equivalent encoder speed
+  domains while avoiding most expensive final-domain coarse probes.
+- **Hardening rule consolidation**: Effective fail-closed, evidence, scope,
+  dependency-approval, workspace-preservation, and privacy-upload rules are now
+  maintained in the local mandatory policy; obsolete duplicate policy templates
+  were removed.
+- **Dependency refresh**: `num-integer` and `whoami` lock entries were refreshed
+  with `cargo update`; no manifest dependency was added or changed.
+- **External-sample calibration**: Healthy public JPEG, PNG, and WebP samples
+  were downloaded into a temporary directory for AVIF speed calibration; no
+  local media or Photos library content was read or copied. Speed 6 provided a
+  materially faster locator than speed 1, while all final evidence remained in
+  the speed 0 domain.
+
+## [0.11.3] - 2026-08-11
+
+### August 2026 Polish: FastImg Delivery & Native GUI Safety
+
+- **Photos permission before long work**: The native macOS host now checks
+  Automation access before launching FastImg shortest-path or explicit Photos
+  import work. First use can show the system consent prompt; a denied grant
+  opens the correct Privacy & Security pane without starting another conversion,
+  while the existing checkpoint remains available for an explicit resume.
+- **Stable application identity**: Native packaging now compiles and self-tests
+  the Swift host with the required CoreServices framework, binds the privacy
+  usage metadata into the final signature, and refuses an implicit ad-hoc
+  signing fallback that would invalidate Photos Automation consent on rebuild.
+  Generated app-bundle metadata and local agent notes are no longer tracked, so
+  a pull or formatting-only change cannot silently break an already signed app.
+- **Native GUI behavior**: The macOS window is a normal titled AppKit window
+  with custom chrome, standard App/Edit/Window menus, and native minimize,
+  zoom, Spaces, Exposé, and accessibility behavior. Backend version-alignment
+  warnings now surface in the UI instead of being visible only in developer
+  tools.
+- **Bounded process output**: Child stdout/stderr capture now releases its
+  bounded reader before draining the pipe, preserving the memory ceiling while
+  preventing a verbose child from blocking on a full pipe.
+- **Fail-closed verification**: Output format detection reports the exact first
+  unreadable file, malformed probe inputs remain explicit failures, and final
+  video settlement refuses incomplete early-insight state rather than
+  fabricating a candidate.
+- **Fixture reliability**: Synthetic PNG, AVIF, HEIC, and animated WebP fixtures
+  now use structurally valid headers/chunks, generated still images are limited
+  to one frame, and the edge-media manifest is regenerated from the current
+  fixture inventory.
+
+### IMG Exploration Policy Hardening
+
+- **Quality-first Meme search**: AVIF probes now have explicit fitting,
+  oversized, and failed outcomes. Strict mode requires the encoded media
+  payload to be smaller than the source; equality is rejected, and a failed or
+  unverifiable probe can no longer masquerade as an oversized size boundary.
+- **Evidence-preserving refinement**: Meme refinement advances only from real
+  fitting and oversized probes. Failed quality points are skipped without
+  changing either boundary, and the result is described only as the highest
+  verified fitting candidate when probe gaps remain.
+- **Narrow JXL exploration**: JPEG reconstruction, confirmed-lossless images,
+  unknown sources, and acceptable modern lossy formats no longer enter JXL
+  distance exploration. Eligible legacy lossy inputs first encode at `d=0`;
+  exploration starts only when that real candidate misses the strict payload
+  policy. Standalone probe and quality-matched entry points use the same source
+  semantics, so they cannot silently reintroduce lossy distance for protected
+  sources or report a requested distance that was not actually encoded.
+- **Single-domain encoder effort**: JXL effort is selected once by normal,
+  ultimate, or archive policy. Large-file and exploration flags no longer
+  launch an independent e7/e8/e11 size contest, avoiding redundant encodes and
+  keeping quality search within one encoder-effort domain. User-facing and
+  telemetry messages now describe that real domain instead of the retired
+  e7-screen/e10-finalize model.
+
+### Unified IMG/VID Exploration Domains
+
+- **One exploration objective**: IMG and VID now use a shared size-policy,
+  probe-outcome, encoder-domain, and product-outcome vocabulary. A lossy search
+  selects the highest-quality verified product that satisfies the active size
+  policy; output size is no longer treated as the primary objective after a
+  candidate already fits.
+- **Final-domain video calibration**: A CRF found with another preset or a
+  sampled timeline is now only a locator. The requested final preset encodes
+  real full-timeline anchors, establishes its own fitting/oversized bracket,
+  and refines inside that domain. A higher-quality final candidate may be
+  larger than the current candidate as long as it still satisfies the active
+  size policy.
+- **Fresh final quality evidence**: Final VMAF-Y and PSNR-UV are measured from
+  the materialized delivery product instead of being copied from search
+  history. CAMBI remains compared with a freshly measured source baseline;
+  missing final metrics fail closed.
+- **Lossless-first Meme routing**: Confirmed-lossless Meme sources first try a
+  verified true-lossless AVIF at speed 0. Only a strictly smaller lossless
+  payload is accepted; otherwise the explicit Meme intent proceeds to lossy
+  quality-boundary exploration. Metadata-clean AVIF adoption, lossless
+  transcoding, explored optimization, and failure now have distinct outcomes.
+- **Failure-safe AVIF handoff**: JXL-to-AVIF quality search now distinguishes
+  encoder/measurement failure from a real oversized candidate. Failed quality
+  points are skipped and cannot fabricate or shrink a size boundary.
 
 ### Reliability, Delivery & CI Repairs
 
 - **FastImg AVIF Meme Mode**: Static-image delivery now normalizes every
   supported source before `avifenc --speed 0 --jobs all` and probes
   `q=100..0`. JPEG, PNG, and JXL sources use metadata-free media budgets while
-  AVIF candidates count only `mdat`; source AVIF intentionally keeps the
-  complete-file budget. The highest verified quality within budget wins, with
-  the smallest candidate under the same budget basis as fallback. Source AVIF
-  files are decoded and re-encoded, clean output omits source
-  Exif/XMP/ICC/gain-map data, and damaged supported media remains explicitly
+  AVIF candidates count only `mdat`. The highest verified quality with a
+  strictly smaller payload wins; failed probes never establish a size bound.
+  Metadata-clean source AVIF files are adopted byte-for-byte, while sources
+  that need metadata cleaning are decoded and re-encoded without source
+  Exif/XMP/ICC/gain-map data. Damaged supported media remains explicitly
   counted and retained instead of disappearing during static-container scan.
 - **Photos Import Safety**: FastImg JXL shortest-path import is rejected before
   writes. `icloud_import` now performs a no-side-effect preflight that detects

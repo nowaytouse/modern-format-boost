@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn test_version_info() {
         let info = Info::current();
-        assert!(!info.program_version.is_empty());
+        assert_ne!(info.program_version, "");
         assert!(info.cache_algorithm_version > 0_i32);
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);
     }

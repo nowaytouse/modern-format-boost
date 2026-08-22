@@ -377,13 +377,8 @@ def test_fast_img_delivery_verify_warning_is_fail_closed(tmp_path, monkeypatch):
     drag.LOG_FILE = ""
     drag.VERBOSE_LOG_FILE = ""
 
-    verify_stdout = "\n".join(
-        [
-            "🔎 Integrity summary",
-            "   Integrity Issues:2",
-            "   Integrity:      WARNINGS",
-            "",
-        ]
+    verify_stdout = (
+        "🔎 Integrity summary\n   Integrity Issues:2\n   Integrity:      WARNINGS\n"
     )
     completed = MagicMock(returncode=0, stdout=verify_stdout, stderr="")
 
@@ -542,17 +537,7 @@ def test_fast_img_post_success_preserves_before_size_snapshot(tmp_path, monkeypa
     drag.FAST_IMG_OUTPUT_CLEANED = False
     drag.MEDIA_TOTAL_SIZE = 10_000
 
-    summary = "\n".join(
-        [
-            "🔎 Integrity summary",
-            "   Recorded source JPEGs:          1",
-            "   Optimized JXL files:            1",
-            "   Recorded skipped JPEGs:         0",
-            "   Integrity Issues:0",
-            "   Integrity:      CLEAN",
-            "",
-        ]
-    )
+    summary = "🔎 Integrity summary\n   Recorded source JPEGs:          1\n   Optimized JXL files:            1\n   Recorded skipped JPEGs:         0\n   Integrity Issues:0\n   Integrity:      CLEAN\n"
 
     def fake_verify(*_args, **_kwargs):
         drag.LAST_VERIFY_SUMMARY = summary
@@ -721,18 +706,7 @@ def test_fast_img_post_success_counts_recorded_skipped_sources(tmp_path, monkeyp
     drag.FAST_IMG_OUTPUT_CLEANED = False
     drag.MEDIA_TOTAL_SIZE = 0
 
-    summary = "\n".join(
-        [
-            "🔎 Integrity summary",
-            "   Recorded source JPEGs:          2",
-            "   Optimized JXL files:            1",
-            "   Recorded skipped JPEGs:         1",
-            "   Recorded failed JPEGs:          0",
-            "   Integrity Issues:0",
-            "   Integrity:      CLEAN",
-            "",
-        ]
-    )
+    summary = "🔎 Integrity summary\n   Recorded source JPEGs:          2\n   Optimized JXL files:            1\n   Recorded skipped JPEGs:         1\n   Recorded failed JPEGs:          0\n   Integrity Issues:0\n   Integrity:      CLEAN\n"
 
     def fake_verify(*_args, **_kwargs):
         drag.LAST_VERIFY_SUMMARY = summary
@@ -765,18 +739,7 @@ def test_fast_img_post_success_counts_recorded_failed_sources(tmp_path, monkeypa
     drag.FAST_IMG_OUTPUT_CLEANED = False
     drag.MEDIA_TOTAL_SIZE = 0
 
-    summary = "\n".join(
-        [
-            "🔎 Integrity summary",
-            "   Recorded source JPEGs:          2",
-            "   Optimized JXL files:            1",
-            "   Recorded skipped JPEGs:         0",
-            "   Recorded failed JPEGs:          1",
-            "   Integrity Issues:0",
-            "   Integrity:      CLEAN",
-            "",
-        ]
-    )
+    summary = "🔎 Integrity summary\n   Recorded source JPEGs:          2\n   Optimized JXL files:            1\n   Recorded skipped JPEGs:         0\n   Recorded failed JPEGs:          1\n   Integrity Issues:0\n   Integrity:      CLEAN\n"
 
     def fake_verify(*_args, **_kwargs):
         drag.LAST_VERIFY_SUMMARY = summary
@@ -798,13 +761,7 @@ def test_restore_jpeg_stats_parser_reads_rust_djxl_completion_line(
     tmp_path, monkeypatch
 ):
     drag = load_drag_processor(tmp_path, monkeypatch)
-    output = "\n".join(
-        [
-            "[SCAN    ] Found 169 true JXL files in /tmp/Album_optimized",
-            "[DONE    ] restored 169 JPEGs to /tmp/Album_restored_jpeg (3 existing outputs skipped)",
-            "",
-        ]
-    )
+    output = "[SCAN    ] Found 169 true JXL files in /tmp/Album_optimized\n[DONE    ] restored 169 JPEGs to /tmp/Album_restored_jpeg (3 existing outputs skipped)\n"
 
     stats = drag.parse_processor_stats(output, parse_type="img", restore_jpeg=True)
 
@@ -825,14 +782,7 @@ def test_restore_jpeg_verification_uses_restore_mode_flag(tmp_path, monkeypatch)
     drag.VERBOSE_LOG_FILE = ""
     completed = MagicMock(
         returncode=0,
-        stdout="\n".join(
-            [
-                "🔎 Integrity summary",
-                "   Integrity Issues:0",
-                "   Integrity:      CLEAN",
-                "",
-            ]
-        ),
+        stdout="🔎 Integrity summary\n   Integrity Issues:0\n   Integrity:      CLEAN\n",
         stderr="",
     )
 
@@ -866,16 +816,7 @@ def test_restore_jpeg_post_success_keeps_nonzero_final_image_counts(
     drag.IMG_IGNORED = 0
     drag.IMG_FAILED = 0
     drag.MEDIA_TOTAL_SIZE = 123
-    summary = "\n".join(
-        [
-            "🔎 Integrity summary",
-            "   Source JXL files:                 172",
-            "   Restored JPEG files:              169",
-            "   Integrity Issues:0",
-            "   Integrity:      CLEAN",
-            "",
-        ]
-    )
+    summary = "🔎 Integrity summary\n   Source JXL files:                 172\n   Restored JPEG files:              169\n   Integrity Issues:0\n   Integrity:      CLEAN\n"
 
     def fake_verify(*_args, **_kwargs):
         drag.LAST_VERIFY_SUMMARY = summary
@@ -900,16 +841,7 @@ def test_restore_jpeg_integrity_counts_include_manifest_deleted_sources(
     tmp_path, monkeypatch
 ):
     drag = load_drag_processor(tmp_path, monkeypatch)
-    summary = "\n".join(
-        [
-            "Integrity summary",
-            "   Source JXL files:           172",
-            "   Source remaining JXL files: 3",
-            "   Manifest verified deleted source JXLs: 169",
-            "   Restored JPEG files:        172",
-            "",
-        ]
-    )
+    summary = "Integrity summary\n   Source JXL files:           172\n   Source remaining JXL files: 3\n   Manifest verified deleted source JXLs: 169\n   Restored JPEG files:        172\n"
 
     assert drag.fast_img_restore_integrity_counts(summary) == (172, 172, 3, 169)
 

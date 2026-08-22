@@ -4,8 +4,8 @@
 //! completely excluding the impact of container format and metadata.
 //!
 //! ## Core Logic
-//! - Main Criterion: `output_pure_media_size < input_pure_media_size +
-//!   DEFAULT_SIZE_TOLERANCE_BYTES`
+//! - Main criterion: the shared active `SizePolicy` over measured pure-media
+//!   payloads (strict-smaller or an explicitly bounded inclusive tolerance).
 //! - As long as the pure media payload shrinks or increases slightly (less than
 //!   the standard tolerance), it's considered a success, regardless of total
 //!   file size.
@@ -224,12 +224,11 @@ fn verify_pure_media_sizes(
 ) -> PureMediaVerifyResult {
     let input_pure_media = input_video.saturating_add(input_audio);
     let output_pure_media = output_video.saturating_add(output_audio);
-    let pure_media_compressed = if allow_size_tolerance {
-        output_pure_media
-            < input_pure_media.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
-    } else {
-        output_pure_media < input_pure_media
-    };
+    let size_policy = crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
+    let pure_media_compressed = size_policy.fits(output_pure_media, input_pure_media);
 
     let video_compression_ratio = size_ratio_or_one(output_video, input_video);
     let pure_media_compression_ratio = size_ratio_or_one(output_pure_media, input_pure_media);
@@ -263,12 +262,11 @@ pub const fn is_video_compressed(
     output_video_size: u64,
     allow_size_tolerance: bool,
 ) -> bool {
-    if allow_size_tolerance {
-        output_video_size
-            < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
-    } else {
-        output_video_size < input_video_size
-    }
+    let size_policy = crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
+    size_policy.fits(output_video_size, input_video_size)
 }
 
 #[inline]
@@ -481,7 +479,9 @@ mod prop_tests {
 
             let result = verify_pure_media_compression(&input, &output, true);
 
-            let expected_compressed = output_video < input_video.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES);
+            let expected_compressed = crate::exploration_policy::SizePolicy::AllowGrowth {
+                max_extra_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            }.fits(output_video, input_video);
             prop_assert_eq!(result.video_compressed, expected_compressed,
                 "When output {} {} input {}, video_compressed should be {}",
                 output_video, if expected_compressed { "<" } else { ">=" },

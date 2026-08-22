@@ -342,6 +342,38 @@ fn copy_candidate_file(path: &Path, input_dir: &Path, output_dir: &Path, result:
 // Rationale: This function handles complex, sequential initialization or
 // business logic where further fragmentation would hinder readability and
 // maintainability.
+/// Collect the paths that `copy_unsupported_files` would copy.
+///
+/// Files whose extension is outside the supported image/video/sidecar sets.
+/// Used by the external-identity audit so the "unsupported" bucket can report
+/// what those files actually are instead of only where they get copied.
+#[must_use]
+pub fn collect_unsupported_files(input_dir: &Path, recursive: bool) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for entry in build_copy_walker(input_dir, recursive) {
+        match entry {
+            Ok(entry) => {
+                if entry.file_type().is_file() && should_copy_file(entry.path()) {
+                    paths.push(entry.into_path());
+                }
+            }
+            Err(err) => {
+                crate::media_conversion_gate::delivery_io_path_audit(
+                    "delivery_io_copy",
+                    input_dir,
+                    format!(
+                        "COPY AUDIT: Failed to inspect directory entry during unsupported scan | \
+                         Forensic: Directory '{}', Error '{}'",
+                        input_dir.display(),
+                        err
+                    ),
+                );
+            }
+        }
+    }
+    paths
+}
+
 pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bool) -> CopyResult {
     let mut result = CopyResult::new();
 

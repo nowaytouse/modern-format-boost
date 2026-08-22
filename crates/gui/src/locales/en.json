@@ -30,7 +30,8 @@
   "dropzone": {
     "drag": "Drop workspace here",
     "browse": "Select Directory",
-    "release": "RELEASE TO BOOST"
+    "release": "RELEASE TO BOOST",
+    "timeout": "Folder selection cancelled (no action for 30 minutes)."
   },
   "processing": {
     "selected_folder": "Selected Directory",

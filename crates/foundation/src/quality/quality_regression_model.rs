@@ -504,18 +504,24 @@ fn resolve_script_path() -> PathBuf {
         return path;
     }
 
-    if let Some(packaged) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .map(|root| {
-            root.join("crates")
-                .join("dev")
-                .join("scripts")
-                .join("quality_regression_model.py")
-        })
-        .filter(|path| path.is_file())
-    {
-        return packaged;
+    match std::env::current_exe() {
+        Ok(path) => {
+            if let Some(packaged) = path.parent().map(|root| {
+                root.join("crates")
+                    .join("dev")
+                    .join("scripts")
+                    .join("quality_regression_model.py")
+            }) && packaged.is_file()
+            {
+                return packaged;
+            }
+        }
+        Err(error) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "quality_model_script_path",
+                format!("failed to resolve current executable for packaged model script: {error}"),
+            );
+        }
     }
 
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

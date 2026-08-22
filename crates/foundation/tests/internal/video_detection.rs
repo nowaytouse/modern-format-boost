@@ -496,8 +496,8 @@ fn video_quality_db_fusion_skips_lossless_compression() {
 fn minimal_animated_webp_fixture() -> Vec<u8> {
   // RIFF animated WebP: VP8X (100×80) + ANIM — ffprobe may leave frame_count empty.
     vec![
-        b'R', b'I', b'F', b'F', 0x1E, 0, 0, 0, b'W', b'E', b'B', b'P', b'V', b'P', b'8', b'X', 10,
-        0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0, b'A', b'N', b'I', b'M', 0, 0, 0, 0,
+        b'R', b'I', b'F', b'F', 0x24, 0, 0, 0, b'W', b'E', b'B', b'P', b'V', b'P', b'8', b'X', 10,
+        0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0, b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0,
     ]
 }
 

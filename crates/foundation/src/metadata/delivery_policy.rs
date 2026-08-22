@@ -149,19 +149,19 @@ pub fn apply_file_timestamps_for_delivery(
     dst: &Path,
     report: &mut MetadataDeliveryReport,
 ) -> io::Result<()> {
-    match super::apply_file_timestamps(src, dst) {
-        Ok(()) => {
-            report.timestamps = MetadataLayerOutcome::Applied;
-            Ok(())
-        }
+    // Timestamp delivery is best-effort: a partial failure is audited and
+    // reported instead of failing the whole metadata delivery.
+    let timestamps_outcome = match super::apply_file_timestamps(src, dst) {
+        Ok(()) => MetadataLayerOutcome::Applied,
         Err(e) => {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata_timestamp",
                 crate::infra::static_logs::messages::MSG_METADATA_DELIVERY_TIMESTAMP_PARTIAL
                     .replace("{}", &e.to_string()),
             );
-            report.timestamps = MetadataLayerOutcome::PartialAudit;
-            Ok(())
+            MetadataLayerOutcome::PartialAudit
         }
-    }
+    };
+    report.timestamps = timestamps_outcome;
+    Ok(())
 }

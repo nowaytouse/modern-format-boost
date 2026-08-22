@@ -66,64 +66,16 @@ macro_rules! info_detail {
 pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 =
     crate::constants::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
 
-/// Opens an image reader with magic bytes detection to handle non-standard
-/// extensions. Falls back to extension-based detection if magic bytes detection
-/// fails.
+/// Opens an image reader with magic-byte detection to handle non-standard
+/// extensions.
 ///
 /// # Errors
 /// Returns `ImageError` if the file cannot be opened or format cannot be
-/// determined. The error message includes details about whether magic bytes
-/// detection or extension-based detection failed.
+/// determined from the file contents.
 fn open_image_reader_with_magic_bytes(
     path: &Path,
-) -> std::result::Result<image::ImageReader<'_>, image::ImageError> {
-    // Use magic bytes detection instead of relying on file extension
-    // This handles cases like .jpe, missing extensions, or incorrect extensions
-    let _format = match infer::get_from_path(path) {
-        Ok(Some(kind)) => match kind.mime_type() {
-            // Standard formats supported by image crate
-            "image/jpeg" => Some(image::ImageFormat::Jpeg),
-            "image/png" => Some(image::ImageFormat::Png),
-            "image/gif" => Some(image::ImageFormat::Gif),
-            "image/webp" => Some(image::ImageFormat::WebP),
-            "image/tiff" => Some(image::ImageFormat::Tiff),
-            "image/bmp" => Some(image::ImageFormat::Bmp),
-            "image/x-icon" => Some(image::ImageFormat::Ico),
-            // Modern formats (if image crate supports them)
-            "image/avif" => Some(image::ImageFormat::Avif),
-            // Note: HEIC/HEIF are handled separately via libheif-rs, not through image crate
-            // Note: JXL is handled separately via djxl/cjxl, not through image crate
-            // Note: OpenEXR, JPEG 2000, PSD, etc. may need special handling
-            _ => {
-                // Log unsupported MIME type for debugging
-                probe_audit!(
-                    "mime_unsupported_for_pixel_analysis",
-                    path,
-                    "format not supported for deep pixel analysis: {mime}",
-                    mime = kind.mime_type(),
-                );
-                None
-            }
-        },
-        Ok(None) => None, // No magic bytes detected, fall back to extension
-        Err(e) => {
-            // Log the magic bytes detection failure but continue with extension-based
-            // detection
-            probe_audit!(
-                "magic_bytes_identify_failed",
-                path,
-                "magic number identification failed: {e}",
-                e = e,
-            );
-            None
-        }
-    };
-
-    let reader = image::ImageReader::open(path)?;
-
-    // Note: set_format and with_guessed_format are not available in new image crate
-    // API Format detection is now handled automatically during decode
-    Ok(reader)
+) -> std::io::Result<image::ImageReaderOptions<std::io::BufReader<std::fs::File>>> {
+    image::ImageReaderOptions::open(path)?.with_guessed_format()
 }
 
 fn image_dimensions_with_magic_bytes(path: &Path) -> std::result::Result<(u32, u32), String> {
@@ -394,12 +346,11 @@ pub fn analyze_image_with_cache(
     // Fast-path for JPEGs: Bypass the SQLite cache entirely because:
     // 1. JPEG analysis (DQT markers only) is faster than SQLite/Hashing overhead.
     // 2. We don't need pixel-level features for JPEG->JXL lossless transcoding.
-    let is_jpeg_hint = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .is_some_and(|e| e == "jpg" || e == "jpeg");
+    let is_jpeg = cache.is_some()
+        && crate::image::format_detect::detect_true_format(path)?
+            == crate::image::format_detect::FormatKind::Jpeg;
 
-    if is_jpeg_hint && cache.is_some() {
+    if is_jpeg {
         match analyze_image_internal(path) {
             Ok(mut analysis) => {
                 crate::media_conversion_gate::reconcile_analysis_animation_flag(
@@ -561,20 +512,18 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         use image::Limits;
         let mut limits = Limits::default();
         limits.max_alloc = Some(crate::constants::IMAGE_DECODE_MAX_ALLOC_BYTES);
-        let _ = reader.set_limits(limits);
+        reader.limits(limits);
     }
 
-    let (img, _metadata) = reader
-        .decode()
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {e}")))?;
-
-    // Format detection - use extension as fallback since infer was used earlier
-    let format = image::ImageFormat::from_path(path).map_err(|_| {
+    let format = reader.format().ok_or_else(|| {
         ImgQualityError::image_not_supported(format!(
-            "Could not detect format for {}",
+            "Could not detect content format for {}",
             path.display()
         ))
     })?;
+    let img = reader
+        .decode()
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {e}")))?;
     let format_str = format_to_string(format);
 
     let mut extension_mismatch = false;
@@ -1459,8 +1408,8 @@ fn extract_universal_physics_and_perception(
 ) -> Result<(Visual, Option<Vec<f32>>, Option<f64>)> {
     // Attempt 1: Native decode (fastest, most accurate)
     match open_image_reader_with_magic_bytes(path) {
-        Ok(mut reader) => match reader.decode() {
-            Ok((img, _)) => {
+        Ok(reader) => match reader.decode() {
+            Ok(img) => {
                 return Ok((
                     extract_visual_perception(&img),
                     Some(crate::real_physics::extract_image_physics_225(&img)),
@@ -1595,32 +1544,14 @@ fn is_animated_format(path: &Path, format: ImageFormat) -> Result<bool> {
 }
 
 fn check_png_animation(path: &Path) -> Result<bool> {
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+    )
+    .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
     let bytes = std::fs::read(path)?;
-
-    // Stage 1: Structural Walk (Official Spec)
-    let (structural_is_animated, structural_count) =
-        crate::image_detection::parse_apng_frames(&bytes);
-    if structural_is_animated && structural_count > 1 {
-        return Ok(true);
-    }
-
-    // Stage 2: Feature Scan (Loose Bitstream Search)
-    // Scan for acTL [61 63 54 4C] or fcTL [66 63 54 4C] markers
-    let apng_actl_found = bytes.windows(4).any(|w| w == b"acTL");
-    let apng_fctl_detected = bytes.windows(4).any(|w| w == b"fcTL");
-
-    if (apng_actl_found || apng_fctl_detected) && !structural_is_animated {
-        // [Disagreement] Deep Internal Validation
-        if deep_research_png_animation(&bytes) {
-            crate::log_detail!(
-                &crate::infra::static_logs::messages::MSG_ANALYZER_APNG_DEEP_RESEARCH
-                    .replace("{}", &path.display().to_string())
-            );
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(crate::image::png_validation::parse_apng_animation(&bytes)?
+        .is_some_and(|info| info.frame_count > 1))
 }
 
 fn check_gif_animation(path: &Path) -> Result<bool> {
@@ -1684,34 +1615,7 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
-
-    // Stage 1: RIFF-structural frame counting (spec-compliant chunk walking).
-    // This is the authoritative count — trust it for both positive and negative
-    // results.
     let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes)?;
-    if structural_count > 1 {
-        return Ok(true);
-    }
-
-    // Stage 2: Feature Scanning — look for ANIM/ANMF fourcc in the RIFF stream.
-    // These are top-level RIFF chunks so a header-only scan is reliable here.
-    // If the RIFF traversal already counted 0 ANMF but a top-level ANIM exists,
-    // the file has an animation header with no frame payload; use ffprobe to
-    // settle.
-    let has_anim_chunk = bytes.windows(4).any(|w| w == b"ANIM");
-    if has_anim_chunk && structural_count <= 1 {
-        // Final fallback tie-breaker
-        if let Some(duration) = get_animation_duration(path)
-            && duration > crate::constants::NEGLIGIBLE_DURATION_F32
-        {
-            crate::log_detail!(
-                &crate::infra::static_logs::messages::MSG_ANALYZER_WEBP_JOINT_AUDIT
-                    .replace("{}", &path.display().to_string())
-            );
-            return Ok(true);
-        }
-    }
-
     Ok(structural_count > 1)
 }
 
@@ -1736,21 +1640,6 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
     confirmed > 1
 }
 
-/// Internal Deep Research: APNG
-/// Validates if fcTL/acTL markers are consistent.
-fn deep_research_png_animation(bytes: &[u8]) -> bool {
-    // APNG uses fcTL (Frame Control Chunk)
-    let mut confirmed_fctl = 0_i32;
-    let mut i = 8; // skip signature
-    while i + 8 < bytes.len() {
-        if bytes.get(i + 4..i + 8) == Some(b"fcTL") {
-            confirmed_fctl += 1_i32;
-        }
-        i += 1;
-    }
-    confirmed_fctl > 0 // Even 1 fcTL usually means it's an APNG (the first frame might have it)
-}
-
 /// Public entry for retrying animation duration (e.g. from main when
 /// `analysis.duration_secs` is None). Tries ffprobe, `ImageMagick`, WebP native
 /// parse, and GIF frame-count estimate.
@@ -1760,10 +1649,20 @@ pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
 }
 
 fn get_animation_duration(path: &Path) -> Option<f32> {
-    let ext_lower = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-    let ext = ext_lower.as_deref();
+    let format = match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => format,
+        Err(error) => {
+            probe_audit!(
+                "animation_duration_format_failed",
+                path,
+                "Animation duration format probe failed: {error}",
+                error = error,
+            );
+            return None;
+        }
+    };
 
-    if ext == Some("gif") {
+    if format == crate::image::format_detect::FormatKind::Gif {
         match crate::image_formats::gif::get_timing_stats(path) {
             Ok(Some(stats)) => {
                 return Some(crate::numeric_cast::f64_to_f32_lossy(stats.duration_secs));
@@ -1780,7 +1679,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if matches!(ext, Some("png" | "apng")) {
+    if format == crate::image::format_detect::FormatKind::Png {
         match std::fs::read(path) {
             Ok(data) => {
                 if let Some(stats) = crate::image_detection::apng_timing_stats_from_bytes(&data) {
@@ -1798,7 +1697,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if ext == Some("webp") {
+    if format == crate::image::format_detect::FormatKind::WebP {
         match std::fs::read(path) {
             Ok(data) => match crate::image_formats::webp::timing_stats_from_bytes(&data) {
                 Ok(Some(stats)) => {
@@ -1829,7 +1728,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 
     // Special handling for JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // Convert to temporary APNG first, then probe duration
-    if ext == Some("jxl") {
+    if format == crate::image::format_detect::FormatKind::Jxl {
         match try_jxl_via_apng(path) {
             Ok(duration) => final_duration = duration,
             Err(err) => {
@@ -1870,20 +1769,29 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         }
     }
 
-    if ext != Some("jxl")
+    if format != crate::image::format_detect::FormatKind::Jxl
         && final_duration.is_none()
         && let Some(duration) = try_imagemagick_identify(path)
     {
         final_duration = Some(duration);
     }
 
-    if ext == Some("webp") && final_duration.is_none() {
+    if format == crate::image::format_detect::FormatKind::WebP && final_duration.is_none() {
         match std::fs::read(path) {
-            Ok(data) => {
-                if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+            Ok(data) => match crate::image_formats::webp::duration_secs_from_bytes(&data) {
+                Ok(Some(secs)) => {
                     final_duration = Some(secs);
                 }
-            }
+                Ok(None) => {}
+                Err(error) => {
+                    probe_audit!(
+                        "webp_duration_parse_failed",
+                        path,
+                        "WebP duration parse failed: {error}",
+                        error = error,
+                    );
+                }
+            },
             Err(err) => {
                 probe_audit!(
                     "webp_duration_read_failed",
@@ -1923,7 +1831,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         return Some(d);
     }
 
-    if ext == Some("gif") {
+    if format == crate::image::format_detect::FormatKind::Gif {
         match try_get_frame_count(path) {
             Ok(Some(frame_count)) => {
                 if frame_count <= 1 {
@@ -2457,7 +2365,7 @@ fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
 
 fn check_webp_lossless(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
-    Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
+    crate::image_formats::webp::is_lossless_from_bytes(&bytes)
 }
 
 /// Returns `true` when `MFB_ENABLE_PIXEL_HEURISTIC` is set to a truthy value.

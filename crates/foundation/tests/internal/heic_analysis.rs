@@ -158,58 +158,148 @@ fn smoke_extract_xmp_from_heic_data() {
 
 #[test]
 fn smoke_find_box_payload_by_magic() {
-    let mut data = vec![0u8; 50];
     let magic = *b"test";
     let payload = b"hello";
-    let pos = 10;
-
-    // Size = 4 (size) + 4 (type) + 5 (payload) = 13
-    let size = 13u32.to_be_bytes();
-    data[pos - 4..pos].copy_from_slice(&size);
-    data[pos..pos + 4].copy_from_slice(&magic);
-    data[pos + 4..pos + 4 + payload.len()].copy_from_slice(payload);
+    let mut data = 13u32.to_be_bytes().to_vec();
+    data.extend_from_slice(&magic);
+    data.extend_from_slice(payload);
 
     let result = find_box_payload_by_magic(&data, magic).unwrap();
     assert_eq!(result, payload);
 
     // Test truncated box
-    let truncated_data = &data[0..pos + 2];
+    let truncated_data = &data[..10];
     assert!(find_box_payload_by_magic(truncated_data, magic).is_none());
 }
 
-#[test]
-fn smoke_detect_heic_is_lossless_simple_lossy() {
-    // 4:2:0 YUV is always lossy in HEVC
-    let mut data = vec![0u8; 100];
-    let hvcc_magic = *b"hvcC";
-    let pos = 20;
+/// Build a minimal, structurally valid ISOBMFF stream: `ftyp` box followed by
+/// an `hvcC` box carrying `payload`. The box walker parses from offset 0, so
+/// fixtures with leading garbage silently hide their hvcC box.
+fn synthetic_isobmff_with_hvccs(payloads: &[&[u8]]) -> Vec<u8> {
+    fn push_box(out: &mut Vec<u8>, box_type: [u8; 4], payload: &[u8]) {
+        let size = u32::try_from(payload.len() + 8).expect("box size fits u32");
+        out.extend_from_slice(&size.to_be_bytes());
+        out.extend_from_slice(&box_type);
+        out.extend_from_slice(payload);
+    }
 
+    let mut data = Vec::new();
+    push_box(&mut data, *b"ftyp", &[0, 0, 0, 0, b'h', b'e', b'i', b'c']);
+    for payload in payloads {
+        push_box(&mut data, *b"hvcC", payload);
+    }
+    data
+}
+
+fn synthetic_isobmff_with_hvcc(payload: &[u8]) -> Vec<u8> {
+    synthetic_isobmff_with_hvccs(&[payload])
+}
+
+#[test]
+fn smoke_classify_heic_compression_main_420_is_lossy() {
+    // 4:2:0 YUV is always lossy in HEVC
     let mut hvcc_payload = vec![0u8; 20];
     hvcc_payload[1] = 1; // profile_idc = Main (lossy)
     hvcc_payload[16] = 1; // chroma_format_idc = 4:2:0 (lossy)
 
-    let size = (u32::try_from(hvcc_payload.len()).unwrap() + 8).to_be_bytes();
-    data[pos - 4..pos].copy_from_slice(&size);
-    data[pos..pos + 4].copy_from_slice(&hvcc_magic);
-    data[pos + 4..pos + 4 + hvcc_payload.len()].copy_from_slice(&hvcc_payload);
-
+    let data = synthetic_isobmff_with_hvcc(&hvcc_payload);
     let path = std::path::Path::new("test.heic");
-    assert!(!detect_heic_is_lossless(&data, path).unwrap());
+    assert_eq!(
+        classify_heic_compression(&data, path).unwrap(),
+        crate::image_detection::CompressionType::Lossy
+    );
 }
 
 #[test]
-fn test_control_group_lossless_lossy() {
-    let lossless_path = std::path::Path::new("/tmp/test_lossless.heic");
-    let lossy_path = std::path::Path::new("/tmp/test_lossy.heic");
-    if lossless_path.exists() && lossy_path.exists() {
-        let lossless_data = std::fs::read(lossless_path).unwrap();
-        let lossy_data = std::fs::read(lossy_path).unwrap();
-        
-        let lossless_res = detect_heic_is_lossless(&lossless_data, lossless_path);
-        let lossy_res = detect_heic_is_lossless(&lossy_data, lossy_path);
-        
-        println!("Control group: lossless={lossless_res:?}, lossy={lossy_res:?}");
-        assert!(lossless_res.unwrap(), "Lossless HEIC failed detection");
-        assert!(!lossy_res.unwrap(), "Lossy HEIC failed detection");
-    }
+fn classify_heic_compression_reserved_profile_is_unknown_not_lossy() {
+    // profile_idc 5 is reserved by the HEVC spec: no evidence ladder applies.
+    // Must classify Unknown — never a fabricated "safe default lossy".
+    let mut hvcc_payload = vec![0u8; 20];
+    hvcc_payload[1] = 5; // reserved profile_idc
+    hvcc_payload[16] = 3; // chroma_format_idc = 4:4:4
+
+    let data = synthetic_isobmff_with_hvcc(&hvcc_payload);
+    assert_eq!(
+        classify_heic_compression(&data, std::path::Path::new("reserved.heic")).unwrap(),
+        crate::image_detection::CompressionType::Unknown
+    );
+}
+
+#[test]
+fn classify_heic_compression_rext_444_without_pps_is_unknown() {
+    // RExt + 4:4:4 but no parsable PPS arrays inside hvcC: insufficient
+    // evidence — Unknown, previously an error/lossy fabrication.
+    let mut hvcc_payload = vec![0u8; 23];
+    hvcc_payload[1] = 4; // profile_idc = RExt
+    hvcc_payload[16] = 3; // chroma_format_idc = 4:4:4
+    hvcc_payload[22] = 0; // num_nalu_arrays = 0 (no PPS evidence)
+
+    let data = synthetic_isobmff_with_hvcc(&hvcc_payload);
+    assert_eq!(
+        classify_heic_compression(&data, std::path::Path::new("nopps.heic")).unwrap(),
+        crate::image_detection::CompressionType::Unknown
+    );
+}
+
+#[test]
+fn classify_heic_compression_requires_every_codec_configuration_to_be_lossy() {
+    let mut lossy_420 = vec![0u8; 20];
+    lossy_420[1] = 1;
+    lossy_420[16] = 1;
+    let mut ambiguous_444 = vec![0u8; 23];
+    ambiguous_444[1] = 4;
+    ambiguous_444[16] = 3;
+
+    let mixed = synthetic_isobmff_with_hvccs(&[&lossy_420, &ambiguous_444]);
+    assert_eq!(
+        classify_heic_compression(&mixed, std::path::Path::new("mixed.heic")).unwrap(),
+        crate::image_detection::CompressionType::Unknown,
+        "a lossy thumbnail/auxiliary hvcC must not classify an ambiguous primary item"
+    );
+
+    let all_lossy = synthetic_isobmff_with_hvccs(&[&lossy_420, &lossy_420]);
+    assert_eq!(
+        classify_heic_compression(&all_lossy, std::path::Path::new("all-lossy.heic"))
+            .unwrap(),
+        crate::image_detection::CompressionType::Lossy
+    );
+}
+
+#[test]
+fn classify_heic_monochrome_is_not_subsampling_evidence() {
+    let mut hvcc_payload = vec![0u8; 23];
+    hvcc_payload[1] = 4; // RExt
+    hvcc_payload[16] = 0; // monochrome: no chroma samples to discard
+    hvcc_payload[22] = 0; // no PPS proof
+
+    let data = synthetic_isobmff_with_hvcc(&hvcc_payload);
+    assert_eq!(
+        classify_heic_compression(&data, std::path::Path::new("mono.heic")).unwrap(),
+        crate::image_detection::CompressionType::Unknown
+    );
+}
+
+#[test]
+fn classify_heic_compression_fails_closed_without_hvcc() {
+    let data = vec![0u8; 64]; // ISOBMFF-ish bytes with no hvcC box
+    let error = classify_heic_compression(&data, std::path::Path::new("no-hvcc.heic"))
+        .expect_err("missing hvcC must not fabricate a compression verdict");
+    assert!(
+        error.to_string().contains("no hvcC"),
+        "error should name the missing hvcC box: {error}"
+    );
+}
+
+#[test]
+fn classify_heic_compression_fails_closed_on_truncated_hvcc() {
+    // Structurally valid boxes, but the hvcC payload (12 bytes) is shorter
+    // than the 20 fixed HEVCDecoderConfigurationRecord fields parsed.
+    let data = synthetic_isobmff_with_hvcc(&[0u8; 12]);
+
+    let error = classify_heic_compression(&data, std::path::Path::new("short-hvcc.heic"))
+        .expect_err("truncated hvcC must not fabricate a compression verdict");
+    assert!(
+        error.to_string().contains("hvcC box is"),
+        "error should state the truncated hvcC length: {error}"
+    );
 }

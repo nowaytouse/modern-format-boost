@@ -20,6 +20,15 @@ use std::sync::OnceLock;
 
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
+const QUICKTIME_CONTAINER_DATE_TAGS: &[&str] = &[
+    "QuickTime:CreateDate",
+    "QuickTime:ModifyDate",
+    "QuickTime:TrackCreateDate",
+    "QuickTime:TrackModifyDate",
+    "QuickTime:MediaCreateDate",
+    "QuickTime:MediaModifyDate",
+];
+
 fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
 }
@@ -400,9 +409,9 @@ fn append_jxl_metadata_rehydrate_without_orientation_args(
     if copy_icc_profile {
         builder.arg("-ICC_Profile<ICC_Profile");
     }
+    // Loading MWG makes `-all:all` copy writable composite tags and synthesize
+    // XMP fields that were absent from the source; rehydrate physical tags only.
     builder
-        .arg("-use")
-        .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
         .quiet()
@@ -430,8 +439,6 @@ fn append_nuclear_repair_exiftool(builder: &mut crate::ExiftoolBuilder, src: &Pa
     append_source_metadata_copy_args(builder, src, dst_ext.eq_ignore_ascii_case("jxl"));
     builder
         .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE)
-        .arg("-use")
-        .arg("MWG")
         .arg("-q")
         .arg("-m");
 }
@@ -517,10 +524,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
         builder.arg("-ICC_Profile<ICC_Profile");
     }
 
-    // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile
+    // Copy physical source tags only. Loading MWG makes `-all:all` include
+    // writable composite tags and synthesizes metadata absent from the source.
+    // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile.
     builder
-        .arg("-use")
-        .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
         .quiet()
@@ -688,21 +695,11 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("windowsunicode=1")
         .arg("-api")
         .arg("LargeFileSupport=1")
-        .overwrite_original()
-        .arg(format!("-QuickTime:CreateDate={best_date}"))
-        .arg(format!("-QuickTime:ModifyDate={best_date}"))
-        .arg(format!("-QuickTime:TrackCreateDate={best_date}"))
-        .arg(format!("-QuickTime:TrackModifyDate={best_date}"))
-        .arg(format!("-QuickTime:MediaCreateDate={best_date}"))
-        .arg(format!("-QuickTime:MediaModifyDate={best_date}"))
-        // Also sync EXIF/XMP date fields for maximum compatibility
-        .arg(format!("-EXIF:DateTimeOriginal={best_date}"))
-        .arg(format!("-EXIF:CreateDate={best_date}"))
-        .arg(format!("-XMP:DateCreated={best_date}"))
-        .arg(format!("-XMP:CreateDate={best_date}"))
-        .quiet()
-        .ignore_minor()
-        .input(dst);
+        .overwrite_original();
+    for tag in QUICKTIME_CONTAINER_DATE_TAGS {
+        builder.arg(format!("-{tag}={best_date}"));
+    }
+    builder.quiet().ignore_minor().input(dst);
 
     let output = builder.build().output()?;
 
@@ -1266,6 +1263,14 @@ mod tests {
         assert!(
             out_date.starts_with("2023:01:01 12:00:00"),
             "QuickTime:CreateDate was not synced correctly. Got: {out_date}"
+        );
+        assert!(
+            exiftool_tag_value(&dst_path, "-XMP-photoshop:DateCreated").is_empty(),
+            "QuickTime compatibility sync must not synthesize XMP DateCreated"
+        );
+        assert!(
+            exiftool_tag_value(&dst_path, "-XMP-xmp:CreateDate").is_empty(),
+            "QuickTime compatibility sync must not synthesize XMP CreateDate"
         );
     }
 

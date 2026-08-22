@@ -1,126 +1,79 @@
 //! Shared JPEG XL effort selection policy.
 //!
 //! The policy is intentionally centralized so JPEG bitstream encode and
-//! direct JXL encode paths do not drift. Large inputs run measured candidate
-//! searches; small inputs stay fixed at e7 to avoid wasting encode time.
+//! direct JXL encode paths do not drift. Effort is an encoder policy, not a
+//! quality-search axis: every encode phase receives one policy-selected effort.
+//!
+//! ## Encoder tiers
+//! Only two tiers exist at the algorithm layer:
+//!   - Normal   → e7  (`ultimate = false`)
+//!   - Ultimate → e11 (`ultimate = true`)
+//!
+//! `archive` is a product mode, not a third encoder tier. Normalize it to the
+//! Ultimate tier here so individual encode paths cannot drift:
+//!
+//! ```rust,ignore
+//! encoder_effort_for_mode(ultimate, archive)
+//! ```
 
 use crate::constants;
-
-pub const JXL_EFFORT_SEARCH_THRESHOLD_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JxlEffortPlan {
     Single(u8),
-    Candidate(u8),
 }
 
 impl JxlEffortPlan {
     #[must_use]
     pub const fn effort(self) -> u8 {
         match self {
-            Self::Single(effort) | Self::Candidate(effort) => effort,
+            Self::Single(effort) => effort,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JxlEffortSearchKind {
+pub enum JxlEffortContext {
     DirectEncode,
     JpegLosslessTranscode,
 }
 
 #[must_use]
-pub const fn size_ge_1mib(file_size: u64) -> bool {
-    file_size >= JXL_EFFORT_SEARCH_THRESHOLD_BYTES
+pub const fn encoder_effort(ultimate: bool) -> u8 {
+    constants::jxl_effort_for_mode(ultimate)
 }
 
+/// Map product flags onto the two encoder tiers.
 #[must_use]
-pub const fn screening_effort(ultimate: bool, explore: bool) -> u8 {
-    if ultimate && explore {
-        constants::JXL_DEFAULT_EFFORT
-    } else {
-        constants::jxl_effort_for_mode(ultimate)
-    }
+pub const fn effective_ultimate(ultimate: bool, archive: bool) -> bool {
+    ultimate || archive
 }
 
+/// Resolve product flags and select one of the two encoder tiers.
 #[must_use]
-pub const fn encode_effort_for_size(ultimate: bool, explore: bool, file_size: u64) -> u8 {
-    if size_ge_1mib(file_size) {
-        screening_effort(ultimate, explore)
-    } else {
-        constants::JXL_DEFAULT_EFFORT
-    }
+pub const fn encoder_effort_for_mode(ultimate: bool, archive: bool) -> u8 {
+    encoder_effort(effective_ultimate(ultimate, archive))
 }
 
+/// Build the encoder-effort plan from product flags without exposing their
+/// normalization to every encode path.
 #[must_use]
-pub const fn direct_encode_effort_for_archive(archive: bool, ultimate: bool) -> u8 {
-    if archive {
-        constants::JXL_ULTIMATE_EFFORT
-    } else {
-        constants::jxl_effort_for_mode(ultimate)
-    }
-}
-
-fn push_unique(plan: &mut Vec<JxlEffortPlan>, effort: u8) {
-    if plan.iter().any(|item| item.effort() == effort) {
-        return;
-    }
-    plan.push(JxlEffortPlan::Candidate(effort));
-}
-
-#[must_use]
-pub const fn archive_effort(kind: JxlEffortSearchKind) -> u8 {
-    match kind {
-        JxlEffortSearchKind::DirectEncode => constants::JXL_ULTIMATE_EFFORT,
-        JxlEffortSearchKind::JpegLosslessTranscode => constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
-    }
-}
-
-#[must_use]
-pub fn archive_effort_search_plan(kind: JxlEffortSearchKind) -> Vec<JxlEffortPlan> {
-    vec![JxlEffortPlan::Single(archive_effort(kind))]
-}
-
-/// Build the measured effort-search plan.
-///
-/// Production policy skips e9. e11 is included by default only for JPEG
-/// bitstream/lossless exploration because encode remains materially faster
-/// than decoded-pixel encoding while still improving output size.
-#[must_use]
-pub fn effort_search_plan(
-    kind: JxlEffortSearchKind,
+pub fn effort_plan_for_mode(
+    kind: JxlEffortContext,
     ultimate: bool,
-    explore: bool,
-    file_size: u64,
-    allow_expert_options: bool,
+    archive: bool,
 ) -> Vec<JxlEffortPlan> {
-    let primary = encode_effort_for_size(ultimate, explore, file_size);
-    if !size_ge_1mib(file_size) {
-        return vec![JxlEffortPlan::Single(primary)];
-    }
+    effort_plan(kind, effective_ultimate(ultimate, archive))
+}
 
-    let mut plan = Vec::new();
-    push_unique(&mut plan, primary);
-
-    let candidates: &[u8] = match (kind, allow_expert_options) {
-        (JxlEffortSearchKind::DirectEncode, _) => &[
-            constants::JXL_DEFAULT_EFFORT,
-            constants::JXL_DEEP_EFFORT,
-            constants::JXL_ULTIMATE_EFFORT,
-        ],
-        (JxlEffortSearchKind::JpegLosslessTranscode, _) => &[
-            constants::JXL_DEFAULT_EFFORT,
-            constants::JXL_DEEP_EFFORT,
-            constants::JXL_ULTIMATE_EFFORT,
-            constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
-        ],
-    };
-
-    for &effort in candidates {
-        push_unique(&mut plan, effort);
-    }
-
-    plan
+/// Build the encoder-effort plan.
+///
+/// The returned vector intentionally contains one item. Quality exploration
+/// may vary distance, but it must not run extra encodes merely to rank effort
+/// levels by output size.
+#[must_use]
+pub fn effort_plan(_kind: JxlEffortContext, ultimate: bool) -> Vec<JxlEffortPlan> {
+    vec![JxlEffortPlan::Single(encoder_effort(ultimate))]
 }
 
 #[cfg(test)]
@@ -132,125 +85,60 @@ mod tests {
     }
 
     #[test]
-    fn small_inputs_are_fixed_e7_even_in_ultimate_mode() {
-        assert!(!size_ge_1mib(JXL_EFFORT_SEARCH_THRESHOLD_BYTES - 1));
+    fn normal_tier_produces_e7() {
+        assert_eq!(encoder_effort(false), constants::JXL_DEFAULT_EFFORT);
+        let plan = effort_plan(JxlEffortContext::DirectEncode, false);
+        assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
+        let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, false);
+        assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
+    }
+
+    #[test]
+    fn ultimate_tier_produces_e11() {
+        assert_eq!(encoder_effort(true), constants::JXL_ULTIMATE_EFFORT);
+        let plan = effort_plan(JxlEffortContext::DirectEncode, true);
+        assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
+        let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, true);
+        assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
+    }
+
+    #[test]
+    fn archive_normalizes_to_ultimate_in_policy() {
+        let cases = [
+            (false, false, false), // Normal
+            (false, true, true),   // Ultimate
+            (true, false, true),   // archive → Ultimate
+            (true, true, true),    // archive+ultimate → Ultimate
+        ];
+        for (archive, ultimate, expected_ultimate) in cases {
+            let effective = effective_ultimate(ultimate, archive);
+            assert_eq!(effective, expected_ultimate);
+            assert_eq!(
+                encoder_effort_for_mode(ultimate, archive),
+                encoder_effort(effective)
+            );
+        }
+    }
+
+    #[test]
+    fn effort_plan_produces_single_item() {
         assert_eq!(
-            effort_search_plan(
-                JxlEffortSearchKind::JpegLosslessTranscode,
-                true,
-                true,
-                JXL_EFFORT_SEARCH_THRESHOLD_BYTES - 1,
+            effort_plan(JxlEffortContext::DirectEncode, false).len(),
+            1,
+            "effort plan must always contain exactly one item"
+        );
+        assert_eq!(
+            effort_plan(JxlEffortContext::DirectEncode, true).len(),
+            1,
+            "effort plan must always contain exactly one item"
+        );
+        assert_eq!(
+            efforts(&effort_plan_for_mode(
+                JxlEffortContext::DirectEncode,
                 false,
-            ),
-            vec![JxlEffortPlan::Single(constants::JXL_DEFAULT_EFFORT)]
-        );
-    }
-
-    #[test]
-    fn direct_encode_large_inputs_use_shared_production_candidates_without_e9() {
-        let plan = effort_search_plan(
-            JxlEffortSearchKind::DirectEncode,
-            false,
-            false,
-            JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
-            false,
-        );
-        assert_eq!(
-            efforts(&plan),
-            vec![
-                constants::JXL_DEFAULT_EFFORT,
-                constants::JXL_DEEP_EFFORT,
-                constants::JXL_ULTIMATE_EFFORT,
-            ]
-        );
-        assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
-        // e11 is now both ULTIMATE and EXPERIMENTAL, already in plan as ULTIMATE
-    }
-
-    #[test]
-    fn jpeg_lossless_large_inputs_include_e11_by_default() {
-        let plan = effort_search_plan(
-            JxlEffortSearchKind::JpegLosslessTranscode,
-            false,
-            false,
-            JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
-            false,
-        );
-        // e11 is now both ULTIMATE and EXPERIMENTAL, plan deduplicates
-        assert_eq!(
-            efforts(&plan),
-            vec![
-                constants::JXL_DEFAULT_EFFORT,
-                constants::JXL_DEEP_EFFORT,
-                constants::JXL_ULTIMATE_EFFORT,
-            ]
-        );
-        assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
-    }
-
-    #[test]
-    fn jpeg_lossless_expert_flag_does_not_duplicate_default_e11_candidate() {
-        let plan = effort_search_plan(
-            JxlEffortSearchKind::JpegLosslessTranscode,
-            false,
-            false,
-            JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
-            true,
-        );
-        // e11 is now both ULTIMATE and EXPERIMENTAL, push_unique deduplicates
-        assert_eq!(
-            efforts(&plan),
-            vec![
-                constants::JXL_DEFAULT_EFFORT,
-                constants::JXL_DEEP_EFFORT,
-                constants::JXL_ULTIMATE_EFFORT,
-            ]
-        );
-        assert!(!efforts(&plan).contains(&constants::JXL_DISABLED_EFFORT));
-    }
-
-    #[test]
-    fn archive_mode_hard_overrides_jpeg_lossless_encode_to_e11() {
-        assert_eq!(
-            archive_effort_search_plan(JxlEffortSearchKind::JpegLosslessTranscode),
-            vec![JxlEffortPlan::Single(
-                constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
-            )]
-        );
-    }
-
-    #[test]
-    fn archive_mode_hard_overrides_direct_encode_to_e10() {
-        assert_eq!(
-            archive_effort_search_plan(JxlEffortSearchKind::DirectEncode),
-            vec![JxlEffortPlan::Single(constants::JXL_ULTIMATE_EFFORT)]
-        );
-    }
-
-    #[test]
-    fn archive_direct_encode_effort_uses_e11_without_requiring_ultimate() {
-        assert_eq!(direct_encode_effort_for_archive(false, false), 7);
-        assert_eq!(direct_encode_effort_for_archive(false, true), 11);
-        assert_eq!(direct_encode_effort_for_archive(true, false), 11);
-        assert_eq!(direct_encode_effort_for_archive(true, true), 11);
-    }
-
-    #[test]
-    fn ultimate_mode_keeps_primary_effort_first_then_shared_candidates() {
-        let plan = effort_search_plan(
-            JxlEffortSearchKind::DirectEncode,
-            true,
-            false,
-            JXL_EFFORT_SEARCH_THRESHOLD_BYTES,
-            false,
-        );
-        assert_eq!(
-            efforts(&plan),
-            vec![
-                constants::JXL_ULTIMATE_EFFORT,
-                constants::JXL_DEFAULT_EFFORT,
-                constants::JXL_DEEP_EFFORT,
-            ]
+                true,
+            )),
+            vec![constants::JXL_ULTIMATE_EFFORT]
         );
     }
 }

@@ -1140,15 +1140,14 @@ pub fn auto_convert_with_cache(
     // Internal judgment reconciliation:
     // If vid sees single-frame on a format that can be animated, re-check with image_detection
     // (which includes structural + penetration animation verification) before static isolation.
-    let content_codec_can_be_animated =
-        foundation::quality_matcher::SourceCodec::identify_by_content(input)
-            .map_err(|err| {
-                VidQualityError::ConversionError(format!(
-                    "Failed to identify source codec for {} during animation reconciliation: {err}",
-                    input.display()
-                ))
-            })?
-            .is_some_and(|codec| codec.can_be_animated());
+    let content_codec = foundation::quality_matcher::SourceCodec::identify_by_content(input)
+        .map_err(|err| {
+            VidQualityError::ConversionError(format!(
+                "Failed to identify source codec for {} during animation reconciliation: {err}",
+                input.display()
+            ))
+        })?;
+    let content_codec_can_be_animated = content_codec.is_some_and(|codec| codec.can_be_animated());
     if !static_image_forced
         && detection.frame_count.is_none_or(|fc| fc <= 1)
         && content_codec_can_be_animated
@@ -1404,8 +1403,8 @@ ignored: false,
     let stem = foundation::media_conversion_gate::output_stem_for_delivery(input);
     let target_ext = strategy.target.extension();
     let input_ext = foundation::media_conversion_gate::path_extension_label(input);
-    // GIF as source has no Apple compatibility issue; do not show "APPLE COMPAT FALLBACK" for GIF→video.
-    let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
+    // GIF as source has no Apple compatibility issue; use the already-sniffed codec, not its suffix.
+    let source_is_gif = content_codec == Some(foundation::quality_matcher::SourceCodec::Gif);
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext)
         || (config.apple_compat() && input_ext.eq_ignore_ascii_case("mov"))
@@ -1514,22 +1513,10 @@ ignored: false,
                 &convert_options_from_config(config),
             )?;
 
-            // Early exit for skipped results
-            if result.skipped {
-                return Ok(ConversionOutput {
-                    input_path: input.display().to_string(),
-                    output_path: String::new(),
-                    strategy,
-                    input_size: detection.file_size,
-                    output_size: 0,
-                    size_ratio: 1.0,
-                    success: result.success,
-                    message: result.message,
-                    final_crf: 0.0,
-                    exploration_attempts: 0,
-                    blake3: None,
-                    ignored: false,
-                });
+            if result.outcome() != foundation::conversion::Outcome::Converted {
+                return task_result_to_conversion_output(
+                    input, &detection, strategy, result, 0.0, 0, cache,
+                );
             }
 
             let output_size = result.output_size.ok_or_else(|| {
@@ -1811,17 +1798,6 @@ ignored: false,
             if !explore_result.pipeline_acceptable(config.match_quality(), config.explore_smaller())
                 && (config.match_quality() || config.explore_smaller())
             {
-                let pure_media_compressed =
-                    explore_result.output_pure_media_size < explore_result.input_pure_media_size;
-                let pure_media_size_ratio = if explore_result.input_pure_media_size > 0 {
-                    let ratio = Rational::from((
-                        explore_result.output_pure_media_size,
-                        explore_result.input_pure_media_size,
-                    ));
-                    ratio.to_f64()
-                } else {
-                    1.0_f64
-                };
                 let decision =
                     ExploreGateRejectionDecision::inspect_and_log(input, &explore_result);
                 decision.emit(input);
@@ -1830,10 +1806,10 @@ ignored: false,
                 if foundation::should_keep_apple_fallback_hevc_output(
                     foundation::AppleFallbackKeepRequest {
                         codec_str: detection.codec.as_str(),
-                        pure_media_size_ratio,
+                        input_pure_media_size: explore_result.input_pure_media_size,
+                        output_pure_media_size: explore_result.output_pure_media_size,
                         flags: foundation::AppleFallbackFlags {
                             outcome: foundation::AppleOutcomeFlags {
-                                pure_media_compressed,
                                 allow_size_tolerance: config.allow_size_tolerance(),
                             },
                             context: foundation::AppleContextFlags {
@@ -2163,17 +2139,6 @@ ignored: false,
         ));
     }
 
-    let pure_media_compressed =
-        verify_result.output_pure_media_size < verify_result.input_pure_media_size;
-    let pure_media_size_ratio = if verify_result.input_pure_media_size > 0 {
-        let ratio = Rational::from((
-            verify_result.output_pure_media_size,
-            verify_result.input_pure_media_size,
-        ));
-        ratio.to_f64()
-    } else {
-        1.0_f64
-    };
     let pure_media_within_tolerance = verify_result.pure_media_compressed;
 
     // --- require_compression phase: primary decision by exact video + audio packet payload. ---
@@ -2204,10 +2169,10 @@ ignored: false,
         if foundation::should_keep_apple_fallback_hevc_output(
             foundation::AppleFallbackKeepRequest {
                 codec_str: detection.codec.as_str(),
-                pure_media_size_ratio,
+                input_pure_media_size: verify_result.input_pure_media_size,
+                output_pure_media_size: verify_result.output_pure_media_size,
                 flags: foundation::AppleFallbackFlags {
                     outcome: foundation::AppleOutcomeFlags {
-                        pure_media_compressed,
                         allow_size_tolerance: config.allow_size_tolerance(),
                     },
                     context: foundation::AppleContextFlags {
@@ -2536,7 +2501,6 @@ fn execute_lossless(
     let input_arg = foundation::safe_path_arg(Path::new(&detection.file_path))
         .as_ref()
         .to_string();
-    let output_arg = foundation::safe_path_arg(output).as_ref().to_string();
     let ultimate =
         encoder_modes.contains(foundation::delivery_codec_strategy::EncoderModeFlags::ULTIMATE);
     let archive =
@@ -2593,12 +2557,9 @@ fn execute_lossless(
         "mkv",
     ));
 
-    args.push(output_arg);
-
-    let (status, stderr) = foundation::FfmpegBuilder::new()
-        .args(args)
-        .spawn()?
-        .wait_with_output()?;
+    let mut builder = foundation::FfmpegBuilder::new();
+    builder.args(args).output(output);
+    let (status, stderr) = builder.spawn()?.wait_with_output()?;
 
     if !status.success() {
         return Err(VidQualityError::FFmpegError {
@@ -3465,7 +3426,7 @@ mod tests {
             strategy,
         );
 
-        assert!(output.output_path.is_empty());
+        assert_eq!(output.output_path, "");
         assert_eq!(output.output_size, 0);
         assert_eq!(output.message, "Skipped: output was created concurrently");
     }
@@ -3523,7 +3484,7 @@ mod tests {
             build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None);
 
         assert!(requires_high_bit_depth_encode(&detection));
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3548,7 +3509,7 @@ mod tests {
 
         assert!(requires_high_bit_depth_encode(&detection));
         assert!(detection.is_hdr());
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3573,7 +3534,7 @@ mod tests {
 
         assert!(requires_high_bit_depth_encode(&detection));
         assert!(!detection.is_hdr());
-        assert!(hdr_x265_params.is_empty());
+        assert_eq!(hdr_x265_params, "");
         assert_eq!(
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
@@ -3599,7 +3560,7 @@ mod tests {
 
         let params = build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None);
 
-        assert!(params.is_empty());
+        assert_eq!(params, "");
     }
 
     #[test]
@@ -3920,9 +3881,9 @@ mod tests {
         };
 
         assert!(requires_high_bit_depth_encode(&detection));
-        assert!(
-            build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None)
-                .is_empty()
+        assert_eq!(
+            build_hevc_x265_extra_params(&detection, hdr_pix_fmt(&detection), None, None),
+            ""
         );
         assert_eq!(
             hdr_pix_fmt(&detection),

@@ -37,6 +37,10 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = crate::constants::WEBP_RATIO_SAMPLE_MAX_DIM;
+const LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES: usize = 512;
+const LOOP_INTENT_THUMBNAIL_DIM: usize = 64;
+const LOOP_INTENT_THUMBNAIL_RGB_BYTES: usize =
+    LOOP_INTENT_THUMBNAIL_DIM * LOOP_INTENT_THUMBNAIL_DIM * 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilenameKind {
@@ -1028,35 +1032,37 @@ struct SignalFlags {
 #[derive(Debug, Default, Clone, Copy)]
 struct DerivedLoopSignals {
     flags: SignalFlags,
-    zero_motion_ratio: f64,
+    /// Share of valid motion magnitudes below the zero-motion threshold.
+    zero_motion_ratio: Option<f64>,
     /// Ratio of I-frames to total frames. GIF→MP4 encodes produce
     /// all-I-frame streams (ratio ≈ 1.0); real video with GOP structure has
-    /// ratio ≈ 0.03–0.10.
-    iframe_ratio: f64,
+    /// ratio ≈ 0.03–0.10. `None` means frame-type evidence is absent.
+    iframe_ratio: Option<f64>,
     /// Average bytes per frame. GIF-class content typically has low
-    /// `bytes_per_frame` compared to real video content.
-    bytes_per_frame: f64,
+    /// `bytes_per_frame` compared to real video content. `None` means the
+    /// required size/frame-count evidence is absent or invalid.
+    bytes_per_frame: Option<f64>,
 }
 
 impl DerivedLoopSignals {
-    #[allow(clippy::manual_unwrap_or)]
     fn from_meta(meta: &LoopMeta) -> Self {
         let zero_motion_ratio = zero_motion_ratio(&meta.mv_magnitudes);
         let i_count = meta.frame_types.iter().filter(|&&c| c == 'I').count();
         let total = meta.frame_types.len();
         let iframe_ratio = if total > 0 {
-            crate::numeric_cast::usize_to_f64(i_count) / crate::numeric_cast::usize_to_f64(total)
+            Some(
+                crate::numeric_cast::usize_to_f64(i_count)
+                    / crate::numeric_cast::usize_to_f64(total),
+            )
         } else {
-            crate::constants::LOOP_INTENT_NEUTRAL_SCORE // neutral when no frame type data
+            None
         };
-        let bytes_per_frame = match crate::media_conversion_gate::loop_bytes_per_frame_optional(
+        let bytes_per_frame = crate::media_conversion_gate::loop_bytes_per_frame_optional(
             meta.file_size_bytes,
             meta.frame_count,
             "DerivedLoopSignals::from_meta",
-        ) {
-            Some(value) => value,
-            None => f64::NAN,
-        };
+        )
+        .filter(|value| value.is_finite() && *value > 0.0);
         let is_portrait = if let (Some(w), Some(h)) = (meta.width, meta.height)
             && w > 0
             && h > 0
@@ -1072,7 +1078,9 @@ impl DerivedLoopSignals {
                 motion: SignalMotionFlags {
                     scene_cut: detect_scene_cut(&meta.pkt_sizes),
                     localized_motion: meta.mv_magnitudes.len() >= 10
-                        && zero_motion_ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO,
+                        && zero_motion_ratio.is_some_and(|ratio| {
+                            ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_RATIO
+                        }),
                 },
                 content: SignalContentFlags {
                     has_audible_audio: crate::media_conversion_gate::loop_audible_audio_fail_closed(
@@ -1469,15 +1477,27 @@ fn tree_layer5_resolution_path(media: &str, outcome: &str) -> &'static str {
     }
 }
 
-fn zero_motion_ratio(mvs: &[f64]) -> f64 {
+fn zero_motion_ratio(mvs: &[f64]) -> Option<f64> {
     if mvs.is_empty() {
-        return 0.0;
+        return None;
+    }
+    if mvs.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        tracing::warn!(
+            target: "mfb.algorithm",
+            pipeline = "loop_intent_signals",
+            branch = "zero_motion_invalid_sample",
+            "zero-motion ratio omitted because motion-vector magnitudes contain invalid values"
+        );
+        return None;
     }
     let zero_count = mvs
         .iter()
         .filter(|&&value| value.abs() < crate::constants::LOOP_INTENT_ZERO_MV_THRESHOLD)
         .count();
-    crate::numeric_cast::usize_to_f64(zero_count) / crate::numeric_cast::usize_to_f64(mvs.len())
+    Some(
+        crate::numeric_cast::usize_to_f64(zero_count)
+            / crate::numeric_cast::usize_to_f64(mvs.len()),
+    )
 }
 
 fn is_near_16_by_9(width: Option<u32>, height: Option<u32>) -> bool {
@@ -1491,24 +1511,25 @@ fn is_near_16_by_9(width: Option<u32>, height: Option<u32>) -> bool {
         < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
 }
 
-fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
+fn loop_count_zero_bonus(meta: &LoopMeta) -> Option<f64> {
     match meta.tier() {
         Some(DurationTier::UltraShort | DurationTier::Short) => {
-            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MAX)
         }
-        Some(DurationTier::MediumLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX
-            .mul_add(
+        Some(DurationTier::MediumLong) => {
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-            ),
+            ))
+        }
         Some(DurationTier::Long | DurationTier::VeryLong) => {
-            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
+            Some(crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
                 -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG,
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
-            )
+            ))
         }
-        Some(DurationTier::DefinitivelyLong) => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
-        None => f64::NAN,
+        Some(DurationTier::DefinitivelyLong) => Some(crate::constants::LOOP_COUNT_ZERO_BONUS_MIN),
+        None => None,
     }
 }
 
@@ -1896,20 +1917,18 @@ impl<'a> StructuralSignalScorer<'a> {
     }
 
     fn apply_iframe_ratio_signal(&mut self) {
-        if (self.derived.iframe_ratio - 0.5).abs() <= 0.01_f64 {
+        let Some(iframe_ratio) = self.derived.iframe_ratio else {
             return;
-        }
+        };
 
-        if self.derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH {
-            let strength = ((self.derived.iframe_ratio
-                - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH)
+        if iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH {
+            let strength = ((iframe_ratio - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH)
                 / (1.0 - crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH))
                 .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             self.log_odds
                 .add(strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
-        } else if self.derived.iframe_ratio <= crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW {
-            let strength = ((crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW
-                - self.derived.iframe_ratio)
+        } else if iframe_ratio <= crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW {
+            let strength = ((crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW - iframe_ratio)
                 / crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW)
                 .clamp(crate::constants::LOOP_INTENT_SIGNAL_STRENGTH_MIN, 1.0);
             self.log_odds
@@ -1918,11 +1937,11 @@ impl<'a> StructuralSignalScorer<'a> {
     }
 
     fn apply_bytes_per_frame_signal(&mut self) {
-        if !self.derived.bytes_per_frame.is_finite() || self.derived.bytes_per_frame <= 0.0_f64 {
+        let Some(bytes_per_frame) = self.derived.bytes_per_frame else {
             return;
-        }
+        };
 
-        let bpf_z = self.thresholds.file_size_z(self.derived.bytes_per_frame);
+        let bpf_z = self.thresholds.file_size_z(bytes_per_frame);
         if bpf_z <= -crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD {
             let strength = ((-bpf_z - crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
                 / crate::constants::LOOP_INTENT_BPF_Z_THRESHOLD)
@@ -1963,7 +1982,11 @@ impl<'a> StructuralSignalScorer<'a> {
         if is_near_16_by_9(self.meta.width, self.meta.height) {
             count += 1;
         }
-        if self.derived.iframe_ratio < crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW_VETO {
+        if self
+            .derived
+            .iframe_ratio
+            .is_some_and(|ratio| ratio < crate::constants::LOOP_INTENT_IFRAME_RATIO_LOW_VETO)
+        {
             count += 1;
         }
         count
@@ -1981,7 +2004,11 @@ impl<'a> StructuralSignalScorer<'a> {
         {
             count += 1;
         }
-        if self.derived.iframe_ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH_VETO {
+        if self
+            .derived
+            .iframe_ratio
+            .is_some_and(|ratio| ratio >= crate::constants::LOOP_INTENT_IFRAME_RATIO_HIGH_VETO)
+        {
             count += 1;
         }
         if self.loop_closure_bonus_signal() {
@@ -2133,9 +2160,10 @@ impl<'a> WeakHeuristicScorer<'a> {
             0.0_f64
         };
         self.log_odds.add(
-            (crate::constants::SHORT_CLIP_MIN_BIAS
-                + headroom * crate::constants::SHORT_CLIP_HEADROOM_MAX
-                + format_bonus
+            (headroom.mul_add(
+                crate::constants::SHORT_CLIP_HEADROOM_MAX,
+                crate::constants::SHORT_CLIP_MIN_BIAS,
+            ) + format_bonus
                 + cadence_bonus)
                 * crate::constants::SHORT_CLIP_PRIOR_LOG_ODDS,
         );
@@ -2216,8 +2244,9 @@ impl<'a> WeakHeuristicScorer<'a> {
         );
 
         if self.derived.flags.motion.localized_motion
-            || self.derived.zero_motion_ratio
-                > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
+            || self.derived.zero_motion_ratio.is_some_and(|ratio| {
+                ratio > crate::constants::LOOP_INTENT_ZERO_MOTION_HIGH_THRESHOLD
+            })
         {
             self.log_odds.add(LOCALIZED_MOTION_POSITIVE_LOG_ODDS);
         }
@@ -2945,8 +2974,7 @@ fn evaluate_image_tree(
     // duration approaches the long-veto boundary. Physical signals are NOT
     // affected.
     if meta.loop_count == Some(0) {
-        let bonus = loop_count_zero_bonus(meta, thresholds);
-        if bonus.is_finite() {
+        if let Some(bonus) = loop_count_zero_bonus(meta) {
             log_odds.add(bonus * metadata_trust);
         }
     } else if meta.loop_count == Some(1) {
@@ -3091,8 +3119,7 @@ fn evaluate_video_tree(
     // boundary (15s), preventing forged metadata from overcoming the Long-tier bias
     // without genuine physical loop evidence in Layers 3–5.
     if meta.loop_count == Some(0) {
-        let bonus = loop_count_zero_bonus(meta, thresholds);
-        if bonus.is_finite() {
+        if let Some(bonus) = loop_count_zero_bonus(meta) {
             log_odds.add(bonus * metadata_trust);
         }
     } else if meta.loop_count == Some(1) {
@@ -3280,7 +3307,11 @@ fn logistic_regression_fusion(
 
     let score = density_signal.mul_add(
         LAYER6_LR_W_DENSITY,
-        (logit(knn_prob) * LAYER6_LR_W_KNN) + (logit(tree_prob) * LAYER6_LR_W_TREE),
+        f64::mul_add(
+            logit(tree_prob),
+            LAYER6_LR_W_TREE,
+            logit(knn_prob) * LAYER6_LR_W_KNN,
+        ),
     ) + LAYER6_LR_BIAS;
 
     // Apply sigmoid once to convert the log-odds-weighted sum back to probability
@@ -4417,16 +4448,21 @@ impl<'a> LoopAssessmentSession<'a> {
             }
             Verdict::Uncertain(reason) => {
                 self.set_resolution_path("tree_uncertain");
+                let knn_enabled = crate::algorithm_runtime::loop_intent_layer6_knn_enabled();
                 ui_stderr::line(
                     "🔭",
                     symbols::plain::TREE_UNCERTAIN,
                     format!(
-                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — falling back \
-                         to Layer 6 KNN..."
+                        "Tree uncertain ({reason}) [prob={tree_probability_label}] — {}",
+                        if knn_enabled {
+                            "falling back to explicitly enabled Layer 6 KNN..."
+                        } else {
+                            "using deterministic arbitration (Layer 6 KNN disabled)"
+                        }
                     ),
                 );
 
-                if !crate::algorithm_runtime::loop_intent_layer6_knn_enabled() {
+                if !knn_enabled {
                     self.tracking.knn_lookup_succeeded = Some(false);
                     self.tracking.hnsw_lookup_branch =
                         Some("layer6_knn_disabled_by_runtime_gate".to_string());
@@ -5164,6 +5200,9 @@ fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
+    if !structural_signal_samples_are_valid(values, "frame_delay_cv") {
+        return None;
+    }
     let n = crate::numeric_cast::usize_to_f64(values.len());
 
     // SIMD mean calculation
@@ -5198,11 +5237,14 @@ fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
         + suffix.iter().map(|&v| (v - mean).powi(2)).sum::<f64>();
 
     let var = var_sum / n;
-    Some(var.sqrt() / mean)
+    finite_structural_signal_score(var.sqrt() / mean, "frame_delay_cv")
 }
 
 fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
+        return None;
+    }
+    if !structural_signal_samples_are_valid(values, "motion_gini") {
         return None;
     }
     let mut sorted = values.to_vec();
@@ -5223,7 +5265,36 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
         .enumerate()
         .map(|(i, &v)| crate::numeric_cast::usize_to_f64(2 * (i + 1)) * v)
         .sum();
-    Some((weighted_sum / (n * sum)) - (n + 1.0) / n)
+    finite_structural_signal_score((weighted_sum / (n * sum)) - (n + 1.0) / n, "motion_gini")
+}
+
+fn structural_signal_samples_are_valid(values: &[f64], signal: &'static str) -> bool {
+    let valid = values
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0);
+    if !valid {
+        tracing::warn!(
+            target: "mfb.algorithm",
+            pipeline = "loop_intent_signals",
+            signal = signal,
+            sample_count = values.len(),
+            "structural signal contains non-finite or negative evidence; omitting signal"
+        );
+    }
+    valid
+}
+
+fn finite_structural_signal_score(score: f64, signal: &'static str) -> Option<f64> {
+    if score.is_finite() {
+        return Some(score);
+    }
+    tracing::warn!(
+        target: "mfb.algorithm",
+        pipeline = "loop_intent_signals",
+        signal = signal,
+        "structural signal arithmetic produced a non-finite score; omitting signal"
+    );
+    None
 }
 
 fn fps_anomaly_score(fps: f64) -> f64 {
@@ -5517,7 +5588,9 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
 /// Detect localized motion (high concentration of motion in small area).
 /// Returns true if motion vectors suggest synthetic/sticker content.
 fn detect_localized_motion(mvs: &[f64]) -> bool {
-    mvs.len() >= 10 && zero_motion_ratio(mvs) > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO
+    mvs.len() >= 10
+        && zero_motion_ratio(mvs)
+            .is_some_and(|ratio| ratio > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO)
 }
 
 /// Extract first frame from video to temporary `PNG` for analysis.
@@ -5723,36 +5796,115 @@ fn sampled_webp_compression_ratio_from_image(
 /// instead of `ffprobe`.
 #[must_use]
 pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase),
-        Some(ext) if ext == "gif"
-    )
+    match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => format == crate::image::format_detect::FormatKind::Gif,
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "loop_intent_gif_format_failed",
+                path,
+                format!("failed to detect GIF content for loop-intent fast path: {error}"),
+            );
+            false
+        }
+    }
 }
 
-/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg`
-/// benchmarks.
+fn ydif_sample_stride(frame_count: Option<u64>) -> u64 {
+    let sample_limit = crate::numeric_cast::usize_to_u64(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+    match frame_count.filter(|&count| count > 0) {
+        Some(count) => count.div_ceil(sample_limit).max(1),
+        None => 1,
+    }
+}
+
+fn ydif_ffmpeg_filter(frame_count: Option<u64>) -> String {
+    let sample_stride = ydif_sample_stride(frame_count);
+    format!("signalstats,select='not(mod(n\\,{sample_stride}))',metadata=print")
+}
+
+fn parse_ydif_sample(token: &str) -> anyhow::Result<f64> {
+    let value = token.parse::<f64>().map_err(|err| {
+        anyhow::anyhow!("malformed loop_intent lavfi YDIF token {token:?}: {err}")
+    })?;
+    if !value.is_finite() || value < 0.0 {
+        anyhow::bail!(
+            "invalid loop_intent lavfi YDIF sample {token:?}: expected finite non-negative value"
+        );
+    }
+    Ok(value)
+}
+
+fn read_loop_intent_thumbnail_rgb(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to inspect loop-intent thumbnail {}: {err}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "loop-intent thumbnail is not a regular file: {}",
+        path.display()
+    );
+    let expected = crate::numeric_cast::usize_to_u64(LOOP_INTENT_THUMBNAIL_RGB_BYTES);
+    anyhow::ensure!(
+        metadata.len() == expected,
+        "loop-intent thumbnail payload size mismatch: expected {expected} bytes, got {} at {}",
+        metadata.len(),
+        path.display()
+    );
+    let bytes = std::fs::read(path).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to read loop-intent thumbnail {}: {err}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        bytes.len() == LOOP_INTENT_THUMBNAIL_RGB_BYTES,
+        "loop-intent thumbnail changed while reading: expected {} bytes, got {} at {}",
+        LOOP_INTENT_THUMBNAIL_RGB_BYTES,
+        bytes.len(),
+        path.display()
+    );
+    Ok(bytes)
+}
+
+/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg` benchmarks.
+///
+/// `YDIF` is sampled across the full declared timeline and bounded
+/// to prevent long or malformed media from producing unbounded diagnostic
+/// output.
 ///
 /// # Errors
-/// Returns an error if the `FFmpeg` command fails or the output cannot be
-/// parsed. # Panics
-///
-/// Panics if the `FFmpeg` output contains malformed UTF-8 or if internal signal
-/// statistics parsing fails unexpectedly.
+/// Returns an error if `FFmpeg` fails, exceeds its deadline, emits more than the
+/// bounded sample budget, or returns malformed/non-finite signal data.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
-    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+    let known_frame_count = meta
+        .real_frame_count
+        .filter(|&count| count > 0)
+        .or_else(|| meta.frame_count.filter(|&count| count > 0));
+    let filter = ydif_ffmpeg_filter(known_frame_count);
+    let mut command = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
+        .frames_v(crate::numeric_cast::usize_to_u32_sat(
+            LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES,
+        ))
         .arg("-vf")
-        .arg("signalstats,metadata=print")
+        .arg(filter)
         .format("null")
         .output_pipe()
-        .build()
-        .output()?;
+        .build();
+    let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
+        .wait_liveness_timeout(
+            crate::ffmpeg_process::ffmpeg_timeout(),
+            crate::process_runner::video_process_hard_timeout(),
+            "loop intent YDIF sampling",
+        )?
+        .check_loud("loop intent YDIF sampling")?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut ydif_values = Vec::new();
+    let mut ydif_values = Vec::with_capacity(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+    let stderr = &output.stderr;
     for line in stderr.lines() {
         if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
             let tail = crate::media_conversion_gate::utf8_suffix_or_empty(
@@ -5764,65 +5916,63 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
                 tail,
                 "loop_intent lavfi YDIF",
             );
-            match token.parse::<f64>() {
-                Ok(val) => ydif_values.push(val),
-                Err(err) => {
-                    anyhow::bail!("malformed loop_intent lavfi YDIF token {token:?}: {err}");
-                }
+            if ydif_values.len() >= LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES {
+                anyhow::bail!(
+                    "loop_intent lavfi YDIF exceeded bounded sample budget of {LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES} frames"
+                );
             }
+            ydif_values.push(parse_ydif_sample(token)?);
         }
     }
     if !ydif_values.is_empty() {
-        meta.temporal_flatness = Some(temporal_flatness_score(&ydif_values));
+        meta.temporal_flatness = temporal_flatness_score(&ydif_values);
         if meta.block_skew.is_none() {
             meta.block_skew = block_skew_score_from_signal(&ydif_values);
         }
     }
 
-    // 2. Extract Palette Depth
-    let thumb_output = crate::ffmpeg_builder::FfmpegBuilder::new()
+    // 2. Extract Palette Depth. Write binary RGB to a private temporary file so
+    // the text-oriented managed process runner never decodes arbitrary pixels.
+    let thumbnail_temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+        "loop_intent_thumbnail",
+        "mfb-loop-thumbnail-",
+    )?;
+    let thumbnail_path = thumbnail_temp_dir.path().join("frame.rgb");
+    let scale_filter = format!("scale={LOOP_INTENT_THUMBNAIL_DIM}:{LOOP_INTENT_THUMBNAIL_DIM}");
+    let mut thumbnail_command = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
         .frames_v(1)
         .arg("-vf")
-        .arg("scale=64:64")
+        .arg(scale_filter)
         .format("rawvideo")
         .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
-        .output_pipe()
-        .build()
-        .output()?;
+        .overwrite()
+        .output(&thumbnail_path)
+        .build();
+    crate::process_runner::ManagedProcess::spawn_captured(&mut thumbnail_command)?
+        .wait_timeout(
+            crate::ffmpeg_process::ffmpeg_timeout(),
+            "loop intent RGB thumbnail extraction",
+        )?
+        .check_loud("loop intent RGB thumbnail extraction")?;
+    let thumbnail_rgb = read_loop_intent_thumbnail_rgb(&thumbnail_path)?;
 
-    if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
-        let mut quantized = std::collections::HashSet::new();
-        for chunk in thumb_output.stdout.as_chunks::<3>().0 {
-            let r = chunk
-                .first()
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse red channel"))?
-                >> 3_i32;
-            let g = chunk
-                .get(1)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse green channel"))?
-                >> 3_i32;
-            let b = chunk
-                .get(2)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse blue channel"))?
-                >> 3_i32;
-            quantized.insert((r, g, b));
-        }
-        meta.palette_depth = Some(palette_depth_score(quantized.len()));
-
-        // 3. Extract Real Physics (225-dimensional 15x15 luminance grid)
-        // Reuse the already decoded 64x64 raw RGB buffer to avoid extra FFmpeg/Decoding
-        // overhead
-        if let Some(img_buf) =
-            image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(64, 64, thumb_output.stdout)
-        {
-            let dynamic_img = image::DynamicImage::ImageRgb8(img_buf);
-            meta.physics_225 = Some(crate::real_physics::extract_image_physics_225(&dynamic_img));
-        }
+    let mut quantized = std::collections::HashSet::new();
+    for &[r, g, b] in thumbnail_rgb.as_chunks::<3>().0 {
+        quantized.insert((r >> 3_i32, g >> 3_i32, b >> 3_i32));
     }
+    meta.palette_depth = Some(palette_depth_score(quantized.len()));
+
+    // 3. Extract Real Physics (225-dimensional 15x15 luminance grid). Reuse
+    // the validated raw RGB frame to avoid another decode.
+    let img_buf = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(
+        crate::numeric_cast::usize_to_u32_sat(LOOP_INTENT_THUMBNAIL_DIM),
+        crate::numeric_cast::usize_to_u32_sat(LOOP_INTENT_THUMBNAIL_DIM),
+        thumbnail_rgb,
+    )
+    .ok_or_else(|| anyhow::anyhow!("validated loop-intent RGB thumbnail shape was rejected"))?;
+    let dynamic_img = image::DynamicImage::ImageRgb8(img_buf);
+    meta.physics_225 = Some(crate::real_physics::extract_image_physics_225(&dynamic_img));
     Ok(())
 }
 
@@ -5831,6 +5981,9 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
 fn block_skew_score_from_signal(values: &[f64]) -> Option<f64> {
     let n = values.len();
     if n < 3 {
+        return None;
+    }
+    if !structural_signal_samples_are_valid(values, "block_skew") {
         return None;
     }
     let n_f = crate::numeric_cast::usize_to_f64(n);
@@ -5851,21 +6004,26 @@ fn block_skew_score_from_signal(values: &[f64]) -> Option<f64> {
         .map(|&v| ((v - mean) / std).powi(3))
         .sum::<f64>()
         / n_f;
-    Some(skew.clamp(-10.0, 10.0))
+    finite_structural_signal_score(skew.clamp(-10.0, 10.0), "block_skew")
 }
 
-fn temporal_flatness_score(ydif_values: &[f64]) -> f64 {
+fn temporal_flatness_score(ydif_values: &[f64]) -> Option<f64> {
     if ydif_values.is_empty() {
-        return 0.5;
+        return None;
+    }
+    if !structural_signal_samples_are_valid(ydif_values, "temporal_flatness") {
+        return None;
     }
     let n = crate::numeric_cast::usize_to_f64(ydif_values.len());
     let mean = ydif_values.iter().sum::<f64>() / n;
-    if mean < 1e-6_f64 {
-        return 1.0;
-    }
-    let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
-    let std = variance.sqrt();
-    1.0 / (1.0 + std / (mean + 1e-6))
+    let score = if mean < 1e-6_f64 {
+        1.0
+    } else {
+        let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
+        let std = variance.sqrt();
+        1.0 / (1.0 + std / (mean + 1e-6))
+    };
+    finite_structural_signal_score(score, "temporal_flatness")
 }
 
 fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
@@ -5925,6 +6083,9 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
     if n < 6 {
         return None;
     }
+    if !structural_signal_samples_are_valid(mv_magnitudes, "motion_periodicity") {
+        return None;
+    }
 
     let mean = mv_magnitudes.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(n);
     let variance = mv_magnitudes
@@ -5964,18 +6125,22 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         .sum();
     let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
 
-    Some(
+    finite_structural_signal_score(
         f64::midpoint(
             autocorr_sum / crate::numeric_cast::usize_to_f64(valid_lags.max(1)),
             1.0,
         )
         .clamp(0.0, 1.0),
+        "motion_periodicity",
     )
 }
 
 fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     let n = pts_deltas.len();
     if n < 3 {
+        return None;
+    }
+    if !structural_signal_samples_are_valid(pts_deltas, "temporal_jitter") {
         return None;
     }
 
@@ -6005,7 +6170,7 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / (crate::numeric_cast::usize_to_f64(n.saturating_sub(1).max(1)) * variance);
 
-    Some(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0))
+    finite_structural_signal_score(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0), "temporal_jitter")
 }
 
 fn support_relief_from_loop_support(
@@ -6136,6 +6301,18 @@ mod tests {
             filename_loop_intent_score: 0.5,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn gif_fast_path_uses_content_not_suffix() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let disguised_gif = temp.path().join("animation.mp4");
+        std::fs::write(&disguised_gif, b"GIF89a\x01\x00\x01\x00").expect("write GIF signature");
+        assert!(should_use_gif_fast_path(&disguised_gif));
+
+        let spoofed_gif = temp.path().join("still.gif");
+        std::fs::write(&spoofed_gif, b"\x89PNG\r\n\x1a\n").expect("write PNG signature");
+        assert!(!should_use_gif_fast_path(&spoofed_gif));
     }
 
     #[test]
@@ -7203,13 +7380,96 @@ mod tests {
     }
 
     #[test]
+    fn ydif_sampling_is_bounded_and_rejects_invalid_evidence() {
+        let sample_limit = crate::numeric_cast::usize_to_u64(LOOP_INTENT_YDIF_SAMPLE_MAX_FRAMES);
+        for frame_count in [1, sample_limit, sample_limit + 1, 10_000, u64::MAX] {
+            let stride = ydif_sample_stride(Some(frame_count));
+            assert!(frame_count.div_ceil(stride) <= sample_limit);
+        }
+        assert_eq!(ydif_sample_stride(None), 1);
+        assert_eq!(
+            ydif_ffmpeg_filter(Some(sample_limit + 1)),
+            "signalstats,select='not(mod(n\\,2))',metadata=print"
+        );
+        assert_eq!(parse_ydif_sample("1.25").expect("finite YDIF"), 1.25);
+        assert!(parse_ydif_sample("NaN").is_err());
+        assert!(parse_ydif_sample("inf").is_err());
+        assert!(parse_ydif_sample("-0.1").is_err());
+    }
+
+    #[test]
+    fn derived_numeric_evidence_never_uses_floating_point_sentinels() {
+        let missing = LoopMeta::default();
+        let derived = DerivedLoopSignals::from_meta(&missing);
+        assert_eq!(derived.zero_motion_ratio, None);
+        assert_eq!(derived.iframe_ratio, None);
+        assert_eq!(derived.bytes_per_frame, None);
+        assert_eq!(loop_count_zero_bonus(&missing), None);
+
+        let valid = LoopMeta {
+            duration_secs: Some(2.0),
+            frame_count: Some(10),
+            file_size_bytes: 1_000,
+            frame_types: vec!['I', 'P'],
+            mv_magnitudes: vec![0.0; 10],
+            ..LoopMeta::default()
+        };
+        let derived = DerivedLoopSignals::from_meta(&valid);
+        assert_eq!(derived.zero_motion_ratio, Some(1.0));
+        assert_eq!(derived.iframe_ratio, Some(0.5));
+        assert_eq!(derived.bytes_per_frame, Some(100.0));
+        assert!(loop_count_zero_bonus(&valid).is_some());
+
+        let invalid_motion = [0.0, f64::NAN];
+        assert_eq!(zero_motion_ratio(&invalid_motion), None);
+    }
+
+    #[test]
     fn structural_metrics_stay_unknown_when_inputs_are_missing() {
         assert_eq!(calculate_cv(&[]), None);
         assert_eq!(calculate_cv_f64(&[]), None);
         assert_eq!(calculate_gini_f64(&[]), None);
+        assert_eq!(temporal_flatness_score(&[]), None);
         assert_eq!(loop_closure_score(&[]), None);
         assert_eq!(motion_periodicity_score(&[]), None);
         assert_eq!(temporal_jitter_score(&[]), None);
+    }
+
+    #[test]
+    fn structural_metrics_reject_invalid_or_overflowing_samples() {
+        for samples in [
+            [1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [1.0, 2.0, -0.1, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [f64::MAX; 8],
+        ] {
+            assert_eq!(calculate_cv_f64(&samples), None);
+            assert_eq!(calculate_gini_f64(&samples), None);
+            assert_eq!(block_skew_score_from_signal(&samples), None);
+            assert_eq!(temporal_flatness_score(&samples), None);
+            assert_eq!(motion_periodicity_score(&samples), None);
+            assert_eq!(temporal_jitter_score(&samples), None);
+        }
+    }
+
+    #[test]
+    fn loop_intent_thumbnail_requires_one_exact_rgb_frame() {
+        let file = tempfile::NamedTempFile::new().expect("thumbnail fixture");
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES])
+            .expect("write exact thumbnail fixture");
+        assert_eq!(
+            read_loop_intent_thumbnail_rgb(file.path())
+                .expect("exact RGB frame")
+                .len(),
+            LOOP_INTENT_THUMBNAIL_RGB_BYTES
+        );
+
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES - 1])
+            .expect("write short thumbnail fixture");
+        assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
+
+        std::fs::write(file.path(), vec![0_u8; LOOP_INTENT_THUMBNAIL_RGB_BYTES + 1])
+            .expect("write oversized thumbnail fixture");
+        assert!(read_loop_intent_thumbnail_rgb(file.path()).is_err());
     }
 
     #[test]

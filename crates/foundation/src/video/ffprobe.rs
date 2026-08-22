@@ -676,7 +676,9 @@ fn resolve_probe_duration(
     // ANMF frame durations.
     if duration.is_none() && format_name.contains("webp") {
         let data = read_native_probe_bytes(path, "webp duration fallback")?;
-        if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+        if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data)
+            .map_err(|error| FFprobeError::ParseError(error.to_string()))?
+        {
             let native_dur = f64::from(native_dur);
             if native_dur > 0.0_f64 {
                 duration = Some(native_dur);
@@ -856,6 +858,7 @@ fn parse_video_stream_fields(
             if duration.is_none()
                 && let Some(duration_secs) =
                     crate::image_formats::webp::duration_secs_from_bytes(&data)
+                        .map_err(|error| FFprobeError::ParseError(error.to_string()))?
             {
                 let duration_secs = f64::from(duration_secs);
                 if duration_secs > 0.0_f64 {
@@ -887,23 +890,21 @@ fn parse_video_stream_fields(
         }
     }
 
-    // Root fix: APNG via `png_pipe` — trust `acTL` / `fcTL` when ffprobe omits
-    // frames (M126).
+    // Root fix: APNG via `png_pipe` — use validated APNG structure when ffprobe
+    // omits frames (M126).
     if format_name.contains("png")
         || format_name.contains("apng")
         || video_codec.eq_ignore_ascii_case("apng")
     {
         let data = read_native_probe_bytes(path, "apng native frame fallback")?;
-        let (is_animated, fc) = crate::image_detection::parse_apng_frames(&data);
-        if is_animated && fc > 1 {
-            let native_frames = u64::from(fc);
+        let info = crate::image::png_validation::parse_apng_animation(&data)
+            .map_err(|error| FFprobeError::ParseError(error.to_string()))?;
+        if let Some(info) = info.filter(|info| info.frame_count > 1) {
+            let native_frames = u64::from(info.frame_count);
             frame_count = Some(native_frames);
-            if duration.is_none()
-                && let Some(stats) = crate::image_detection::apng_timing_stats_from_bytes(&data)
-                && stats.duration_secs > 0.0_f64
-            {
+            if duration.is_none() && info.duration_secs > 0.0_f64 {
                 avg_frame_rate =
-                    Some(crate::numeric_cast::u64_to_f64(native_frames) / stats.duration_secs);
+                    Some(crate::numeric_cast::u64_to_f64(native_frames) / info.duration_secs);
             }
         }
     }

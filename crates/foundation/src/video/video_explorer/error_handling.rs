@@ -135,7 +135,7 @@ pub fn validate_quality_score(score: Option<f64>, target: f64, metric_name: &str
 /// # Errors
 /// Returns error if output size is not smaller than input size.
 pub fn validate_size_reduction(output_size: u64, input_size: u64) -> Result<()> {
-    if output_size < input_size {
+    if crate::exploration_policy::SizePolicy::StrictlySmaller.fits(output_size, input_size) {
         Ok(())
     } else {
         bail!(

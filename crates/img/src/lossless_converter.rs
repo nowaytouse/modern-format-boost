@@ -19,7 +19,8 @@ use foundation::ToolBuilder;
 use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
-use foundation::jxl_effort_policy::{JxlEffortPlan, JxlEffortSearchKind, size_ge_1mib};
+use foundation::jxl_effort_policy::JxlEffortPlan;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -60,84 +61,15 @@ fn format_output_size_ratio_pct_plain(input_size: u64, output_size: u64) -> Stri
         .map_or_else(|| "N/A".to_string(), |pct| format!("{pct:.1}"))
 }
 
-const fn jxl_encode_effort_for_size(
-    archive: bool,
-    ultimate: bool,
-    explore: bool,
-    file_size: u64,
-) -> u8 {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort(JxlEffortSearchKind::DirectEncode);
-    }
-    foundation::jxl_effort_policy::encode_effort_for_size(ultimate, explore, file_size)
-}
+const JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES: u64 = 1_048_576;
 
-#[derive(Debug, Clone, Copy)]
-struct JxlEffortCandidate {
-    effort: u8,
-    output_size: u64,
-}
-
-fn jxl_effort_search_plan(
-    archive: bool,
-    ultimate: bool,
-    explore: bool,
-    file_size: u64,
-) -> Vec<JxlEffortPlan> {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort_search_plan(
-            JxlEffortSearchKind::DirectEncode,
-        );
-    }
-    foundation::jxl_effort_policy::effort_search_plan(
-        JxlEffortSearchKind::DirectEncode,
-        ultimate,
-        explore,
-        file_size,
-        false,
-    )
-}
-
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-    struct JpegEffortModeFlags: u8 {
-        const ARCHIVE = 1 << 0;
-        const ULTIMATE = 1 << 1;
-        const EXPLORE = 1 << 2;
-        const ALLOW_EXPERT_OPTIONS = 1 << 3;
-    }
-}
-
-fn jpeg_effort_search_plan(flags: JpegEffortModeFlags, file_size: u64) -> Vec<JxlEffortPlan> {
-    if flags.contains(JpegEffortModeFlags::ARCHIVE) {
-        return foundation::jxl_effort_policy::archive_effort_search_plan(
-            JxlEffortSearchKind::JpegLosslessTranscode,
-        );
-    }
-    foundation::jxl_effort_policy::effort_search_plan(
-        JxlEffortSearchKind::JpegLosslessTranscode,
-        flags.contains(JpegEffortModeFlags::ULTIMATE),
-        flags.contains(JpegEffortModeFlags::EXPLORE),
-        file_size,
-        flags.contains(JpegEffortModeFlags::ALLOW_EXPERT_OPTIONS),
-    )
-}
-
-fn select_jxl_effort_winner(candidates: &[JxlEffortCandidate]) -> Option<usize> {
-    candidates
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, candidate)| (candidate.output_size, candidate.effort))
-        .map(|(idx, _)| idx)
-}
-
-const fn jxl_effort_from_plan_item(item: JxlEffortPlan) -> u8 {
-    item.effort()
+const fn input_size_allows_jxl_distance_exploration(file_size: u64) -> bool {
+    file_size >= JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES
 }
 
 fn format_jxl_effort_plan(plan: &[JxlEffortPlan]) -> String {
     plan.iter()
-        .map(|item| jxl_effort_from_plan_item(*item))
+        .map(|item| item.effort())
         .map(|effort| format!("e{effort}"))
         .collect::<Vec<_>>()
         .join(", ")
@@ -182,6 +114,18 @@ enum CommitOutcome {
     Ready,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PixelAudit {
+    RequiredAtCommit,
+    VerifiedByCaller,
+}
+
+impl PixelAudit {
+    const fn already_verified(self) -> bool {
+        matches!(self, Self::VerifiedByCaller)
+    }
+}
+
 fn commit_with_size_check(
     input: &Path,
     temp_output: &Path,
@@ -191,6 +135,7 @@ fn commit_with_size_check(
     options: &ConvertOptions,
     format_label: &str,
     extra_info: Option<&str>,
+    pixel_audit: PixelAudit,
 ) -> Result<CommitOutcome> {
     let input_label = foundation::media_conversion_gate::path_file_name_for_log(input);
 
@@ -204,12 +149,22 @@ fn commit_with_size_check(
         extra_info
     ));
 
-    if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
-        temp_output,
-        output,
-        options.force(),
-        Some(input),
-    )? {
+    let committed = if pixel_audit.already_verified() {
+        foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+            temp_output,
+            output,
+            options.force(),
+            Some(input),
+        )?
+    } else {
+        foundation::conversion::commit_temp_to_output_with_metadata(
+            temp_output,
+            output,
+            options.force(),
+            Some(input),
+        )?
+    };
+    if !committed {
         return Ok(CommitOutcome::Skipped(TaskResult::skipped_exists(
             input, output,
         )?));
@@ -254,7 +209,7 @@ fn commit_with_size_check(
             format_label,
         ) {
             skipped.input_size = input_size;
-            skipped.output_size = fs::metadata(output).ok().map(|metadata| metadata.len());
+            skipped.output_size = Some(fs::metadata(output)?.len());
             return Ok(CommitOutcome::Skipped(skipped));
         }
     }
@@ -287,6 +242,36 @@ fn finalize_with_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::RequiredAtCommit,
+    )? {
+        CommitOutcome::Skipped(task) => Ok(task),
+        CommitOutcome::Ready => {
+            finalize_task(input, output, input_size, format_label, extra_info, options)
+                .map_err(ImgQualityError::IoError)
+        }
+    }
+}
+
+fn finalize_with_verified_pixels_and_size_check(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+    format_label: &str,
+    extra_info: Option<&str>,
+) -> Result<TaskResult> {
+    match commit_with_size_check(
+        input,
+        temp_output,
+        output,
+        input_size,
+        output_size,
+        options,
+        format_label,
+        extra_info,
+        PixelAudit::VerifiedByCaller,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -315,6 +300,7 @@ fn finalize_with_exact_metadata_and_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::VerifiedByCaller,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -354,6 +340,7 @@ fn finalize_with_sidecars_and_size_check(
         options,
         format_label,
         extra_info,
+        PixelAudit::RequiredAtCommit,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -586,7 +573,7 @@ fn perform_icc_d50_retry(
     };
     let patched_icc_path = patched_icc.as_ref().map(tempfile::NamedTempFile::path);
 
-    let retry_out = run_direct_jxl_encode_effort_search(
+    let retry_out = run_direct_jxl_encode_with_policy(
         actual_input,
         temp_output,
         actual_dist,
@@ -634,6 +621,15 @@ fn try_pipeline_recovery_fallbacks(
     original_result: std::result::Result<std::process::Output, JxlDirectEncodeError>,
 ) -> FallbackResult {
     use std::process::Stdio;
+    if !options.allow_expert_options() {
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "cjxl_external_recovery_disabled",
+            input,
+            "cjxl failed; ImageMagick/FFmpeg recovery requires --allow_expert_options",
+        );
+        return FallbackResult::Exhausted(original_result);
+    }
+
     // Check if this is a grayscale ICC profile mismatch error
     // If so, use ImageMagick fallback which has proper retry logic with -strip
     if foundation::jxl_utils::is_grayscale_icc_cjxl_error(stderr) {
@@ -643,13 +639,13 @@ fn try_pipeline_recovery_fallbacks(
             "grayscale ICC mismatch; using ImageMagick fallback",
         );
 
-        if try_imagemagick_fallback_with_effort(
+        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
             input,
             temp_output,
             actual_dist,
+            actual_eff,
             max_threads,
             options.apple_compat(),
-            actual_eff,
         )
         .is_ok()
         {
@@ -668,7 +664,7 @@ fn try_pipeline_recovery_fallbacks(
                 cleanup_temp_output(temp_output, input);
                 return FallbackResult::Finalized(Err(e));
             }
-            match foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+            match foundation::conversion::commit_temp_to_output_with_metadata(
                 temp_output,
                 output,
                 options.force(),
@@ -947,13 +943,13 @@ fn try_pipeline_recovery_fallbacks(
                         );
                         log_detail!(&line);
                         log_detail!(" SECONDARY FALLBACK: Trying ImageMagick pipeline...",);
-                        if try_imagemagick_fallback_with_effort(
+                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                             input,
                             temp_output,
                             actual_dist,
+                            actual_eff,
                             max_threads,
                             options.apple_compat(),
-                            actual_eff,
                         )
                         .is_ok()
                         {
@@ -974,13 +970,13 @@ fn try_pipeline_recovery_fallbacks(
                         log_detail!(
                             "Pipeline Recovery: FFmpeg fallback exhausted; engaging ImageMagick secondary pre-decode stage",
                         );
-                        if try_imagemagick_fallback_with_effort(
+                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                             input,
                             temp_output,
                             actual_dist,
+                            actual_eff,
                             max_threads,
                             options.apple_compat(),
-                            actual_eff,
                         )
                         .is_ok()
                         {
@@ -1004,13 +1000,13 @@ fn try_pipeline_recovery_fallbacks(
                     log_detail!(&line);
                 }
                 log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-                if try_imagemagick_fallback_with_effort(
+                if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                     input,
                     temp_output,
                     actual_dist,
+                    actual_eff,
                     max_threads,
                     options.apple_compat(),
-                    actual_eff,
                 )
                 .is_ok()
                 {
@@ -1035,13 +1031,13 @@ fn try_pipeline_recovery_fallbacks(
             log_detail!("  Recommended Action: Install via Homebrew: 'brew install ffmpeg'");
 
             log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-            if try_imagemagick_fallback_with_effort(
+            if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
                 input,
                 temp_output,
                 actual_dist,
+                actual_eff,
                 max_threads,
                 options.apple_compat(),
-                actual_eff,
             )
             .is_ok()
             {
@@ -1059,12 +1055,98 @@ fn try_pipeline_recovery_fallbacks(
     }
 }
 
-fn resolved_jxl_distance(requested_distance: f32, ultimate: bool, is_genuine_png: bool) -> f32 {
-    if is_genuine_png || requested_distance <= 0.0 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JxlSourceSemantics {
+    JpegReconstruction,
+    ConfirmedLossless,
+    ModernLossy,
+    ConfirmedLossy,
+    Unknown,
+}
+
+const fn classify_jxl_source_semantics(
+    format: &foundation::image_detection::DetectedFormat,
+    compression: Option<foundation::image_detection::CompressionType>,
+) -> JxlSourceSemantics {
+    use foundation::image_detection::{CompressionType, DetectedFormat};
+
+    match format {
+        DetectedFormat::JPEG => JxlSourceSemantics::JpegReconstruction,
+        DetectedFormat::PNG => JxlSourceSemantics::ConfirmedLossless,
+        DetectedFormat::MP4
+        | DetectedFormat::MOV
+        | DetectedFormat::MKV
+        | DetectedFormat::WEBM
+        | DetectedFormat::Unknown(_) => JxlSourceSemantics::Unknown,
+        DetectedFormat::WebP
+        | DetectedFormat::JXL
+        | DetectedFormat::AVIF
+        | DetectedFormat::HEIC
+        | DetectedFormat::HEIF => match compression {
+            Some(CompressionType::Lossless) => JxlSourceSemantics::ConfirmedLossless,
+            Some(CompressionType::Lossy) => JxlSourceSemantics::ModernLossy,
+            // jbrd JXL is reversible to its original JPEG: same semantics as a
+            // JPEG source (reconstruction route), never a lossy-distance
+            // re-encode candidate.
+            Some(CompressionType::JpegReconstruction) => JxlSourceSemantics::JpegReconstruction,
+            // Unproven compression semantics never unlock lossy distance
+            // exploration; encode stays lossless (fail-closed).
+            Some(CompressionType::Unknown) | None => JxlSourceSemantics::Unknown,
+        },
+        _ => match compression {
+            Some(CompressionType::Lossless | CompressionType::JpegReconstruction) => {
+                JxlSourceSemantics::ConfirmedLossless
+            }
+            Some(CompressionType::Lossy) => JxlSourceSemantics::ConfirmedLossy,
+            Some(CompressionType::Unknown) | None => JxlSourceSemantics::Unknown,
+        },
+    }
+}
+
+fn detect_jxl_source_semantics(input: &Path) -> Result<JxlSourceSemantics> {
+    use foundation::image_detection::DetectedFormat;
+
+    let format = foundation::image_detection::detect_format_from_bytes(input)?;
+    let compression = match &format {
+        DetectedFormat::JPEG
+        | DetectedFormat::PNG
+        | DetectedFormat::MP4
+        | DetectedFormat::MOV
+        | DetectedFormat::MKV
+        | DetectedFormat::WEBM
+        | DetectedFormat::Unknown(_) => None,
+        _ => Some(foundation::image_detection::detect_compression(
+            &format, input,
+        )?),
+    };
+    Ok(classify_jxl_source_semantics(&format, compression))
+}
+
+const fn jxl_distance_exploration_allowed(source: JxlSourceSemantics) -> bool {
+    matches!(source, JxlSourceSemantics::ConfirmedLossy)
+}
+
+const fn resolved_jxl_distance_for_source(
+    requested_distance: f32,
+    ultimate: bool,
+    source: JxlSourceSemantics,
+) -> f32 {
+    if !matches!(source, JxlSourceSemantics::ConfirmedLossy) || requested_distance <= 0.0 {
         0.0
     } else {
         foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
     }
+}
+
+/// Returns true when JXL d=0 output does NOT satisfy the active size policy.
+/// Callers must resolve the active policy from `ConvertOptions::effective_allow_size_tolerance()`
+/// and `DEFAULT_SIZE_TOLERANCE_BYTES` — never hardcode `StrictlySmaller` here.
+const fn jxl_d0_misses_active_size_policy(
+    input_size: u64,
+    output_size: u64,
+    policy: foundation::exploration_policy::SizePolicy,
+) -> bool {
+    !policy.fits(output_size, input_size)
 }
 
 pub fn convert_to_jxl(
@@ -1084,14 +1166,9 @@ pub fn convert_to_jxl(
 
     let input_size = fs::metadata(input)?.len();
     let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
+    let source_semantics = detect_jxl_source_semantics(input)?;
 
-    if !options.force()
-        && !is_genuine_png
-        && input
-            .extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("png"))
-        && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
-    {
+    if should_skip_small_png(options.force(), is_genuine_png, input_size) {
         if options.verbose() {
             log_skip!(
                 &foundation::media_conversion_gate::path_file_name_for_log(input),
@@ -1157,32 +1234,35 @@ pub fn convert_to_jxl(
         )
     );
 
-    let actual_dist = resolved_jxl_distance(distance, options.ultimate(), is_genuine_png);
-    let is_extreme_explore = !is_genuine_png
-        && size_ge_1mib(input_size)
+    let exploration_requested = !is_genuine_png
+        && input_size_allows_jxl_distance_exploration(input_size)
         && options.ultimate()
         && options.explore()
         && !options.archive();
+    let is_extreme_explore =
+        exploration_requested && jxl_distance_exploration_allowed(source_semantics);
+    let actual_dist = if is_extreme_explore {
+        0.0
+    } else {
+        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)
+    };
     let effort_plan = if is_genuine_png {
         vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
             foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
         )]
     } else {
-        jxl_effort_search_plan(
-            options.archive(),
+        foundation::jxl_effort_policy::effort_plan_for_mode(
+            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
             options.ultimate(),
-            options.explore(),
-            input_size,
+            options.archive(),
         )
     };
     let actual_eff = if is_genuine_png {
         foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT
     } else {
-        jxl_encode_effort_for_size(
-            options.archive(),
+        foundation::jxl_effort_policy::encoder_effort_for_mode(
             options.ultimate(),
-            options.explore(),
-            input_size,
+            options.archive(),
         )
     };
 
@@ -1218,7 +1298,7 @@ pub fn convert_to_jxl(
         ));
     }
 
-    let result = run_direct_jxl_encode_effort_search(
+    let result = run_direct_jxl_encode_with_policy(
         &actual_input,
         &temp_output,
         actual_dist,
@@ -1286,6 +1366,7 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
+            let mut d0_missed_active_size_policy = false;
             let explore_result = if is_extreme_explore {
                 let input_payload_size = foundation::image::static_payload::measure(input)
                     .map_err(|error| {
@@ -1301,22 +1382,42 @@ pub fn convert_to_jxl(
                             "Cannot explore JXL without a pure candidate payload measurement: {error}"
                         ))
                     })?;
-                try_explore_ultimate_jxl_distance(
-                    input,
-                    &actual_input,
-                    &temp_output,
+                // Resolve active policy: respect effective_allow_size_tolerance which
+                // may veto tolerance even when the caller requested it.
+                let active_policy =
+                    foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+                        options.effective_allow_size_tolerance(),
+                        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+                    );
+                d0_missed_active_size_policy = jxl_d0_misses_active_size_policy(
                     input_payload_size,
                     output_payload_size,
-                    max_threads,
-                    options,
-                    icc_path,
-                    color_info,
-                )?
+                    active_policy,
+                );
+                if d0_missed_active_size_policy {
+                    try_explore_ultimate_jxl_distance(
+                        input,
+                        &actual_input,
+                        &temp_output,
+                        input_payload_size,
+                        output_payload_size,
+                        max_threads,
+                        options,
+                        icc_path,
+                        color_info,
+                    )?
+                } else {
+                    log_detail!(&format!(
+                        "JXL d=0 satisfies active size policy ({output_payload_size}B fits \
+                         {input_payload_size}B policy={active_policy:?}); quality exploration is unnecessary"
+                    ));
+                    None
+                }
             } else {
                 None
             };
 
-            if is_extreme_explore && distance > 0.0 && explore_result.is_none() {
+            if is_extreme_explore && d0_missed_active_size_policy && explore_result.is_none() {
                 if let Some(output_size) = try_jxl_pre_avif_fallback(
                     input,
                     &actual_input,
@@ -1363,13 +1464,14 @@ pub fn convert_to_jxl(
                 );
             }
 
+            let explored_optimized = explore_result.is_some();
             let (final_output_size, extra_info) = explore_result.map_or_else(
                 || (output_size, None),
                 |result| {
                     (
                         result.output_size,
                         Some(format!(
-                            "(screened e7, finalized e10 d={})",
+                            "(single-domain e{actual_eff} d={})",
                             foundation::jxl_explorer::format_distance_for_log(
                                 result.accepted_distance
                             )
@@ -1378,7 +1480,7 @@ pub fn convert_to_jxl(
                 },
             );
 
-            finalize_with_size_check(
+            let task = finalize_with_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -1387,7 +1489,14 @@ pub fn convert_to_jxl(
                 options,
                 LABEL_JXL,
                 extra_info.as_deref(),
-            )
+            )?;
+            Ok(if explored_optimized {
+                task.with_optimization_outcome(
+                    foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
+                )
+            } else {
+                task
+            })
         }
         Ok(output_cmd) => {
             cleanup_temp_output(&temp_output, input);
@@ -1405,6 +1514,10 @@ pub fn convert_to_jxl(
             Err(ImgQualityError::ConversionError(e))
         }
     }
+}
+
+const fn should_skip_small_png(force: bool, is_genuine_png: bool, input_size: u64) -> bool {
+    !force && is_genuine_png && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
 }
 
 /// Returns `(temp_output_path, output_size_bytes)` on success.
@@ -1425,6 +1538,7 @@ pub fn convert_to_jxl_probe(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
+    let source_semantics = detect_jxl_source_semantics(input)?;
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, None)?;
     let icc_temp = foundation::jxl_utils::extract_icc_profile(input);
     let icc_path = icc_temp.as_ref().map(tempfile::NamedTempFile::path);
@@ -1435,26 +1549,22 @@ pub fn convert_to_jxl_probe(
         foundation::thread_manager::get_optimal_threads()
     };
 
-    let actual_dist = if is_genuine_png {
-        0.0
-    } else {
-        foundation::constants::jxl_distance_for_mode(distance, options.ultimate())
-    };
+    let actual_dist =
+        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics);
 
     let effort_plan = if is_genuine_png {
         vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
             foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
         )]
     } else {
-        jxl_effort_search_plan(
-            options.archive(),
+        foundation::jxl_effort_policy::effort_plan_for_mode(
+            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
             options.ultimate(),
-            options.explore(),
-            fs::metadata(input)?.len(),
+            options.archive(),
         )
     };
 
-    let result = run_direct_jxl_encode_effort_search(
+    let result = run_direct_jxl_encode_with_policy(
         &actual_input,
         &temp_output,
         actual_dist,
@@ -1480,7 +1590,7 @@ pub fn convert_to_jxl_probe(
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
-                "cjxl failed at distance {distance}: {stderr}"
+                "cjxl failed at requested distance {distance} (effective {actual_dist}): {stderr}"
             )))
         }
         Err(e) => {
@@ -1660,30 +1770,103 @@ fn run_cjxl_jpeg_encode_with_effort(
     allow_jpeg_reconstruction: Option<u8>,
     effort: u8,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut builder = foundation::CjxlBuilder::new();
-    builder
-        .input(input)
-        .output(temp_output)
-        .lossless_jpeg(true)
-        .allow_expert_options(options.allow_expert_options())
-        .effort(effort)
-        .threads(max_threads)
-        .apple_compat(options.apple_compat());
+    let run = |selected_effort: u8,
+               allow_expert: bool,
+               apple_compat: bool|
+     -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+        let mut builder = foundation::CjxlBuilder::new();
+        builder
+            .input(input)
+            .output(temp_output)
+            .lossless_jpeg(true)
+            .allow_expert_options(allow_expert)
+            .effort(selected_effort)
+            .threads(max_threads)
+            .apple_compat(apple_compat);
 
-    if let Some(v) = allow_jpeg_reconstruction {
-        builder.allow_jpeg_reconstruction(v != 0);
+        if let Some(v) = allow_jpeg_reconstruction {
+            builder.allow_jpeg_reconstruction(v != 0);
+        }
+
+        let mut command = builder.build();
+        foundation::process_runner::ManagedProcess::spawn(&mut command)?.wait_liveness_timeout(
+            cjxl_timeout()?,
+            foundation::process_runner::image_process_hard_timeout(),
+            "cjxl JPEG lossless transcode",
+        )
+    };
+
+    let mut selected_effort = effort;
+    let mut allow_expert = options.allow_expert_options();
+    let mut apple_compat = options.apple_compat();
+    loop {
+        let output = run(selected_effort, allow_expert, apple_compat)?;
+        if output.status.success() {
+            return Ok(output);
+        }
+        // Lossless-JPEG e11 itself requires the expert switch in CjxlBuilder,
+        // even when the broader expert-options flag is off.
+        if cjxl_rejected_expert_option(selected_effort, &output.stderr) {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "cjxl_expert_compat_retry",
+                temp_output,
+            );
+            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                "cjxl_expert_option_unsupported",
+                input,
+                format!(
+                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
+                    foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
+                    foundation::constants::JXL_DEEP_EFFORT,
+                ),
+            );
+            selected_effort = foundation::constants::JXL_DEEP_EFFORT;
+            allow_expert = false;
+            continue;
+        }
+        if apple_compat && cjxl_rejected_apple_compat_option(&output.stderr) {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "cjxl_apple_compat_retry",
+                temp_output,
+            );
+            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                "cjxl_compress_boxes_option_unsupported",
+                input,
+                format!(
+                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction without the unsupported box-compression control",
+                    foundation::constants::JXL_ARG_COMPRESS_BOXES,
+                ),
+            );
+            apple_compat = false;
+            continue;
+        }
+        return Ok(output);
     }
-
-    let mut command = builder.build();
-    foundation::process_runner::ManagedProcess::spawn(&mut command)?.wait_liveness_timeout(
-        cjxl_timeout()?,
-        foundation::process_runner::image_process_hard_timeout(),
-        "cjxl JPEG lossless transcode",
-    )
 }
 
-fn jpeg_effort_stage_label(base: &str, effort: u8) -> String {
-    format!("{base} e{effort}")
+fn cjxl_rejected_expert_option(effort: u8, stderr: &str) -> bool {
+    if effort != foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT {
+        return false;
+    }
+    cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
+}
+
+fn cjxl_rejected_apple_compat_option(stderr: &str) -> bool {
+    cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_COMPRESS_BOXES)
+}
+
+fn cjxl_rejected_option(stderr: &str, option: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains(&option.to_ascii_lowercase())
+        && [
+            "unknown argument",
+            "unknown option",
+            "unrecognized argument",
+            "unrecognized option",
+            "invalid option",
+        ]
+        .iter()
+        .any(|needle| stderr.contains(needle))
 }
 
 pub const JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON: &str =
@@ -1696,6 +1879,7 @@ enum JpegLosslessTranscodePlanMode {
     StandardFallback,
 }
 
+#[allow(dead_code)]
 fn jpeg_aggressive_lossless_plan(enabled: bool) -> Vec<JxlEffortPlan> {
     if enabled {
         vec![JxlEffortPlan::Single(
@@ -1706,67 +1890,29 @@ fn jpeg_aggressive_lossless_plan(enabled: bool) -> Vec<JxlEffortPlan> {
     }
 }
 
-fn jpeg_standard_encode_fallback_plan(source_size: u64) -> Vec<JxlEffortPlan> {
-    if size_ge_1mib(source_size) {
-        vec![
-            JxlEffortPlan::Candidate(foundation::constants::JXL_DEFAULT_EFFORT),
-            JxlEffortPlan::Candidate(foundation::constants::JXL_DEEP_EFFORT),
-            JxlEffortPlan::Candidate(foundation::constants::JXL_ULTIMATE_EFFORT),
-        ]
-    } else {
-        vec![JxlEffortPlan::Single(
-            foundation::constants::JXL_DEFAULT_EFFORT,
-        )]
-    }
+#[allow(dead_code)]
+fn jpeg_standard_encode_fallback_plan() -> Vec<JxlEffortPlan> {
+    vec![JxlEffortPlan::Single(
+        foundation::constants::JXL_DEFAULT_EFFORT,
+    )]
 }
 
 fn jpeg_lossless_encode_plan(
     mode: JpegLosslessTranscodePlanMode,
     options: &ConvertOptions,
-    source_size: u64,
 ) -> Vec<JxlEffortPlan> {
     match mode {
-        JpegLosslessTranscodePlanMode::Policy => jpeg_effort_search_plan(
-            JpegEffortModeFlags::empty()
-                | if options.archive() {
-                    JpegEffortModeFlags::ARCHIVE
-                } else {
-                    JpegEffortModeFlags::empty()
-                }
-                | if options.ultimate() {
-                    JpegEffortModeFlags::ULTIMATE
-                } else {
-                    JpegEffortModeFlags::empty()
-                }
-                | if options.explore() {
-                    JpegEffortModeFlags::EXPLORE
-                } else {
-                    JpegEffortModeFlags::empty()
-                }
-                | if options.allow_expert_options() {
-                    JpegEffortModeFlags::ALLOW_EXPERT_OPTIONS
-                } else {
-                    JpegEffortModeFlags::empty()
-                },
-            source_size,
-        ),
-        JpegLosslessTranscodePlanMode::AggressiveE11 => {
-            if options.archive() {
-                foundation::jxl_effort_policy::archive_effort_search_plan(
-                    JxlEffortSearchKind::JpegLosslessTranscode,
-                )
-            } else {
-                jpeg_aggressive_lossless_plan(true)
-            }
+        JpegLosslessTranscodePlanMode::Policy | JpegLosslessTranscodePlanMode::StandardFallback => {
+            foundation::jxl_effort_policy::effort_plan_for_mode(
+                foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+                options.ultimate(),
+                options.archive(),
+            )
         }
-        JpegLosslessTranscodePlanMode::StandardFallback => {
-            if options.archive() {
-                foundation::jxl_effort_policy::archive_effort_search_plan(
-                    JxlEffortSearchKind::JpegLosslessTranscode,
-                )
-            } else {
-                jpeg_standard_encode_fallback_plan(source_size)
-            }
+        JpegLosslessTranscodePlanMode::AggressiveE11 => {
+            vec![JxlEffortPlan::Single(
+                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
+            )]
         }
     }
 }
@@ -1775,136 +1921,15 @@ const fn jpeg_aggressive_lossless_enabled(options: &ConvertOptions) -> bool {
     options.ultimate() || options.require_output_delivery()
 }
 
-fn run_cjxl_jpeg_encode_effort_search(
-    input: &Path,
-    temp_output: &Path,
-    options: &ConvertOptions,
-    max_threads: usize,
-    allow_jpeg_reconstruction: Option<u8>,
-    plan: &[JxlEffortPlan],
-) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let mut successes: Vec<(
-        JxlEffortCandidate,
-        PathBuf,
-        foundation::process_runner::ProcessOutput,
-    )> = Vec::new();
-    let mut failures: Vec<foundation::process_runner::ProcessOutput> = Vec::new();
-    let mut failure_summaries: Vec<String> = Vec::new();
-
-    for item in plan {
-        let effort = match item {
-            JxlEffortPlan::Single(effort) | JxlEffortPlan::Candidate(effort) => *effort,
-        };
-        let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)?;
-        let output = run_cjxl_jpeg_encode_with_effort(
-            input,
-            &candidate_output,
-            options,
-            max_threads,
-            allow_jpeg_reconstruction,
-            effort,
-        )?;
-
-        if output.status.success() {
-            if let Err(err) = verify_jxl_health(&candidate_output) {
-                failure_summaries.push(format!(
-                    "{}: output health verification failed: {err}",
-                    jpeg_effort_stage_label("JPEG lossless effort candidate", effort)
-                ));
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "jpeg_effort_candidate_health_failed",
-                    &candidate_output,
-                );
-                continue;
-            }
-            let output_size = foundation::image::static_payload::jxl(&candidate_output)
-                .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-            successes.push((
-                JxlEffortCandidate {
-                    effort,
-                    output_size,
-                },
-                candidate_output,
-                output,
-            ));
-        } else {
-            failure_summaries.push(cjxl_failure_summary(
-                &jpeg_effort_stage_label("JPEG lossless effort candidate", effort),
-                &output,
-            ));
-            failures.push(output);
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "jpeg_effort_candidate_failed",
-                &candidate_output,
-            );
-        }
-    }
-
-    if successes.is_empty() {
-        if let Some(mut failure) = failures.into_iter().next() {
-            let joined = failure_summaries.join("; ");
-            failure.stderr = format!(
-                "JPEG lossless effort exploration failed for every candidate: {joined}\n{}",
-                failure.stderr
-            );
-            return Ok(failure);
-        }
-        let joined = failure_summaries.join("; ");
-        anyhow::bail!("JPEG lossless effort exploration produced no valid candidate: {joined}");
-    }
-
-    let candidate_stats: Vec<JxlEffortCandidate> = successes
-        .iter()
-        .map(|(candidate, _, _)| *candidate)
-        .collect();
-    let winner_idx = select_jxl_effort_winner(&candidate_stats).ok_or_else(|| {
-        anyhow::anyhow!("JPEG lossless effort exploration had successes but no selectable winner")
-    })?;
-    let (winner, winner_path, winner_output) = successes.swap_remove(winner_idx);
-
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "jpeg_effort_winner_prepare",
-        temp_output,
-    );
-    std::fs::copy(&winner_path, temp_output).map_err(|err| {
-        anyhow::anyhow!(
-            "failed to copy JPEG effort winner e{} ({} bytes) from {} to {}: {err}",
-            winner.effort,
-            winner.output_size,
-            winner_path.display(),
-            temp_output.display()
-        )
-    })?;
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "jpeg_effort_winner_cleanup",
-        &winner_path,
-    );
-
-    for (_, path, _) in successes {
-        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-            "jpeg_effort_nonwinner_cleanup",
-            &path,
-        );
-    }
-
-    log_detail!(&format!(
-        "JPEG lossless effort exploration selected e{} ({} bytes)",
-        winner.effort, winner.output_size
-    ));
-
-    Ok(winner_output)
-}
-
 fn run_cjxl_jpeg_encode_with_plan_mode(
     input: &Path,
     temp_output: &Path,
     options: &ConvertOptions,
-    source_size: u64,
     max_threads: usize,
     allow_jpeg_reconstruction: Option<u8>,
     mode: JpegLosslessTranscodePlanMode,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    let plan = jpeg_lossless_encode_plan(mode, options, source_size);
+    let plan = jpeg_lossless_encode_plan(mode, options);
     match plan.as_slice() {
         [JxlEffortPlan::Single(effort)] => run_cjxl_jpeg_encode_with_effort(
             input,
@@ -1914,13 +1939,9 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
             allow_jpeg_reconstruction,
             *effort,
         ),
-        _ => run_cjxl_jpeg_encode_effort_search(
-            input,
-            temp_output,
-            options,
-            max_threads,
-            allow_jpeg_reconstruction,
-            &plan,
+        _ => anyhow::bail!(
+            "JPEG lossless encoder policy must select exactly one effort; got {} entries",
+            plan.len()
         ),
     }
 }
@@ -1989,7 +2010,6 @@ fn run_jbrd_retry_from_temp(
         candidate,
         temp_output,
         options,
-        input_size,
         max_threads,
         None,
         mode,
@@ -2081,7 +2101,6 @@ fn run_standard_jpeg_lossless_fallback(
         input,
         temp_output,
         options,
-        input_size,
         max_threads,
         None,
         JpegLosslessTranscodePlanMode::StandardFallback,
@@ -2144,7 +2163,6 @@ fn run_standard_jpeg_lossless_fallback(
         &source_to_use,
         temp_output,
         options,
-        input_size,
         max_threads,
         None,
         JpegLosslessTranscodePlanMode::StandardFallback,
@@ -2190,7 +2208,6 @@ fn run_standard_jpeg_lossless_fallback(
         &source_to_use,
         temp_output,
         options,
-        input_size,
         max_threads,
         Some(0),
         JpegLosslessTranscodePlanMode::StandardFallback,
@@ -2316,7 +2333,7 @@ fn commit_jpeg_to_jxl_success(
         })?
         .len();
     let final_options = jpeg_transcode_finalization_options(options, proof);
-    finalize_with_size_check(
+    finalize_with_verified_pixels_and_size_check(
         input,
         temp_output,
         output,
@@ -2584,7 +2601,6 @@ pub fn convert_jpeg_to_jxl(
         input,
         &temp_output,
         options,
-        input_size,
         max_threads,
         None,
         encode_plan_mode,
@@ -2662,7 +2678,6 @@ pub fn convert_jpeg_to_jxl(
             &source_to_use,
             &temp_output,
             options,
-            input_size,
             max_threads,
             None,
             encode_plan_mode,
@@ -2693,7 +2708,6 @@ pub fn convert_jpeg_to_jxl(
             &source_to_use,
             &temp_output,
             options,
-            input_size,
             max_threads,
             Some(0),
             encode_plan_mode,
@@ -2953,6 +2967,26 @@ impl AvifencMetadataRetryState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AvifencInputColorModel {
+    Grayscale,
+    Color,
+    Unknown,
+}
+
+fn detect_avif_input_color_model(input: &Path) -> AvifencInputColorModel {
+    let Ok(file) = std::fs::File::open(input) else {
+        return AvifencInputColorModel::Unknown;
+    };
+    match foundation::image_detection::parse_png_structure(file) {
+        Ok(info) if info.color_type == 0 || info.color_type == 4 => {
+            AvifencInputColorModel::Grayscale
+        }
+        Ok(_) => AvifencInputColorModel::Color,
+        Err(_) => AvifencInputColorModel::Unknown,
+    }
+}
+
 #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn build_avifenc_command(
     input: &Path,
@@ -2967,11 +3001,18 @@ fn build_avifenc_command(
         Some(configured_speed) => configured_speed,
         None => 0,
     };
-    builder
-        .speed(effective_speed)
-        .jobs("all")
-        .yuv("444")
-        .cicp("1/13/0");
+    builder.speed(effective_speed).jobs("all");
+    match detect_avif_input_color_model(input) {
+        AvifencInputColorModel::Grayscale => {
+            // For grayscale PNGs (color_type 0 or 4), let avifenc auto-select YUV400.
+            // libavif >= 1.3.0 prohibits YUV400 + Identity matrix (1/13/0) as non-conformant
+            // to AV1 spec, and forcing 444 + Identity on 1-channel grayscale PNG causes G-only
+            // decoding (R=0, B=0), producing a bright fluorescent-green artifact.
+        }
+        AvifencInputColorModel::Color | AvifencInputColorModel::Unknown => {
+            builder.yuv("444");
+        }
+    }
 
     if lossless {
         builder.lossless(true);
@@ -3363,7 +3404,7 @@ pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
                     "AVIF pixel equivalence failed: {e}"
                 )));
             }
-            finalize_with_size_check(
+            finalize_with_verified_pixels_and_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -3549,15 +3590,157 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
     }
 }
 
+/// Probe and fingerprint an AVIF candidate whose pixel proof must survive a
+/// later selection phase before commit.
+pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String)> {
+    let (temp_output, output_size) = convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        metadata_retry,
+        options,
+    )?;
+    let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output) {
+        Ok(hash) => hash,
+        Err(error) => {
+            cleanup_temp_output(&temp_output, source);
+            return Err(ImgQualityError::ConversionError(format!(
+                "AVIF verified candidate fingerprint failed at q={quality}: {error}"
+            )));
+        }
+    };
+    Ok((temp_output, output_size, content_blake3))
+}
+
+/// Probe a true-lossless AVIF candidate in a fixed speed domain and preserve
+/// its custody proof for later Meme Mode selection.
+pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
+    source: &Path,
+    encoder_input: &Path,
+    speed: u8,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String)> {
+    if let Err(error) = foundation::conversion::validate_input_file(source) {
+        return Err(ImgQualityError::ConversionError(error));
+    }
+    let output = get_output_path(source, EXT_AVIF, options)?;
+    let temp_output =
+        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|error| {
+            ImgQualityError::ConversionError(format!(
+                "lossless AVIF probe temp path failed for {}: {error}",
+                source.display()
+            ))
+        })?;
+    let result = run_avifenc_with_malformed_xmp_retry(
+        encoder_input,
+        &temp_output,
+        None,
+        true,
+        Some(speed),
+        avifenc_probe_timeout()?,
+        "official avifenc lossless Meme probe",
+        metadata_retry,
+    );
+    match result {
+        Ok(output) if output.status.success() => {
+            let output_size = match fs::metadata(&temp_output) {
+                Ok(metadata) => metadata.len(),
+                Err(error) => {
+                    cleanup_temp_output(&temp_output, source);
+                    return Err(ImgQualityError::IoError(error));
+                }
+            };
+            if let Err(error) =
+                foundation::quality_verifier_enhanced::verify_avif_health(&temp_output)
+            {
+                cleanup_temp_output(&temp_output, source);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "lossless AVIF probe health check failed: {error}"
+                )));
+            }
+            if let Err(error) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+                encoder_input,
+                &temp_output,
+            ) {
+                cleanup_temp_output(&temp_output, source);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "lossless AVIF probe pixel equivalence failed: {error}"
+                )));
+            }
+            let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output)
+            {
+                Ok(hash) => hash,
+                Err(error) => {
+                    cleanup_temp_output(&temp_output, source);
+                    return Err(ImgQualityError::ConversionError(format!(
+                        "lossless AVIF probe custody hash failed: {error}"
+                    )));
+                }
+            };
+            Ok((temp_output, output_size, content_blake3))
+        }
+        Ok(output) => {
+            cleanup_temp_output(&temp_output, source);
+            Err(ImgQualityError::ConversionError(format!(
+                "lossless AVIF Meme probe failed: {}",
+                output.stderr
+            )))
+        }
+        Err(error) => {
+            cleanup_temp_output(&temp_output, source);
+            Err(ImgQualityError::ConversionError(format!(
+                "lossless AVIF Meme probe execution failed: {error}"
+            )))
+        }
+    }
+}
+
+fn verify_avif_probe_custody(
+    path: &Path,
+    expected_content_blake3: &str,
+    stage: &str,
+) -> Result<()> {
+    let actual = foundation::common_utils::calculate_blake3_hash(path).map_err(|error| {
+        ImgQualityError::ConversionError(format!(
+            "Meme Mode AVIF candidate custody check could not hash {stage} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if actual != expected_content_blake3 {
+        return Err(ImgQualityError::ConversionError(format!(
+            "Meme Mode AVIF candidate custody mismatch at {stage}: {} no longer matches the pixel-verified content",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Commit a verified Meme Mode AVIF candidate without applying the standard
 /// "must be smaller than source" gate or copying source metadata.
 pub fn finalize_meme_avif_probe(
     source: &Path,
     temp_output: &Path,
+    expected_content_blake3: &str,
     options: &ConvertOptions,
 ) -> Result<TaskResult> {
     let input_size = fs::metadata(source)?.len();
     let output = get_output_path(source, EXT_AVIF, options)?;
+
+    if let Err(error) =
+        verify_avif_probe_custody(temp_output, expected_content_blake3, "before commit")
+    {
+        cleanup_temp_output(temp_output, source);
+        return Err(error);
+    }
 
     if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
         temp_output,
@@ -3566,6 +3749,15 @@ pub fn finalize_meme_avif_probe(
         None,
     )? {
         return Ok(TaskResult::skipped_exists(source, &output)?);
+    }
+
+    if let Err(error) = verify_avif_probe_custody(&output, expected_content_blake3, "after commit")
+    {
+        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+            "meme AVIF custody mismatch output cleanup",
+            &output,
+        );
+        return Err(error);
     }
 
     // CONTRACT: meme mode must not retain removable embedded metadata.
@@ -3598,7 +3790,7 @@ pub fn finalize_meme_avif_probe(
 
 const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
 const JXL_TO_AVIF_MIN_QUALITY: u8 = 0;
-const JXL_TO_AVIF_BINARY_PROBE_BUDGET: usize = 7;
+pub const AVIF_QUALITY_BINARY_PROBE_BUDGET: usize = 7;
 const JXL_AVIF_HANDOFF_QUALITY_FLOOR: u8 = 75;
 const JXL_AVIF_HANDOFF_EXHAUSTED_REASON: &str = "jxl_avif_handoff_exhausted";
 
@@ -3621,25 +3813,28 @@ const fn avif_handoff_selection_label(quality: u8) -> &'static str {
 
 fn search_highest_fitting_avif_quality_with<Probe>(
     input_size: u64,
-    require_smaller: bool,
+    size_policy: Option<foundation::exploration_policy::SizePolicy>,
     mut probe: Probe,
 ) -> (Option<u8>, usize)
 where
-    Probe: FnMut(u8) -> Option<u64>,
+    Probe: FnMut(u8) -> std::result::Result<u64, String>,
 {
     let mut probe_count = 0;
     let mut quality = 100;
     let mut first_fitting = None;
-    let mut upper_failure = 101;
-
+    let mut lowest_oversize = None;
+    let mut failed_qualities = BTreeSet::new();
     loop {
         probe_count += 1;
         match probe(quality) {
-            Some(size) if !require_smaller || size < input_size => {
+            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
                 first_fitting = Some(quality);
                 break;
             }
-            _ => upper_failure = quality,
+            Ok(_) => lowest_oversize = Some(quality),
+            Err(_) => {
+                failed_qualities.insert(quality);
+            }
         }
 
         if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
@@ -3655,24 +3850,45 @@ where
         return (Some(best_quality), probe_count);
     }
 
-    let mut low = best_quality + 1;
-    let mut high = upper_failure.saturating_sub(1).min(100);
-    for _ in 0..JXL_TO_AVIF_BINARY_PROBE_BUDGET {
-        if low > high {
+    for _ in 0..AVIF_QUALITY_BINARY_PROBE_BUDGET {
+        let Some(oversize_quality) = lowest_oversize else {
+            break;
+        };
+        if best_quality.saturating_add(1) >= oversize_quality {
             break;
         }
-        let candidate = low + (high - low) / 2;
+        let midpoint = best_quality + (oversize_quality - best_quality) / 2;
+        let Some(candidate) = (best_quality.saturating_add(1)..oversize_quality)
+            .filter(|quality| !failed_qualities.contains(quality))
+            .min_by_key(|quality| (quality.abs_diff(midpoint), std::cmp::Reverse(*quality)))
+        else {
+            break;
+        };
         probe_count += 1;
         match probe(candidate) {
-            Some(size) if !require_smaller || size < input_size => {
+            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
                 best_quality = candidate;
-                low = candidate.saturating_add(1);
             }
-            _ => high = candidate.saturating_sub(1),
+            Ok(_) => lowest_oversize = Some(candidate),
+            Err(_) => {
+                failed_qualities.insert(candidate);
+            }
         }
     }
 
     (Some(best_quality), probe_count)
+}
+
+fn measure_avif_probe_payload(
+    path: &Path,
+    quality: u8,
+    complete_file_size: u64,
+) -> std::result::Result<u64, String> {
+    foundation::image::static_payload::isobmff_mdat(path).map_err(|error| {
+        format!(
+            "AVIF q={quality} payload measurement failed after complete_file={complete_file_size}B: {error}"
+        )
+    })
 }
 
 fn try_jxl_to_avif_extreme_handoff(
@@ -3696,9 +3912,13 @@ fn try_jxl_to_avif_extreme_handoff(
         })?;
     let mut last_error = None;
     let mut metadata_retry = AvifencMetadataRetryState::default();
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let (quality, probe_count) = search_highest_fitting_avif_quality_with(
         input_payload_size,
-        !options.require_output_delivery(),
+        (!options.require_output_delivery()).then_some(active_policy),
         |quality| {
             log_detail!(&format!(
                 "JXL->AVIF exact quality probe: q={quality}, speed=0 for {}",
@@ -3713,21 +3933,32 @@ fn try_jxl_to_avif_extreme_handoff(
                 options,
             ) {
                 Ok((temp_path, output_size)) => {
-                    let payload_size =
-                        foundation::image::static_payload::isobmff_mdat(&temp_path).ok();
-                    log_detail!(&format!(
-                        "JXL->AVIF exact quality probe: q={quality}, complete_file={output_size}B, pure_payload={payload_size:?}B, source_pure_payload={input_payload_size}B"
-                    ));
+                    let payload_result =
+                        measure_avif_probe_payload(&temp_path, quality, output_size);
                     cleanup_temp_output(&temp_path, input);
-                    payload_size
+                    match payload_result {
+                        Ok(payload_size) => {
+                            log_detail!(&format!(
+                                "JXL->AVIF exact quality probe: q={quality}, complete_file={output_size}B, pure_payload={payload_size}B, source_pure_payload={input_payload_size}B"
+                            ));
+                            Ok(payload_size)
+                        }
+                        Err(reason) => {
+                            log_detail!(&format!(
+                                "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
+                            ));
+                            last_error = Some(reason.clone());
+                            Err(reason)
+                        }
+                    }
                 }
                 Err(err) => {
                     let reason = err.to_string();
                     log_detail!(&format!(
                         "JXL->AVIF exact quality probe: q={quality} failed: {reason}"
                     ));
-                    last_error = Some(reason);
-                    None
+                    last_error = Some(reason.clone());
+                    Err(reason)
                 }
             }
         },
@@ -3775,7 +4006,9 @@ fn try_jxl_to_avif_extreme_handoff(
                 "Final AVIF payload measurement failed without complete-file fallback: {error}"
             ))
         })?;
-    if !options.require_output_delivery() && avif_payload_size >= input_payload_size {
+    if !options.require_output_delivery()
+        && !active_policy.fits(avif_payload_size, input_payload_size)
+    {
         cleanup_temp_output(&avif_temp_output, input);
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
             "jxl_to_avif_extreme_final_size_drift",
@@ -3835,6 +4068,10 @@ fn try_jxl_pre_avif_fallback(
     let candidate_output = foundation::path_safety::isolated_temp_path_for_search(jxl_temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let effort = foundation::constants::jxl_effort_for_mode(true);
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let input_payload_size =
         foundation::image::static_payload::measure(input).map_err(|error| {
             ImgQualityError::ConversionError(format!(
@@ -3842,7 +4079,7 @@ fn try_jxl_pre_avif_fallback(
             ))
         })?;
 
-    match probe_jxl_pre_avif_fallback_with(input_payload_size, |distance| {
+    match probe_jxl_pre_avif_fallback_with(input_payload_size, active_policy, |distance| {
         let output_size = encode_jxl_probe_to_output(
             input,
             actual_input,
@@ -3851,11 +4088,12 @@ fn try_jxl_pre_avif_fallback(
             effort,
             max_threads,
             options.apple_compat(),
+            options.allow_expert_options(),
             icc_path,
             color_info,
             "Pre-AVIF fallback probe",
         )?;
-        if output_size < input_payload_size {
+        if active_policy.fits(output_size, input_payload_size) {
             foundation::fast_img::verify_pixel_equivalence_integrity(
                 input,
                 &candidate_output,
@@ -3908,13 +4146,16 @@ fn try_jxl_pre_avif_fallback(
 
 fn probe_jxl_pre_avif_fallback_with<Probe>(
     input_payload_size: u64,
+    size_policy: foundation::exploration_policy::SizePolicy,
     mut probe: Probe,
 ) -> std::result::Result<Option<u64>, String>
 where
     Probe: FnMut(f32) -> std::result::Result<u64, String>,
 {
     let output_payload_size = probe(jxl_pre_avif_distance())?;
-    Ok((output_payload_size < input_payload_size).then_some(output_payload_size))
+    Ok(size_policy
+        .fits(output_payload_size, input_payload_size)
+        .then_some(output_payload_size))
 }
 
 fn jxl_avif_handoff_exhausted_result(
@@ -4023,7 +4264,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                     "Lossless AVIF pixel equivalence failed: {e}"
                 )));
             }
-            finalize_with_size_check(
+            finalize_with_verified_pixels_and_size_check(
                 input,
                 &temp_output,
                 &output,
@@ -4132,10 +4373,17 @@ pub fn convert_to_jxl_matched(
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    let distance = calculate_matched_distance_for_static(analysis, input_size)?;
+    let source_semantics = detect_jxl_source_semantics(input)?;
+    let requested_distance = if jxl_distance_exploration_allowed(source_semantics) {
+        calculate_matched_distance_for_static(analysis, input_size)?
+    } else {
+        0.0
+    };
+    let actual_dist =
+        resolved_jxl_distance_for_source(requested_distance, options.ultimate(), source_semantics);
     log_stat!(
         foundation::infra::static_logs::messages::LABEL_JXL,
-        format!("Forensic: Matched JXL distance finalized at {distance:.2}")
+        format!("Forensic: Effective JXL distance finalized at {actual_dist:.2}")
     );
 
     let max_threads = if options.child_threads > 0 {
@@ -4144,20 +4392,22 @@ pub fn convert_to_jxl_matched(
         foundation::thread_manager::get_optimal_threads()
     };
 
-    let actual_dist = foundation::constants::jxl_distance_for_mode(distance, options.ultimate());
-    let effort_plan =
-        jxl_effort_search_plan(options.archive(), options.ultimate(), false, input_size);
+    let effort_plan = foundation::jxl_effort_policy::effort_plan_for_mode(
+        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        options.ultimate(),
+        options.archive(),
+    );
 
     log_detail!(&format!(
         "{} Encoding quality-matched JXL: {} (distance={}, effort_plan=[{}], threads={})",
         foundation::infra::static_logs::messages::LABEL_JXL,
         input.display(),
-        distance,
+        actual_dist,
         format_jxl_effort_plan(&effort_plan),
         max_threads
     ));
 
-    let result = run_direct_jxl_encode_effort_search(
+    let result = run_direct_jxl_encode_with_policy(
         input,
         &temp_output,
         actual_dist,
@@ -4177,7 +4427,7 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            let extra = format!("d={distance:.2}");
+            let extra = format!("d={actual_dist:.2}");
             finalize_with_size_check(
                 input,
                 &temp_output,
@@ -4203,31 +4453,7 @@ pub fn convert_to_jxl_matched(
     }
 }
 
-const fn jxl_screening_effort(archive: bool, ultimate: bool, explore: bool) -> u8 {
-    if archive {
-        return foundation::jxl_effort_policy::archive_effort(JxlEffortSearchKind::DirectEncode);
-    }
-    foundation::jxl_effort_policy::screening_effort(ultimate, explore)
-}
-
-fn try_imagemagick_fallback_with_effort(
-    input: &Path,
-    output: &Path,
-    distance: f32,
-    max_threads: usize,
-    apple_compat: bool,
-    effort: u8,
-) -> std::result::Result<(), std::io::Error> {
-    foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-        input,
-        output,
-        distance,
-        effort,
-        max_threads,
-        apple_compat,
-    )
-}
-
+#[allow(dead_code)]
 fn cjxl_std_failure_summary(stage: &str, output: &Output) -> String {
     let stderr_text = String::from_utf8_lossy(&output.stderr);
     let stderr_tail = stderr_text
@@ -4274,7 +4500,7 @@ fn run_direct_jxl_encode_with_effort(
     run_image_process(builder.build())
 }
 
-fn run_direct_jxl_encode_effort_search(
+fn run_direct_jxl_encode_with_policy(
     input: &Path,
     temp_output: &Path,
     distance: f32,
@@ -4284,165 +4510,23 @@ fn run_direct_jxl_encode_effort_search(
     color_info: Option<&ColorInfo>,
     plan: &[JxlEffortPlan],
 ) -> std::result::Result<Output, JxlDirectEncodeError> {
-    match plan {
-        [JxlEffortPlan::Single(effort)] => {
-            return run_direct_jxl_encode_with_effort(
-                input,
-                temp_output,
-                distance,
-                *effort,
-                max_threads,
-                apple_compat,
-                icc_path,
-                color_info,
-            )
-            .map_err(JxlDirectEncodeError::Launch);
-        }
-        [] => {
-            return Err(JxlDirectEncodeError::Conversion(
-                "JXL effort exploration plan was empty".to_string(),
-            ));
-        }
-        _ => {}
-    }
-
-    let mut successes: Vec<(JxlEffortCandidate, PathBuf, Output)> = Vec::new();
-    let mut failures: Vec<Output> = Vec::new();
-    let mut failure_summaries: Vec<String> = Vec::new();
-
-    for item in plan {
-        let effort = jxl_effort_from_plan_item(*item);
-        let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)
-            .map_err(|err| JxlDirectEncodeError::Conversion(err.to_string()))?;
-        let output = match run_direct_jxl_encode_with_effort(
-            input,
-            &candidate_output,
-            distance,
-            effort,
-            max_threads,
-            apple_compat,
-            icc_path,
-            color_info,
-        ) {
-            Ok(output) => output,
-            Err(err) => {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "jxl_effort_candidate_launch_failed",
-                    &candidate_output,
-                );
-                for (_, path, _) in successes {
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "jxl_effort_prior_success_cleanup_after_launch_failure",
-                        &path,
-                    );
-                }
-                return Err(JxlDirectEncodeError::Launch(err));
-            }
-        };
-
-        if output.status.success() {
-            if let Err(err) = verify_jxl_health(&candidate_output) {
-                failure_summaries.push(format!(
-                    "{}: output health verification failed: {err}",
-                    jpeg_effort_stage_label("JXL effort candidate", effort)
-                ));
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "jxl_effort_candidate_health_failed",
-                    &candidate_output,
-                );
-                continue;
-            }
-            let output_size = match foundation::image::static_payload::jxl(&candidate_output) {
-                Ok(size) => size,
-                Err(err) => {
-                    failure_summaries.push(format!(
-                        "{}: output pure-payload measurement failed: {err}",
-                        jpeg_effort_stage_label("JXL effort candidate", effort)
-                    ));
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "jxl_effort_candidate_metadata_failed",
-                        &candidate_output,
-                    );
-                    continue;
-                }
-            };
-            log_detail!(&format!(
-                "JXL effort candidate e{effort} produced {output_size} pure-payload bytes"
-            ));
-            successes.push((
-                JxlEffortCandidate {
-                    effort,
-                    output_size,
-                },
-                candidate_output,
-                output,
-            ));
-        } else {
-            failure_summaries.push(cjxl_std_failure_summary(
-                &jpeg_effort_stage_label("JXL effort candidate", effort),
-                &output,
-            ));
-            failures.push(output);
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "jxl_effort_candidate_failed",
-                &candidate_output,
-            );
-        }
-    }
-
-    if successes.is_empty() {
-        let joined = failure_summaries.join("; ");
-        if let Some(mut failure) = failures.into_iter().next() {
-            let original_stderr = String::from_utf8_lossy(&failure.stderr);
-            failure.stderr = format!(
-                "JXL effort exploration failed for every candidate: {joined}\n{original_stderr}"
-            )
-            .into_bytes();
-            return Ok(failure);
-        }
+    let [JxlEffortPlan::Single(effort)] = plan else {
         return Err(JxlDirectEncodeError::Conversion(format!(
-            "JXL effort exploration produced no valid candidate: {joined}"
+            "JXL encoder policy must select exactly one effort; got {} entries",
+            plan.len()
         )));
-    }
-
-    let candidate_stats: Vec<JxlEffortCandidate> = successes
-        .iter()
-        .map(|(candidate, _, _)| *candidate)
-        .collect();
-    let winner_idx = select_jxl_effort_winner(&candidate_stats).ok_or_else(|| {
-        JxlDirectEncodeError::Conversion(
-            "JXL effort exploration had successes but no selectable winner".to_string(),
-        )
-    })?;
-    let (winner, winner_path, winner_output) = successes.swap_remove(winner_idx);
-
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "jxl_effort_winner_prepare",
+    };
+    run_direct_jxl_encode_with_effort(
+        input,
         temp_output,
-    );
-    foundation::io_utils::robust_move(&winner_path, temp_output).map_err(|err| {
-        JxlDirectEncodeError::Conversion(format!(
-            "failed to move JXL effort winner e{} ({} bytes) from {} to {}: {err}",
-            winner.effort,
-            winner.output_size,
-            winner_path.display(),
-            temp_output.display()
-        ))
-    })?;
-
-    for (_, path, _) in successes {
-        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-            "jxl_effort_nonwinner_cleanup",
-            &path,
-        );
-    }
-
-    log_detail!(&format!(
-        "JXL effort exploration selected e{} ({} bytes)",
-        winner.effort, winner.output_size
-    ));
-
-    Ok(winner_output)
+        distance,
+        *effort,
+        max_threads,
+        apple_compat,
+        icc_path,
+        color_info,
+    )
+    .map_err(JxlDirectEncodeError::Launch)
 }
 
 fn encode_direct_jxl_probe_with_effort(
@@ -4479,6 +4563,9 @@ fn encode_direct_jxl_probe_with_effort(
     }
 }
 
+// Probe plumbing carries the full encode context per the shared verifier
+// contract; grouping it into a struct would fork the type per call site.
+#[allow(clippy::too_many_arguments)]
 fn encode_jxl_probe_to_output(
     input: &Path,
     actual_input: &Path,
@@ -4487,6 +4574,7 @@ fn encode_jxl_probe_to_output(
     effort: u8,
     max_threads: usize,
     apple_compat: bool,
+    allow_expert_options: bool,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
     stage_label: &str,
@@ -4524,13 +4612,13 @@ fn encode_jxl_probe_to_output(
             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
             effort
         ));
-        try_imagemagick_fallback_with_effort(
+        foundation::jxl_utils::try_imagemagick_fallback_with_effort(
             input,
             output,
             candidate_distance,
+            effort,
             max_threads,
             apple_compat,
-            effort,
         )
         .map_err(|e| e.to_string())?;
         verify_jxl_health(output).map_err(|err| {
@@ -4539,11 +4627,17 @@ fn encode_jxl_probe_to_output(
         foundation::image::static_payload::jxl(output).map_err(|error| error.to_string())
     };
 
-    run_jxl_exploration_probe_with(distance, &mut direct_encode, &mut fallback_encode)
+    run_jxl_exploration_probe_with(
+        distance,
+        allow_expert_options,
+        &mut direct_encode,
+        &mut fallback_encode,
+    )
 }
 
 fn run_jxl_exploration_probe_with<Direct, Fallback>(
     distance: f32,
+    allow_expert_options: bool,
     direct_encode: &mut Direct,
     fallback_encode: &mut Fallback,
 ) -> std::result::Result<u64, String>
@@ -4553,7 +4647,11 @@ where
 {
     match direct_encode(distance) {
 Ok(size) => Ok(size),
-Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
+        Err(direct_err) if !allow_expert_options => Err(format!(
+            "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled (requires --allow_expert_options)",
+            foundation::jxl_explorer::format_distance_for_log(distance)
+        )),
+        Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
 format!(
 "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}",
 foundation::jxl_explorer::format_distance_for_log(distance)
@@ -4568,11 +4666,12 @@ fn compare_jxl_finalists(
     left_size: u64,
     right_distance: f32,
     right_size: u64,
+    policy: foundation::exploration_policy::SizePolicy,
 ) -> std::cmp::Ordering {
-    let left_smaller_than_input = left_size < input_size;
-    let right_smaller_than_input = right_size < input_size;
+    let left_fits = policy.fits(left_size, input_size);
+    let right_fits = policy.fits(right_size, input_size);
 
-    match (left_smaller_than_input, right_smaller_than_input) {
+    match (left_fits, right_fits) {
         (true, false) => return std::cmp::Ordering::Less,
         (false, true) => return std::cmp::Ordering::Greater,
         _ => {}
@@ -4587,6 +4686,7 @@ fn describe_jxl_finalist_pass(
     finalist: &foundation::jxl_explorer::JxlScreenedCandidate,
     screening: &foundation::jxl_explorer::JxlScreeningResult,
     input_size: u64,
+    effort: u8,
 ) -> String {
     let distance = foundation::jxl_explorer::format_distance_for_log(finalist.distance);
     let ratio_pct = output_size_ratio_pct(input_size, finalist.output_size);
@@ -4606,7 +4706,7 @@ fn describe_jxl_finalist_pass(
         "sampling a shortlist branch"
     };
 
-    format!("{role}: d={distance} from the {origin} pass ({ratio_label} of input at e7)")
+    format!("{role}: d={distance} from the {origin} pass ({ratio_label} of input at e{effort})")
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
@@ -4621,18 +4721,24 @@ fn try_explore_ultimate_jxl_distance(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
-    const MAX_CONTINUED_ITERATIONS: u32 = 20;
+    const MAX_REFINEMENT_ITERATIONS: u32 = 20;
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
-        "Ultimate Exploration: screening with e7, promoting a shortlist, finalizing with e10",
+        "Ultimate Exploration: one effort domain, distance screening, shortlist verification",
     );
 
-    let screening_effort = jxl_screening_effort(false, true, true);
-    let final_effort = foundation::constants::jxl_effort_for_mode(true);
+    let exploration_effort = foundation::jxl_effort_policy::encoder_effort(true);
+    // Active policy: must be consistent with d0 check and SizeToleranceCheck.
+    // Resolves the same way as jxl_d0_misses_active_size_policy.
+    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+        options.effective_allow_size_tolerance(),
+        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    );
     let screening = foundation::jxl_explorer::screen_jxl_candidates(
         input_size,
         initial_output_size,
+        active_policy,
         |distance| {
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
@@ -4642,9 +4748,10 @@ fn try_explore_ultimate_jxl_distance(
                 actual_input,
                 &candidate_output,
                 distance,
-                screening_effort,
+                exploration_effort,
                 max_threads,
                 options.apple_compat(),
+                options.allow_expert_options(),
                 icc_path,
                 color_info,
                 "Screening probe",
@@ -4663,7 +4770,9 @@ fn try_explore_ultimate_jxl_distance(
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "jxl_explore_screening_abort",
                 input,
-                format!("ultimate JXL e7 screening aborted; reverting to baseline: {err}"),
+                format!(
+                    "ultimate JXL distance screening at e{exploration_effort} aborted; reverting to d0 baseline: {err}"
+                ),
             );
             return Ok(None);
         }
@@ -4680,6 +4789,8 @@ fn try_explore_ultimate_jxl_distance(
     }
 
     let mut best_final: Option<(usize, u64, std::path::PathBuf)> = None;
+    let mut finalized_sizes = Vec::with_capacity(screening.finalists.len());
+    let mut total_iterations = screening.iterations;
 
     for (finalist_idx, finalist) in screening.finalists.iter().enumerate() {
         log_detail!(&format!(
@@ -4687,30 +4798,35 @@ fn try_explore_ultimate_jxl_distance(
             foundation::infra::static_logs::messages::LABEL_PHASE_2,
             finalist_idx + 1,
             screening.finalists.len(),
-            final_effort,
-            describe_jxl_finalist_pass(finalist, &screening, input_size)
+            exploration_effort,
+            describe_jxl_finalist_pass(finalist, &screening, input_size, exploration_effort,)
         ));
 
         let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-        match encode_jxl_probe_to_output(
+        let finalist_result = encode_jxl_probe_to_output(
             input,
             actual_input,
             &candidate_output,
             finalist.distance,
-            final_effort,
+            exploration_effort,
             max_threads,
             options.apple_compat(),
+            options.allow_expert_options(),
             icc_path,
             color_info,
             "Finalist encode",
-        ) {
+        );
+        total_iterations = total_iterations.saturating_add(1);
+
+        match finalist_result {
             Ok(size) => {
+                finalized_sizes.push((finalist.distance, size));
                 log_detail!(&format!(
                     "{} ↳ e{} Result: {} efficiency",
                     foundation::infra::static_logs::messages::LABEL_PHASE_2,
-                    final_effort,
+                    exploration_effort,
                     format_output_size_ratio_pct(input_size, size),
                 ));
                 let replace_best = best_final.as_ref().is_none_or(|(best_idx, best_size, _)| {
@@ -4728,6 +4844,7 @@ fn try_explore_ultimate_jxl_distance(
                         size,
                         best_f.distance,
                         *best_size,
+                        active_policy,
                     ) == std::cmp::Ordering::Less
                 });
 
@@ -4756,7 +4873,7 @@ fn try_explore_ultimate_jxl_distance(
                     "jxl_explore_finalist_failed",
                     input,
                     format!(
-                        "finalist pass failed (e{final_effort}, d={}): {err}",
+                        "finalist pass failed (e{exploration_effort}, d={}): {err}",
                         foundation::jxl_explorer::format_distance_for_log(finalist.distance)
                     ),
                 );
@@ -4765,17 +4882,17 @@ fn try_explore_ultimate_jxl_distance(
     }
 
     let Some((best_idx, best_size, best_path)) = best_final else {
-        log_detail!(foundation::infra::static_logs::messages::JXL_E10_FAILURE_KEEP_E7);
+        log_detail!(foundation::infra::static_logs::messages::JXL_FINALIST_FAILURE_KEEP_BASELINE);
         return Ok(None);
     };
 
-    if best_size >= input_size {
+    if !active_policy.fits(best_size, input_size) {
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "jxl oversized best candidate cleanup",
             &best_path,
         );
         log_detail!(&format!(
-            "All e10 finalists exceed input size (best={} of input); skipping JXL",
+            "All verified finalists exceed input size (best={} of input); skipping JXL",
             format_output_size_ratio_pct(input_size, best_size),
         ));
         return Ok(None);
@@ -4793,62 +4910,85 @@ fn try_explore_ultimate_jxl_distance(
     foundation::io_utils::robust_move(&best_path, temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    // ── Phase: Continued Downward Exploration at e10 ────────────────────
-    // e10 has greater compression potential than e7. After finalists settle,
-    // continue stepping distance downward (higher quality) to see if e10
-    // can produce even smaller files at lower distances.
-    // STRICT RULE: stop immediately on first size increase.
+    // ── Phase: same-effort quality-boundary refinement ──────────────────
+    // The final effort domain may keep the output below source size at a
+    // lower distance than the screened point.
+    // Reuse the finalist ordering rule: once size beats the source, lower
+    // distance wins even when it is larger than the current accepted output.
     let mut accepted_distance = best_candidate.distance;
     let mut accepted_size = best_size;
     {
         let floor = foundation::constants::JXL_EXPLORE_FLOOR;
-        // Adaptive step: use 1/10th of current distance, clamped to sane bounds
-        let step = (accepted_distance / 10.0).clamp(
-            foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION,
-            0.01,
-        );
-        let mut test_distance = accepted_distance - step;
-        let mut continued_iterations = 0u32;
+        let precision = foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION;
+        let mut lower_bound = finalized_sizes
+            .iter()
+            .filter(|(distance, size)| {
+                *distance < accepted_distance && !active_policy.fits(*size, input_size)
+            })
+            .map(|(distance, _)| *distance)
+            .max_by(f32::total_cmp)
+            .unwrap_or(floor);
+        let mut refinement_iterations = 0u32;
 
-        if test_distance >= floor {
+        if accepted_distance - lower_bound >= precision {
             log_detail!(&format!(
-                "{} Continued e{} exploration: stepping down from d={} (step={})",
+                "{} e{} quality refinement: binary bracket d={}..{} (precision={})",
                 foundation::modern_ui::symbols::pick("🔬", "[AUDIT]"),
-                final_effort,
+                exploration_effort,
+                foundation::jxl_explorer::format_distance_for_log(lower_bound),
                 foundation::jxl_explorer::format_distance_for_log(accepted_distance),
-                foundation::jxl_explorer::format_distance_for_log(step),
+                foundation::jxl_explorer::format_distance_for_log(precision),
             ));
         }
 
-        while test_distance >= floor && continued_iterations < MAX_CONTINUED_ITERATIONS {
-            // Canonicalize to avoid float drift
-            let candidate_distance =
-                foundation::jxl_explorer::clamp_explore_distance(test_distance);
+        while accepted_distance - lower_bound >= precision
+            && refinement_iterations < MAX_REFINEMENT_ITERATIONS
+        {
+            let midpoint = f64::midpoint(f64::from(lower_bound), f64::from(accepted_distance));
+            let candidate_distance = foundation::jxl_explorer::clamp_explore_distance(
+                foundation::numeric_cast::f64_to_f32_lossy(midpoint),
+            );
+            if candidate_distance <= lower_bound + f32::EPSILON
+                || candidate_distance >= accepted_distance - f32::EPSILON
+            {
+                break;
+            }
 
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-            match encode_jxl_probe_to_output(
+            let refinement_result = encode_jxl_probe_to_output(
                 input,
                 actual_input,
                 &candidate_output,
                 candidate_distance,
-                final_effort,
+                exploration_effort,
                 max_threads,
                 options.apple_compat(),
+                options.allow_expert_options(),
                 icc_path,
                 color_info,
-                "Continued exploration",
-            ) {
+                "Quality-boundary refinement",
+            );
+            refinement_iterations += 1;
+            total_iterations = total_iterations.saturating_add(1);
+
+            match refinement_result {
                 Ok(size) => {
-                    continued_iterations += 1;
                     let pct_label = format_output_size_ratio_pct(input_size, size);
 
-                    if size < accepted_size {
-                        // Progress: smaller file at lower distance
+                    if compare_jxl_finalists(
+                        input_size,
+                        candidate_distance,
+                        size,
+                        accepted_distance,
+                        accepted_size,
+                        active_policy,
+                    ) == std::cmp::Ordering::Less
+                    {
                         log_detail!(&format!(
-                            "{} d={} -> {} of input (gain)",
+                            "{} d={} -> {} of input (higher quality within size gate)",
                             foundation::modern_ui::symbols::pick("✓", "[+]"),
                             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
                             pct_label
@@ -4862,11 +5002,10 @@ fn try_explore_ultimate_jxl_distance(
                         );
                         foundation::io_utils::robust_move(&candidate_output, temp_output)
                             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-                        test_distance -= step;
                     } else {
-                        // Size increased or stayed the same — stop immediately
+                        lower_bound = candidate_distance;
                         log_detail!(&format!(
-                            "{} d={} -> {} of input (size increased, stopping)",
+                            "{} d={} -> {} of input (outside size gate; tightening bracket)",
                             foundation::modern_ui::symbols::pick("✗", "[x]"),
                             foundation::jxl_explorer::format_distance_for_log(candidate_distance),
                             pct_label
@@ -4875,7 +5014,6 @@ fn try_explore_ultimate_jxl_distance(
                             "jxl continued nonwinner cleanup",
                             &candidate_output,
                         );
-                        break;
                     }
                 }
                 Err(err) => {
@@ -4884,7 +5022,7 @@ fn try_explore_ultimate_jxl_distance(
                         &candidate_output,
                     );
                     log_detail!(&format!(
-                        "Continued exploration probe failed at d={}: {err}",
+                        "Quality refinement probe failed at d={}: {err}",
                         foundation::jxl_explorer::format_distance_for_log(candidate_distance)
                     ));
                     break;
@@ -4892,14 +5030,14 @@ fn try_explore_ultimate_jxl_distance(
             }
         }
 
-        if continued_iterations > 0 && accepted_distance < best_candidate.distance {
+        if refinement_iterations > 0 && accepted_distance < best_candidate.distance {
             log_stat!(
                 foundation::infra::static_logs::messages::LABEL_PHASE_3,
                 format!(
                     "Refinement Improved: d={} -> d={} ({} probes)",
                     foundation::jxl_explorer::format_distance_for_log(best_candidate.distance),
                     foundation::jxl_explorer::format_distance_for_log(accepted_distance),
-                    continued_iterations
+                    refinement_iterations
                 )
             );
         }
@@ -4907,7 +5045,8 @@ fn try_explore_ultimate_jxl_distance(
 
     let mut log = screening.log.clone();
     log.push(format!(
-        "Accepted e10 finalist d={} -> {} of input",
+        "Accepted e{} candidate d={} -> {} of input",
+        exploration_effort,
         foundation::jxl_explorer::format_distance_for_log(accepted_distance),
         format_output_size_ratio_pct(input_size, accepted_size),
     ));
@@ -4918,10 +5057,16 @@ fn try_explore_ultimate_jxl_distance(
         }
     }
     let result = foundation::jxl_explorer::JxlExploreResult {
+        encoder_domain: foundation::exploration_policy::EncoderDomain::jxl(exploration_effort),
+        outcome: foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
         accepted_distance,
         output_size: fs::metadata(temp_output)?.len(),
-        iterations: screening.iterations,
-        ladder_phase: best_candidate.ladder_phase,
+        iterations: total_iterations,
+        // Exact equality is intentional: `accepted_distance` originates from
+        // this same `best_candidate.distance` value (copied, not recomputed),
+        // so identity comparison identifies the accepted ladder finalist.
+        #[allow(clippy::float_cmp)]
+        ladder_phase: accepted_distance == best_candidate.distance && best_candidate.ladder_phase,
         screened_best_distance: screening.best_distance,
         screened_best_size: screening.best_output_size,
         promoted_distances: screening
@@ -4954,8 +5099,9 @@ fn try_explore_ultimate_jxl_distance(
     foundation::log_info!(
         foundation::infra::static_logs::messages::LABEL_JXL,
         &format!(
-            "Ultimate JXL exploration accepted d={} after e7 screening / e10 finalization ({} of input)",
+            "Ultimate JXL exploration accepted d={} in one e{} effort domain ({} of input)",
             foundation::jxl_explorer::format_distance_for_log(result.accepted_distance),
+            exploration_effort,
             format_output_size_ratio_pct(input_size, result.output_size),
         )
     );
@@ -5621,11 +5767,23 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic
+    )]
     use super::*;
     use std::cell::Cell;
     use std::process::{Command, Stdio};
     use tempfile::tempdir;
     use vid::animated_image::is_high_quality_animated;
+
+    #[test]
+    fn pixel_audit_only_skips_delivery_audit_after_explicit_proof() {
+        assert!(!PixelAudit::RequiredAtCommit.already_verified());
+        assert!(PixelAudit::VerifiedByCaller.already_verified());
+    }
 
     fn test_tool_available(tool: &str) -> bool {
         match Command::new(tool)
@@ -5646,6 +5804,14 @@ mod tests {
             0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
         ]));
         assert!(!has_jxl_magic(b"not-jxl"));
+    }
+
+    #[test]
+    fn small_png_skip_uses_detected_content_not_suffix() {
+        let small = crate::constants::SMALL_PNG_THRESHOLD_BYTES - 1;
+        assert!(should_skip_small_png(false, true, small));
+        assert!(!should_skip_small_png(false, false, small));
+        assert!(!should_skip_small_png(true, true, small));
     }
 
     #[test]
@@ -5734,8 +5900,8 @@ mod tests {
                 args.windows(2)
                     .find(|pair| pair[0] == "--cicp")
                     .map(|pair| pair[1].as_str()),
-                Some("1/13/0"),
-                "RGB encoder input must use Identity CICP to avoid matrix color drift"
+                None,
+                "avifenc must infer CICP from the input instead of forcing sRGB/Identity"
             );
         }
     }
@@ -5768,18 +5934,39 @@ mod tests {
         let source = root.path().join("source.png");
         let candidate = root.path().join("verified-candidate.avif");
         image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3])).save(&source)?;
-        std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.codex/bugs/metadata/78fa2eb489d3307.AVIF"),
-            &candidate,
-        )?;
+        let sample_avif = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        if sample_avif.exists() {
+            std::fs::copy(&sample_avif, &candidate)?;
+        } else if test_tool_available("avifenc") {
+            // If the repository sample is missing, try to produce a candidate
+            // using the local `avifenc` tool so the test can run in CI/local.
+            let status = Command::new("avifenc")
+                .arg("-s")
+                .arg("0")
+                .arg("-j")
+                .arg("all")
+                .arg(&source)
+                .arg(&candidate)
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "avifenc failed to generate candidate AVIF"
+            );
+        } else {
+            panic!(
+                "Required AVIF sample missing at {} and avifenc not available; test requires one",
+                sample_avif.display()
+            );
+        }
         let options = ConvertOptions {
             output_dir: Some(output_dir),
             flags: ConvertFlags::FORCE,
             ..Default::default()
         };
 
-        let result = finalize_meme_avif_probe(&source, &candidate, &options)?;
+        let content_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
+        let result = finalize_meme_avif_probe(&source, &candidate, &content_blake3, &options)?;
 
         assert!(result.success);
         assert!(
@@ -5792,6 +5979,42 @@ mod tests {
                 .output_path
                 .is_some_and(|path| Path::new(&path).is_file())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_meme_avif_probe_rejects_candidate_changed_after_verification() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let output_dir = root.path().join("out");
+        std::fs::create_dir(&output_dir)?;
+        let source = root.path().join("source.png");
+        let candidate = root.path().join("verified-candidate.avif");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3])).save(&source)?;
+        let sample_avif = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../foundation/tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&sample_avif, &candidate)?;
+        let verified_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
+        let mut changed = std::fs::read(&candidate)?;
+        changed.extend_from_slice(b"changed-after-verification");
+        std::fs::write(&candidate, changed)?;
+        let options = ConvertOptions {
+            output_dir: Some(output_dir),
+            flags: ConvertFlags::FORCE,
+            ..Default::default()
+        };
+        let output = get_output_path(&source, EXT_AVIF, &options)?;
+
+        let error = finalize_meme_avif_probe(&source, &candidate, &verified_blake3, &options)
+            .expect_err("changed candidate must not inherit prior pixel proof");
+
+        assert!(
+            error
+                .to_string()
+                .contains("custody mismatch at before commit")
+        );
+        assert!(!candidate.exists(), "changed candidate must be cleaned up");
+        assert!(!output.exists(), "changed candidate must not be committed");
         Ok(())
     }
 
@@ -5872,13 +6095,46 @@ mod tests {
     }
 
     #[test]
+    fn cjxl_expert_compat_retry_only_matches_the_exact_unsupported_option() {
+        let e11 = foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
+        assert!(cjxl_rejected_expert_option(
+            e11,
+            "Unknown argument: --allow_expert_options"
+        ));
+        assert!(cjxl_rejected_expert_option(
+            e11,
+            "unrecognized option '--allow_expert_options'"
+        ));
+        assert!(!cjxl_rejected_expert_option(
+            foundation::constants::JXL_DEEP_EFFORT,
+            "Unknown argument: --allow_expert_options"
+        ));
+        assert!(!cjxl_rejected_expert_option(
+            e11,
+            "Error while decoding the JPEG image"
+        ));
+        assert!(cjxl_rejected_apple_compat_option(
+            "Unknown argument: --compress_boxes=0"
+        ));
+        assert!(cjxl_rejected_apple_compat_option(
+            "unrecognized option '--compress_boxes=0'"
+        ));
+        assert!(!cjxl_rejected_apple_compat_option(
+            "Error while compressing JPEG XL boxes"
+        ));
+        assert!(!cjxl_rejected_apple_compat_option(
+            "Unknown argument: --allow_expert_options"
+        ));
+    }
+
+    #[test]
     fn jpeg_lossless_encode_leaves_color_encoding_to_libjxl() {
         let source = include_str!("lossless_converter.rs");
         let start = source
             .find("fn run_cjxl_jpeg_encode_with_effort(")
             .unwrap_or_else(|| panic!("JPEG encode runner anchor missing"));
         let end = source[start..]
-            .find("fn jpeg_effort_stage_label")
+            .find("pub const JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON")
             .map_or_else(
                 || panic!("JPEG encode runner end anchor missing"),
                 |offset| start + offset,
@@ -6073,50 +6329,115 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_effort_policy_uses_fixed_e7_below_1mib_and_mode_effort_above() {
-        assert!(!size_ge_1mib(1_048_575));
-        assert!(size_ge_1mib(1_048_576));
-        assert_eq!(
-            jxl_encode_effort_for_size(false, false, false, 1_048_575),
-            7
-        );
-        assert_eq!(jxl_encode_effort_for_size(false, true, false, 1_048_575), 7);
-        assert_eq!(
-            jxl_encode_effort_for_size(false, false, false, 1_048_576),
-            7
-        );
-        assert_eq!(
-            jxl_encode_effort_for_size(false, true, false, 1_048_576),
-            11
-        );
-        assert_eq!(jxl_encode_effort_for_size(false, true, true, 1_048_576), 7);
-        assert_eq!(
-            jxl_encode_effort_for_size(true, false, false, 1_048_575),
-            11
-        );
+    fn effort_policy_is_independent_of_size_and_exploration() {
+        let eff = foundation::jxl_effort_policy::encoder_effort;
+        assert_eq!(eff(false), 7);
+        assert_eq!(eff(true), 11);
     }
 
     #[test]
-    fn jpeg_effort_search_plan_explores_supported_efforts_at_or_above_1mib() {
+    fn jxl_distance_exploration_size_gate_is_not_an_effort_policy() {
+        assert!(!input_size_allows_jxl_distance_exploration(
+            JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES - 1
+        ));
+        assert!(input_size_allows_jxl_distance_exploration(
+            JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES
+        ));
+    }
+
+    #[test]
+    fn jxl_distance_exploration_requires_confirmed_lossy_non_jpeg_source() {
+        use foundation::image_detection::{CompressionType, DetectedFormat};
+
         assert_eq!(
-            jpeg_effort_search_plan(JpegEffortModeFlags::empty(), 1_048_575),
-            vec![JxlEffortPlan::Single(7)]
+            classify_jxl_source_semantics(&DetectedFormat::JPEG, Some(CompressionType::Lossy)),
+            JxlSourceSemantics::JpegReconstruction
         );
         assert_eq!(
-            jpeg_effort_search_plan(JpegEffortModeFlags::empty(), 1_048_576),
-            vec![
-                JxlEffortPlan::Candidate(7),
-                JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(11),
-            ]
+            classify_jxl_source_semantics(&DetectedFormat::PNG, Some(CompressionType::Lossy)),
+            JxlSourceSemantics::ConfirmedLossless
         );
         assert_eq!(
-            jpeg_effort_search_plan(JpegEffortModeFlags::ALLOW_EXPERT_OPTIONS, 1_048_576),
-            vec![
-                JxlEffortPlan::Candidate(7),
-                JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(11),
-            ]
+            classify_jxl_source_semantics(&DetectedFormat::WebP, Some(CompressionType::Lossless)),
+            JxlSourceSemantics::ConfirmedLossless
+        );
+        assert_eq!(
+            classify_jxl_source_semantics(&DetectedFormat::WebP, Some(CompressionType::Lossy)),
+            JxlSourceSemantics::ModernLossy
+        );
+        assert_eq!(
+            classify_jxl_source_semantics(&DetectedFormat::TIFF, Some(CompressionType::Lossy)),
+            JxlSourceSemantics::ConfirmedLossy
+        );
+        assert_eq!(
+            classify_jxl_source_semantics(&DetectedFormat::Unknown("opaque".to_string()), None),
+            JxlSourceSemantics::Unknown
+        );
+
+        assert!(!jxl_distance_exploration_allowed(
+            JxlSourceSemantics::JpegReconstruction
+        ));
+        assert!(!jxl_distance_exploration_allowed(
+            JxlSourceSemantics::ConfirmedLossless
+        ));
+        assert!(!jxl_distance_exploration_allowed(
+            JxlSourceSemantics::ModernLossy
+        ));
+        assert!(!jxl_distance_exploration_allowed(
+            JxlSourceSemantics::Unknown
+        ));
+        assert!(jxl_distance_exploration_allowed(
+            JxlSourceSemantics::ConfirmedLossy
+        ));
+    }
+
+    #[test]
+    fn jxl_distance_exploration_starts_only_after_d0_misses_active_policy() {
+        use foundation::exploration_policy::SizePolicy;
+        let strict = SizePolicy::StrictlySmaller;
+        // strict: only candidate < source passes
+        assert!(!jxl_d0_misses_active_size_policy(1_000, 999, strict));
+        assert!(jxl_d0_misses_active_size_policy(1_000, 1_000, strict));
+        assert!(jxl_d0_misses_active_size_policy(1_000, 1_001, strict));
+
+        // tolerance: candidate up to source+512KiB passes — d=0 accepted without exploration
+        let tolerance = SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        let source: u64 = 10_000_000;
+        // d0 slightly above source but within 512 KiB → no exploration needed
+        assert!(!jxl_d0_misses_active_size_policy(
+            source,
+            source + 200_000,
+            tolerance
+        ));
+        // d0 above source + 512 KiB → exploration triggered
+        assert!(jxl_d0_misses_active_size_policy(
+            source,
+            source + 524_289,
+            tolerance
+        ));
+        // strict equality still rejects under strict policy
+        assert!(jxl_d0_misses_active_size_policy(source, source, strict));
+        assert_eq!(
+            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossless),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::JpegReconstruction),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ModernLossy),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::Unknown),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossy),
+            foundation::constants::JXL_ULTIMATE_DISTANCE
         );
     }
 
@@ -6135,22 +6456,15 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_standard_encode_fallback_excludes_e11_after_aggressive_phase() {
+    fn jpeg_standard_encode_fallback_is_one_e7_attempt() {
         assert_eq!(
-            jpeg_standard_encode_fallback_plan(1_048_575),
+            jpeg_standard_encode_fallback_plan(),
             vec![JxlEffortPlan::Single(7)]
         );
-        let fallback = jpeg_standard_encode_fallback_plan(1_048_576);
         assert_eq!(
-            fallback,
-            vec![
-                JxlEffortPlan::Candidate(7),
-                JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(11),
-            ]
+            jpeg_standard_encode_fallback_plan(),
+            vec![JxlEffortPlan::Single(7)]
         );
-        // Note: Since JXL_ULTIMATE_EFFORT and JXL_EXPERIMENTAL_LOSSLESS_EFFORT are both 11,
-        // Phase 2 will carry effort 11 by default, making this check pass as long as it contains Candidate(11).
     }
 
     #[test]
@@ -6182,116 +6496,21 @@ mod tests {
     }
 
     #[test]
-    fn jxl_effort_search_plan_matches_jpeg_policy_for_large_inputs() {
+    fn jxl_effort_plan_uses_one_final_domain_effort() {
         assert_eq!(
-            jxl_effort_search_plan(false, false, false, 1_048_575),
+            foundation::jxl_effort_policy::effort_plan(
+                foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+                false,
+            ),
             vec![JxlEffortPlan::Single(7)]
         );
         assert_eq!(
-            jxl_effort_search_plan(false, false, false, 1_048_576),
-            vec![
-                JxlEffortPlan::Candidate(7),
-                JxlEffortPlan::Candidate(8),
-                JxlEffortPlan::Candidate(11),
-            ]
+            foundation::jxl_effort_policy::effort_plan(
+                foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+                true,
+            ),
+            vec![JxlEffortPlan::Single(11)]
         );
-        assert_eq!(
-            jxl_effort_search_plan(false, true, false, 1_048_576),
-            vec![
-                JxlEffortPlan::Candidate(11),
-                JxlEffortPlan::Candidate(7),
-                JxlEffortPlan::Candidate(8),
-            ]
-        );
-    }
-
-    #[test]
-    fn jxl_primary_encode_paths_invoke_effort_search_runner() {
-        let source = include_str!("lossless_converter.rs");
-
-        let convert_start = source
-            .find("pub fn convert_to_jxl(")
-            .unwrap_or_else(|| panic!("convert_to_jxl source anchor missing"));
-        let matched_start = source
-            .find("pub fn convert_to_jxl_matched(")
-            .unwrap_or_else(|| panic!("convert_to_jxl_matched source anchor missing"));
-        let convert_body = &source[convert_start..matched_start];
-        let direct_runner_start = convert_body
-            .find("let result = run_direct_jxl_encode_effort_search(")
-            .unwrap_or_else(|| panic!("convert_to_jxl must invoke direct JXL effort search"));
-        let primary_setup = &convert_body[..direct_runner_start];
-        assert!(
-            !primary_setup.contains("CjxlBuilder::new()"),
-            "convert_to_jxl primary path must not build one direct cjxl effort before effort search"
-        );
-
-        let matched_end = source
-            .find("const fn jxl_screening_effort")
-            .unwrap_or_else(|| panic!("jxl_screening_effort source anchor missing"));
-        let matched_body = &source[matched_start..matched_end];
-        assert!(
-            matched_body.contains("let result = run_direct_jxl_encode_effort_search("),
-            "convert_to_jxl_matched must invoke direct JXL effort search"
-        );
-        assert!(
-            !matched_body.contains("let mut builder = foundation::CjxlBuilder::new();"),
-            "convert_to_jxl_matched must not regress to a single direct cjxl effort"
-        );
-    }
-
-    #[test]
-    fn jpeg_effort_search_winner_uses_smallest_successful_output() {
-        let candidates = [
-            JxlEffortCandidate {
-                effort: 7,
-                output_size: 1_200,
-            },
-            JxlEffortCandidate {
-                effort: 10,
-                output_size: 1_000,
-            },
-        ];
-
-        assert_eq!(select_jxl_effort_winner(&candidates), Some(1));
-    }
-
-    #[test]
-    fn jxl_effort_winner_uses_codestream_payload_not_complete_file_size() -> Result<()> {
-        fn container(payload: usize, metadata: usize) -> Vec<u8> {
-            let mut bytes = vec![0, 0, 0, 12, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a];
-            if metadata > 0 {
-                bytes.extend_from_slice(&u32::try_from(8 + metadata).unwrap().to_be_bytes());
-                bytes.extend_from_slice(b"Exif");
-                bytes.resize(bytes.len() + metadata, 0);
-            }
-            bytes.extend_from_slice(&u32::try_from(8 + payload).unwrap().to_be_bytes());
-            bytes.extend_from_slice(b"jxlc");
-            bytes.resize(bytes.len() + payload, 1);
-            bytes
-        }
-
-        let dir = tempdir()?;
-        let small_file_large_payload = dir.path().join("small-file.jxl");
-        let large_file_small_payload = dir.path().join("large-file.jxl");
-        std::fs::write(&small_file_large_payload, container(20, 0))?;
-        std::fs::write(&large_file_small_payload, container(10, 64))?;
-        assert!(
-            std::fs::metadata(&small_file_large_payload)?.len()
-                < std::fs::metadata(&large_file_small_payload)?.len()
-        );
-
-        let candidates = [
-            JxlEffortCandidate {
-                effort: 7,
-                output_size: foundation::image::static_payload::jxl(&small_file_large_payload)?,
-            },
-            JxlEffortCandidate {
-                effort: 10,
-                output_size: foundation::image::static_payload::jxl(&large_file_small_payload)?,
-            },
-        ];
-        assert_eq!(select_jxl_effort_winner(&candidates), Some(1));
-        Ok(())
     }
 
     #[test]
@@ -6574,7 +6793,7 @@ mod tests {
             Ok(88)
         };
 
-        let size = run_jxl_exploration_probe_with(0.2, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.2, true, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("fallback should recover the exploration probe: {e:?}"));
 
         assert_eq!(size, 88);
@@ -6596,7 +6815,7 @@ mod tests {
             Ok(55)
         };
 
-        let size = run_jxl_exploration_probe_with(0.1, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("direct cjxl probe should win: {e:?}"));
 
         assert_eq!(size, 77);
@@ -6605,26 +6824,80 @@ mod tests {
     }
 
     #[test]
-    fn smoke_jxl_screening_effort_only_drops_to_e7_for_ultimate_explore() {
-        assert_eq!(jxl_screening_effort(false, true, true), 7);
-        assert_eq!(jxl_screening_effort(false, true, false), 11);
-        assert_eq!(jxl_screening_effort(false, false, true), 7);
-        assert_eq!(jxl_screening_effort(false, false, false), 7);
-        assert_eq!(jxl_screening_effort(true, false, false), 11);
+    fn smoke_jxl_exploration_probe_requires_explicit_fallback_opt_in() {
+        let fallback_calls = Cell::new(0);
+        let mut direct = |_distance: f32| Err("direct cjxl failed".to_string());
+        let mut fallback = |_distance: f32| {
+            fallback_calls.set(fallback_calls.get() + 1);
+            Ok(55)
+        };
+
+        let error = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
+            .expect_err("default exploration must not invoke ImageMagick");
+
+        assert!(error.contains("--allow_expert_options"));
+        assert_eq!(fallback_calls.get(), 0);
     }
 
     #[test]
-    fn smoke_jxl_final_round_prefers_lower_distance_once_size_beats_source() {
-        assert_eq!(
-            compare_jxl_finalists(9_000_000, 0.01, 8_800_000, 0.1, 7_500_000),
-            std::cmp::Ordering::Less
+    fn smoke_jxl_exploration_stays_in_final_encoder_domain() {
+        let eff = foundation::jxl_effort_policy::encoder_effort;
+        assert_eq!(eff(true), 11);
+        assert_eq!(eff(false), 7);
+        assert_ne!(
+            foundation::exploration_policy::EncoderDomain::jxl(7),
+            foundation::exploration_policy::EncoderDomain::jxl(11),
+            "Effort domains must isolate final-encoder policy parameters"
         );
     }
 
     #[test]
-    fn smoke_jxl_final_round_requires_beating_source_before_quality_preference() {
+    fn smoke_jxl_quality_ranking_accepts_larger_output_at_lower_distance_within_gate() {
+        use foundation::exploration_policy::SizePolicy;
+        // strict mode: lower distance wins only when it fits StrictlySmaller
         assert_eq!(
-            compare_jxl_finalists(9_000_000, 0.01, 9_200_000, 0.1, 8_900_000),
+            compare_jxl_finalists(
+                9_000_000,
+                0.01,
+                8_800_000,
+                0.1,
+                7_500_000,
+                SizePolicy::StrictlySmaller,
+            ),
+            std::cmp::Ordering::Less
+        );
+        // B8 tolerance test: A at d=0.10 +400 KiB fits AllowGrowth(512 KiB)
+        // B at d=0.20 strictly smaller → A wins (lower distance)
+        let source: u64 = 10_485_760; // 10 MiB
+        let policy = SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        assert_eq!(
+            compare_jxl_finalists(
+                source,
+                0.10,
+                source + 409_600, // +400 KiB — fits policy
+                0.20,
+                8_388_608, // 8 MiB — strictly smaller
+                policy,
+            ),
+            std::cmp::Ordering::Less, // A (lower distance) must win
+        );
+    }
+
+    #[test]
+    fn smoke_jxl_final_round_requires_fitting_policy_before_quality_preference() {
+        use foundation::exploration_policy::SizePolicy;
+        // strict mode: candidate not fitting strict policy loses
+        assert_eq!(
+            compare_jxl_finalists(
+                9_000_000,
+                0.01,
+                9_200_000,
+                0.1,
+                8_900_000,
+                SizePolicy::StrictlySmaller,
+            ),
             std::cmp::Ordering::Greater
         );
     }
@@ -6711,10 +6984,16 @@ mod tests {
 
     #[test]
     fn explicit_lossless_jxl_distance_survives_ultimate_mode() {
-        assert_eq!(resolved_jxl_distance(0.0, true, false), 0.0);
-        assert_eq!(resolved_jxl_distance(0.0, true, true), 0.0);
         assert_eq!(
-            resolved_jxl_distance(0.4, true, false),
+            resolved_jxl_distance_for_source(0.0, true, JxlSourceSemantics::ConfirmedLossy),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(0.4, true, JxlSourceSemantics::ConfirmedLossless),
+            0.0
+        );
+        assert_eq!(
+            resolved_jxl_distance_for_source(0.4, true, JxlSourceSemantics::ConfirmedLossy),
             foundation::constants::JXL_ULTIMATE_DISTANCE
         );
     }
@@ -6722,23 +7001,46 @@ mod tests {
     #[test]
     fn jxl_to_avif_search_finds_exact_highest_quality_boundary() {
         let mut probes = Vec::new();
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |quality| {
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
                 probes.push(quality);
-                Some(if quality <= 89 { 900 } else { 1_100 })
-            });
+                Ok(if quality <= 89 { 900 } else { 1_100 })
+            },
+        );
 
         assert_eq!(quality, Some(89));
         assert_eq!(probe_count, 7);
         assert_eq!(probes, vec![100, 90, 80, 85, 87, 88, 89]);
-        const { assert!(JXL_TO_AVIF_BINARY_PROBE_BUDGET >= 7) };
+        const { assert!(AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7) };
+    }
+
+    #[test]
+    fn jxl_to_avif_failed_probe_does_not_become_an_oversize_boundary() {
+        let (quality, _) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
+                if quality == 90 {
+                    Err("temporary encoder failure".to_string())
+                } else {
+                    Ok(if quality <= 89 { 900 } else { 1_100 })
+                }
+            },
+        );
+
+        assert_eq!(quality, Some(89));
     }
 
     #[test]
     fn jxl_to_avif_search_exhausts_before_preserving_source() {
         assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 0);
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |_quality| Some(1_000));
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |_quality| Ok(1_000),
+        );
 
         assert_eq!(quality, None);
         assert_eq!(probe_count, 11);
@@ -6747,11 +7049,14 @@ mod tests {
     #[test]
     fn jxl_to_avif_search_uses_verified_q0_as_emergency_final_fallback() {
         let mut probes = Vec::new();
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, true, |quality| {
+        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
                 probes.push(quality);
-                Some(if quality == 0 { 900 } else { 1_100 })
-            });
+                Ok(if quality == 0 { 900 } else { 1_100 })
+            },
+        );
 
         assert_eq!(quality, Some(0));
         assert_eq!(
@@ -6769,9 +7074,9 @@ mod tests {
     fn required_delivery_accepts_verified_oversized_q100_avif() {
         let mut probes = Vec::new();
         let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, false, |quality| {
+            search_highest_fitting_avif_quality_with(1_000, None, |quality| {
                 probes.push(quality);
-                Some(1_100)
+                Ok(1_100)
             });
 
         assert_eq!(quality, Some(100));
@@ -6784,23 +7089,54 @@ mod tests {
     }
 
     #[test]
-    fn jxl_pre_avif_fallback_probes_q75_distance_and_requires_smaller_output() {
+    fn jxl_pre_avif_fallback_probes_q75_distance_under_active_policy() {
         let mut probes = Vec::new();
-        let accepted = probe_jxl_pre_avif_fallback_with(1_000, |distance| {
-            probes.push(distance);
-            Ok(900)
-        });
+        let accepted = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |distance| {
+                probes.push(distance);
+                Ok(900)
+            },
+        );
         assert_eq!(accepted, Ok(Some(900)));
         assert_eq!(JXL_AVIF_HANDOFF_QUALITY_FLOOR, 75);
         assert_eq!(probes, vec![2.5]);
 
-        let unchanged = probe_jxl_pre_avif_fallback_with(1_000, |_distance| Ok(1_000));
+        let unchanged = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Ok(1_000),
+        );
         assert_eq!(unchanged, Ok(None));
 
-        let failed = probe_jxl_pre_avif_fallback_with(1_000, |_distance| {
-            Err("quality verification failed".to_string())
-        });
+        let failed = probe_jxl_pre_avif_fallback_with(
+            1_000,
+            foundation::exploration_policy::SizePolicy::StrictlySmaller,
+            |_distance| Err("quality verification failed".to_string()),
+        );
         assert_eq!(failed, Err("quality verification failed".to_string()));
+
+        let tolerance = foundation::exploration_policy::SizePolicy::AllowGrowth {
+            max_extra_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        };
+        assert_eq!(
+            probe_jxl_pre_avif_fallback_with(1_000, tolerance, |_distance| Ok(1_001)),
+            Ok(Some(1_001))
+        );
+    }
+
+    #[test]
+    fn avif_probe_payload_measurement_preserves_the_real_error() {
+        let dir = tempdir().expect("tempdir");
+        let malformed = dir.path().join("malformed.avif");
+        std::fs::write(&malformed, b"not-isobmff").expect("write malformed AVIF");
+
+        let error = measure_avif_probe_payload(&malformed, 88, 11)
+            .expect_err("malformed AVIF probe must not become an ordinary candidate miss");
+        assert!(error.contains("AVIF q=88 payload measurement failed"));
+        assert!(error.contains("complete_file=11B"));
+        assert!(error.contains("ISOBMFF"));
     }
 
     #[test]
@@ -6811,8 +7147,10 @@ mod tests {
             .unwrap_or_else(|| panic!("convert_to_jxl source missing"));
         let convert_end = source[convert_start..]
             .find("pub fn convert_to_jxl_probe(")
-            .map(|offset| convert_start + offset)
-            .unwrap_or_else(|| panic!("convert_to_jxl_probe boundary missing"));
+            .map_or_else(
+                || panic!("convert_to_jxl_probe boundary missing"),
+                |offset| convert_start + offset,
+            );
         let convert = &source[convert_start..convert_end];
         let jxl_fallback = convert
             .find("try_jxl_pre_avif_fallback(")
@@ -6867,8 +7205,10 @@ mod tests {
         let output_dir = temp.path().join("output");
         fs::write(&input, b"original jpeg bytes").expect("write source");
 
-        let mut options = ConvertOptions::default();
-        options.output_dir = Some(output_dir.clone());
+        let options = ConvertOptions {
+            output_dir: Some(output_dir.clone()),
+            ..Default::default()
+        };
         let skipped =
             jxl_avif_handoff_exhausted_result(&input, 19, &options).expect("preserve source");
 
@@ -6993,5 +7333,231 @@ mod tests {
             source_bytes_before, source_bytes_after,
             "source JPEG must be byte-identical after fast-img skip"
         );
+    }
+
+    #[test]
+    fn unknown_input_keeps_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let non_png = root.path().join("input.jpg");
+        std::fs::write(&non_png, [0u8; 16]).expect("write");
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &non_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--yuv")
+                .map(|w| w[1].as_str()),
+            Some("444"),
+            "Unknown input must keep --yuv 444"
+        );
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--cicp")
+                .map(|w| w[1].as_str()),
+            None,
+            "Unknown input must not force --cicp"
+        );
+    }
+
+    #[test]
+    fn color_png_inputs_keep_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let color_png = root.path().join("color.png");
+        image::RgbImage::from_pixel(10, 10, image::Rgb([10, 20, 30]))
+            .save(&color_png)
+            .expect("save rgb png");
+        assert_eq!(
+            super::detect_avif_input_color_model(&color_png),
+            super::AvifencInputColorModel::Color
+        );
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &color_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--yuv")
+                .map(|w| w[1].as_str()),
+            Some("444"),
+            "Color PNG must keep --yuv 444"
+        );
+        assert_eq!(
+            args.windows(2)
+                .find(|w| w[0] == "--cicp")
+                .map(|w| w[1].as_str()),
+            None,
+            "Color PNG must not force --cicp"
+        );
+    }
+
+    #[test]
+    fn grayscale_png_inputs_skip_rgb_encoder_flags() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let gray_png = root.path().join("gray.jpg");
+        image::GrayImage::from_pixel(10, 10, image::Luma([128]))
+            .save_with_format(&gray_png, image::ImageFormat::Png)
+            .expect("save gray png");
+        assert_eq!(
+            super::detect_avif_input_color_model(&gray_png),
+            super::AvifencInputColorModel::Grayscale
+        );
+        let output = root.path().join("output.avif");
+        let cmd = super::build_avifenc_command(
+            &gray_png,
+            &output,
+            Some(80),
+            false,
+            AvifencMetadataPolicy::Preserve,
+            Some(0),
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !args.iter().any(|arg| arg == "--yuv"),
+            "Grayscale PNG must omit --yuv so avifenc auto-selects YUV400"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--cicp"),
+            "Grayscale PNG must omit --cicp so avifenc does not force Identity matrix (GBR)"
+        );
+    }
+
+    #[test]
+    fn synthetic_gray_and_single_channel_avif_roundtrips_preserve_color() {
+        assert!(
+            test_tool_available("avifenc") && test_tool_available("avifdec"),
+            "avifenc and avifdec must be available"
+        );
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let round_trip = |input: &Path, stem: &str| {
+            let encoded = root.path().join(format!("{stem}.avif"));
+            let decoded = root.path().join(format!("{stem}.png"));
+            let mut retry_state = super::AvifencMetadataRetryState::default();
+            let output = super::run_avifenc_with_malformed_xmp_retry(
+                input,
+                &encoded,
+                Some(100),
+                false,
+                Some(0),
+                Duration::from_secs(30),
+                "synthetic_channel_regression",
+                &mut retry_state,
+            )
+            .expect("run avifenc");
+            assert!(
+                output.status.success(),
+                "avifenc pipeline failed: {}",
+                output.stderr
+            );
+            let output = Command::new("avifdec")
+                .arg(&encoded)
+                .arg(&decoded)
+                .output()
+                .expect("run avifdec");
+            assert!(
+                output.status.success(),
+                "avifdec failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            image::open(decoded).expect("open decoded png").to_rgb8()
+        };
+
+        let gray_jpeg = root.path().join("synthetic_gray.jpg");
+        image::GrayImage::from_fn(192, 128, |x, y| {
+            let luma = u8::try_from((x + y * 3) % 256).expect("modulo result fits u8");
+            image::Luma([luma])
+        })
+        .save(&gray_jpeg)
+        .expect("save synthetic grayscale JPEG");
+        assert_eq!(
+            super::detect_avif_input_color_model(&gray_jpeg),
+            super::AvifencInputColorModel::Unknown,
+            "JPEG clone must exercise the non-PNG production path"
+        );
+        let decoded_gray = round_trip(&gray_jpeg, "gray");
+        let max_channel_delta = decoded_gray.pixels().iter().fold(0u8, |max_delta, pixel| {
+            max_delta.max(
+                pixel[0]
+                    .abs_diff(pixel[1])
+                    .max(pixel[1].abs_diff(pixel[2]))
+                    .max(pixel[0].abs_diff(pixel[2])),
+            )
+        });
+        assert!(
+            max_channel_delta <= 2,
+            "grayscale AVIF gained a color cast: max RGB delta {max_channel_delta}"
+        );
+
+        let channels_png = root.path().join("synthetic_rgb_channels.png");
+        image::RgbImage::from_fn(300, 100, |x, _| {
+            if x < 100 {
+                image::Rgb([255, 0, 0])
+            } else if x < 200 {
+                image::Rgb([0, 255, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        })
+        .save(&channels_png)
+        .expect("save synthetic single-channel PNG");
+        let decoded_channels = round_trip(&channels_png, "channels");
+        for (x, expected_channel) in [(50, 0usize), (150, 1), (250, 2)] {
+            let pixel = decoded_channels.get_pixel(x, 50);
+            assert!(
+                pixel[expected_channel] >= 220
+                    && pixel[(expected_channel + 1) % 3] <= 35
+                    && pixel[(expected_channel + 2) % 3] <= 35,
+                "single-channel patch {expected_channel} was remapped: {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jxl_jp2_lossy_semantics() {
+        use foundation::image_detection::{CompressionType, DetectedFormat};
+
+        let lossy_jp2 = super::classify_jxl_source_semantics(
+            &DetectedFormat::JP2,
+            Some(CompressionType::Lossy),
+        );
+        assert_eq!(lossy_jp2, super::JxlSourceSemantics::ConfirmedLossy);
+        assert!(super::jxl_distance_exploration_allowed(lossy_jp2));
+
+        let lossless_jp2 = super::classify_jxl_source_semantics(
+            &DetectedFormat::JP2,
+            Some(CompressionType::Lossless),
+        );
+        assert_eq!(lossless_jp2, super::JxlSourceSemantics::ConfirmedLossless);
+        assert!(!super::jxl_distance_exploration_allowed(lossless_jp2));
+
+        let unknown_jp2 = super::classify_jxl_source_semantics(&DetectedFormat::JP2, None);
+        assert_eq!(unknown_jp2, super::JxlSourceSemantics::Unknown);
+        assert!(!super::jxl_distance_exploration_allowed(unknown_jp2));
+
+        let jpeg = super::classify_jxl_source_semantics(&DetectedFormat::JPEG, None);
+        assert_eq!(jpeg, super::JxlSourceSemantics::JpegReconstruction);
+        assert!(!super::jxl_distance_exploration_allowed(jpeg));
     }
 }

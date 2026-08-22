@@ -3557,7 +3557,7 @@ fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, Option<f64>, f64)]) -> f64
     };
     let iqr = (q3 - q1).max(0.06);
     let d0 = distances[0];
-    (d0 + iqr * 1.5).max(d0 + 0.08)
+    f64::mul_add(iqr, 1.5, d0).max(d0 + 0.08)
 }
 
 pub(crate) fn normalize_log_ratio(a: f64, b: f64, scale: f64) -> f64 {

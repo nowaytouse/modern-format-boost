@@ -203,6 +203,49 @@ impl ToolBuilder for JxlinfoBuilder {
     }
 }
 
+/// Builder for constructing `siegfried` (`sf`) identification commands.
+///
+/// Format identity only: `sf -json <paths>` answers "what is this file?" —
+/// never loss state, validity, or conversion decisions. All input paths are
+/// applied through the safe-path argument helper.
+#[derive(Debug, Default)]
+pub struct SiegfriedBuilder {
+    base: crate::builder_base::BaseBuilder,
+}
+
+impl SiegfriedBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Self::default().check_available()
+    }
+}
+
+crate::impl_base_builder_accessors!(SiegfriedBuilder);
+
+impl ToolBuilder for SiegfriedBuilder {
+    fn get_command_name(&self) -> &str {
+        constants::TOOL_SIEGFRIED
+    }
+
+    fn get_check_args(&self) -> &[&str] {
+        &["-version"]
+    }
+
+    fn build(&self) -> Command {
+        let mut cmd = self.get_resolved_command();
+
+        self.base.apply_to_command(&mut cmd);
+        self.base.apply_all_inputs(&mut cmd, None);
+
+        cmd
+    }
+}
+
 /// Builder for constructing `dovi_tool` commands.
 #[derive(Debug, Default)]
 pub struct DoviBuilder {

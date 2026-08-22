@@ -39,31 +39,10 @@ license-files = [{ path = "LICENSE-LGPL.md", hash = 986959994 }]
 multiple-versions = "warn"
 wildcards = "allow"
 skip = [
-  { crate = "bitstream-io", reason = "libavif/rav1e and current codec dependencies require separate major lines" },
-  { crate = "built", reason = "libavif/rav1e and current codec dependencies require separate minor lines" },
-  { crate = "cfg-expr", reason = "system-deps 6 and 7 require separate cfg-expr lines" },
   { crate = "fallible-iterator", reason = "postgres and rusqlite currently require different major/minor lines" },
-  { crate = "getrandom", reason = "registry 0.3 and git 0.4 are required by independent upstream dependency trees" },
-  { crate = "hashbrown", reason = "rusqlite transitively pulls both registry and git lines" },
-  { crate = "itertools", reason = "libavif and image/ravif require separate codec dependency lines" },
   { crate = "miniz_oxide", reason = "image and flate2 currently require separate upstream lines" },
   { crate = "quick-error", reason = "transitive dependencies currently require separate quick-error lines" },
-  { crate = "r-efi", reason = "getrandom/WASI dependency trees currently require separate source lines" },
-  { crate = "rand", reason = "codec and database/proptest dependency trees currently require separate lines" },
-  { crate = "rand_chacha", reason = "rand and proptest dependency trees currently require separate lines" },
-  { crate = "rand_core", reason = "rand 0.9 and 0.10 dependency trees currently require separate lines" },
-  { crate = "rav1e", reason = "libavif and image/ravif currently require separate rav1e lines" },
-  { crate = "serde_spanned", reason = "toml 0.8 and 1.x require separate serde_spanned lines" },
   { crate = "syn", reason = "current proc-macro dependency trees require syn 2 and syn 3" },
-  { crate = "system-deps", reason = "native codec bindings currently require system-deps 6 and 7" },
-  { crate = "target-lexicon", reason = "system-deps 6 and 7 require separate target-lexicon lines" },
-  { crate = "thiserror", reason = "upstream dependencies still require thiserror 1 alongside project nightly thiserror 2" },
-  { crate = "thiserror-impl", reason = "upstream dependencies still require thiserror-impl 1 and 2" },
-  { crate = "toml", reason = "build dependencies currently require toml 0.8 and 1.x" },
-  { crate = "toml_datetime", reason = "toml 0.8 and 1.x require separate datetime lines" },
-  { crate = "wasi", reason = "tokio and wasite dependency trees currently require separate WASI lines" },
-  { crate = "windows-sys", reason = "notify and current platform dependencies require separate Windows API lines" },
-  { crate = "winnow", reason = "toml 0.8 and 1.x require separate parser lines" },
 ]
 
 [sources]

@@ -116,6 +116,10 @@ fn contract_nuclear_repair_exiftool_argv_locked() {
             >= 2,
         "CONTRACT: nuclear repair must pass -unsafe twice"
     );
+    assert!(
+        !args.iter().any(|arg| arg.eq_ignore_ascii_case("MWG")),
+        "CONTRACT: nuclear repair must copy physical tags without synthesizing MWG composites"
+    );
 }
 
 #[test]
@@ -191,6 +195,10 @@ fn contract_jxl_rehydrate_uses_block_exclusion_not_tag_allowlist() {
     assert!(
         args.iter().any(|a| a == "-ICC_Profile<ICC_Profile"),
         "CONTRACT: JXL rehydrate can copy ICC when caller reports no embedded ICC"
+    );
+    assert!(
+        !args.iter().any(|arg| arg.eq_ignore_ascii_case("MWG")),
+        "CONTRACT: JXL rehydrate must copy physical tags without synthesizing MWG composites"
     );
 }
 

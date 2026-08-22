@@ -5,7 +5,7 @@ Project-wide Python entry guards (single source of truth).
 - ``guard_main(script_name)`` at the top of every production ``main()``.
 - ``run_delegated(...)`` for all subprocess calls into other MFB scripts / Rust CLIs.
 - Never read JSON configs here; use ``mfb_config_load.load_consumer_json``.
-"""
+"""  # noqa: EXE001
 
 from __future__ import annotations
 
@@ -61,7 +61,6 @@ SCRIPT_INVOKERS: dict[str, frozenset[str]] = {
     "backfill_directory_scores.py": _COMMON,
     "loop_intent_clustering.py": _COMMON,
     "quality_regression_model.py": _COMMON,
-    "media_conversion_delivery_heatmap.py": _COMMON,
     "drag_and_drop_processor.py": frozenset(
         {INVOKER_DIRECT, INVOKER_TEST_HARNESS, INVOKER_DATABASE_MANAGER}
     ),
@@ -78,7 +77,6 @@ PRODUCTION_GUARDED_SCRIPTS: frozenset[str] = frozenset(
         "drag_and_drop_processor.py",
         "backfill_directory_scores.py",
         "loop_intent_clustering.py",
-        "media_conversion_delivery_heatmap.py",
         "python_api.py",
     }
 )
@@ -449,7 +447,7 @@ def detach_to_background(
                 pass
             else:
                 print(f"  [BACKGROUND] Cleared stale pid file: {pid_file}")
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: DTZ005
     log_path = log_dir / f"{Path(sys.argv[0]).stem}_{stamp}.log"
     argv = [str(a) for a in sys.argv if a != flag_to_strip]
     with open(log_path, "ab", buffering=0) as log_f:

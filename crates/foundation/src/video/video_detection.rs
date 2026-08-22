@@ -708,6 +708,17 @@ fn cached_detection_needs_bitstream_repair(cached: &Detection, path: &Path) -> b
         return false;
     }
     if format == crate::image_detection::DetectedFormat::PNG {
+        if let Err(error) = crate::common_utils::validate_file_size_limit(
+            path,
+            crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+        ) {
+            crate::media_conversion_gate::probe_layer_audit(
+                "video_cache_bitstream_apng_size_rejected",
+                path,
+                format!("cache bitstream APNG size rejected: {error}"),
+            );
+            return true;
+        }
         let data = match std::fs::read(path) {
             Ok(data) => data,
             Err(err) => {
@@ -719,8 +730,18 @@ fn cached_detection_needs_bitstream_repair(cached: &Detection, path: &Path) -> b
                 return !canvas_ok || !frames_ok;
             }
         };
-        let (is_animated, _) = crate::image_detection::parse_apng_frames(&data);
-        return is_animated && (!canvas_ok || !frames_ok);
+        return match crate::image::png_validation::parse_apng_animation(&data) {
+            Ok(Some(info)) => info.frame_count > 1 && (!canvas_ok || !frames_ok),
+            Ok(None) => false,
+            Err(error) => {
+                crate::media_conversion_gate::probe_layer_audit(
+                    "video_cache_bitstream_apng_parse_failed",
+                    path,
+                    format!("cache bitstream APNG parse failed: {error}"),
+                );
+                true
+            }
+        };
     }
     let (is_animated, native_frames, _) =
         match crate::image_detection::detect_animation(path, &format) {
@@ -948,6 +969,16 @@ fn animated_header_timing_data(
     path: &Path,
     label: &'static str,
 ) -> std::result::Result<Vec<u8>, crate::ffprobe::FFprobeError> {
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+    )
+    .map_err(|err| {
+        crate::ffprobe::FFprobeError::ParseError(format!(
+            "{label} header recovery input rejected for {}: {err}",
+            path.display()
+        ))
+    })?;
     match std::fs::read(path) {
         Ok(data) => Ok(data),
         Err(err) => {
@@ -969,8 +1000,13 @@ fn try_probe_from_animated_apng_header(
     let Some(buf) = read_png_header_prefix(path)? else {
         return Ok(None);
     };
-    let (is_animated, frame_count) = crate::image_detection::parse_apng_frames(&buf);
-    if !is_animated || frame_count <= 1 {
+    let timing_data = animated_header_timing_data(path, "apng")?;
+    let Some(info) = crate::image::png_validation::parse_apng_animation(&timing_data)
+        .map_err(|error| crate::ffprobe::FFprobeError::ParseError(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    if info.frame_count <= 1 {
         return Ok(None);
     }
     let Some((width, height)) = png_ihdr_dimensions_from_bytes(&buf) else {
@@ -979,20 +1015,13 @@ fn try_probe_from_animated_apng_header(
             path.display()
         )));
     };
-    let frame_count = u64::from(frame_count);
+    let frame_count = u64::from(info.frame_count);
 
     let file_size = animated_header_file_size(path, "apng")?;
-    let timing = crate::image_detection::apng_timing_stats_from_bytes(
-        &animated_header_timing_data(path, "apng")?,
-    );
-    let duration = timing
-        .as_ref()
-        .map(|t| t.duration_secs)
-        .filter(|d| d.is_finite() && *d > 0.0);
-    let frame_rate = timing
-        .as_ref()
-        .map(|t| t.fps)
-        .filter(|f| f.is_finite() && *f > 0.0);
+    let duration =
+        (info.duration_secs.is_finite() && info.duration_secs > 0.0).then_some(info.duration_secs);
+    let frame_rate =
+        duration.map(|duration| crate::numeric_cast::u64_to_f64(frame_count) / duration);
 
     Ok(Some(crate::ffprobe::FFprobeResult {
         format_name: "apng".to_string(),
@@ -1155,23 +1184,26 @@ fn try_probe_from_animated_webp_header(
             path.display()
         )));
     }
-    let frame_count = u64::from(
-        crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
-            path,
-        ),
-    );
-
     let file_size = animated_header_file_size(path, "webp")?;
-    let timing = crate::image_formats::webp::timing_stats_from_bytes(&animated_header_timing_data(
-        path, "webp",
-    )?)
-    .map_err(|err| {
-        crate::ffprobe::FFprobeError::ParseError(format!(
-            "WebP header timing parse failed for {}: {err}",
-            path.display()
-        ))
-    })?;
+    let timing_data = animated_header_timing_data(path, "webp")?;
+    let timing =
+        crate::image_formats::webp::timing_stats_from_bytes(&timing_data).map_err(|err| {
+            crate::ffprobe::FFprobeError::ParseError(format!(
+                "WebP header timing parse failed for {}: {err}",
+                path.display()
+            ))
+        })?;
+    let frame_count = timing.as_ref().map_or_else(
+        || {
+            u64::from(
+                crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
+                    crate::image_formats::webp::count_frames_from_bytes(&timing_data),
+                    path,
+                ),
+            )
+        },
+        |stats| u64::from(stats.frame_count),
+    );
     let duration = timing
         .as_ref()
         .map(|t| t.duration_secs)
@@ -1297,8 +1329,9 @@ fn backfill_animated_frame_count_from_bitstream_header(
         if !crate::image_formats::webp::is_animated_from_bytes(&buf) {
             return Ok(false);
         }
+        let data = animated_header_timing_data(path, "webp")?;
         let n = crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
+            crate::image_formats::webp::count_frames_from_bytes(&data),
             path,
         );
         detection.frame_count = Some(u64::from(n));
@@ -1328,14 +1361,16 @@ fn backfill_animated_frame_count_from_bitstream_header(
     }
 
     if true_format == crate::image::format_detect::FormatKind::Png {
-        let Some(buf) = read_png_header_prefix(path)? else {
+        let data = animated_header_timing_data(path, "apng")?;
+        let Some(info) = crate::image::png_validation::parse_apng_animation(&data)
+            .map_err(|error| crate::ffprobe::FFprobeError::ParseError(error.to_string()))?
+        else {
             return Ok(false);
         };
-        let (is_animated, fc) = crate::image_detection::parse_apng_frames(&buf);
-        if !is_animated || fc <= 1 {
+        if info.frame_count <= 1 {
             return Ok(false);
         }
-        detection.frame_count = Some(u64::from(fc));
+        detection.frame_count = Some(u64::from(info.frame_count));
         return Ok(true);
     }
 
@@ -1389,7 +1424,9 @@ fn try_promote_animated_webp_from_header(
     }
     let frame_count = u64::from(
         crate::media_conversion_gate::probe_webp_animated_frame_count_or_minimum(
-            crate::image_formats::webp::count_frames_from_bytes(&buf),
+            crate::image_formats::webp::count_frames_from_bytes(&animated_header_timing_data(
+                path, "webp",
+            )?),
             path,
         ),
     );

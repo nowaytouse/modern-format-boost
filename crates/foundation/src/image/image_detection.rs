@@ -36,21 +36,21 @@
 //! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy,
 //!   others→lossless. Supports both standard TIFF and `BigTIFF` (0x002B). No
 //!   tag → assumed lossless.
-//! - **AVIF**: Multi-dimension (av1C chroma 4:2:0/4:2:2→lossy; 4:4:4 + colr
-//!   Identity MC u16[8..9]/pixi/high bit depth→lossless; 4:4:4 ambiguous→Err).
-//!   Err when av1C missing or 4:4:4 without definitive indicators.
-//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy;
-//!   Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; `RExt` without
-//!   4:4:4→Err). Err when hvcC missing.
-//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan);
-//!   codestream `xyb_encoded→lossy/modular`; Err only when no jbrd and header
-//!   unparseable.
+//! - **AVIF**: every av1C record must prove 4:2:0/4:2:2 before a lossy verdict;
+//!   4:4:4/monochrome remains unknown because pixel format does not prove AV1
+//!   quantization state. Err when required structure is missing/malformed.
+//! - **HEIC**: every hvcC record must prove 4:2:0/4:2:2, or a sole RExt/SCC
+//!   record must prove PPS bypass disabled. Monochrome/4:4:4 with bypass
+//!   permission remains unknown. Err when hvcC is malformed.
+//! - **JXL**: Container jbrd box→JPEG-reconstruction semantics; VarDCT/XYB
+//!   and jxlinfo-confirmed Modular lossy→lossy; hedged "possibly lossless"
+//!   Modular streams remain unknown.
 //! - **JPEG**: Always lossy; JXL transcoding does not require quality judgment.
 //! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless;
 //!   PXR24/B44/B44A/DWAA/DWAB→lossy).
-//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: COD marker wavelet
-//!   transform (9/7 irreversible→lossy, 5/3 reversible→lossless); fallback
-//!   lossy if COD not found.
+//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: resolves main COD/COC
+//!   plus first-tile overrides; an effective 9/7 component proves lossy, while
+//!   all-reversible or incomplete evidence remains unknown/fails closed.
 //! - **ICO**: Parses directory entries; embedded PNG checked for quantization
 //!   (tRNS + indexed, tool signatures). BMP/DIB entries → lossless.
 //! - **TGA, PSD, DDS**: Treated as lossless.
@@ -70,13 +70,13 @@
 //! | WebP   | High        | Yes (VP8L/VP8)| Animated: traverses all ANMF frames. |
 //! | TIFF   | High        | Yes (tag 259) | All IFDs + `BigTIFF`. No tag → lossless. |
 //! | JPEG   | N/A         | Yes (always)  | Always lossy. |
-//! | AVIF   | High        | Multi (av1C)  | Err if no av1C or ambiguous 4:4:4. colr MC u16 fix. |
-//! | HEIC   | High        | Multi (hvcC)  | chromaFormatIdc + profile. Err if no hvcC or `RExt` w/o 4:4:4. |
-//! | JXL    | High        | Multi (jbrd/xyb)| Container-only jbrd. Err if unparseable. |
+//! | AVIF   | High        | Multi (av1C)  | 4:4:4 without coded-lossless proof → Unknown. |
+//! | HEIC   | High        | Multi (hvcC/PPS) | PPS bypass permission without all-CU proof → Unknown. |
+//! | JXL    | High        | Multi (jbrd/VarDCT/jxlinfo)| Modular "possibly lossless" → Unknown. |
 //! | GIF    | Assumed     | N/A           | Treated as lossless. |
 //! | EXR    | High        | Yes (attr)    | Parses compression attr. No attr → lossless. |
 //! | QOI/FLIF/PNM | Assumed | N/A        | Treated as lossless. |
-//! | JP2    | High        | Yes (COD wavelet)| Fallback lossy if COD not found. |
+//! | JP2    | High        | Positive (effective first-tile COD/COC)| Reversible/incomplete evidence → Unknown or Err. |
 //! | ICO    | Medium      | Partial       | Embedded PNG checked for quantization. |
 //! | TGA/PSD/DDS | Assumed | N/A         | Treated as lossless. |
 //!
@@ -98,6 +98,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::process::Output;
+use std::time::Duration;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
 ///
@@ -186,6 +188,17 @@ pub enum ImageType {
 pub enum CompressionType {
     Lossless,
     Lossy,
+    /// Structure parsed, but the codec evidence available to this project
+    /// cannot prove either lossless or lossy semantics. `Unknown` is a
+    /// third state: it must never be consumed as `Lossy` or `Lossless`.
+    /// Admission to lossy-re-encode or lossless/copy routes requires
+    /// positive evidence; unproven compression stays fail-closed.
+    Unknown,
+    /// JPEG XL carrying a `jbrd` JPEG bitstream reconstruction box: reversible
+    /// to the exact original JPEG. Its own semantics — not plain `Lossless`
+    /// (the reconstructed JPEG is usually lossy) and never `Lossy` as a
+    /// source claim (the transcode itself is bit-exact).
+    JpegReconstruction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -474,7 +487,21 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data)?;
+            let frame_count = match crate::image_formats::gif::count_frames_from_bytes(&data) {
+                Ok(frame_count) => frame_count,
+                Err(error) => {
+                    if crate::image_formats::gif::is_animated_from_bytes(&data)? {
+                        tracing::warn!(
+                            target: "gif_animation_probe",
+                            path = %path.display(),
+                            error = %error,
+                            "GIF has at least two decoded frames despite later corruption; exact frame count and timing are unavailable"
+                        );
+                        return Ok((true, None, None));
+                    }
+                    return Err(error);
+                }
+            };
             let fps = if frame_count > 1 {
                 crate::image_formats::gif::timing_stats_from_bytes(&data)?
                     .filter(|stats| stats.fps.is_finite() && stats.fps > 0.0_f64)
@@ -513,7 +540,9 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (is_animated, frame_count) = parse_apng_frames(&data);
+            let info = crate::image::png_validation::parse_apng_animation(&data)?;
+            let frame_count = info.map(|info| info.frame_count);
+            let is_animated = frame_count.is_some_and(|count| count > 1);
             let fps = if is_animated {
                 apng_timing_stats_from_bytes(&data)
                     .filter(|stats| stats.fps.is_finite() && stats.fps > 0.0_f64)
@@ -521,7 +550,7 @@ pub fn detect_animation(
             } else {
                 None
             };
-            return Ok((is_animated, Some(frame_count), fps));
+            return Ok((is_animated, frame_count, fps));
         }
         DetectedFormat::TIFF => {
             // TIFF does not support animation (no multi-frame sequence standard).
@@ -540,7 +569,31 @@ pub fn detect_animation(
                 return Ok((true, None, fps));
             }
 
-            return Ok((false, Some(1), None));
+            // Sequence brands absent is necessary but not sufficient: verify
+            // the item structure with the authoritative libheif reader (same
+            // strategy as HEIC below) instead of declaring static from brands
+            // alone. Do not fabricate frame_count=1 (M248).
+            let data = std::fs::read(path)?;
+            match libheif_rs::HeifContext::read_from_bytes(&data) {
+                Ok(ctx) => {
+                    let ids = ctx.image_ids();
+                    if ids.len() > 1 {
+                        let fc =
+                            crate::numeric_cast::usize_to_u32_strict(ids.len(), "avif_item_count");
+                        return Ok((true, fc, None));
+                    }
+                    return Ok((false, None, None));
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "libheif_probe",
+                        path = %path.display(),
+                        error = %err,
+                        "libheif-rs failed to read AVIF for animation detection; falling through to ffprobe"
+                    );
+                    // Fall through to Stage 2 (ffprobe) for ambiguous/malformed containers.
+                }
+            }
         }
         DetectedFormat::HEIC | DetectedFormat::HEIF => {
             // libheif-rs is the authoritative HEIC/HEIF library — use it
@@ -803,8 +856,8 @@ pub fn animatable_format_confirmed_static_only(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (is_animated, count) = parse_apng_frames(&data);
-            Ok(!is_animated && count <= 1)
+            Ok(crate::image::png_validation::parse_apng_animation(&data)?
+                .is_none_or(|info| info.frame_count <= 1))
         }
         DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => {
             isobmff_confirmed_static_only(path)
@@ -848,7 +901,12 @@ pub fn animatable_format_confirmed_static_only(
             }
             Ok(false)
         }
-        _ => Ok(false),
+        // Formats with no animation capability in-spec (JP2, BMP, QOI, ICO,
+        // TGA, EXR, FLIF, PSD, PNM, DDS, JPEG) are confirmed static by
+        // definition — returning false here would silently bar them from
+        // static-only admission paths (e.g. tier-2 modern lossy import).
+        // Video containers and unknown bytes stay fail-closed at false.
+        _ => Ok(is_definitely_static_non_animated_format(format)),
     }
 }
 
@@ -1061,39 +1119,25 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> Result<bool> {
     // HEIC/AVIF)
     use crate::constants::ISOBMFF_ANIMATED_BRANDS;
 
-    let mut file = File::open(path)?;
-
-    let mut header = [0u8; 32];
-    std::io::Read::read_exact(&mut file, &mut header)?;
-
-    if header.get(4..8) != Some(b"ftyp") {
+    let file = File::open(path)?;
+    let mut header = Vec::new();
+    std::io::Read::read_to_end(&mut file.take(4096), &mut header)?;
+    let Some(ftyp_payload) = crate::common_utils::isobmff_ftyp_payload(&header) else {
         return Ok(false);
-    }
+    };
 
-    let major_brand = &header[8..12];
+    let major_brand = &ftyp_payload[0..4];
     for seq_brand in ISOBMFF_ANIMATED_BRANDS {
         if major_brand == *seq_brand {
             return Ok(true);
         }
     }
 
-    // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    let ftyp_box_size = crate::numeric_cast::u32_to_usize_strict(ftyp_box_size, "ftyp_box_size")
-        .ok_or_else(|| ImgQualityError::AnalysisError("ftyp box size overflow".to_string()))?;
-
-    if !(16..=4096).contains(&ftyp_box_size) {
+    let (compatible_brands, remainder) = ftyp_payload[8..].as_chunks::<4>();
+    if !remainder.is_empty() {
         return Ok(false);
     }
-    let compat_size = ftyp_box_size - 16;
-    if compat_size == 0 {
-        return Ok(false);
-    }
-
-    let mut compat_data = vec![0u8; compat_size];
-    std::io::Read::read_exact(&mut file, &mut compat_data)?;
-
-    for cb in compat_data.as_chunks::<4>().0 {
+    for cb in compatible_brands {
         for seq_brand in ISOBMFF_ANIMATED_BRANDS {
             if cb == *seq_brand {
                 return Ok(true);
@@ -1113,17 +1157,7 @@ fn detect_jxl_animation_via_jxlinfo(path: &Path) -> Result<Option<bool>> {
         return Ok(None);
     }
 
-    let output = JxlinfoBuilder::new()
-        .input(path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!(
-                "JXL animation detection via jxlinfo failed for {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+    let output = run_jxlinfo_bounded(path, "JXL animation detection")?;
 
     let combined = format!(
         "{}\n{}",
@@ -1151,7 +1185,7 @@ fn jxlinfo_refine_jxl_animation(path: &Path, oxide_fps: Option<f32>) -> (Option<
         return (None, oxide_fps);
     }
 
-    let output = match JxlinfoBuilder::new().input(path).build().output() {
+    let output = match run_jxlinfo_bounded(path, "JXL frame-count refinement") {
         Ok(o) => o,
         Err(err) => {
             tracing::debug!(
@@ -1181,6 +1215,38 @@ fn jxlinfo_refine_jxl_animation(path: &Path, oxide_fps: Option<f32>) -> (Option<
     let (frame_count, jxlinfo_fps) = parse_jxlinfo_full_info(&combined);
     let fps = jxlinfo_fps.or(oxide_fps);
     (frame_count, fps)
+}
+
+const JXLINFO_SOFT_TIMEOUT: Duration = Duration::from_mins(2);
+const JXLINFO_HARD_TIMEOUT: Duration = Duration::from_mins(10);
+
+fn run_jxlinfo_bounded(path: &Path, context: &str) -> Result<Output> {
+    let mut command = JxlinfoBuilder::new().input(path).build();
+    crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        JXLINFO_SOFT_TIMEOUT,
+        JXLINFO_HARD_TIMEOUT,
+        context,
+    )
+    .map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "{context} via jxlinfo failed for {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn parse_jxlinfo_compression_hint(output: &str) -> Option<CompressionType> {
+    output.lines().find_map(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        if line.starts_with("jpeg xl image") && line.contains(", lossy") {
+            Some(CompressionType::Lossy)
+        } else {
+            // jxlinfo deliberately says "(possibly) lossless" for streams it
+            // cannot prove lossless. Never upgrade that hedge to a verdict.
+            None
+        }
+    })
 }
 
 /// Parse `jxlinfo` stdout/stderr for frame count and FPS.
@@ -1415,7 +1481,7 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
                 return detect_webp_animation_compression(&data);
             }
 
-            let is_lossless = crate::image_formats::webp::is_lossless_from_bytes(&data);
+            let is_lossless = crate::image_formats::webp::is_lossless_from_bytes(&data)?;
             Ok(if is_lossless {
                 CompressionType::Lossless
             } else {
@@ -1433,7 +1499,22 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
         DetectedFormat::EXR => detect_exr_compression(path),
         DetectedFormat::JP2 => detect_jp2_compression(path),
 
-        _ => Ok(CompressionType::Lossy),
+        // Baseline/progressive JPEG is lossy by definition of the route that
+        // reaches this probe; reversible-JPEG handling lives in the dedicated
+        // JPEG analysis path, not here.
+        DetectedFormat::JPEG => Ok(CompressionType::Lossy),
+
+        // Video containers and unknown bytes are not still images; answering
+        // "lossy" would fabricate a compression verdict that no caller of this
+        // API is allowed to consume.
+        DetectedFormat::MP4
+        | DetectedFormat::MOV
+        | DetectedFormat::MKV
+        | DetectedFormat::WEBM
+        | DetectedFormat::Unknown(_) => Err(ImgQualityError::AnalysisError(format!(
+            "detect_compression requires a still-image format, got {format:?}: {}",
+            path.display()
+        ))),
     }
 }
 
@@ -1968,8 +2049,8 @@ impl PngQuantizationSession {
 
         if self.png_info.color_type == 3
             && compression_ratio < crate::constants::PNG_SIZE_EFFICIENCY_THRESHOLD
-            && self.png_info.width * self.png_info.height
-                > crate::constants::PNG_EFFICIENCY_PIXEL_COUNT_THRESHOLD
+            && u64::from(self.png_info.width) * u64::from(self.png_info.height)
+                > u64::from(crate::constants::PNG_EFFICIENCY_PIXEL_COUNT_THRESHOLD)
         {
             self.factors.size_efficiency_anomaly = crate::constants::PNG_SIZE_EFFICIENCY_ANOMALY;
             self.explanations.push(format!(
@@ -2111,10 +2192,10 @@ impl PngQuantizationSession {
         PngQuantizationAnalysis {
             is_quantized: true,
             quality_estimate: None,
-            confidence: Some(
-                crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT
-                    + tc_score_f * crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE,
-            ),
+            confidence: Some(tc_score_f.mul_add(
+                crate::constants::IMAGE_DETECTION_TRUECOLOR_CONF_SLOPE,
+                crate::constants::IMAGE_DETECTION_CONFIDENCE_TRUECOLOR_QUANT,
+            )),
             factor_scores: self.factors.clone(),
             detected_tool: None,
             explanation: format!(
@@ -2287,9 +2368,6 @@ impl PngQuantizationSession {
 ///
 /// # Errors
 /// Returns an error if the PNG structure is invalid or decoding fails.
-///
-/// # Panics
-/// Panics if the PNG decompression fails unexpectedly on a valid zTXt chunk.
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -2316,25 +2394,74 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
+fn decompress_png_text_bounded(data: &[u8], remaining_budget: &mut usize) -> Result<Vec<u8>> {
+    let allowed = *remaining_budget;
+    let read_limit = u64::try_from((*remaining_budget).saturating_add(1)).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "PNG text decompression limit conversion failed: {error}"
+        ))
+    })?;
+    let mut decompressed = Vec::new();
+    flate2::read::ZlibDecoder::new(data)
+        .take(read_limit)
+        .read_to_end(&mut decompressed)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "PNG compressed text payload is invalid: {error}"
+            ))
+        })?;
+    if decompressed.len() > *remaining_budget {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "PNG decompressed text exceeds remaining {allowed} byte safety budget"
+        )));
+    }
+    *remaining_budget -= decompressed.len();
+    Ok(decompressed)
+}
+
 /// # Errors
 /// Returns an error if the file cannot be read or if the PNG structure is
 /// corrupted. Specifically, `ImgQualityError::IoError` for file operations and
 /// `ImgQualityError::AnalysisError` for parsing issues.
-///
-/// # Panics
-/// Panics if the PNG structure is fundamentally corrupted beyond repair.
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
-    fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
-        let offset = i64::try_from(bytes).map_err(|e| {
+    const PNG_DIMENSION_MAX: u32 = 0x7FFF_FFFF;
+
+    fn skip_bytes<R: Seek>(
+        reader: &mut R,
+        bytes: u64,
+        stream_end: u64,
+        context: &str,
+    ) -> Result<()> {
+        let current = reader.stream_position().map_err(|error| {
             ImgQualityError::AnalysisError(format!(
-                "PNG chunk too large to seek while parsing {context}: {e}"
+                "Failed to locate PNG stream while parsing {context}: {error}"
             ))
         })?;
-        reader.seek(SeekFrom::Current(offset)).map_err(|e| {
-            ImgQualityError::AnalysisError(format!("Failed to seek past {context}: {e}"))
+        let next = current
+            .checked_add(bytes)
+            .filter(|next| *next <= stream_end)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "PNG {context} extends beyond the end of the file"
+                ))
+            })?;
+        reader.seek(SeekFrom::Start(next)).map_err(|error| {
+            ImgQualityError::AnalysisError(format!("Failed to seek past PNG {context}: {error}"))
         })?;
         Ok(())
     }
+
+    let initial_position = reader.stream_position().map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Failed to locate PNG stream start: {error}"))
+    })?;
+    let stream_end = reader.seek(SeekFrom::End(0)).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Failed to locate PNG stream end: {error}"))
+    })?;
+    reader
+        .seek(SeekFrom::Start(initial_position))
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!("Failed to rewind PNG stream: {error}"))
+        })?;
 
     let mut header = [0u8; 8];
 
@@ -2352,6 +2479,18 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     reader
         .read_exact(&mut ihdr_header)
         .map_err(|e| ImgQualityError::AnalysisError(format!("Missing IHDR: {e}")))?;
+    if u32::from_be_bytes([
+        ihdr_header[0],
+        ihdr_header[1],
+        ihdr_header[2],
+        ihdr_header[3],
+    ]) != 13
+        || &ihdr_header[4..8] != b"IHDR"
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG must begin with a 13-byte IHDR chunk".to_string(),
+        ));
+    }
     let mut ihdr_data = [0u8; 13];
     reader
         .read_exact(&mut ihdr_data)
@@ -2361,12 +2500,33 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     let bit_depth = ihdr_data[8];
     let color_type = ihdr_data[9];
-    skip_bytes(&mut reader, 4, "IHDR CRC")?;
+    let compression_method = ihdr_data[10];
+    let filter_method = ihdr_data[11];
+    let interlace_method = ihdr_data[12];
+    if width == 0 || height == 0 || width > PNG_DIMENSION_MAX || height > PNG_DIMENSION_MAX {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG IHDR dimensions are outside the valid range".to_string(),
+        ));
+    }
+    let valid_depth = match color_type {
+        0 => [1, 2, 4, 8, 16].contains(&bit_depth),
+        2 | 4 | 6 => [8, 16].contains(&bit_depth),
+        3 => [1, 2, 4, 8].contains(&bit_depth),
+        _ => false,
+    };
+    if !valid_depth || compression_method != 0 || filter_method != 0 || interlace_method > 1 {
+        return Err(ImgQualityError::AnalysisError(
+            "PNG IHDR contains an unsupported format field".to_string(),
+        ));
+    }
+    skip_bytes(&mut reader, 4, stream_end, "IHDR CRC")?;
 
     let mut palette_size: Option<usize> = None;
     let mut has_trns = false;
     let mut has_text_chunks = false;
     let mut detected_tool: Option<String> = None;
+    let mut decompressed_text_budget = crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT;
+    let mut saw_idat = false;
 
     let signatures: &[(&str, &str)] = &[
         ("pngquant", "pngquant"),
@@ -2397,7 +2557,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
     loop {
         match reader.read_exact(&mut buf) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(ImgQualityError::AnalysisError(
+                    "PNG ended before the IEND chunk".to_string(),
+                ));
+            }
             Err(e) => {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "Failed to read PNG chunk header: {e}"
@@ -2408,7 +2572,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
         let chunk_type = &buf[4..8];
 
         match chunk_type {
-            b"PLTE" if color_type == 3 => {
+            b"PLTE" => {
                 let plte_len =
                     crate::numeric_cast::u64_to_usize_strict(chunk_len, "PLTE chunk_len")
                         .ok_or_else(|| {
@@ -2416,12 +2580,28 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                                 "Invalid PLTE length: {chunk_len}"
                             ))
                         })?;
-                palette_size = Some(plte_len / 3);
-                skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
+                if plte_len == 0 || plte_len > 768 || plte_len % 3 != 0 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "Invalid PLTE length: {plte_len}"
+                    )));
+                }
+                if color_type == 0 || color_type == 4 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PLTE is forbidden for greyscale PNG images".to_string(),
+                    ));
+                }
+                if color_type == 3 {
+                    palette_size = Some(plte_len / 3);
+                }
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "PLTE chunk")?;
+            }
+            b"IDAT" => {
+                saw_idat = true;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "IDAT chunk")?;
             }
             b"tRNS" => {
                 has_trns = true;
-                skip_bytes(&mut reader, chunk_len + 4, "tRNS chunk")?;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "tRNS chunk")?;
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
@@ -2433,9 +2613,10 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             ))
                         })?;
                 if text_len > crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT {
-                    return Err(ImgQualityError::AnalysisError(
-                        "PNG text chunk exceeds 10MB safety limit".to_string(),
-                    ));
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "PNG text chunk exceeds {} byte safety limit",
+                        crate::constants::PNG_TEXT_CHUNK_SIZE_LIMIT
+                    )));
                 }
                 let mut payload = vec![0u8; text_len];
                 reader.read_exact(&mut payload).map_err(|e| {
@@ -2443,84 +2624,140 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                         "Failed to read PNG text chunk payload: {e}"
                     ))
                 })?;
-                if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                    let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                let null_pos = payload.iter().position(|&b| b == 0).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "PNG text chunk is missing its keyword separator".to_string(),
+                    )
+                })?;
+                if !(1..=79).contains(&null_pos) {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG text keyword length must be between 1 and 79 bytes".to_string(),
+                    ));
+                }
+                let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                for &(pattern, tool_name) in signatures {
+                    if keyword.contains(pattern) {
+                        detected_tool = Some(tool_name.to_string());
+                        break;
+                    }
+                }
+
+                if detected_tool.is_none() {
+                    let (text_payload, is_compressed) = match chunk_type {
+                        b"zTXt" => {
+                            let method = payload.get(null_pos + 1).copied().ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG zTXt chunk is missing its compression method".to_string(),
+                                )
+                            })?;
+                            if method != 0 {
+                                return Err(ImgQualityError::AnalysisError(format!(
+                                    "PNG zTXt chunk uses unsupported compression method {method}"
+                                )));
+                            }
+                            let compressed = payload.get(null_pos + 2..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG zTXt chunk is missing compressed text".to_string(),
+                                )
+                            })?;
+                            (compressed, true)
+                        }
+                        b"iTXt" => {
+                            let comp_flag =
+                                payload.get(null_pos + 1).copied().ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its compression flag"
+                                            .to_string(),
+                                    )
+                                })?;
+                            let method = payload.get(null_pos + 2).copied().ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG iTXt chunk is missing its compression method".to_string(),
+                                )
+                            })?;
+                            if comp_flag > 1 || (comp_flag == 1 && method != 0) {
+                                return Err(ImgQualityError::AnalysisError(format!(
+                                    "PNG iTXt chunk has invalid compression flag/method {comp_flag}/{method}"
+                                )));
+                            }
+                            let mut pos = null_pos + 3;
+                            let lang_null = payload
+                                .get(pos..)
+                                .and_then(|rest| rest.iter().position(|&byte| byte == 0))
+                                .ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its language separator"
+                                            .to_string(),
+                                    )
+                                })?;
+                            pos += lang_null + 1;
+                            let translated_null = payload
+                                .get(pos..)
+                                .and_then(|rest| rest.iter().position(|&byte| byte == 0))
+                                .ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "PNG iTXt chunk is missing its translated keyword separator"
+                                            .to_string(),
+                                    )
+                                })?;
+                            pos += translated_null + 1;
+                            let text = payload.get(pos..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG iTXt chunk has an invalid text offset".to_string(),
+                                )
+                            })?;
+                            (text, comp_flag == 1)
+                        }
+                        b"tEXt" => {
+                            let text = payload.get(null_pos + 1..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "PNG tEXt chunk has an invalid text offset".to_string(),
+                                )
+                            })?;
+                            (text, false)
+                        }
+                        _ => {
+                            return Err(ImgQualityError::AnalysisError(
+                                "Unsupported PNG text chunk type".to_string(),
+                            ));
+                        }
+                    };
+
+                    let decompressed;
+                    let text = if is_compressed {
+                        decompressed = decompress_png_text_bounded(
+                            text_payload,
+                            &mut decompressed_text_budget,
+                        )?;
+                        String::from_utf8_lossy(&decompressed)
+                    } else {
+                        String::from_utf8_lossy(text_payload)
+                    };
                     for &(pattern, tool_name) in signatures {
-                        if keyword.contains(pattern) {
+                        if text.contains(pattern) {
                             detected_tool = Some(tool_name.to_string());
                             break;
                         }
                     }
-
-                    if detected_tool.is_none() {
-                        let mut text_payload = None;
-                        let mut is_compressed = false;
-
-                        match chunk_type {
-                            b"zTXt" if null_pos + 2 < payload.len() => {
-                                // zTXt: keyword\0 + method(1) + compressed_text
-                                text_payload = Some(&payload[null_pos + 2..]);
-                                is_compressed = true;
-                            }
-                            b"iTXt" if null_pos + 5 < payload.len() => {
-                                // iTXt: keyword\0 + flag(1) + method(1) + lang\0 + trans\0 + text
-                                let comp_flag = payload[null_pos + 1];
-                                let mut pos = null_pos + 3;
-                                if let Some(lang_null) = payload[pos..].iter().position(|&b| b == 0)
-                                {
-                                    pos += lang_null + 1;
-                                    if let Some(trans_null) =
-                                        payload[pos..].iter().position(|&b| b == 0)
-                                    {
-                                        pos += trans_null + 1;
-                                        if pos < payload.len() {
-                                            text_payload = Some(&payload[pos..]);
-                                            is_compressed = comp_flag == 1;
-                                        }
-                                    }
-                                }
-                            }
-                            b"tEXt" => {
-                                text_payload = Some(&payload[null_pos + 1..]);
-                                is_compressed = false;
-                            }
-                            _ => {}
-                        }
-
-                        if let Some(data) = text_payload {
-                            if is_compressed {
-                                let mut decompressed = Vec::new();
-                                // Security: 50MB decompression limit to prevent Zip Bomb / OOM
-                                if flate2::read::ZlibDecoder::new(data)
-                                    .take(52_428_800)
-                                    .read_to_end(&mut decompressed)
-                                    .is_ok()
-                                {
-                                    let text = String::from_utf8_lossy(&decompressed);
-                                    for &(pattern, tool_name) in signatures {
-                                        if text.contains(pattern) {
-                                            detected_tool = Some(tool_name.to_string());
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else {
-                                let text = String::from_utf8_lossy(data);
-                                for &(pattern, tool_name) in signatures {
-                                    if text.contains(pattern) {
-                                        detected_tool = Some(tool_name.to_string());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
-                skip_bytes(&mut reader, 4, "text chunk CRC")?;
+                skip_bytes(&mut reader, 4, stream_end, "text chunk CRC")?;
             }
-            b"IEND" => break,
+            b"IEND" => {
+                if chunk_len != 0 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG IEND chunk must be empty".to_string(),
+                    ));
+                }
+                if !saw_idat {
+                    return Err(ImgQualityError::AnalysisError(
+                        "PNG IEND appeared before any IDAT chunk".to_string(),
+                    ));
+                }
+                skip_bytes(&mut reader, 4, stream_end, "IEND CRC")?;
+                break;
+            }
             _ => {
-                skip_bytes(&mut reader, chunk_len + 4, "PNG chunk")?;
+                skip_bytes(&mut reader, chunk_len + 4, stream_end, "PNG chunk")?;
             }
         }
     }
@@ -2997,7 +3234,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         } else {
             0.0_f64
         };
-        total_score += ch_score * weight;
+        total_score = f64::mul_add(ch_score, weight, total_score);
     }
 
     // Diagonal scan on luma for efficiency — catches diagonal gradients
@@ -3421,26 +3658,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 precision.is_lossless_deterministic = comp == CompressionType::Lossless;
             } else {
                 precision.is_lossless_deterministic =
-                    crate::image_formats::webp::is_lossless_from_bytes(&data);
-                if !precision.is_lossless_deterministic {
-                    precision.quality_estimate = match estimate_webp_quality(path) {
-                        Ok(q) => Some(q),
-                        Err(e) => {
-                            crate::media_conversion_gate::probe_layer_audit(
-                                "checkpoint_progress",
-                                path,
-                                format!(
-                                    "WEBP QUALITY AUDIT: Failed to estimate quality for '{}' | \
-                                     Forensic: Error '{}'; refusing to forge data; information \
-                                     invalidated to prevent downstream precision loss",
-                                    path.display(),
-                                    e
-                                ),
-                            );
-                            None
-                        }
-                    };
-                }
+                    crate::image_formats::webp::is_lossless_from_bytes(&data)?;
             }
         }
         DetectedFormat::JPEG => {
@@ -3794,7 +4012,7 @@ fn estimate_png_quantized_quality(
     };
 
     let range = crate::constants::PNG_QUALITY_EST_MAX - crate::constants::PNG_QUALITY_EST_MIN;
-    let q = crate::constants::PNG_QUALITY_EST_MIN + adjusted * range;
+    let q = f64::mul_add(adjusted, range, crate::constants::PNG_QUALITY_EST_MIN);
     let result = crate::numeric_cast::f64_to_u8_strict(q.round(), "png_estimated_quality")
         .ok_or_else(|| {
             ImgQualityError::AnalysisError(format!(
@@ -3936,11 +4154,6 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     Ok(analysis.estimated_quality)
 }
 
-/// Estimate WebP VP8 quality by parsing the bitstream quantization index.
-fn estimate_webp_quality(path: &Path) -> Result<u8> {
-    crate::image_formats::webp::estimate_quality(path)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ApngTimingStats {
     pub frame_count: u32,
@@ -3948,63 +4161,23 @@ pub(crate) struct ApngTimingStats {
     pub fps: f64,
 }
 
-fn apng_frame_delay_secs(delay_num: u16, delay_den: u16) -> f64 {
-    let den = if delay_den == 0 { 100_u16 } else { delay_den };
-    f64::from(delay_num) / f64::from(den)
-}
-
 /// Aggregate APNG timing from `fcTL` frame delays and `acTL` frame count.
 #[must_use]
 pub(crate) fn apng_timing_stats_from_bytes(data: &[u8]) -> Option<ApngTimingStats> {
-    let (is_animated, frame_count) = parse_apng_frames(data);
-    if !is_animated || frame_count <= 1 {
+    let info = match crate::image::png_validation::parse_apng_animation(data) {
+        Ok(info) => info?,
+        Err(error) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "apng_timing_parse_failed",
+                format!("APNG timing parse failed: {error}"),
+            );
+            return None;
+        }
+    };
+    let frame_count = info.frame_count;
+    let duration_secs = info.duration_secs;
+    if frame_count <= 1 {
         return None;
-    }
-
-    let mut duration_secs = 0.0_f64;
-    let mut pos = 8usize;
-    while pos + 12 <= data.len() {
-        let Some(length_bytes) = data.get(pos..pos + 4) else {
-            break;
-        };
-        let length = u32::from_be_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]);
-        pos += 4;
-
-        let Some(chunk_type) = data.get(pos..pos + 4) else {
-            break;
-        };
-        pos += 4;
-
-        if chunk_type == b"fcTL" {
-            let Some(chunk_data_size) =
-                crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-            else {
-                break;
-            };
-            if chunk_data_size >= 26 && pos + 24 <= data.len() {
-                let delay_num = u16::from_be_bytes([data[pos + 20], data[pos + 21]]);
-                let delay_den = u16::from_be_bytes([data[pos + 22], data[pos + 23]]);
-                let delay = apng_frame_delay_secs(delay_num, delay_den);
-                if delay.is_finite() && delay >= 0.0_f64 {
-                    duration_secs += delay;
-                }
-            }
-        }
-
-        let Some(chunk_data_size) =
-            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-        else {
-            break;
-        };
-        if pos > data.len().saturating_sub(chunk_data_size.saturating_add(4)) {
-            break;
-        }
-        pos += chunk_data_size.saturating_add(4);
     }
 
     if !duration_secs.is_finite() || duration_secs <= f64::EPSILON {
@@ -4036,12 +4209,18 @@ pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
         );
         chunk.extend_from_slice(chunk_type);
         chunk.extend_from_slice(payload);
-        chunk.extend_from_slice(&[0, 0, 0, 0]);
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(chunk_type);
+        hasher.update(payload);
+        chunk.extend_from_slice(&hasher.finalize().to_be_bytes());
         chunk
     }
 
-    fn fctl_chunk(delay_num: u16, delay_den: u16) -> Vec<u8> {
+    fn fctl_chunk(sequence: u32, delay_num: u16, delay_den: u16) -> Vec<u8> {
         let mut payload = vec![0u8; 26];
+        payload[0..4].copy_from_slice(&sequence.to_be_bytes());
+        payload[7] = 1;
+        payload[11] = 1;
         payload[20] = crate::numeric_cast::u16_high8_to_u8(delay_num);
         payload[21] = crate::numeric_cast::u16_low8_to_u8(delay_num);
         payload[22] = crate::numeric_cast::u16_high8_to_u8(delay_den);
@@ -4053,70 +4232,17 @@ pub(crate) fn synthetic_two_frame_apng_for_test() -> Vec<u8> {
     let ihdr = [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0];
     data.extend(png_chunk(b"IHDR", &ihdr));
     data.extend(png_chunk(b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]));
-    data.extend(fctl_chunk(1, 100));
-    data.extend(fctl_chunk(2, 100));
+    data.extend(fctl_chunk(0, 1, 100));
+    data.extend(png_chunk(
+        b"IDAT",
+        &[0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01],
+    ));
+    data.extend(fctl_chunk(1, 2, 100));
+    let mut second_frame = 2u32.to_be_bytes().to_vec();
+    second_frame.extend_from_slice(&[0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01]);
+    data.extend(png_chunk(b"fdAT", &second_frame));
     data.extend(png_chunk(b"IEND", &[]));
     data
-}
-
-/// Parse APNG (Animated PNG) frame count from PNG data
-/// Returns (`is_animated`, `frame_count`)
-pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
-    // Look for acTL (Animation Control) chunk
-    let mut pos = 8; // Skip PNG signature
-    while pos + 12 <= data.len() {
-        // Read chunk length (big-endian)
-        let Some(length_bytes) = data.get(pos..pos + 4) else {
-            break;
-        };
-        let length = u32::from_be_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]);
-        pos += 4;
-
-        // Read chunk type
-        let Some(chunk_type) = data.get(pos..pos + 4) else {
-            break;
-        };
-        pos += 4;
-
-        // Check if this is acTL chunk
-        if chunk_type == b"acTL" {
-            if pos + 4 <= data.len() {
-                // Read num_frames (first 4 bytes of acTL data)
-                let Some(num_frames_bytes) = data.get(pos..pos + 4) else {
-                    break;
-                };
-                let num_frames = u32::from_be_bytes([
-                    num_frames_bytes[0],
-                    num_frames_bytes[1],
-                    num_frames_bytes[2],
-                    num_frames_bytes[3],
-                ]);
-                return (num_frames > 1, num_frames.max(1));
-            }
-            crate::media_conversion_gate::probe_layer_batch_audit(
-                "delivery_db_numeric",
-                "PNG DECODE AUDIT: acTL chunk found but num_frames data is missing/truncated! | \
-                 Forensic: Malformed APNG bitstream; refusing to forge frame count to prevent \
-                 downstream numeric corruption",
-            );
-            return (true, 0); // Honest report: it's animated, but count is unknown
-        }
-
-        // Skip chunk data and CRC
-        let Some(chunk_data_size) =
-            crate::numeric_cast::u32_to_usize_strict(length, "png_chunk_size")
-        else {
-            break;
-        };
-        pos += chunk_data_size + 4;
-    }
-
-    (false, 1)
 }
 
 // ============================================================================
@@ -4145,7 +4271,7 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
     }
 }
 
-/// Detect AVIF lossless encoding — multi-dimension analysis.
+/// Detect AVIF compression from positive codec evidence.
 fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4154,14 +4280,10 @@ fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_formats::avif::is_lossless_from_bytes(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
-    }
+    crate::image_formats::avif::classify_compression(&data, path)
 }
 
-/// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
+/// Detect HEIC/HEIF compression from positive codec evidence.
 fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(
         path,
@@ -4170,11 +4292,7 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_heic_analysis::detect_heic_is_lossless(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
-    }
+    crate::image_heic_analysis::classify_heic_compression(&data, path)
 }
 
 /// Detect ICO compression by inspecting embedded image entries.
@@ -4185,10 +4303,17 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
 fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
+    let file_len = file.metadata().map_err(ImgQualityError::IoError)?.len();
+    if file_len > crate::constants::IMAGE_ANALYSIS_FILE_SIZE_LIMIT {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "ICO: file is too large ({file_len} bytes > {} max allowed)",
+            crate::constants::IMAGE_ANALYSIS_FILE_SIZE_LIMIT,
+        )));
+    }
 
     // ICO header: reserved(2) + type(2) + count(2) = 6 bytes
     let mut header = [0u8; 6];
-    file.read(&mut header).map_err(|err| {
+    file.read_exact(&mut header).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "ICO: failed to read 6-byte header from '{}': {err}",
             path.display()
@@ -4196,6 +4321,30 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     })?;
 
     let image_count = usize::from(u16::from_le_bytes([header[4], header[5]]));
+    if header[0..2] != [0, 0] || header[2..4] != [1, 0] || image_count == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "ICO: invalid ICONDIR header in '{}' (reserved={}, type={}, count={image_count})",
+            path.display(),
+            u16::from_le_bytes([header[0], header[1]]),
+            u16::from_le_bytes([header[2], header[3]]),
+        )));
+    }
+    let directory_end = 6_u64
+        .checked_add(
+            u64::try_from(image_count).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: image count conversion failed in '{}': {error}",
+                    path.display()
+                ))
+            })? * 16,
+        )
+        .filter(|end| *end <= file_len)
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: directory for {image_count} images exceeds file length {file_len} in '{}'",
+                path.display()
+            ))
+        })?;
     let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     // Each directory entry is 16 bytes, starting at offset 6
@@ -4205,37 +4354,21 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
                 ImgQualityError::AnalysisError(format!("ICO index conversion failed for entry {i}"))
             })?
             * 16;
-        if file.seek(SeekFrom::Start(entry_offset)).is_err() {
-            crate::media_conversion_gate::probe_layer_audit(
-                "delivery_db_metadata",
-                path,
-                format!(
-                    "ICO DECODE AUDIT: Failed to seek to entry {} at offset {} for '{}' | \
-                     Forensic: IO failure during directory traversal; breaking loop to prevent \
-                     corrupt metadata emission",
-                    i,
-                    entry_offset,
-                    path.display()
-                ),
-            );
-            break;
-        }
+        file.seek(SeekFrom::Start(entry_offset))
+            .map_err(ImgQualityError::IoError)?;
 
         let mut entry = [0u8; 16];
-        if file.read(&mut entry).is_err() {
-            crate::media_conversion_gate::probe_layer_audit(
-                "probe_image_detection",
-                path,
-                format!(
-                    "ICO DECODE AUDIT: Truncated entry {} at offset {} for '{}' | Forensic: \
-                     Unexpected EOF during directory parse; breaking loop to prevent \
-                     out-of-bounds access",
-                    i,
-                    entry_offset,
-                    path.display()
-                ),
-            );
-            break;
+        file.read_exact(&mut entry).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: directory entry {i} is truncated in '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if entry[3] != 0 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "ICO: directory entry {i} has non-zero reserved byte in '{}'",
+                path.display()
+            )));
         }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
@@ -4245,59 +4378,45 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         let img_offset = u64::from(u32::from_le_bytes([
             entry[12], entry[13], entry[14], entry[15],
         ]));
+        let img_end = img_offset
+            .checked_add(img_size)
+            .filter(|end| img_size >= 8 && img_offset >= directory_end && *end <= file_len)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: entry {i} image range offset={img_offset}, size={img_size} is outside \
+                     data region {directory_end}..{file_len} in '{}'",
+                    path.display()
+                ))
+            })?;
 
-        // Peak into image data for PNG magic
-        match file.seek(SeekFrom::Start(img_offset)) {
-            Ok(_) => {
-                let mut magic_peek = [0u8; 8];
-                match file.read_exact(&mut magic_peek) {
-                    Ok(()) if magic_peek == png_magic => {
-                        // Seek back to start of image data for full analysis
-                        file.seek(SeekFrom::Start(img_offset))?;
-                        let mut img_reader = (&file).take(img_size);
-                        // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't
-                        // provide it easily, we read the PNG part into
-                        // memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
-                        // This is infinitely safer than loading the whole 64MB ICO.
-                        let Some(png_capacity) =
-                            crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
-                        else {
-                            crate::media_conversion_gate::probe_layer_audit(
-                                "delivery_db_numeric",
-                                path,
-                                format!(
-                                    "ICO DECODE AUDIT: Image size {} in '{}' overflows usize | \
-                                     Forensic: Magnitude exceeds platform pointer width; skipping \
-                                     entry to prevent OOM panic",
-                                    img_size,
-                                    path.display()
-                                ),
-                            );
-                            continue;
-                        };
-                        let mut png_data = Vec::with_capacity(png_capacity);
-                        img_reader.read_to_end(&mut png_data)?;
-                        let analysis = analyze_png_quantization_from_bytes(&png_data)?;
-                        if analysis.is_quantized {
-                            return Ok(CompressionType::Lossy);
-                        }
-                    }
-                    Ok(()) => {}
-                    Err(err) => {
-                        crate::media_conversion_gate::probe_layer_audit(
-                            "ico_embedded_png_magic_read_failed",
-                            path,
-                            format!("failed to read embedded ICO image magic: {err}"),
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                crate::media_conversion_gate::probe_layer_audit(
-                    "ico_embedded_png_seek_failed",
-                    path,
-                    format!("failed to seek to embedded ICO image offset {img_offset}: {err}"),
-                );
+        file.seek(SeekFrom::Start(img_offset))
+            .map_err(ImgQualityError::IoError)?;
+        let mut magic_peek = [0u8; 8];
+        file.read_exact(&mut magic_peek).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "ICO: failed to read entry {i} image header ending at {img_end} in '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if magic_peek == png_magic {
+            file.seek(SeekFrom::Start(img_offset))
+                .map_err(ImgQualityError::IoError)?;
+            let png_len = crate::numeric_cast::u64_to_usize_strict(img_size, "ico_img_size")
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(format!(
+                        "ICO: entry {i} image size {img_size} overflows usize in '{}'",
+                        path.display()
+                    ))
+                })?;
+            let mut png_data = vec![0; png_len];
+            file.read_exact(&mut png_data).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "ICO: entry {i} PNG payload changed or truncated during read in '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            if analyze_png_quantization_from_bytes(&png_data)?.is_quantized {
+                return Ok(CompressionType::Lossy);
             }
         }
     }
@@ -4472,12 +4591,12 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     Ok(CompressionType::Lossless)
 }
 
-/// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.
+/// Detect positive JPEG 2000 lossy evidence by parsing COD and COC markers.
 ///
 /// COD (Coding style Default, FF 52) contains default `SPcod` parameters; the
 /// last byte is the wavelet transform type:
 ///   - 0 = 9/7 irreversible (lossy)
-///   - 1 = 5/3 reversible (lossless)
+///   - 1 = 5/3 reversible (necessary but insufficient evidence for lossless)
 ///
 /// COC (Component-specific coding style, FF 53) can override COD for specific
 /// components. For multi-component images (e.g. DICOM-JP2), if COD=9/7 but COC
@@ -4495,225 +4614,266 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
 
     let data = std::fs::read(path)?;
     if data.len() < 4 {
-        return Ok(CompressionType::Lossy);
+        return Err(ImgQualityError::AnalysisError(format!(
+            "JP2: file is too short ({len} bytes) to contain a codestream — {}",
+            path.display(),
+            len = data.len()
+        )));
     }
 
-    // Determine where the codestream starts
-    let cs_start = if data.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
-        // Raw codestream
-        0
+    let cs = if data.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
+        data.as_slice()
     } else {
-        // JP2 container — find jp2c box
-        find_jp2c_offset(&data).ok_or_else(|| {
+        crate::common_utils::find_box_data_recursive(&data, *b"jp2c").ok_or_else(|| {
             ImgQualityError::AnalysisError(
                 "Could not find JPEG 2000 codestream (jp2c box)".to_string(),
             )
         })?
     };
 
-    // Scan for COD and COC markers in the codestream header area
-    // COD/COC must appear before the first tile-part, so limit scan to first 4KB of
-    // codestream
-    let scan_end = (cs_start + 4096).min(data.len());
-    let cs = data.get(cs_start..scan_end).ok_or_else(|| {
-        ImgQualityError::AnalysisError("Required byte slice missing (out of bounds)".to_string())
-    })?;
-
-    let (cod_wavelet, coc_wavelets) = find_jp2_wavelets(cs);
-
-    // Check COD default wavelet
-    if let Some(wavelet) = cod_wavelet {
+    // Resolve main-header COD/COC defaults plus first-tile overrides exactly.
+    // Inspecting only the main COD is unsafe: a tile COD can replace it for
+    // every component. Conversely, one effective 9/7 component in a real tile
+    // is sufficient positive proof that the codestream is lossy.
+    let wavelets = first_jp2_tile_wavelets(cs)?;
+    for (component, wavelet) in wavelets.iter().copied().enumerate() {
         if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
             crate::log_detail!(&format!(
-                "   📊 JP2 COD wavelet: {} ({})",
-                wavelet,
-                if wavelet == 1 {
-                    "5/3 reversible — lossless"
-                } else {
-                    "9/7 irreversible — lossy"
-                }
-            ));
-        }
-        // If COD is lossy and no COC overrides, it's lossy
-        if wavelet == 0 && coc_wavelets.is_empty() {
-            return Ok(CompressionType::Lossy);
-        }
-    }
-
-    // Check COC component-specific wavelets
-    for (component, wavelet) in &coc_wavelets {
-        if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
-            crate::log_detail!(&format!(
-                "   📊 JP2 COC component {} wavelet: {} ({})",
+                "   📊 JP2 first-tile component {} wavelet: {} ({})",
                 component,
                 wavelet,
-                if *wavelet == 1 {
-                    "5/3 reversible — lossless"
+                if wavelet == 1 {
+                    "5/3 reversible — losslessness unproven"
                 } else {
                     "9/7 irreversible — lossy"
                 }
             ));
         }
         // Any lossy component → entire file is lossy
-        if *wavelet == 0 {
+        if wavelet == 0 {
             return Ok(CompressionType::Lossy);
         }
     }
 
-    // All components are lossless (or only COD found and it's lossless)
-    if cod_wavelet == Some(1) || !coc_wavelets.is_empty() {
-        return Ok(CompressionType::Lossless);
-    }
-
-    // Couldn't find COD — default to lossy (safer assumption for JP2)
-    Ok(CompressionType::Lossy)
+    // A reversible wavelet alone does not prove a lossless codestream: QCD/QCC
+    // quantization and component transforms must also be reversible. Until the
+    // complete main header is proven, retain the source rather than fabricating
+    // a Lossless verdict.
+    Ok(CompressionType::Unknown)
 }
 
-/// Find the offset of the jp2c (contiguous codestream) box payload in a JP2
-/// container.
-fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
-    let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_strict(
-            data.get_u32_be_strict(pos, "JP2 box size")?,
-            "jp2_box_size",
-        )?;
-        let box_type = crate::media_conversion_gate::probe_jpeg_buffer_slice(
-            data,
-            (pos + 4)..(pos + 8),
-            "jp2 box type",
-        );
-
-        if box_type == b"jp2c" {
-            return Some(pos + 8);
-        }
-
-        if size == 0 {
-            break;
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                break;
-            }
-            let ext = crate::numeric_cast::u64_to_usize_strict(
-                data.get_u64_be_strict(pos + 8, "JP2 extended box size")?,
-                "jp2_ext_box_size",
-            )?;
-            pos += ext;
-        } else if size < 8 {
-            break;
-        } else {
-            pos += size;
-        }
+/// Resolve the effective wavelet for every component of the first real tile.
+/// Main-header parameters are copied to each tile; tile COD replaces all
+/// component defaults, then tile COC replaces one component.
+fn first_jp2_tile_wavelets(cs: &[u8]) -> Result<Vec<u8>> {
+    if !cs.starts_with(&[0xFF, 0x4F]) {
+        return Err(ImgQualityError::AnalysisError(
+            "JP2: codestream does not start with SOC".to_string(),
+        ));
     }
-    None
-}
 
-/// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform
-/// types. Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
-/// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible
-/// (lossless). COC: component-specific overrides.
-fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
-    let mut cod_wavelet: Option<u8> = None;
-    let mut coc_wavelets: Vec<(u16, u8)> = Vec::new();
-
-    // Walk markers: each marker is FF xx, followed by 2-byte length (except
-    // SOC=FF4F, SOD=FF93)
+    let mut main_wavelets: Option<Vec<Option<u8>>> = None;
+    let mut tile_wavelets: Option<Vec<Option<u8>>> = None;
     let mut pos = 0;
     while pos + 2 <= cs.len() {
         if cs.get(pos) != Some(&0xFF) {
-            pos += 1;
-            continue;
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: expected marker at codestream offset {pos}"
+            )));
         }
         let Some(marker) = cs.get_byte_strict(pos + 1, "JP2 marker") else {
-            break;
+            return Err(ImgQualityError::AnalysisError(
+                "JP2: truncated marker".to_string(),
+            ));
         };
 
-        // SOC (FF 4F) — no length field
         if marker == 0x4F {
+            if pos != 0 {
+                return Err(ImgQualityError::AnalysisError(
+                    "JP2: duplicate SOC marker".to_string(),
+                ));
+            }
             pos += 2;
             continue;
         }
-        // SOD (FF 93) — start of data, stop scanning
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
         if marker == 0x93 {
-            break;
+            let wavelets = tile_wavelets.ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "JP2: SOD encountered before a first-tile SOT marker".to_string(),
+                )
+            })?;
+            return wavelets
+                .into_iter()
+                .enumerate()
+                .map(|(component, wavelet)| {
+                    wavelet.ok_or_else(|| {
+                        ImgQualityError::AnalysisError(format!(
+                            "JP2: no effective COD/COC wavelet for component {component}"
+                        ))
+                    })
+                })
+                .collect();
         }
 
-        // COD marker (FF 52)
-        if marker == 0x52 && pos + 4 <= cs.len() {
-            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COD segment length") else {
-                break;
-            };
-            let Some(seg_len) =
-                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
-            else {
-                break;
-            };
-            // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
-            // SPcod starts at offset 5 within segment data
-            // SPcod layout: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
-            // So transform byte is at segment_data[5 + 4] = segment_data[9]
-            // segment_data starts at pos+4, so transform is at pos+4+9 = pos+13
-            let transform_offset = pos + 4 + 9;
-            if transform_offset < cs.len() && seg_len >= 10 {
-                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COD wavelet") else {
-                    break;
-                };
-                if wavelet <= 1 {
-                    cod_wavelet = Some(wavelet);
-                }
-            }
-        }
-
-        // COC marker (FF 53) — component-specific coding style
-        if marker == 0x53 && pos + 4 <= cs.len() {
-            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COC segment length") else {
-                break;
-            };
-            let Some(seg_len) =
-                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_coc_seg_len")
-            else {
-                break;
-            };
-            // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
-            // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
-            // We'll assume 1 byte for simplicity (most common case)
-            // SPcoc layout is same as SPcod: NL(1) + cb_width(1) + cb_height(1) +
-            // cb_style(1) + transform(1)
-            let component_offset = pos + 4;
-            let spcoc_offset = component_offset + 1; // Ccoc (1 byte) + Scoc (1 byte) = 2 bytes before SPcoc
-            let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
-
-            if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let Some(comp_idx) =
-                    cs.get_byte_strict(component_offset, "JP2 COC component index")
-                else {
-                    break;
-                };
-                let component = u16::from(comp_idx);
-                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COC wavelet") else {
-                    break;
-                };
-                if wavelet <= 1 {
-                    coc_wavelets.push((component, wavelet));
-                }
-            }
-        }
-
-        // Skip marker segment
         if pos + 4 > cs.len() {
-            break;
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: truncated marker segment 0xff{marker:02x}"
+            )));
         }
-        let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 segment length") else {
-            break;
-        };
-        let Some(seg_len) = crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
-        else {
-            break;
-        };
-        pos += 2 + seg_len;
+        let seg_len = usize::from(
+            cs.get_u16_be_strict(pos + 2, "JP2 segment length")
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError("JP2: missing segment length".to_string())
+                })?,
+        );
+        if seg_len < 2 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: invalid segment length {seg_len} for marker 0xff{marker:02x}"
+            )));
+        }
+        let next = pos
+            .checked_add(2)
+            .and_then(|v| v.checked_add(seg_len))
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError("JP2: marker boundary overflow".to_string())
+            })?;
+        if next > cs.len() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: marker 0xff{marker:02x} exceeds codestream boundary"
+            )));
+        }
+        let segment = crate::media_conversion_gate::probe_jpeg_buffer_slice(
+            cs,
+            pos..next,
+            "JP2 marker segment",
+        );
+        if segment.len() != next - pos {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: marker 0xff{marker:02x} slice is incomplete"
+            )));
+        }
+
+        match marker {
+            0x51 => {
+                if main_wavelets.is_some() || tile_wavelets.is_some() || seg_len < 41 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: invalid or duplicate SIZ marker".to_string(),
+                    ));
+                }
+                let components = usize::from(
+                    segment
+                        .get_u16_be_strict(38, "JP2 SIZ component count")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError("JP2: truncated SIZ marker".to_string())
+                        })?,
+                );
+                let expected = 38usize
+                    .checked_add(components.checked_mul(3).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: SIZ component count overflow".to_string(),
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: SIZ length overflow".to_string())
+                    })?;
+                if components == 0 || seg_len != expected {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: SIZ length {seg_len} does not match {components} components"
+                    )));
+                }
+                main_wavelets = Some(vec![None; components]);
+            }
+            0x52 => {
+                if seg_len < 12 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: COD marker is too short".to_string(),
+                    ));
+                }
+                let wavelet = segment
+                    .get_byte_strict(13, "JP2 COD wavelet")
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: truncated COD marker".to_string())
+                    })?;
+                if wavelet > 1 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: invalid COD wavelet {wavelet}"
+                    )));
+                }
+                let target = tile_wavelets
+                    .as_mut()
+                    .or(main_wavelets.as_mut())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: COD encountered before SIZ".to_string(),
+                        )
+                    })?;
+                target.fill(Some(wavelet));
+            }
+            0x53 => {
+                let target = tile_wavelets
+                    .as_mut()
+                    .or(main_wavelets.as_mut())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: COC encountered before SIZ".to_string(),
+                        )
+                    })?;
+                let component_bytes = if target.len() <= 256 { 1 } else { 2 };
+                let minimum = 8 + component_bytes;
+                if seg_len < minimum {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: COC marker is too short".to_string(),
+                    ));
+                }
+                let component = if component_bytes == 1 {
+                    usize::from(segment.get_byte_strict(4, "JP2 COC component").ok_or_else(
+                        || ImgQualityError::AnalysisError("JP2: truncated COC marker".to_string()),
+                    )?)
+                } else {
+                    usize::from(
+                        segment
+                            .get_u16_be_strict(4, "JP2 COC component")
+                            .ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "JP2: truncated COC marker".to_string(),
+                                )
+                            })?,
+                    )
+                };
+                let wavelet = segment
+                    .get_byte_strict(9 + component_bytes, "JP2 COC wavelet")
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: truncated COC marker".to_string())
+                    })?;
+                if component >= target.len() || wavelet > 1 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: invalid COC component/wavelet ({component}, {wavelet})"
+                    )));
+                }
+                target[component] = Some(wavelet);
+            }
+            0x90 => {
+                if tile_wavelets.is_some() {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: second SOT encountered before first SOD".to_string(),
+                    ));
+                }
+                tile_wavelets = Some(main_wavelets.clone().ok_or_else(|| {
+                    ImgQualityError::AnalysisError("JP2: SOT encountered before SIZ".to_string())
+                })?);
+            }
+            _ => {}
+        }
+        pos = next;
     }
 
-    (cod_wavelet, coc_wavelets)
+    Err(ImgQualityError::AnalysisError(
+        "JP2: first tile header ended without SOD".to_string(),
+    ))
 }
 
 /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
@@ -4725,11 +4885,27 @@ fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
     .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if crate::image_formats::jxl::is_lossless_from_bytes(&data, path)? {
-        Ok(CompressionType::Lossless)
-    } else {
-        Ok(CompressionType::Lossy)
+    let internal = crate::image_formats::jxl::classify_compression(&data, path)?;
+    if internal != CompressionType::Unknown || !JxlinfoBuilder::new().check_available() {
+        return Ok(internal);
     }
+
+    let output = run_jxlinfo_bounded(path, "JXL Modular compression classification")?;
+    if !output.status.success() {
+        tracing::debug!(
+            target: "jxlinfo_probe",
+            path = %path.display(),
+            status = %output.status,
+            "jxlinfo could not refine JXL compression; retaining Unknown"
+        );
+        return Ok(CompressionType::Unknown);
+    }
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(parse_jxlinfo_compression_hint(&combined).unwrap_or(CompressionType::Unknown))
 }
 
 #[cfg(test)]

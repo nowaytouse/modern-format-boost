@@ -29,12 +29,19 @@ pub fn project_root() -> Result<PathBuf> {
     if cwd.join("crates/dev/scripts").is_dir() {
         return Ok(cwd);
     }
-    if let Some(executable_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .filter(|path| path.join("crates/dev/scripts").is_dir())
-    {
-        return Ok(executable_dir);
+    match std::env::current_exe() {
+        Ok(path) => {
+            if let Some(executable_dir) = path
+                .parent()
+                .map(Path::to_path_buf)
+                .filter(|path| path.join("crates/dev/scripts").is_dir())
+            {
+                return Ok(executable_dir);
+            }
+        }
+        Err(error) => {
+            eprintln!("failed to inspect current executable while locating root: {error}")
+        }
     }
     bail!("could not locate repository root (missing Cargo.toml)")
 }

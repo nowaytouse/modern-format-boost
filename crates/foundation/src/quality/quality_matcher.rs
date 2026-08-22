@@ -308,7 +308,7 @@ impl SourceCodec {
     /// This is the "Tight Entry" mechanism that avoids relying on file
     /// extensions.
     pub fn identify_by_content(path: &std::path::Path) -> std::io::Result<Option<Self>> {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::Read;
         let mut file = std::fs::File::open(path).map_err(|e| {
             crate::media_conversion_gate::probe_quality_layer_audit(
                 "quality_matcher_open_failed",
@@ -323,7 +323,7 @@ impl SourceCodec {
                 ),
             )
         })?;
-        let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
+        let mut header = [0u8; 64]; // Expanded to capture the WebP VP8X header.
         let n = file.read(&mut header).map_err(|e| {
             crate::media_conversion_gate::probe_quality_layer_audit(
                 "quality_matcher_header_read_failed",
@@ -394,108 +394,12 @@ impl SourceCodec {
             }
         }
 
-        // Deep APNG verification
-        // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
-        // can push the acTL chunk far beyond the header. We use Seek to jump over chunk
-        // data.
-        if codec == Some(Self::Png) {
-            file.seek(SeekFrom::Start(8)).map_err(|e| {
-                crate::media_conversion_gate::probe_quality_layer_audit(
-                    "quality_matcher_apng_seek_failed",
-                    path,
-                    format!("failed to seek for APNG chunk scan: {e}"),
-                );
-                e
-            })?;
-            let mut chunk_header = [0u8; 8];
-            loop {
-                if let Err(e) = file.read_exact(&mut chunk_header) {
-                    if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                        crate::media_conversion_gate::probe_quality_layer_audit(
-                            "quality_matcher_apng_chunk_read_failed",
-                            path,
-                            format!("failed to read APNG chunk header: {e}"),
-                        );
-                        return Err(e);
-                    }
-                    break;
-                }
-                let b1 = if let Some(b) = chunk_header.first() {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        &format!(
-                            "APNG CORRUPTION AUDIT: Chunk header missing byte 0 at position {:?} \
-                             | Forensic: Unexpected EOF during animation traversal; breaking scan",
-                            file.stream_position()
-                        )
-                    );
-                    break;
-                };
-                let b2 = if let Some(b) = chunk_header.get(1) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 1 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let b3 = if let Some(b) = chunk_header.get(2) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 2 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let b4 = if let Some(b) = chunk_header.get(3) {
-                    *b
-                } else {
-                    crate::log_corruption!(
-                        crate::infra::static_logs::messages::LABEL_ANOMALY,
-                        "APNG CORRUPTION AUDIT: Chunk header missing byte 3 | Forensic: Truncated \
-                         bitstream; breaking scan"
-                    );
-                    break;
-                };
-                let length = u32::from_be_bytes([b1, b2, b3, b4]);
-                let Some(chunk_type) = chunk_header.get(4..8) else {
-                    crate::media_conversion_gate::probe_quality_layer_audit(
-                        "quality_matcher_apng_chunk_type_missing",
-                        path,
-                        format!(
-                            "APNG chunk type missing at position {:?}; terminating animation \
-                             search",
-                            file.stream_position()
-                        ),
-                    );
-                    break;
-                };
-
-                if chunk_type == b"acTL" {
-                    codec = Some(Self::Apng);
-                    break;
-                }
-                if chunk_type == b"IDAT" {
-                    break; // Image data reached; no animation chunk present
-                }
-
-                // Seek past the chunk data and its 4-byte CRC
-                file.seek(SeekFrom::Current(i64::from(length) + 4))
-                    .map_err(|e| {
-                        crate::media_conversion_gate::probe_quality_layer_audit(
-                            "quality_matcher_apng_chunk_seek_failed",
-                            path,
-                            format!("failed to seek past APNG chunk payload length {length}: {e}"),
-                        );
-                        e
-                    })?;
-            }
+        if codec == Some(Self::Png)
+            && crate::image::png_validation::is_apng_file(path).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+            })?
+        {
+            codec = Some(Self::Apng);
         }
 
         Ok(codec)
@@ -515,11 +419,6 @@ impl SourceCodec {
         }
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte
-            // 33 starts the second chunk)
-            if header.len() >= 41 && header.get(37..41) == Some(b"acTL") {
-                return Some(Self::Apng);
-            }
             return Some(Self::Png);
         }
         // GIF: GIF87a / GIF89a
@@ -2496,7 +2395,6 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AppleOutcomeFlags {
-    pub pure_media_compressed: bool,
     pub allow_size_tolerance: bool,
 }
 
@@ -2519,7 +2417,8 @@ pub struct AppleFallbackFlags {
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {
     pub codec_str: &'a str,
-    pub pure_media_size_ratio: f64,
+    pub input_pure_media_size: u64,
+    pub output_pure_media_size: u64,
     pub flags: AppleFallbackFlags,
 }
 
@@ -2537,9 +2436,55 @@ pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<
     {
         return false;
     }
-    request.flags.outcome.pure_media_compressed
-        || (request.flags.outcome.allow_size_tolerance
-            && request.pure_media_size_ratio < crate::constants::SIZE_TOLERANCE_RATIO)
+    crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+        request.flags.outcome.allow_size_tolerance,
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+    )
+    .fits(
+        request.output_pure_media_size,
+        request.input_pure_media_size,
+    )
+}
+
+#[cfg(test)]
+mod apple_fallback_policy_tests {
+    use super::*;
+
+    fn request(
+        output_pure_media_size: u64,
+        allow_size_tolerance: bool,
+    ) -> AppleFallbackKeepRequest<'static> {
+        AppleFallbackKeepRequest {
+            codec_str: "vp9",
+            input_pure_media_size: 10_000_000,
+            output_pure_media_size,
+            flags: AppleFallbackFlags {
+                outcome: AppleOutcomeFlags {
+                    allow_size_tolerance,
+                },
+                context: AppleContextFlags {
+                    apple_compat: true,
+                    source_is_gif: false,
+                    ultimate_explore: false,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn apple_fallback_uses_the_shared_byte_budget() {
+        let ceiling = 10_000_000_u64 + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
+        assert!(!should_keep_apple_fallback_hevc_output(request(
+            10_000_000, false
+        )));
+        assert!(should_keep_apple_fallback_hevc_output(request(
+            ceiling, true
+        )));
+        assert!(!should_keep_apple_fallback_hevc_output(request(
+            ceiling + 1,
+            true
+        )));
+    }
 }
 
 #[must_use]
@@ -4594,19 +4539,27 @@ mod content_id_tests {
             ),
             (
                 "png-as-txt.txt",
-                &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..],
+                &[], // We will override this and save a real PNG
                 SourceCodec::Png,
             ),
             (
                 "heic-as-jpg.jpg",
                 &[
-                    0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c',
+                    0x00, 0x00, 0x00, 0x10, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0x00,
+                    0x00, 0x00, 0x00,
                 ][..],
                 SourceCodec::Heic,
             ),
         ] {
             let path = temp_dir.path().join(rel);
-            std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("Failed to write {rel}: {e:?}"));
+            if expected == SourceCodec::Png {
+                image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+                    .save_with_format(&path, image::ImageFormat::Png)
+                    .unwrap();
+            } else {
+                std::fs::write(&path, bytes)
+                    .unwrap_or_else(|e| panic!("Failed to write {rel}: {e:?}"));
+            }
             let codec = SourceCodec::identify_by_content(&path)
                 .unwrap_or_else(|e| panic!("Content identification failed for {rel}: {e:?}"))
                 .unwrap_or_else(|| panic!("Should identify content for {rel}"));
@@ -4628,8 +4581,12 @@ mod content_id_tests {
 
     #[test]
     fn test_identify_png() {
-        let file = create_temp_with_content(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        let codec = SourceCodec::identify_by_content(file.path())
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("image.png");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+            .save_with_format(&file, image::ImageFormat::Png)
+            .unwrap();
+        let codec = SourceCodec::identify_by_content(&file)
             .expect("PNG content identification must not fail")
             .unwrap_or_else(|| panic!("Should identify PNG"));
         assert_eq!(codec, SourceCodec::Png);
@@ -4678,12 +4635,9 @@ mod content_id_tests {
         let temp_dir =
             tempfile::tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
         let png_as_jpg = temp_dir.path().join("image.jpg");
-        {
-            let mut file = std::fs::File::create(&png_as_jpg)
-                .unwrap_or_else(|e| panic!("Failed to create file: {e:?}"));
-            file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-                .unwrap_or_else(|e| panic!("Failed to write PNG header: {e:?}"));
-        }
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+            .save_with_format(&png_as_jpg, image::ImageFormat::Png)
+            .unwrap();
 
         let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg)
             .unwrap_or_else(|e| panic!("Should fix extension: {e:?}"));

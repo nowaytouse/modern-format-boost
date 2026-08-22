@@ -2411,7 +2411,7 @@ pub fn knn_regression_lookup(
     } else {
         mean
     };
-    let confidence = 1.0 / (1.0 + std * dist_to_nearest);
+    let confidence = 1.0 / std.mul_add(dist_to_nearest, 1.0);
 
     let features = KnnRegressionFeatures {
         knn_score_mean_k5: mean,

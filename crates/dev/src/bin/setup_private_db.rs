@@ -24,6 +24,10 @@ fn main() -> Result<()> {
 
     let mut input = String::new();
     match io::stdin().read_line(&mut input) {
+        Ok(0) => {
+            println!("\nCancelled.");
+            return Ok(());
+        }
         Ok(_) => {}
         Err(err) if err.kind() == io::ErrorKind::Interrupted => {
             println!("\nCancelled.");

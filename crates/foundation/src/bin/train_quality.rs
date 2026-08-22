@@ -454,10 +454,7 @@ fn detect_media_extension(path: &Path) -> String {
         }
     }
 
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) => ext.to_lowercase(),
-        None => String::new(),
-    }
+    String::new()
 }
 
 fn reject_animated_image_quality_asset(path: &Path) -> Result<()> {
@@ -533,6 +530,15 @@ mod tests {
         sample.write_all(b"GIF89a\x01\x00\x01\x00\x00\x00\x00")?;
 
         assert_eq!(detect_media_extension(sample.path()), "gif");
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_content_does_not_fall_back_to_suffix() -> Result<()> {
+        let sample = tempfile::Builder::new().suffix(".gif").tempfile()?;
+        std::fs::write(sample.path(), b"not media")?;
+
+        assert_eq!(detect_media_extension(sample.path()), "");
         Ok(())
     }
 

@@ -153,10 +153,19 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         }
     }
 
-    let is_webp = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("webp"));
+    let is_webp = match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => format == crate::image::format_detect::FormatKind::WebP,
+        Err(error) => {
+            crate::media_conversion_gate::explore_precheck_degraded_audit(
+                "explore_audit",
+                format!(
+                    "Failed to detect content format for frame count ({}): {error}",
+                    path.display()
+                ),
+            );
+            false
+        }
+    };
     if is_webp {
         let data = match std::fs::read(path) {
             Ok(d) => d,

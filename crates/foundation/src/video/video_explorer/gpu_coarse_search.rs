@@ -12,13 +12,15 @@
 //! Final output selection follows the same priorities as the rest of the
 //! explorers:
 //!
-//! 1. **Size Gate**: Output must be smaller than input
-//! 2. **Quality Gates**: standard → `ms_ssim_passed` / SSIM fusion; ultimate →
+//! 1. **Evidence Gate**: the candidate must belong to the final encoder domain
+//! 2. **Size Gate**: output must satisfy the active shared size policy
+//! 3. **Quality Gates**: standard → `ms_ssim_passed` / SSIM fusion; ultimate →
 //!    `ultimate_quality_passed` (VMAF/CAMBI/PSNR-UV)
-//! 3. **Quality Metrics**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
-//! 4. **Size**: Prefer smaller output (tiebreaker)
-//! 5. **CRF**: Prefer lower/more aggressive (tiebreaker)
-//! 6. **Preset**: Prefer higher rank = slower/better quality (tiebreaker)
+//! 4. **Quality Coordinate**: within one domain, lower CRF wins
+//! 5. **Size**: compare only as a same-quality tiebreaker
+//!
+//! Search-preset or sampled-timeline CRF values are locator hints.  A changed
+//! preset/timeline establishes fresh anchors and a bracket in the final domain.
 
 use crate::builder_base::ToolBuilder;
 use anyhow::{Context, Result};
@@ -43,6 +45,9 @@ use crate::constants::{
     LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_SECS,
     VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
+use crate::exploration_policy::{
+    DomainCoordinate, ProbeOutcome, SizePolicy, TimelineDomain, VideoCodecDomain,
+};
 use crate::modern_ui::colors::{BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, DIM, GREEN, RESET};
 use crate::types::EncoderPreset;
 
@@ -51,11 +56,10 @@ const MAX_CONSECUTIVE_FAILURES: u32 = crate::constants::GPU_COARSE_MAX_CONSECUTI
 const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = crate::constants::PHASE4_ULTIMATE_MAX_FINE_FAILURES;
 const PHASE4_MAX_BACKTRACK_RETRIES: u32 = crate::constants::PHASE4_MAX_BACKTRACK_RETRIES;
 const PHASE4_MAX_ATTEMPTS: u32 = crate::constants::PHASE4_MAX_ATTEMPTS;
-/// Maximum number of consecutive non-improving encodes Phase 5 may perform.
-/// This acts as a patience counter (lookahead) to find local minima.
+/// Maximum number of consecutive failed final-domain probes before retaining
+/// the last verified candidate.
 const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = crate::constants::PHASE5_MAX_CONSECUTIVE_FAILURES;
-/// Absolute cap to prevent an infinite march to CRF 0.0 for monotonically
-/// decreasing files.
+/// Absolute cap for final-domain anchor and bracket probes.
 const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = crate::constants::PHASE5_MAX_TOTAL_ATTEMPTS;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 =
     crate::constants::GPU_COARSE_UPWARD_SIZE_STAGNATION_THRESHOLD;
@@ -132,8 +136,6 @@ struct UpwardSearchFeedback {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct UltimateQualityBaselines {
-    search_vmaf_y: Option<f64>,
-    search_psnr_uv: Option<(f64, f64)>,
     source_cambi: Option<f64>,
 }
 
@@ -160,14 +162,6 @@ impl UltimateQualityEvaluation {
     }
 }
 
-fn adaptive_vmaf_floor(search_baseline: Option<f64>) -> Option<f64> {
-    crate::media_conversion_gate::explore_adaptive_vmaf_y_floor_optional(search_baseline)
-}
-
-fn adaptive_psnr_uv_floor(search_baseline: Option<(f64, f64)>) -> Option<(f64, f64)> {
-    crate::media_conversion_gate::explore_adaptive_psnr_uv_floor_optional(search_baseline)
-}
-
 fn adaptive_cambi_ceiling(source_baseline: Option<f64>) -> Option<f64> {
     let baseline = source_baseline?;
     Some(if baseline <= crate::constants::EXPLORATION_CAMBI_MAX {
@@ -190,8 +184,11 @@ fn evaluate_ultimate_quality_gate(
     metrics: UltimateQualityMetrics,
     baselines: UltimateQualityBaselines,
 ) -> UltimateQualityEvaluation {
-    let vmaf_floor = adaptive_vmaf_floor(baselines.search_vmaf_y);
-    let psnr_uv_floor = adaptive_psnr_uv_floor(baselines.search_psnr_uv);
+    let vmaf_floor = Some(crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR);
+    let psnr_uv_floor = Some((
+        crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR,
+        crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR,
+    ));
     let cambi_ceiling = adaptive_cambi_ceiling(baselines.source_cambi);
 
     let vmaf_ok = match (metrics.vmaf_y, vmaf_floor) {
@@ -646,7 +643,7 @@ impl<'a> ExploreSession<'a> {
             probe_result: self.probe_result.as_ref(),
             flags: self.flags.clone(),
         }
-        .verify(&mut result, &tracking)?;
+        .verify(&mut result)?;
 
         self.append_result_log_lines(&mut result, quality_verification_skipped_for_format)?;
         self.log_gpu_mapping(&result);
@@ -1344,7 +1341,7 @@ struct ExploreQualityVerifier<'a> {
 }
 
 impl ExploreQualityVerifier<'_> {
-    fn verify(&self, result: &mut ExploreResult, tracking: &TrackingState) -> anyhow::Result<bool> {
+    fn verify(&self, result: &mut ExploreResult) -> anyhow::Result<bool> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_3,
             "Quality Verification"
@@ -1361,7 +1358,7 @@ impl ExploreQualityVerifier<'_> {
             if animated_lossless {
                 self.verify_animated_lossless(result);
             } else {
-                self.run_ultimate_quality_gate(result, duration_opt, tracking)?;
+                self.run_ultimate_quality_gate(result, duration_opt)?;
             }
             return Ok(false);
         }
@@ -1452,7 +1449,6 @@ impl ExploreQualityVerifier<'_> {
         &self,
         result: &mut ExploreResult,
         duration_hint: Option<f64>,
-        tracking: &TrackingState,
     ) -> anyhow::Result<()> {
         result.ultimate_mode = true;
         crate::log_info!(
@@ -1491,33 +1487,14 @@ impl ExploreQualityVerifier<'_> {
             );
         }
 
-        let vmaf_y = match tracking.best_vmaf {
-            Some(v) => {
-                crate::log_info!(
-                    crate::infra::static_logs::messages::LABEL_PHASE_3,
-                    &format!("Reusing VMAF from search phase: {v:.2}")
-                );
-                Some(v)
-            }
-            None => super::ssim_calculator::calculate_vmaf_y(self.input, self.output, sample_rate)?,
-        };
-
-        let psnr_uv = match tracking.best_psnr_uv {
-            Some(uv) => {
-                crate::log_info!(
-                    crate::infra::static_logs::messages::LABEL_PHASE_3,
-                    &format!(
-                        "Reusing PSNR-UV from search phase: {u:.2}/{v:.2}",
-                        u = uv.0,
-                        v = uv.1
-                    )
-                );
-                Some(uv)
-            }
-            None => {
-                super::ssim_calculator::calculate_psnr_uv(self.input, self.output, sample_rate)?
-            }
-        };
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_PHASE_3,
+            "Measuring final-product VMAF-Y and PSNR-UV (search metrics are telemetry only)..."
+        );
+        let vmaf_y =
+            super::ssim_calculator::calculate_vmaf_y(self.input, self.output, sample_rate)?;
+        let psnr_uv =
+            super::ssim_calculator::calculate_psnr_uv(self.input, self.output, sample_rate)?;
 
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_3,
@@ -1531,11 +1508,7 @@ impl ExploreQualityVerifier<'_> {
         );
         let cambi = super::ssim_calculator::calculate_cambi(self.output, sample_rate)?;
 
-        let baselines = UltimateQualityBaselines {
-            search_vmaf_y: tracking.best_vmaf,
-            search_psnr_uv: tracking.best_psnr_uv,
-            source_cambi,
-        };
+        let baselines = UltimateQualityBaselines { source_cambi };
         let metrics = UltimateQualityMetrics {
             vmaf_y,
             psnr_uv,
@@ -1555,40 +1528,29 @@ impl ExploreQualityVerifier<'_> {
         baselines: UltimateQualityBaselines,
         evaluation: UltimateQualityEvaluation,
     ) {
-        match (vmaf_y, evaluation.vmaf_floor, baselines.search_vmaf_y) {
-            (Some(v), Some(floor), Some(base)) => {
+        match (vmaf_y, evaluation.vmaf_floor) {
+            (Some(v), Some(floor)) => {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "VMAF-Y: {v:6.2} ≥ {floor:.1} {} (search baseline: {base:.2})",
+                        "VMAF-Y: {v:6.2} ≥ {floor:.1} {} (fresh final-product metric)",
                         crate::modern_ui::symbols::ok_fail_icon(evaluation.vmaf_ok),
                     )
                 );
             }
-            (Some(v), None, _) => {
+            (Some(v), None) => {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "VMAF-Y measured {v:.2} but adaptive floor refused (search baseline \
-                         absent) {}",
+                        "VMAF-Y measured {v:.2} but final floor is absent {}",
                         crf_fail_tag()
                     ),
                 );
             }
-            (None, _, _) => {
+            (None, _) => {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!("VMAF-Y absent (calculation failed) {}", crf_fail_tag()),
-                );
-            }
-            (Some(_), Some(_), None) => {
-                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
-                    "explore_gpu_quality",
-                    format!(
-                        "VMAF-Y gate incomplete: adaptive floor present but search baseline \
-                         absent {}",
-                        crf_fail_tag()
-                    ),
                 );
             }
         }
@@ -1632,44 +1594,32 @@ impl ExploreQualityVerifier<'_> {
             }
         }
 
-        match (psnr_uv, evaluation.psnr_uv_floor, baselines.search_psnr_uv) {
-            (Some((pu, pv)), Some((f1, f2)), Some((bu, bv))) => {
+        match (psnr_uv, evaluation.psnr_uv_floor) {
+            (Some((pu, pv)), Some((f1, f2))) => {
                 let u_pass = pu >= f1;
                 let v_pass = pv >= f2;
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_PHASE_3,
                     &format!(
-                        "PSNR-UV: U={pu:.2} dB {}, V={pv:.2} dB {} (floors ≥ {f1:.1}/{f2:.1} dB, \
-                         search baseline: {bu:.1}/{bv:.1})",
+                        "PSNR-UV: U={pu:.2} dB {}, V={pv:.2} dB {} (final floors ≥ {f1:.1}/{f2:.1} dB)",
                         crate::modern_ui::symbols::ok_fail_icon(u_pass),
                         crate::modern_ui::symbols::ok_fail_icon(v_pass),
                     )
                 );
             }
-            (Some((pu, pv)), None, _) => {
+            (Some((pu, pv)), None) => {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!(
-                        "PSNR-UV measured U={pu:.2}/V={pv:.2} dB but adaptive floors refused \
-                         (search baseline absent) {}",
+                        "PSNR-UV measured U={pu:.2}/V={pv:.2} dB but final floors are absent {}",
                         crf_fail_tag()
                     ),
                 );
             }
-            (None, _, _) => {
+            (None, _) => {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                     "explore_gpu_quality",
                     format!("PSNR-UV absent (calculation failed) {}", crf_fail_tag()),
-                );
-            }
-            (Some(_), Some(_), None) => {
-                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
-                    "explore_gpu_quality",
-                    format!(
-                        "PSNR-UV gate incomplete: adaptive floors present but search baseline \
-                         absent {}",
-                        crf_fail_tag()
-                    ),
                 );
             }
         }
@@ -1727,19 +1677,13 @@ impl ExploreQualityVerifier<'_> {
                 (Some(v), Some(floor)) => {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
-                        format!(
-                            "FAILED VMAF-Y {v:.2} < {floor:.1} (fell below adaptive floor from \
-                             search baseline)"
-                        ),
+                        format!("FAILED VMAF-Y {v:.2} < {floor:.1} (fresh final-product metric)"),
                     );
                 }
                 (Some(v), None) => {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
-                        format!(
-                            "FAILED VMAF-Y gate: measured {v:.2} but adaptive floor refused \
-                             (search baseline absent)"
-                        ),
+                        format!("FAILED VMAF-Y gate: measured {v:.2} but final floor is absent"),
                     );
                 }
                 (None, _) => {
@@ -1786,7 +1730,7 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED PSNR-UV U={u:.2}/V={v:.2} dB below adaptive floors \
+                            "FAILED PSNR-UV U={u:.2}/V={v:.2} dB below final floors \
                              {f1:.1}/{f2:.1} dB"
                         ),
                     );
@@ -1795,8 +1739,8 @@ impl ExploreQualityVerifier<'_> {
                     crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
                         "explore_gpu_quality",
                         format!(
-                            "FAILED PSNR-UV gate: measured U={u:.2}/V={v:.2} dB but adaptive \
-                             floors refused (search baseline absent)"
+                            "FAILED PSNR-UV gate: measured U={u:.2}/V={v:.2} dB but final \
+                             floors are absent"
                         ),
                     );
                 }
@@ -2235,11 +2179,28 @@ pub fn explore(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
 }
 
 fn is_image_container(path: &Path) -> bool {
-    let ext = crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path);
-    matches!(
-        ext.as_str(),
-        "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
-    )
+    match crate::image::format_detect::detect_true_format(path) {
+        Ok(format) => matches!(
+            format,
+            crate::image::format_detect::FormatKind::Avif
+                | crate::image::format_detect::FormatKind::Heic
+                | crate::image::format_detect::FormatKind::Heif
+                | crate::image::format_detect::FormatKind::Gif
+                | crate::image::format_detect::FormatKind::WebP
+                | crate::image::format_detect::FormatKind::Png
+                | crate::image::format_detect::FormatKind::Jpeg
+                | crate::image::format_detect::FormatKind::Bmp
+                | crate::image::format_detect::FormatKind::Tiff
+        ),
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "gpu_coarse_image_container_failed",
+                path,
+                format!("failed to detect image container for GPU exploration: {error}"),
+            );
+            false
+        }
+    }
 }
 
 #[inline]
@@ -2260,13 +2221,17 @@ fn is_animated_image_like_input(
         }
     }
 
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        let ext = e.to_ascii_lowercase();
-        matches!(
-            ext.as_str(),
-            "gif" | "webp" | "avif" | "heic" | "heif" | "apng"
-        )
-    })
+    match crate::quality_matcher::SourceCodec::identify_by_content(path) {
+        Ok(codec) => codec.is_some_and(|codec| codec.can_be_animated()),
+        Err(error) => {
+            crate::media_conversion_gate::probe_layer_audit(
+                "gpu_coarse_animated_format_failed",
+                path,
+                format!("failed to identify animated input for GPU exploration: {error}"),
+            );
+            false
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2276,6 +2241,83 @@ enum AnimatedExplorationEncodeMode {
     ExplorationSample,
     /// One full-length encode at the chosen CRF (deliverable timeline).
     FullTimeline,
+}
+
+const fn video_codec_domain(encoder: VideoEncoder) -> VideoCodecDomain {
+    match encoder {
+        VideoEncoder::Hevc => VideoCodecDomain::Hevc,
+        VideoEncoder::Av1 => VideoCodecDomain::Av1,
+        VideoEncoder::H264 => VideoCodecDomain::H264,
+    }
+}
+
+const fn timeline_domain(mode: AnimatedExplorationEncodeMode) -> TimelineDomain {
+    match mode {
+        AnimatedExplorationEncodeMode::ExplorationSample => TimelineDomain::Sampled,
+        AnimatedExplorationEncodeMode::FullTimeline => TimelineDomain::Full,
+    }
+}
+
+const fn video_domain_coordinate(
+    crf: f32,
+    encoder: VideoEncoder,
+    preset: EncoderPreset,
+    mode: AnimatedExplorationEncodeMode,
+) -> DomainCoordinate {
+    DomainCoordinate::video(
+        crf,
+        video_codec_domain(encoder),
+        preset,
+        timeline_domain(mode),
+    )
+}
+
+fn requires_final_domain_calibration(
+    encoder: VideoEncoder,
+    search_preset: EncoderPreset,
+    search_mode: AnimatedExplorationEncodeMode,
+    final_preset: EncoderPreset,
+    final_mode: AnimatedExplorationEncodeMode,
+) -> bool {
+    !video_domain_coordinate(0.0, encoder, search_preset, search_mode).same_unit_as(
+        video_domain_coordinate(0.0, encoder, final_preset, final_mode),
+    )
+}
+
+#[must_use]
+fn final_domain_candidate_improves_quality(
+    size_policy: SizePolicy,
+    source_size: u64,
+    current_crf: f32,
+    _current_size: u64,
+    candidate_crf: f32,
+    candidate_size: u64,
+) -> bool {
+    candidate_crf < current_crf && size_policy.fits(candidate_size, source_size)
+}
+
+#[derive(Clone, Copy)]
+struct RenderedCandidate {
+    crf: f32,
+    mode: AnimatedExplorationEncodeMode,
+    preset: EncoderPreset,
+}
+
+impl RenderedCandidate {
+    fn matches(self, crf: f32, mode: AnimatedExplorationEncodeMode, preset: EncoderPreset) -> bool {
+        crate::float_compare::approx_eq_crf(self.crf, crf)
+            && self.mode == mode
+            && self.preset == preset
+    }
+}
+
+fn candidate_is_materialized(
+    rendered_candidate: Option<RenderedCandidate>,
+    crf: f32,
+    mode: AnimatedExplorationEncodeMode,
+    preset: EncoderPreset,
+) -> bool {
+    rendered_candidate.is_some_and(|rendered| rendered.matches(crf, mode, preset))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2907,6 +2949,7 @@ struct CpuFineTuneSession<'a> {
     // ---- Inputs (immutable) ----------------------------------------
     input: &'a Path,
     output: &'a Path,
+    encoder: VideoEncoder,
     gpu_boundary_crf: f32,
     min_crf: f32,
     max_crf: f32,
@@ -2923,7 +2966,6 @@ struct CpuFineTuneSession<'a> {
     // ---- Derived from inputs (immutable) ---------------------------
     input_pure_media_size: u64,
     input_is_animated_image_like: bool,
-    use_animated_exploration_sampling: bool,
     exploration_mode: AnimatedExplorationEncodeMode,
 
     // ---- Owned components ------------------------------------------
@@ -2935,6 +2977,7 @@ struct CpuFineTuneSession<'a> {
     iterations: u32,
     best_crf: Option<f32>,
     best_size: Option<u64>,
+    rendered_candidate: Option<RenderedCandidate>,
     early_insight_triggered: bool,
     prefer_compat_ssim_mode: bool,
     tracking: &'a mut TrackingState,
@@ -3127,6 +3170,7 @@ impl<'a> CpuFineTuneSession<'a> {
         Ok(Self {
             input,
             output,
+            encoder,
             gpu_boundary_crf,
             min_crf,
             max_crf,
@@ -3141,7 +3185,6 @@ impl<'a> CpuFineTuneSession<'a> {
             gpu_executed,
             input_pure_media_size,
             input_is_animated_image_like,
-            use_animated_exploration_sampling,
             exploration_mode,
             fine_tune_encoder,
             cpu_progress,
@@ -3149,6 +3192,7 @@ impl<'a> CpuFineTuneSession<'a> {
             iterations: 0,
             best_crf: None,
             best_size: None,
+            rendered_candidate: None,
             early_insight_triggered: false,
             prefer_compat_ssim_mode: false,
             tracking,
@@ -3225,20 +3269,43 @@ impl<'a> CpuFineTuneSession<'a> {
     }
 
     fn encode_cached(&mut self, crf: f32) -> Result<u64> {
-        if let Some(&size) = self.size_cache.get(crf) {
-            self.cpu_progress.inc_iteration(crf, size, None);
+        if let Some(&size) = self.size_cache.get(crf)
+            && candidate_is_materialized(
+                self.rendered_candidate,
+                crf,
+                self.exploration_mode,
+                self.preset,
+            )
+        {
             return Ok(size);
         }
         let size = self
             .fine_tune_encoder
             .encode_full(crf, self.exploration_mode, self.preset)?;
+        self.rendered_candidate = Some(RenderedCandidate {
+            crf,
+            mode: self.exploration_mode,
+            preset: self.preset,
+        });
         self.size_cache.insert(crf, size);
+        self.iterations += 1;
         self.cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
     }
 
     fn pure_media_size_pct(&self, size: u64) -> f64 {
         super::calc_change_pct_for_input_size(self.input_pure_media_size, size)
+    }
+
+    const fn size_policy(&self) -> SizePolicy {
+        SizePolicy::strict_or_allow_growth(
+            self.allow_size_tolerance,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        )
+    }
+
+    const fn candidate_fits(&self, size: u64) -> bool {
+        self.size_policy().fits(size, self.input_pure_media_size)
     }
 
     fn calculate_ssim_quick(&mut self) -> anyhow::Result<Option<f64>> {
@@ -3345,7 +3412,6 @@ impl<'a> CpuFineTuneSession<'a> {
             );
             e
         })?;
-        self.iterations += 1;
         let gpu_pct = self.pure_media_size_pct(gpu_size);
         let gpu_ssim = if self.ultimate_mode {
             None
@@ -3353,7 +3419,7 @@ impl<'a> CpuFineTuneSession<'a> {
             self.calculate_ssim_quick()?
         };
 
-        if gpu_size >= self.input_pure_media_size {
+        if !self.candidate_fits(gpu_size) {
             crate::media_conversion_gate::explore_gpu_coarse_audit(
                 "explore_gpu_crf",
                 self.input,
@@ -3600,7 +3666,6 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             let pure_media_size_pct = self.pure_media_size_pct(size);
             let current_ssim_opt = if self.ultimate_mode {
                 None
@@ -3608,7 +3673,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 self.calculate_ssim_quick()?
             };
 
-            let is_effectively_compressed = size < self.input_pure_media_size;
+            let is_effectively_compressed = self.candidate_fits(size);
 
             if is_effectively_compressed {
                 let prev_ssim_opt = last_good_ssim;
@@ -4006,7 +4071,6 @@ impl<'a> CpuFineTuneSession<'a> {
             );
 
             let ceiling_size = self.encode_cached(max_crf)?;
-            self.iterations += 1;
             let ceiling_pct = self.pure_media_size_pct(ceiling_size);
 
             if ceiling_pct >= 0.0_f64 {
@@ -4047,7 +4111,6 @@ impl<'a> CpuFineTuneSession<'a> {
             && !self.early_insight_triggered
         {
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             feedback.upward_iteration_count += 1;
 
             let pure_media_size_pct = self.pure_media_size_pct(size);
@@ -4063,9 +4126,8 @@ impl<'a> CpuFineTuneSession<'a> {
 
             let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
-            // Unified Direction Switch Logic: size stagnation past the lossless deadzone or
-            // sustained upward iteration without finding compression flips us to a downward
-            // sweep.
+            // Size stagnation past the lossless deadzone or sustained upward iteration requests
+            // a measured ceiling pivot before any downward sweep.
             if size_delta < 0.5_f64 {
                 if test_crf > 12.0 {
                     feedback.size_stagnation_count += 1;
@@ -4088,13 +4150,29 @@ impl<'a> CpuFineTuneSession<'a> {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_STRATEGY,
                     &format!(
-                        "Search Direction Switch: {trigger_reason} reached. Switching to downward \
-                         search for efficiency."
+                        "Search Direction Switch: {trigger_reason} reached. Probing ceiling CRF \
+                         {max_crf:.2} before downward search."
                     )
                 );
 
-                found_compress_point = true;
-                self.best_crf = Some(max_crf);
+                let ceiling_size = self.encode_cached(max_crf)?;
+                if ceiling_size < best_tested_size {
+                    best_tested_crf = max_crf;
+                    best_tested_size = ceiling_size;
+                }
+                if self.candidate_fits(ceiling_size) {
+                    found_compress_point = true;
+                    self.best_crf = Some(max_crf);
+                    self.best_size = Some(ceiling_size);
+                } else {
+                    crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                        "explore_gpu_crf",
+                        format!(
+                            "Direction switch ceiling probe at CRF {max_crf:.2} remained larger \
+                             than the input; no compression point confirmed."
+                        ),
+                    );
+                }
                 break;
             }
 
@@ -4176,7 +4254,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 best_tested_size = size;
             }
 
-            let is_effectively_compressed = size < self.input_pure_media_size;
+            let is_effectively_compressed = self.candidate_fits(size);
 
             // Ultimate Mode: Insight-Based Credibility Check (Sticky). Only run expensive
             // VMAF/PSNR when we are somewhat close to compression to avoid process
@@ -4386,7 +4464,6 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
             let pure_media_size_pct = self.pure_media_size_pct(size);
 
             let current_ssim_opt = if self.ultimate_mode {
@@ -4420,7 +4497,7 @@ impl<'a> CpuFineTuneSession<'a> {
                 }
             }
 
-            let is_effectively_compressed = size < self.input_pure_media_size;
+            let is_effectively_compressed = self.candidate_fits(size);
             let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
             if is_effectively_compressed {
@@ -4739,9 +4816,8 @@ impl<'a> CpuFineTuneSession<'a> {
             }
 
             let size = self.encode_cached(test_crf)?;
-            self.iterations += 1;
 
-            let is_effectively_compressed = size < self.input_pure_media_size;
+            let is_effectively_compressed = self.candidate_fits(size);
             let pure_media_size_pct = self.pure_media_size_pct(size);
             let size_delta = (pure_media_size_pct - last_size_pct).abs();
 
@@ -4892,9 +4968,8 @@ impl<'a> CpuFineTuneSession<'a> {
                     "Forcing mandatory CRF 0.00 probe (floor guarantee)"
                 );
                 let size = self.encode_cached(0.0)?;
-                self.iterations += 1;
                 let pure_media_size_pct = self.pure_media_size_pct(size);
-                if size < self.input_pure_media_size {
+                if self.candidate_fits(size) {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_4,
                         &format!(
@@ -4914,7 +4989,7 @@ impl<'a> CpuFineTuneSession<'a> {
                     );
                 }
             } else if let Some(&cached_size) = self.size_cache.get(0.0_f32)
-                && cached_size < self.input_pure_media_size
+                && self.candidate_fits(cached_size)
                 && current_best > 0.0
             {
                 current_best = 0.0;
@@ -4939,23 +5014,89 @@ impl<'a> CpuFineTuneSession<'a> {
         Ok(())
     }
 
+    fn encode_final_domain(&mut self, crf: f32) -> Result<u64> {
+        let size = self.fine_tune_encoder.encode_full(
+            crf,
+            AnimatedExplorationEncodeMode::FullTimeline,
+            self.final_output_preset,
+        )?;
+        self.rendered_candidate = Some(RenderedCandidate {
+            crf,
+            mode: AnimatedExplorationEncodeMode::FullTimeline,
+            preset: self.final_output_preset,
+        });
+        self.iterations = self.iterations.saturating_add(1);
+        Ok(size)
+    }
+
+    const fn classify_final_domain_size(&self, size: u64) -> ProbeOutcome<u64, String> {
+        if self.candidate_fits(size) {
+            ProbeOutcome::Fits(size)
+        } else {
+            ProbeOutcome::Oversize(size)
+        }
+    }
+
+    fn probe_final_domain_preserving_best(
+        &mut self,
+        crf: f32,
+        backup_path: &Path,
+    ) -> Result<ProbeOutcome<u64, String>> {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "gpu_coarse_final_domain_stale_backup",
+            backup_path,
+        );
+        let backup_candidate = self.rendered_candidate;
+        std::fs::rename(self.output, backup_path).with_context(|| {
+            format!(
+                "Final-domain backup rename failed (src={}, dst={})",
+                self.output.display(),
+                backup_path.display()
+            )
+        })?;
+
+        let outcome = match self.encode_final_domain(crf) {
+            Ok(size) => self.classify_final_domain_size(size),
+            Err(error) => ProbeOutcome::Failed(error.to_string()),
+        };
+        if matches!(outcome, ProbeOutcome::Fits(_)) {
+            crate::media_conversion_gate::delivery_remove_file_or_audit(
+                "gpu_coarse_final_domain_backup_discard",
+                backup_path,
+            );
+            return Ok(outcome);
+        }
+
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "gpu_coarse_final_domain_probe_discard",
+            self.output,
+        );
+        if !crate::media_conversion_gate::delivery_rename_or_audit(
+            "gpu_coarse_final_domain_restore",
+            backup_path,
+            self.output,
+        ) {
+            bail!(
+                "Failed to restore final-domain best product from {} to {}",
+                backup_path.display(),
+                self.output.display()
+            );
+        }
+        self.rendered_candidate = backup_candidate;
+        Ok(outcome)
+    }
+
     /// Reconcile the search outcome into a concrete (CRF, output size) pair.
     /// Promotes `best_crf` to a final value (or falls back to `max_crf` when
     /// search never produced one), runs the optional preset upgrade encode,
     /// and reports whether Phase 5 should follow.
     fn prepare_final_settlement(&mut self) -> Result<(f32, u64, bool)> {
-        let size_tolerance = if self.allow_size_tolerance {
-            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
-        } else {
-            0
-        };
-
         let (final_crf, mut final_pure_media_size) = match (self.best_crf, self.best_size) {
-            (Some(crf), Some(size)) if crf < self.max_crf => {
-                if size < self.input_pure_media_size + size_tolerance {
+            (Some(crf), Some(size)) => {
+                if self.candidate_fits(size) {
                     crate::log_info!(
                         crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!("Best CRF {crf:.2} settled from search (output on disk)")
+                        &format!("Best CRF {crf:.2} selected from search history")
                     );
                 } else {
                     crate::media_conversion_gate::explore_gpu_coarse_audit(
@@ -4969,103 +5110,109 @@ impl<'a> CpuFineTuneSession<'a> {
                 }
                 (crf, size)
             }
-            _ => {
+            (Some(_), None) | (None, Some(_)) => {
+                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                    "explore_gpu_crf",
+                    "Search ended with an unpaired best CRF/size; refusing to fabricate a \
+                     settlement candidate",
+                );
+                bail!("GPU coarse search ended with incomplete best candidate state");
+            }
+            (None, None) => {
                 if self.early_insight_triggered {
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        "Skipping final settlement: early insight already proved further \
-                         compression is futile."
+                    crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                        "explore_gpu_crf",
+                        "Early insight ended search without a measured candidate; refusing to \
+                         invent a max-CRF size",
                     );
-                    let fallback_crf = self.max_crf;
-                    let size = self.input_pure_media_size + 1;
-                    (fallback_crf, size)
-                } else {
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!(
-                            "Fallback: using max CRF {max:.2} (no better compression found)",
-                            max = self.max_crf
-                        )
-                    );
-
-                    let last_output_pure_media =
-                        crate::stream_size::measure_strict_pure_media(self.output)
-                            .with_context(|| {
-                                format!(
-                                    "Strict pure-media output measurement failed for {}",
-                                    self.output.display()
-                                )
-                            })?
-                            .pure_media_size();
-                    crate::log_info!(
-                        crate::infra::static_logs::messages::LABEL_PHASE_3,
-                        &format!(
-                            "Pure media: input {in_b} vs output {out_b} ({pct:+.1}%)",
-                            in_b = crate::format_bytes(self.input_pure_media_size),
-                            out_b = crate::format_bytes(last_output_pure_media),
-                            pct = stream_size_change_pct(
-                                last_output_pure_media,
-                                self.input_pure_media_size
-                            )
-                        )
-                    );
-                    let max_crf = self.max_crf;
-                    let size = self.encode_cached(max_crf)?;
-                    self.iterations += 1;
-                    (max_crf, size)
+                    bail!("Early insight ended without a measured settlement candidate");
                 }
+                crate::log_info!(
+                    crate::infra::static_logs::messages::LABEL_PHASE_3,
+                    &format!(
+                        "Fallback: using max CRF {max:.2} (no better compression found)",
+                        max = self.max_crf
+                    )
+                );
+
+                let last_output_pure_media =
+                    crate::stream_size::measure_strict_pure_media(self.output)
+                        .with_context(|| {
+                            format!(
+                                "Strict pure-media output measurement failed for {}",
+                                self.output.display()
+                            )
+                        })?
+                        .pure_media_size();
+                crate::log_info!(
+                    crate::infra::static_logs::messages::LABEL_PHASE_3,
+                    &format!(
+                        "Pure media: input {in_b} vs output {out_b} ({pct:+.1}%)",
+                        in_b = crate::format_bytes(self.input_pure_media_size),
+                        out_b = crate::format_bytes(last_output_pure_media),
+                        pct = stream_size_change_pct(
+                            last_output_pure_media,
+                            self.input_pure_media_size
+                        )
+                    )
+                );
+                let max_crf = self.max_crf;
+                let size = self.encode_cached(max_crf)?;
+                (max_crf, size)
             }
         };
 
-        // Final-render gate: an explicit preset upgrade (e.g. search=slow →
-        // final=slower) needs a last full-quality render, and segmented
-        // sampling needs a full-timeline encode regardless.
-        let needs_final_preset_render = self.final_output_preset != self.preset;
-        let mut run_phase5 = false;
-
-        if self.use_animated_exploration_sampling && !self.early_insight_triggered {
+        // A search coordinate is a locator only when preset or timeline changes.
+        // Materialize it in the final domain, then let Phase 5 establish a fresh
+        // final-domain bracket.  Early-insight termination does not waive this
+        // contract.
+        let run_phase5 = requires_final_domain_calibration(
+            self.encoder,
+            self.preset,
+            self.exploration_mode,
+            self.final_output_preset,
+            AnimatedExplorationEncodeMode::FullTimeline,
+        );
+        let (settlement_mode, settlement_preset) = if run_phase5 {
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_PHASE_3,
                 &format!(
-                    "Full-timeline encode at CRF {final_crf:.2} with preset {preset} (replacing \
-                     segmented exploration output)",
-                    preset = self
-                        .final_output_preset
+                    "Search CRF {final_crf:.2} is a locator only; calibrating full-timeline preset {}",
+                    self.final_output_preset
                         .hevc_name_for_archive(self.archive_mode)
                 )
             );
-            final_pure_media_size = self.fine_tune_encoder.encode_full(
-                final_crf,
+            (
                 AnimatedExplorationEncodeMode::FullTimeline,
                 self.final_output_preset,
-            )?;
-            self.iterations += 1;
-            // Preset upgraded mid-pipeline: follow up with Phase 5 to squeeze further
-            // gains.
-            if needs_final_preset_render && final_crf < self.max_crf {
-                run_phase5 = true;
+            )
+        } else {
+            (self.exploration_mode, self.preset)
+        };
+        if !candidate_is_materialized(
+            self.rendered_candidate,
+            final_crf,
+            settlement_mode,
+            settlement_preset,
+        ) {
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_PHASE_3,
+                &format!("Materializing selected CRF {final_crf:.2} on disk")
+            );
+            final_pure_media_size = if run_phase5 {
+                self.encode_final_domain(final_crf)?
+            } else {
+                self.fine_tune_encoder
+                    .encode_full(final_crf, settlement_mode, settlement_preset)?
+            };
+            self.rendered_candidate = Some(RenderedCandidate {
+                crf: final_crf,
+                mode: settlement_mode,
+                preset: settlement_preset,
+            });
+            if !run_phase5 {
+                self.iterations = self.iterations.saturating_add(1);
             }
-        } else if needs_final_preset_render
-            && !self.early_insight_triggered
-            && final_crf < self.max_crf
-        {
-            crate::log_info!(
-                crate::infra::static_logs::messages::LABEL_PHASE_3,
-                &format!(
-                    "Final render: preset {old} → {new} at settled CRF {final_crf:.2}",
-                    old = self.preset.hevc_name_for_archive(self.archive_mode),
-                    new = self
-                        .final_output_preset
-                        .hevc_name_for_archive(self.archive_mode)
-                )
-            );
-            final_pure_media_size = self.fine_tune_encoder.encode_full(
-                final_crf,
-                AnimatedExplorationEncodeMode::FullTimeline,
-                self.final_output_preset,
-            )?;
-            self.iterations += 1;
-            run_phase5 = true;
         }
 
         Ok((final_crf, final_pure_media_size, run_phase5))
@@ -5083,190 +5230,154 @@ impl<'a> CpuFineTuneSession<'a> {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_5,
             &format!(
-                "Downward Exploration with Ultimate Preset ({})",
+                "Final-domain calibration with preset {} from locator CRF {final_crf:.2}",
                 self.final_output_preset
                     .hevc_name_for_archive(self.archive_mode)
             )
         );
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_PHASE_5,
-            &format!(
-                "Starting from Phase 4 bound (CRF {final_crf:.2}). Stopping after \
-                 {PHASE5_MAX_CONSECUTIVE_FAILURES} non-improving attempts."
-            )
-        );
-
         let backup_path = self.output.with_extension(format!(
             "{}.bak",
             crate::media_conversion_gate::backup_extension_label_or_tmp(self.output)
         ));
-        let mut test_crf = final_crf - 0.01;
-        let mut consecutive_failures = 0u32;
         let mut total_attempts = 0u32;
+        let mut lower_oversize = (!self.candidate_fits(final_pure_media_size)).then_some(final_crf);
 
-        loop {
-            if test_crf < 0.0 {
-                break;
-            }
-            if consecutive_failures >= PHASE5_MAX_CONSECUTIVE_FAILURES {
-                crate::log_info!(
-                    crate::infra::static_logs::messages::LABEL_PHASE_5,
-                    &format!(
-                        "Adaptive lookahead cap ({PHASE5_MAX_CONSECUTIVE_FAILURES} \
-                         non-improvements) reached. Stopping Phase 5."
-                    )
-                );
-                break;
-            }
-            if total_attempts >= PHASE5_MAX_TOTAL_ATTEMPTS {
-                crate::log_info!(
-                    crate::infra::static_logs::messages::LABEL_PHASE_5,
-                    &format!(
-                        "Absolute Phase 5 safety cap ({PHASE5_MAX_TOTAL_ATTEMPTS} total attempts) \
-                         reached. Stopping."
-                    )
-                );
-                break;
-            }
-            total_attempts += 1;
-
-            // Re-align to 0.01 precision to prevent float drift
-            test_crf = (test_crf * 100.0).round() / 100.0;
-            if test_crf < 0.0 {
-                test_crf = 0.0;
-            }
-
-            crate::media_conversion_gate::delivery_remove_file_or_audit(
-                "gpu_coarse_phase5_stale_backup_preclean",
-                &backup_path,
-            );
-            if let Err(e) = std::fs::rename(self.output, &backup_path) {
-                crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
-                    "explore_gpu_encode",
-                    format!(
-                        "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe \
-                         lower CRF without recoverable current-best output",
-                        self.output.display(),
-                        backup_path.display()
-                    ),
-                );
-                return Err(anyhow::anyhow!(
-                    "Phase-5 backup rename failed (src={}, dst={}): {e}; refusing to probe lower \
-                     CRF without recoverable current-best output",
-                    self.output.display(),
-                    backup_path.display()
-                ));
-            }
-
-            crate::log_info!(
-                crate::infra::static_logs::messages::LABEL_PHASE_5,
-                &format!(
-                    "{} Probing ultimate preset at CRF {test_crf:.2}...",
-                    crate::media_conversion_gate::ui_icon_pick("🔬", "trace")
-                )
-            );
-
-            match self.fine_tune_encoder.encode_full(
-                test_crf,
-                AnimatedExplorationEncodeMode::FullTimeline,
-                self.final_output_preset,
-            ) {
-                Ok(test_size) => {
-                    self.iterations += 1;
-                    if test_size < final_pure_media_size {
-                        let pct_gain = (1.0_f64
-                            - (crate::numeric_cast::u64_to_f64(test_size)
-                                / crate::numeric_cast::u64_to_f64(final_pure_media_size.max(1))))
-                            * 100.0_f64;
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_PHASE_5,
-                            &format!(
-                                "{} CRF {test_crf:.2} -> {test_size} bytes (decreased by \
-                                 {pct_gain:.2}%, keeping)",
-                                crf_pass_prefix(),
-                            )
-                        );
+        // The locator coordinate may be oversized in the final preset.  Find a
+        // real fitting anchor by walking toward lower quality in that domain.
+        if lower_oversize.is_some() {
+            let mut step = 0.25_f32;
+            let mut found_fit = false;
+            while total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS && final_crf < self.max_crf {
+                let test_crf = (final_crf + step).min(self.max_crf);
+                total_attempts = total_attempts.saturating_add(1);
+                match self.encode_final_domain(test_crf) {
+                    Ok(size) if self.candidate_fits(size) => {
                         final_crf = test_crf;
-                        final_pure_media_size = test_size;
-                        crate::media_conversion_gate::delivery_remove_file_or_audit(
-                            "gpu_coarse_phase5_backup_discard",
-                            &backup_path,
-                        );
-                        consecutive_failures = 0;
-                    } else {
-                        consecutive_failures += 1;
-                        let attempts_left =
-                            PHASE5_MAX_CONSECUTIVE_FAILURES.saturating_sub(consecutive_failures);
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_PHASE_5,
-                            &format!(
-                                "{} CRF {test_crf:.2} -> {test_size} bytes (increased past \
-                                 {final_pure_media_size}, discarding)",
-                                crf_fail_prefix(),
-                            )
-                        );
-                        if attempts_left > 0 && total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS {
-                            crate::log_info!(
-                                crate::infra::static_logs::messages::LABEL_PHASE_5,
-                                &format!(
-                                    "... exploring further ({attempts_left} lookahead attempts \
-                                     remaining)"
-                                )
-                            );
-                        }
-                        crate::media_conversion_gate::delivery_remove_file_or_audit(
-                            "gpu_coarse_phase5_output_discard",
-                            self.output,
-                        );
-                        if !crate::media_conversion_gate::delivery_rename_or_audit(
-                            "gpu_coarse_phase5_restore",
-                            &backup_path,
-                            self.output,
-                        ) {
-                            return Err(anyhow::anyhow!(
-                                "Phase-5 failed to restore previous best output from {} to {} \
-                                 after non-improving candidate",
-                                backup_path.display(),
-                                self.output.display()
-                            ));
-                        }
-                    }
-
-                    if crate::float_compare::approx_eq_crf(test_crf, 0.0) {
+                        final_pure_media_size = size;
+                        found_fit = true;
                         break;
                     }
-                    test_crf -= 0.01;
-                }
-                Err(e) => {
-                    crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
-                        "explore_gpu_crf",
-                        format!("Probe failed at CRF {test_crf:.2}: {e}"),
-                    );
-                    crate::media_conversion_gate::delivery_remove_file_or_audit(
-                        "gpu_coarse_phase5_output_discard",
-                        self.output,
-                    );
-                    if !crate::media_conversion_gate::delivery_rename_or_audit(
-                        "gpu_coarse_phase5_restore",
-                        &backup_path,
-                        self.output,
-                    ) {
-                        return Err(anyhow::anyhow!(
-                            "Phase-5 failed to restore previous best output from {} to {} after \
-                             encode failure",
-                            backup_path.display(),
-                            self.output.display()
-                        ));
+                    Ok(_) => {
+                        lower_oversize = Some(test_crf);
+                        final_crf = test_crf;
+                        step = (step * 2.0).min(4.0);
                     }
+                    Err(error) => {
+                        crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                            "explore_gpu_final_domain",
+                            format!(
+                                "Final-domain anchor failed at CRF {test_crf:.2}: {error}; boundary unchanged"
+                            ),
+                        );
+                        final_crf = test_crf;
+                        step = (step * 2.0).min(4.0);
+                    }
+                }
+            }
+            if !found_fit {
+                bail!(
+                    "Final encoder domain produced no verified fitting candidate through CRF {:.2}",
+                    self.max_crf
+                );
+            }
+        }
+
+        // If the locator already fit, locate a real oversized anchor toward
+        // higher quality.  Accepted candidates may be larger than the current
+        // output as long as the shared size policy still passes.
+        if lower_oversize.is_none() && final_crf > 0.0 {
+            let mut step = 0.25_f32;
+            let mut failures = 0u32;
+            while total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS && final_crf > 0.0 {
+                let test_crf = (final_crf - step).max(0.0);
+                total_attempts = total_attempts.saturating_add(1);
+                match self.probe_final_domain_preserving_best(test_crf, &backup_path)? {
+                    ProbeOutcome::Fits(size)
+                        if final_domain_candidate_improves_quality(
+                            self.size_policy(),
+                            self.input_pure_media_size,
+                            final_crf,
+                            final_pure_media_size,
+                            test_crf,
+                            size,
+                        ) =>
+                    {
+                        final_crf = test_crf;
+                        final_pure_media_size = size;
+                        failures = 0;
+                        if crate::float_compare::approx_eq_crf(test_crf, 0.0) {
+                            break;
+                        }
+                        step = (step * 2.0).min(4.0);
+                    }
+                    ProbeOutcome::Oversize(_) => {
+                        lower_oversize = Some(test_crf);
+                        break;
+                    }
+                    ProbeOutcome::Failed(reason) | ProbeOutcome::Unverifiable(reason) => {
+                        failures = failures.saturating_add(1);
+                        crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                            "explore_gpu_final_domain",
+                            format!(
+                                "Final-domain quality anchor failed at CRF {test_crf:.2}: {reason}; boundary unchanged"
+                            ),
+                        );
+                        if failures >= PHASE5_MAX_CONSECUTIVE_FAILURES || step <= 0.01 {
+                            break;
+                        }
+                        step = (step / 2.0).max(0.01);
+                    }
+                    ProbeOutcome::Fits(_) => break,
+                }
+            }
+        }
+
+        // Refine solely between final-domain measurements.  Probe failure
+        // terminates refinement without forging either boundary.
+        if let Some(mut lower) = lower_oversize {
+            let mut upper = final_crf;
+            while upper - lower > 0.01 && total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS {
+                let test_crf = (f32::midpoint(lower, upper) * 100.0).round() / 100.0;
+                if test_crf <= lower || test_crf >= upper {
                     break;
+                }
+                total_attempts = total_attempts.saturating_add(1);
+                match self.probe_final_domain_preserving_best(test_crf, &backup_path)? {
+                    ProbeOutcome::Fits(size) => {
+                        final_crf = test_crf;
+                        final_pure_media_size = size;
+                        upper = test_crf;
+                    }
+                    ProbeOutcome::Oversize(_) => lower = test_crf,
+                    ProbeOutcome::Failed(reason) | ProbeOutcome::Unverifiable(reason) => {
+                        crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
+                            "explore_gpu_final_domain",
+                            format!(
+                                "Final-domain refinement failed at CRF {test_crf:.2}: {reason}; retaining verified bracket"
+                            ),
+                        );
+                        break;
+                    }
                 }
             }
         }
 
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_PHASE_5,
-            &format!("Phase 5 completed. Final CRF: {final_crf:.2}")
+            &format!(
+                "Final-domain calibration completed: CRF {final_crf:.2}, {final_pure_media_size} bytes"
+            )
         );
+        if !candidate_is_materialized(
+            self.rendered_candidate,
+            final_crf,
+            AnimatedExplorationEncodeMode::FullTimeline,
+            self.final_output_preset,
+        ) {
+            bail!(
+                "Final-domain calibration selected CRF {final_crf:.2} without a matching materialized product"
+            );
+        }
 
         Ok((final_crf, final_pure_media_size))
     }
@@ -5294,11 +5405,10 @@ impl<'a> CpuFineTuneSession<'a> {
             ..
         } = self;
 
-        let size_tolerance = if allow_size_tolerance {
-            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
-        } else {
-            0
-        };
+        let size_policy = SizePolicy::strict_or_allow_growth(
+            allow_size_tolerance,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        );
 
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_DETECTION,
@@ -5322,8 +5432,7 @@ impl<'a> CpuFineTuneSession<'a> {
         let size_change_pct =
             super::calc_change_pct_for_input_size(input_pure_media_size, final_pure_media_size);
 
-        let pure_media_compressed =
-            final_pure_media_size < input_pure_media_size.saturating_add(size_tolerance);
+        let pure_media_compressed = size_policy.fits(final_pure_media_size, input_pure_media_size);
         let ssim_ok = ssim.is_some_and(|s| s >= min_ssim);
         let integrity_gate_ok = lossless_integrity_ok == Some(true);
         let mut quality_passed = if ultimate_mode {
@@ -5544,9 +5653,11 @@ impl<'a> CpuFineTuneSession<'a> {
             input_pure_media_size,
             output_pure_media_size: final_pure_media_size,
             container_overhead: output_container_overhead,
-            vmaf_y_score: tracking.best_vmaf,
+            // Search metrics belong to locator candidates.  The verifier fills
+            // these fields from the materialized final product.
+            vmaf_y_score: None,
             cambi_score: None,
-            psnr_uv_score: tracking.best_psnr_uv,
+            psnr_uv_score: None,
             early_insight_triggered,
             ultimate_mode,
         })
@@ -5913,9 +6024,9 @@ mod tests {
     use super::{
         AnimatedInputProfile, ExplorationSamplingProfile, FineTuneEncoder, FineTuneQualityMode,
         GifSourceProfile, StreamMappingMode, UltimateQualityBaselines, UltimateQualityMetrics,
-        adaptive_cambi_ceiling, adaptive_psnr_uv_floor, adaptive_vmaf_floor, av1_preset_plan,
-        build_color_args_from_probe, evaluate_ultimate_quality_gate, format_quality_check_line,
-        hevc_preset_plan, pick_pix_fmt, search_anchor_crf, should_probe_crf_zero_from_phase4,
+        adaptive_cambi_ceiling, av1_preset_plan, build_color_args_from_probe,
+        evaluate_ultimate_quality_gate, format_quality_check_line, hevc_preset_plan, pick_pix_fmt,
+        search_anchor_crf, should_probe_crf_zero_from_phase4,
     };
     use crate::constants::EXPLORATION_CAMBI_MAX;
     use crate::ffprobe::{FFprobeAudioInfo, FFprobeHdrInfo, FFprobeResult, FFprobeSubtitleInfo};
@@ -6209,21 +6320,6 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_quality_floors_follow_search_baseline() {
-        assert!(
-            (adaptive_vmaf_floor(Some(95.0_f64)).expect("baseline vmaf floor") - 93.0).abs()
-                < f64::EPSILON
-        );
-        assert!(adaptive_vmaf_floor(None).is_none());
-
-        let psnr = adaptive_psnr_uv_floor(Some((36.5_f64, 35.0_f64))).expect("baseline psnr");
-        assert!((psnr.0 - 35.0).abs() < f64::EPSILON);
-        assert!((psnr.1 - 33.5).abs() < f64::EPSILON);
-
-        assert!(adaptive_psnr_uv_floor(None).is_none());
-    }
-
-    #[test]
     fn test_adaptive_cambi_ceiling_respects_source_banding_level() {
         assert!(adaptive_cambi_ceiling(None).is_none());
         assert!(
@@ -6249,8 +6345,6 @@ mod tests {
                 cambi: Some(10.2_f64),
             },
             UltimateQualityBaselines {
-                search_vmaf_y: Some(94.0_f64),
-                search_psnr_uv: Some((35.0_f64, 35.0_f64)),
                 source_cambi: Some(9.0_f64),
             },
         );
@@ -6270,8 +6364,6 @@ mod tests {
                 cambi: Some(9.5_f64),
             },
             UltimateQualityBaselines {
-                search_vmaf_y: Some(94.0_f64),
-                search_psnr_uv: Some((35.0_f64, 35.0_f64)),
                 source_cambi: Some(5.0_f64),
             },
         );
@@ -6295,15 +6387,13 @@ mod tests {
                 cambi: Some(0.01_f64),
             },
             UltimateQualityBaselines {
-                search_vmaf_y: None,
-                search_psnr_uv: None,
                 source_cambi: Some(0.01_f64),
             },
         );
 
         assert!(
-            !evaluation.vmaf_ok,
-            "VMAF requires search baseline for adaptive floor (refuse sanity-floor fabrication)"
+            evaluation.vmaf_ok,
+            "fresh VMAF uses the invariant final floor"
         );
         assert!(evaluation.cambi_ok);
         assert!(!evaluation.chroma_ok, "None PSNR-UV must fail chroma gate");
@@ -6322,8 +6412,6 @@ mod tests {
                 cambi: Some(1.0_f64),
             },
             UltimateQualityBaselines {
-                search_vmaf_y: Some(99.0_f64),
-                search_psnr_uv: Some((50.0_f64, 48.0_f64)),
                 source_cambi: Some(1.0_f64),
             },
         );
@@ -6341,8 +6429,6 @@ mod tests {
                 cambi: None,
             },
             UltimateQualityBaselines {
-                search_vmaf_y: Some(99.0_f64),
-                search_psnr_uv: Some((50.0_f64, 48.0_f64)),
                 source_cambi: Some(1.0_f64),
             },
         );
@@ -6529,7 +6615,7 @@ mod tests {
     fn test_adaptive_vmaf_floor_clamps_to_sanity() {
         // baseline 88.0 - 2.0 = 86.0, matching the sanity floor
         assert!(
-            (adaptive_vmaf_floor(Some(88.0_f64)).expect("vmaf floor")
+            (crate::media_conversion_gate::explore_adaptive_vmaf_y_floor(Some(88.0_f64))
                 - crate::constants::EXPLORATION_VMAF_Y_SANITY_FLOOR)
                 .abs()
                 < f64::EPSILON
@@ -6540,7 +6626,10 @@ mod tests {
     fn test_adaptive_psnr_floor_clamps_to_sanity() {
         // baseline 31.0/31.2 - 1.5 would fall below 30.0, so both clamp to the sanity
         // floor
-        let psnr = adaptive_psnr_uv_floor(Some((31.0_f64, 31.2_f64))).expect("psnr floor");
+        let psnr = crate::media_conversion_gate::explore_adaptive_psnr_uv_floor_optional(Some((
+            31.0_f64, 31.2_f64,
+        )))
+        .expect("psnr floor");
         assert!((psnr.0 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
         assert!((psnr.1 - crate::constants::EXPLORATION_PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
     }
@@ -6580,5 +6669,84 @@ mod tests {
             pct.is_nan(),
             "zero input_size must return NaN, not fabricated 0.0: {pct}"
         );
+    }
+
+    #[test]
+    fn cached_candidate_reuse_requires_materialized_identity() {
+        let rendered = super::RenderedCandidate {
+            crf: 20.8,
+            mode: super::AnimatedExplorationEncodeMode::FullTimeline,
+            preset: EncoderPreset::Slow,
+        };
+
+        assert!(super::candidate_is_materialized(
+            Some(rendered),
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!super::candidate_is_materialized(
+            None,
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
+            20.7,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow
+        ));
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
+            20.8,
+            super::AnimatedExplorationEncodeMode::ExplorationSample,
+            EncoderPreset::Slow
+        ));
+        assert!(!super::candidate_is_materialized(
+            Some(rendered),
+            20.8,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slower
+        ));
+    }
+
+    #[test]
+    fn final_domain_calibration_is_required_for_preset_or_timeline_changes() {
+        assert!(!super::requires_final_domain_calibration(
+            VideoEncoder::Hevc,
+            EncoderPreset::Slow,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slow,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+        ));
+        assert!(super::requires_final_domain_calibration(
+            VideoEncoder::Hevc,
+            EncoderPreset::Slow,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+            EncoderPreset::Slower,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+        ));
+        assert!(super::requires_final_domain_calibration(
+            VideoEncoder::Hevc,
+            EncoderPreset::Slow,
+            super::AnimatedExplorationEncodeMode::ExplorationSample,
+            EncoderPreset::Slow,
+            super::AnimatedExplorationEncodeMode::FullTimeline,
+        ));
+    }
+
+    #[test]
+    fn final_domain_quality_improvement_may_be_larger_than_current_output() {
+        let policy = crate::exploration_policy::SizePolicy::StrictlySmaller;
+        assert!(super::final_domain_candidate_improves_quality(
+            policy, 1_000, 20.0, 700, 19.5, 900,
+        ));
+        assert!(!super::final_domain_candidate_improves_quality(
+            policy, 1_000, 20.0, 700, 19.5, 1_000,
+        ));
+        assert!(!super::final_domain_candidate_improves_quality(
+            policy, 1_000, 20.0, 700, 20.5, 600,
+        ));
     }
 }

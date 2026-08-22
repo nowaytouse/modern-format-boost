@@ -31,7 +31,7 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
         for (j, cell) in row.iter_mut().enumerate() {
             let x = crate::numeric_cast::usize_to_f64(i) - center;
             let y = crate::numeric_cast::usize_to_f64(j) - center;
-            let g = (-((x * x + y * y) / (2.0 * sigma * sigma))).exp();
+            let g = (-(y.mul_add(y, x * x) / (2.0 * sigma * sigma))).exp();
             *cell = g;
             sum += g;
         }

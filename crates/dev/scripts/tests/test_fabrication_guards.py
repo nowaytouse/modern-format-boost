@@ -121,7 +121,7 @@ class TestFabricationGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "corpus"
             root.mkdir()
-            with patch.object(run_training.os, "scandir", return_value=FakeScandir()):
+            with patch.object(run_training.os, "scandir", return_value=FakeScandir()):  # noqa: SIM117
                 with self.assertRaises(run_training.ScanPlanningError):
                     list(run_training.iter_media_files(root))
 
@@ -291,7 +291,7 @@ class TestFabricationGuards(unittest.TestCase):
     def test_load_rules_missing_file_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "training_rules.json"
-            with patch.object(run_training, "RULES_FILE", missing):
+            with patch.object(run_training, "RULES_FILE", missing):  # noqa: SIM117
                 with self.assertRaises(FileNotFoundError):
                     run_training.load_rules()
 
@@ -414,7 +414,7 @@ class TestFabricationGuards(unittest.TestCase):
             start_training_four.ensure_db_training_closure_before_training(hardening)
 
     def test_four_lane_dry_run_does_not_spawn_training_process(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:  # noqa: SIM117
             with patch.object(run_training.subprocess, "run") as run_mock:
                 name, code, log_path = run_training.start_four_lane(
                     lane="static_high",
@@ -618,7 +618,7 @@ class TestFabricationGuards(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp_home,
         ):
             repo_root = Path(tmp_repo)
-            with patch.dict(os.environ, {"HOME": tmp_home}, clear=False):
+            with patch.dict(os.environ, {"HOME": tmp_home}, clear=False):  # noqa: SIM117
                 with patch.object(
                     post_training_closure.subprocess,
                     "run",
@@ -641,7 +641,7 @@ class TestFabricationGuards(unittest.TestCase):
         self.assertIs(start_training_four.start_lane, run_training.start_four_lane)
 
     def test_start_training_four_coerces_workspace_log_root(self):
-        with tempfile.TemporaryDirectory() as tmp_home:
+        with tempfile.TemporaryDirectory() as tmp_home:  # noqa: SIM117
             with patch.dict(os.environ, {"HOME": tmp_home}, clear=False):
                 os.environ.pop("MFB_HOME_ROOT", None)
                 resolved = start_training_four.resolve_launch_log_root(
@@ -745,7 +745,7 @@ class TestFabricationGuards(unittest.TestCase):
             def poll(self):
                 return None
 
-        with (
+        with (  # noqa: SIM117
             tempfile.TemporaryDirectory() as tmp,
             patch.object(
                 run_training,

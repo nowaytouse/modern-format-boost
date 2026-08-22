@@ -832,7 +832,12 @@ fn main() -> anyhow::Result<()> {
 
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
-            let resume = resume && !no_resume;
+            let resume = foundation::checkpoint::resolve_resume_choice(
+                &input,
+                output.as_deref(),
+                resume,
+                no_resume,
+            )?;
             let selected_codec = match SelectedCodec::resolve_cli_delivery_codec(
                 DeliveryProduct::Vid,
                 &codec,
@@ -1340,6 +1345,12 @@ fn build_conversion_config(
 
 #[cfg(test)]
 mod fast_gif_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::expect_fun_call,
+        clippy::panic
+    )]
     use super::{
         Cli, Commands, FastGifDelivery, command_requires_database,
         fast_gif_avif_delivery_output_path, fast_gif_avif_output_path_for,
@@ -1376,10 +1387,14 @@ mod fast_gif_tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Structurally exact ftyp box: size 0x14 = 8-byte header + major/minor/
+        // compatible brands (3×4 bytes). The previous 0x18 length declared
+        // 4 bytes beyond EOF, which made detect_true_format fail closed to
+        // Unknown before the brand check could run.
         std::fs::write(
             path,
             [
-                0x00, 0x00, 0x00, 0x18, b'f', b't', b'y', b'p', b'a', b'v', b'i', b's', 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x14, b'f', b't', b'y', b'p', b'a', b'v', b'i', b's', 0x00, 0x00,
                 0x00, 0x00, b'a', b'v', b'i', b's',
             ],
         )?;
@@ -1484,8 +1499,8 @@ mod fast_gif_tests {
     }
 
     #[test]
-    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() {
-        let root = TempDir::new().unwrap();
+    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
         let without_apple =
             fast_gif_convert_options(root.path(), root.path(), false, false, "Meme Mode");
         let with_apple =
@@ -1501,13 +1516,16 @@ mod fast_gif_tests {
                 .flags
                 .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
         );
+        Ok(())
     }
 
     #[test]
     fn normal_vid_run_rejects_manual_avif_strategy() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["vid", "run", "/media/in", "--strategy", "avif"])?;
 
-        let error = validate_command_strategy(&parsed.command).unwrap_err();
+        let Err(error) = validate_command_strategy(&parsed.command) else {
+            anyhow::bail!("normal vid run unexpectedly accepted --strategy avif");
+        };
         assert!(error.to_string().contains("vid fast-gif --strategy avif"));
         Ok(())
     }
@@ -1595,6 +1613,7 @@ mod fast_gif_tests {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
         };
 
         assert_eq!(fast_gif_delivery_output_path(&result)?, Some(output));
@@ -1624,6 +1643,7 @@ mod fast_gif_tests {
             blake3: None,
             explore_final_crf: None,
             explore_iterations: None,
+            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
         };
 
         assert_eq!(fast_gif_avif_delivery_output_path(&result)?, Some(output));

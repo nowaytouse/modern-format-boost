@@ -50,14 +50,14 @@ const fn post_install_check_hint() -> &'static str {
     "You can now run 'cargo run --locked -p dev --bin check_all' to verify the workspace."
 }
 
-fn run_cmd(cmd: &str, check: bool) -> Result<String> {
+fn run_cmd(cmd: &str) -> Result<String> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .output()
         .with_context(|| format!("Failed to execute command: {cmd}"))?;
 
-    if check && !output.status.success() {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(anyhow!(
             "Command '{}' failed with status: {} ({})",
@@ -104,11 +104,10 @@ fn main() -> Result<()> {
             println!("Installing Homebrew...");
             run_cmd(
                 r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
-                true,
             )?;
         }
         println!("Updating Homebrew...");
-        run_cmd("brew update", true)?;
+        run_cmd("brew update")?;
         println!("Checking and installing system dependencies via Homebrew...");
 
         let deps = vec![
@@ -136,7 +135,7 @@ fn main() -> Result<()> {
 
         // Handle ffmpeg specially to avoid tap conflicts
         if command_exists("ffmpeg") {
-            let ffmpeg_info = run_cmd("which ffmpeg", false)?;
+            let ffmpeg_info = run_cmd("which ffmpeg")?;
             print_c(
                 GREEN,
                 &format!(
@@ -153,7 +152,7 @@ fn main() -> Result<()> {
                 "   💡 For full-featured ffmpeg, see script header for homebrew-ffmpeg tap \
                  instructions.",
             );
-            run_cmd("brew install ffmpeg", true)?;
+            run_cmd("brew install ffmpeg")?;
         }
 
         for dep in deps {
@@ -185,7 +184,7 @@ fn main() -> Result<()> {
                 );
             } else {
                 println!("Installing {dep}...");
-                run_cmd(&format!("brew install {dep}"), true)?;
+                run_cmd(&format!("brew install {dep}"))?;
             }
         }
 
@@ -205,19 +204,16 @@ fn main() -> Result<()> {
         }
 
         // 1. Create libstdc++.tbd pointing to system libc++.tbd in the SDK
-        let sdk_path = run_cmd("xcrun --show-sdk-path", true)?;
+        let sdk_path = run_cmd("xcrun --show-sdk-path")?;
         let sdk_path_trimmed = sdk_path.trim();
         let libcxx_tbd = PathBuf::from(sdk_path_trimmed).join("usr/lib/libc++.tbd");
         let target_tbd = tmp_lib_dir.join("libstdc++.tbd");
         if libcxx_tbd.exists() {
-            run_cmd(
-                &format!(
-                    "ln -sf \"{}\" \"{}\"",
-                    libcxx_tbd.display(),
-                    target_tbd.display()
-                ),
-                true,
-            )?;
+            run_cmd(&format!(
+                "ln -sf \"{}\" \"{}\"",
+                libcxx_tbd.display(),
+                target_tbd.display()
+            ))?;
             print_c(
                 GREEN,
                 &format!(
@@ -235,13 +231,10 @@ fn main() -> Result<()> {
 
         // 2. Create libstdc++.dylib pointing to system libc++.dylib
         let target_dylib = tmp_lib_dir.join("libstdc++.dylib");
-        run_cmd(
-            &format!(
-                "ln -sf \"/usr/lib/libc++.dylib\" \"{}\"",
-                target_dylib.display()
-            ),
-            true,
-        )?;
+        run_cmd(&format!(
+            "ln -sf \"/usr/lib/libc++.dylib\" \"{}\"",
+            target_dylib.display()
+        ))?;
         print_c(
             GREEN,
             &format!(
@@ -256,13 +249,12 @@ fn main() -> Result<()> {
         );
         if command_exists("apt-get") {
             println!("Installing system dependencies via apt...");
-            run_cmd("sudo apt-get update", true)?;
+            run_cmd("sudo apt-get update")?;
             run_cmd(
                 "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp \
                  libheif-dev libavif-bin jpeginfo pngcheck exiv2 coreutils nodejs npm shellcheck \
                  shfmt curl git build-essential postgresql postgresql-contrib libchromaprint-dev \
                  libvmaf-dev pkg-config",
-                true,
             )?;
 
             // Check for libjxl (JPEG XL)
@@ -276,6 +268,9 @@ fn main() -> Result<()> {
                 );
                 println!("   You may need to build from source or use a PPA:");
                 println!("   https://github.com/libjxl/libjxl");
+                return Err(anyhow!(
+                    "JPEG XL tools are required but cjxl is still unavailable after apt install"
+                ));
             }
         } else {
             print_c(
@@ -307,10 +302,7 @@ fn main() -> Result<()> {
                 pick_symbol("🦀", "[RUST]")
             ),
         );
-        run_cmd(
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
-            true,
-        )?;
+        run_cmd("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")?;
         let home = match std::env::var("HOME") {
             Ok(h) => h,
             Err(e) => return Err(anyhow!("HOME environment variable not set: {e}")),
@@ -323,8 +315,8 @@ fn main() -> Result<()> {
     }
 
     println!("Updating Rust and adding components...");
-    run_cmd("rustup update", true)?;
-    run_cmd("rustup component add clippy rustfmt", true)?;
+    run_cmd("rustup update")?;
+    run_cmd("rustup component add clippy rustfmt")?;
 
     print_c(
         BLUE,
@@ -356,7 +348,7 @@ fn main() -> Result<()> {
             );
         } else {
             println!("Installing {package}...");
-            let _ = run_cmd(&format!("cargo install {package}"), false);
+            run_cmd(&format!("cargo install {package}"))?;
         }
     }
 
@@ -379,18 +371,14 @@ fn main() -> Result<()> {
             "Pillow",
         ];
         println!("   Installing: {}", python_packages.join(", "));
-        let _ = run_cmd(
-            &format!("pip3 install --upgrade {}", python_packages.join(" ")),
-            false,
-        );
+        run_cmd(&format!(
+            "pip3 install --upgrade {}",
+            python_packages.join(" ")
+        ))?;
     } else {
-        print_c(
-            RED,
-            &format!(
-                "{} pip3 not found. Skipping Python tools.",
-                pick_symbol("⚠️", "[WARN]")
-            ),
-        );
+        return Err(anyhow!(
+            "pip3 not found; required Python utilities were not installed"
+        ));
     }
 
     print_c(
@@ -403,18 +391,14 @@ fn main() -> Result<()> {
     if command_exists("npm") {
         println!("Installing prettier and markdownlint-cli2 globally...");
         if os_type == "linux" {
-            let _ = run_cmd("sudo npm install -g prettier markdownlint-cli2", false);
+            run_cmd("sudo npm install -g prettier markdownlint-cli2")?;
         } else {
-            let _ = run_cmd("npm install -g prettier markdownlint-cli2", false);
+            run_cmd("npm install -g prettier markdownlint-cli2")?;
         }
     } else {
-        print_c(
-            RED,
-            &format!(
-                "{} npm not found. Skipping Node tools.",
-                pick_symbol("⚠️", "[WARN]")
-            ),
-        );
+        return Err(anyhow!(
+            "npm not found; required Node.js utilities were not installed"
+        ));
     }
 
     println!("--------------------------------------------------------");
@@ -456,6 +440,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn test_run_cmd_propagates_nonzero_status_and_stderr() {
+        let error = run_cmd("printf 'install denied' >&2; exit 7")
+            .expect_err("failed dependency commands must stop the installer");
+        let message = error.to_string();
+        assert!(message.contains("status"));
+        assert!(message.contains("install denied"));
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn test_command_exists_requires_executable_like_shutil_which() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let fake_tool = tempdir.path().join("fake-tool");

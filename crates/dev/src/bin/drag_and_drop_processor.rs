@@ -10,10 +10,9 @@ use dev::infra::drag_drop::{
     ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
     build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
     create_directory_structure, delete_fast_img_shortest_path_output_dir,
-    effective_success_failure_counts, fast_img_integrity_counts, fast_img_marker_requires_retry,
-    fast_img_restore_integrity_counts, fast_img_retained_file_names, fast_img_session_size_metrics,
-    get_unique_output_path, run_unified_verification, safety_check, scan_content,
-    sync_non_media_files,
+    effective_success_failure_counts, fast_img_integrity_counts, fast_img_restore_integrity_counts,
+    fast_img_retained_file_names, fast_img_session_size_metrics, get_unique_output_path,
+    run_unified_verification, safety_check, scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -111,8 +110,12 @@ struct Args {
     #[arg(long)]
     vue: bool,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_resume")]
     resume: bool,
+
+    /// Explicitly discard saved conversion state and start a fresh run.
+    #[arg(long, conflicts_with = "resume")]
+    no_resume: bool,
 
     #[arg(long)]
     ultimate: bool,
@@ -1191,52 +1194,31 @@ fn run_fast_img_restore_post_success(
     Ok(())
 }
 
-fn run_fast_img_with_retry(
+fn run_fast_img_task(
     args: &Args,
     project_root: &Path,
     session: &DragDropSession,
 ) -> Result<(ProcessorStats, PathBuf)> {
     let target = args.inputs.first().context("input required")?;
     let verify_bin = cli_binary(project_root, "verify");
+    let marker_probe = |dir: &Path| dev::infra::drag_drop::marker_exists(&verify_bin, dir);
+    let resume_probe = (!args.no_resume).then_some(&marker_probe as &dyn Fn(&Path) -> bool);
     let output = args.output.clone().unwrap_or_else(|| {
-        dev::infra::fastmode_paths::fast_img_output_dir_for_target(
-            target,
-            Some(&|dir: &Path| dev::infra::drag_drop::marker_exists(&verify_bin, dir)),
-        )
+        dev::infra::fastmode_paths::fast_img_output_dir_for_target(target, resume_probe)
     });
     let img_bin = cli_binary(project_root, "img");
-    let mut retry = args.retry;
-    if !retry && fast_img_marker_requires_retry(&verify_bin, &output)? {
-        retry = true;
-    }
+    let retry = args.retry || args.resume;
     let command = LaunchCommand::from_argv(build_fast_img_command(
         &img_bin,
         target,
         args.shortest_path,
         true,
         retry,
+        args.no_resume,
         args.strategy.as_deref(),
         args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
     ))?;
     let stats = command.run_collecting(args.dry_run, Some(session), false)?;
-    if stats.exit_code != 0 && !args.retry && fast_img_marker_requires_retry(&verify_bin, &output)?
-    {
-        eprintln!(
-            "{} Recoverable failure detected, retrying automatically...",
-            pick_symbol("🔄", "[RETRY]")
-        );
-        let retry_cmd = LaunchCommand::from_argv(build_fast_img_command(
-            &img_bin,
-            target,
-            args.shortest_path,
-            true,
-            true,
-            args.strategy.as_deref(),
-            args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
-        ))?;
-        let retry_stats = retry_cmd.run_collecting(args.dry_run, Some(session), false)?;
-        return Ok((retry_stats, output));
-    }
     Ok((stats, output))
 }
 
@@ -1266,6 +1248,8 @@ fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
     }
     if args.resume {
         command.push("--resume".to_string());
+    } else if args.no_resume {
+        command.push("--no-resume".to_string());
     }
     if args.ultimate || DRAG_DROP_CHILD_ULTIMATE {
         command.push("--ultimate".to_string());
@@ -1340,7 +1324,8 @@ fn plan_cli_invocations(
                     input,
                     args.shortest_path,
                     args.archive,
-                    args.retry,
+                    args.retry || args.resume,
+                    args.no_resume,
                     args.strategy.as_deref(),
                     args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
                 ))?);
@@ -1623,7 +1608,7 @@ fn run_drag_drop(
             }
         } else {
             draw_separator("Processing (fast-img)");
-            match run_fast_img_with_retry(args, &root, session.expect("session")) {
+            match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
                     match fs::read_to_string(&session.expect("session").verbose_log) {
@@ -2216,6 +2201,7 @@ fn build_run_args(
         base_dir: None,
         in_place,
         resume: false,
+        no_resume: false,
         ultimate: DRAG_DROP_CHILD_ULTIMATE,
         verbose: DRAG_DROP_CHILD_VERBOSE,
         watch: false,
@@ -2534,7 +2520,7 @@ fn main() -> Result<()> {
 
     session.rename_log_to_project(&args.inputs[0])?;
 
-    if args.in_place {
+    if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
         dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
     }
 
@@ -2670,6 +2656,7 @@ mod tests {
             force: false,
             dry_run: true,
             resume: false,
+            no_resume: false,
             ultimate: false,
             in_place: false,
             verbose: false,
@@ -2712,6 +2699,7 @@ mod tests {
             force: false,
             dry_run: true,
             resume: false,
+            no_resume: false,
             ultimate: false,
             in_place: false,
             verbose: false,
@@ -2764,6 +2752,7 @@ mod tests {
                 force: false,
                 dry_run: true,
                 resume: false,
+                no_resume: false,
                 ultimate: false,
                 in_place: false,
                 verbose: false,
@@ -2814,6 +2803,7 @@ mod tests {
                 force: false,
                 dry_run: true,
                 resume: false,
+                no_resume: false,
                 ultimate: false,
                 in_place: false,
                 verbose: false,

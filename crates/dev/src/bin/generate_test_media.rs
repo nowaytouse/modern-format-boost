@@ -22,6 +22,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "sine=f=1000:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
             "-c:a",
@@ -35,6 +37,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=red:s=800x600:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -46,6 +50,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=green:s=3840x2160:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -57,6 +63,8 @@ const IMAGE_JOBS: &[MediaJob] = &[
             "lavfi",
             "-i",
             "color=yellow:s=640x480:d=1",
+            "-vframes",
+            "1",
             "-c:v",
             "png",
         ],
@@ -271,18 +279,32 @@ fn project_root() -> Result<PathBuf> {
     }
 }
 
-fn run_ffmpeg(args: &[&str], output: &Path) -> bool {
-    let Some(ffmpeg) = foundation::common_utils::resolve_tool_path("ffmpeg") else {
-        return false;
-    };
-    let status = Command::new(ffmpeg)
+fn run_ffmpeg(args: &[&str], output: &Path) -> Result<()> {
+    let ffmpeg = foundation::common_utils::resolve_tool_path("ffmpeg")
+        .context("ffmpeg is required to generate edge-test media")?;
+    let result = Command::new(ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error"])
         .args(args)
         .args(["-y"])
         .arg(output)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    matches!(status, Ok(status) if status.success())
+        .output()
+        .with_context(|| format!("start ffmpeg for {}", output.display()))?;
+    if !result.status.success() {
+        anyhow::bail!(
+            "ffmpeg failed for {} (status {:?}): {}",
+            output.display(),
+            result.status.code(),
+            String::from_utf8_lossy(&result.stderr).trim()
+        );
+    }
+    if fs::metadata(output)
+        .with_context(|| format!("inspect generated media {}", output.display()))?
+        .len()
+        == 0
+    {
+        anyhow::bail!("ffmpeg produced an empty media file: {}", output.display());
+    }
+    Ok(())
 }
 
 fn summary_lines(
@@ -342,24 +364,36 @@ fn main() -> Result<()> {
         test_dir.display()
     );
     for job in IMAGE_JOBS {
-        let _ = run_ffmpeg(job.args, &images_dir.join(job.output));
+        run_ffmpeg(job.args, &images_dir.join(job.output))?;
     }
 
     for job in VIDEO_JOBS {
-        let _ = run_ffmpeg(job.args, &videos_dir.join(job.output));
+        run_ffmpeg(job.args, &videos_dir.join(job.output))?;
     }
 
     for job in GIF_JOBS {
-        let _ = run_ffmpeg(job.args, &gifs_dir.join(job.output));
+        run_ffmpeg(job.args, &gifs_dir.join(job.output))?;
     }
 
     let manifest_path = test_dir.join("MEDIA_MANIFEST.md");
+    let manifest_content = format!(
+        "# Edge Media Fixtures Manifest\n\n\
+         Automated test media generated for Modern Format Boost.\n\n\
+         - Images: {} files\n\
+         - Videos: {} files (Codecs: H.264, AV1, VP9, HEVC | Quality metrics: CRF, SSIM)\n\
+         - GIFs: {} files\n",
+        IMAGE_JOBS.len(),
+        VIDEO_JOBS.len(),
+        GIF_JOBS.len()
+    );
+    fs::write(&manifest_path, manifest_content)?;
+
     for line in summary_lines(
         &test_dir,
         &manifest_path,
-        fs::read_dir(&images_dir)?.count(),
-        fs::read_dir(&videos_dir)?.count(),
-        fs::read_dir(&gifs_dir)?.count(),
+        IMAGE_JOBS.len(),
+        VIDEO_JOBS.len(),
+        GIF_JOBS.len(),
         manifest_path.is_file(),
     ) {
         println!("{line}");
@@ -428,5 +462,23 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "For test specifications, see: /tmp/mfb-edge/MEDIA_MANIFEST.md"));
+    }
+
+    #[test]
+    fn rust_generator_propagates_ffmpeg_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let output = temp.path().join("invalid.png");
+        let error = run_ffmpeg(
+            &["-f", "lavfi", "-i", "mfb_filter_that_does_not_exist"],
+            &output,
+        )
+        .expect_err("invalid ffmpeg input must fail the generator");
+
+        assert!(
+            error.to_string().contains("ffmpeg failed")
+                || error.to_string().contains("ffmpeg is required"),
+            "unexpected error: {error}"
+        );
+        assert!(!output.exists());
     }
 }

@@ -124,7 +124,7 @@ fn main() -> Result<()> {
         ],
     )?;
     if command_exists("ldconfig") {
-        let _ = Command::new("sudo").arg("ldconfig").status();
+        run("sudo", &["ldconfig".into()])?;
     }
 
     if let Some(github_env) = std::env::var_os("GITHUB_ENV").map(PathBuf::from)
@@ -161,5 +161,19 @@ mod tests {
         assert!(text.contains("LIBDISPATCH_SRC_DIR"));
         assert!(text.contains("LIBDISPATCH_REF"));
         assert!(text.contains("clang++"));
+    }
+
+    #[test]
+    fn required_commands_and_ldconfig_fail_closed() {
+        let error = run("sh", &["-c".into(), "exit 7".into()])
+            .expect_err("required install commands must not ignore failure");
+        assert!(error.to_string().contains("status"));
+
+        let source = include_str!("build_libdispatch.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map(|(production, _)| production)
+            .expect("test module boundary missing");
+        assert!(production.contains("run(\"sudo\", &[\"ldconfig\".into()])?;"));
     }
 }

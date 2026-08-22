@@ -4,7 +4,9 @@
 //! environment variable toggles to ensure consistency across the workspace.
 
 // --- Size & Storage Defaults ---
-pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = MB;
+/// Default allowed pure-media payload growth: 512 KiB = 524,288 bytes.
+/// Explorer and final delivery gate must both use this constant via `SizePolicy`.
+pub const DEFAULT_SIZE_TOLERANCE_BYTES: u64 = 512 * 1024;
 /// Default allowed size-growth ratio.
 pub const DEFAULT_SIZE_TOLERANCE_RATIO: f64 = 0.01;
 /// Minimum output size for images to be considered valid for deletion of
@@ -501,14 +503,16 @@ pub const ENV_ENABLE_EXPLORATION_ALGORITHM_SEAL: &str =
 /// [`crate::algorithm_seal`]).
 pub const ENV_DISABLE_EXPLORATION_ALGORITHM_SEAL: &str =
     "MODERN_FORMAT_DISABLE_EXPLORATION_ALGORITHM_SEAL";
-/// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_LAYER6_KNN`] (default
-/// **on**).
+/// Explicit opt-in for Layer 6 HNSW when the decision tree is uncertain.
+pub const LOOP_INTENT_LAYER6_KNN_OPT_IN_ENV_KEY: &str =
+    "MODERN_FORMAT_LOOP_INTENT_LAYER6_KNN_OPT_IN";
+/// Legacy default-on name; runtime code deliberately ignores it.
 #[deprecated(
     since = "0.11.4",
-    note = "Default-on gate; set MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN=1 to relax"
+    note = "Use MODERN_FORMAT_LOOP_INTENT_LAYER6_KNN_OPT_IN=1 for explicit opt-in"
 )]
 pub const ENV_ENABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_ENABLE_LOOP_INTENT_LAYER6_KNN";
-/// Kill-switch for Layer 6 HNSW when the decision tree is uncertain.
+/// Kill-switch for Layer 6 HNSW; takes precedence over the explicit opt-in.
 pub const ENV_DISABLE_LOOP_INTENT_LAYER6_KNN: &str = "MODERN_FORMAT_DISABLE_LOOP_INTENT_LAYER6_KNN";
 /// Legacy name only — use [`ENV_DISABLE_LOOP_INTENT_INFERENCE_LOG`] (default
 /// **on**).
@@ -1020,6 +1024,10 @@ pub const TOOL_PNGCHECK: &str = "pngcheck";
 pub const TOOL_DWEBP: &str = "dwebp";
 pub const TOOL_AVIFDEC: &str = "avifdec";
 pub const TOOL_HEIF_INFO: &str = "heif-info";
+/// Siegfried format-identification sidecar (PRONOM signatures). Optional
+/// capability: an absent `sf` only disables external identification, never
+/// the internal detectors.
+pub const TOOL_SIEGFRIED: &str = "sf";
 pub const TOOL_X265: &str = "x265";
 pub const TOOL_AVIFENC: &str = "avifenc";
 pub const TOOL_DOVI: &str = "dovi_tool";
@@ -1081,15 +1089,14 @@ pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
 pub const JXL_ULTIMATE_EFFORT: u8 = 11;
 /// Default effort level for standard mode
 pub const JXL_DEFAULT_EFFORT: u8 = 7;
-/// Deep production effort candidate. e9 is intentionally skipped by policy.
+/// Deep production effort retained for explicit compatibility paths.
 pub const JXL_DEEP_EFFORT: u8 = 8;
-/// Lossless-only experimental effort candidate.
+/// Lossless-only high-effort setting.
 pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
 /// Disabled production effort due to the documented e9/e10 efficiency
 /// inversion.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
-/// Runtime JXL policy: default mode always emits `e7`, ultimate mode always
-/// emits `e10`.
+/// Runtime JXL policy: default mode emits `e7`; ultimate mode emits `e11`.
 #[must_use]
 pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
     if ultimate {
@@ -1481,7 +1488,7 @@ pub const VIDEO_RECOMMENDATION_HIGH_BITRATE_THRESHOLD: u64 = 50_000_000;
 pub const VIDEO_RECOMMENDATION_AV1_CRF_DEFAULT: f32 = 20.0;
 /// Default SVT-AV1 preset for video upgrade recommendations.
 pub const VIDEO_RECOMMENDATION_AV1_PRESET_DEFAULT: u8 = 6;
-/// Maximum number of finalist candidates promoted for JXL e10 finalization (8).
+/// Maximum number of finalist candidates promoted for JXL verification (8).
 pub const JXL_FINALIST_LIMIT: usize = 8;
 /// Perceptual probe anchor at distance 0.03.
 pub const JXL_ANCHOR_DIST_0_03: f64 = 0.03;

@@ -486,6 +486,106 @@ fn runtime_matrix_executes_generated_h264_across_supported_modes() -> Result<()>
 
 #[test]
 #[serial]
+fn synthetic_grayscale_video_production_roundtrip_stays_rgb_neutral() -> Result<()> {
+    const WIDTH: usize = 64;
+    const HEIGHT: usize = 64;
+    const FRAMES: usize = 3;
+
+    let temp = tempfile::tempdir().context("failed to create grayscale video temp dir")?;
+    let input = temp.path().join("synthetic_gray_ffv1.avi");
+    let generated = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:s=64x64:r=4:d=0.75",
+            "-frames:v",
+            "3",
+            "-pix_fmt",
+            "gray",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(&input)
+        .output()
+        .context("failed to generate synthetic grayscale FFV1 video")?;
+    if !generated.status.success() {
+        bail!(
+            "synthetic grayscale video generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+    }
+
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
+    let temp_root = temp.path().join("mfb_home");
+    let temp_root_str = temp_root.to_string_lossy().to_string();
+    let _guard = EnvGuard::set(foundation::constants::ENV_MFB_HOME_ROOT, &temp_root_str);
+    let config = ConversionConfig {
+        output_dir: Some(output_dir),
+        base_dir: Some(temp.path().to_path_buf()),
+        flags: ConfigFlags::FORCE,
+        min_ssim: foundation::constants::MIN_SSIM_DEFAULT,
+        child_threads: 2,
+        codec: SelectedCodec::Hevc,
+    };
+    let converted = auto_convert_with_cache(&input, &config, None)
+        .context("production grayscale video conversion failed")?;
+    assert!(converted.success, "conversion failed: {converted:?}");
+    assert_eq!(
+        converted.strategy.target,
+        TargetVideoFormat::HevcLosslessMkv
+    );
+
+    let decoded = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&converted.output_path)
+        .args(["-map", "0:v:0", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+        .output()
+        .context("failed to decode production grayscale video output")?;
+    if !decoded.status.success() {
+        bail!(
+            "production grayscale video decode failed: {}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+    }
+
+    assert_eq!(
+        decoded.stdout.len(),
+        WIDTH * HEIGHT * 3 * FRAMES,
+        "production conversion must preserve every synthetic grayscale frame"
+    );
+    let (max_channel_delta, worst_pixel) =
+        decoded
+            .stdout
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .fold((0u8, [0u8; 3]), |worst, pixel| {
+                let delta = pixel[0]
+                    .abs_diff(pixel[1])
+                    .max(pixel[1].abs_diff(pixel[2]))
+                    .max(pixel[0].abs_diff(pixel[2]));
+                if delta > worst.0 {
+                    (delta, [pixel[0], pixel[1], pixel[2]])
+                } else {
+                    worst
+                }
+            });
+    assert!(
+        max_channel_delta <= 2,
+        "production grayscale video gained a color cast: max RGB delta \
+         {max_channel_delta}, pixel {worst_pixel:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
 fn runtime_matrix_handles_hevc_skip_honestly() -> Result<()> {
     let input = video_file("test_hevc_8s.mp4");
 

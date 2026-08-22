@@ -76,7 +76,7 @@ fn normalize_vector(embedding: &[f64]) -> (Vec<f64>, usize) {
 fn psql(connstr: &str, sql: &str) -> Result<String> {
     let output = Command::new("psql")
         .arg(connstr)
-        .args(["-At", "-F", "\t", "-c", sql])
+        .args(["-v", "ON_ERROR_STOP=1", "-At", "-F", "\t", "-c", sql])
         .output()
         .with_context(|| "psql is required for DB sentinel backfill".to_string())?;
     if !output.status.success() {
@@ -88,19 +88,20 @@ fn psql(connstr: &str, sql: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn update_embedding(connstr: &str, table: &str, id: &str, vector: &str) -> Result<()> {
+fn update_embedding_sql(table: &str, id: &str, vector: &str) -> String {
     let escaped = vector.replace('\'', "''");
     let id_escaped = id.replace('\'', "''");
-    let sql = format!(
-        "UPDATE {table} SET embedding = '{escaped}'::vector WHERE id::text = '{id_escaped}'"
-    );
-    let _ = psql(connstr, &sql)?;
-    Ok(())
+    format!("UPDATE {table} SET embedding = '{escaped}'::vector WHERE id::text = '{id_escaped}'")
+}
+
+fn update_transaction(updates: &[String]) -> String {
+    format!("BEGIN;\n{};\nCOMMIT;", updates.join(";\n"))
 }
 
 fn run(connstr: &str, dry_run: bool) -> Result<(usize, usize)> {
     let mut total_rows = 0;
     let mut total_slots = 0;
+    let mut updates = Vec::new();
     for table in QUALITY_TABLES {
         let rows = psql(
             connstr,
@@ -133,8 +134,15 @@ fn run(connstr: &str, dry_run: bool) -> Result<(usize, usize)> {
                 );
                 continue;
             }
-            update_embedding(connstr, table, id, &format_pgvector(&normalized))?;
+            updates.push(update_embedding_sql(
+                table,
+                id,
+                &format_pgvector(&normalized),
+            ));
         }
+    }
+    if !dry_run && !updates.is_empty() {
+        let _ = psql(connstr, &update_transaction(&updates))?;
     }
     Ok((total_rows, total_slots))
 }
@@ -177,5 +185,16 @@ mod tests {
         for index in EMBED_SLOT_INDICES {
             assert_eq!(normalized[*index], PGVECTOR_MISSING_MEASUREMENT);
         }
+    }
+
+    #[test]
+    fn test_updates_are_committed_as_one_transaction() {
+        let first = update_embedding_sql("samples", "one", "[1,2]");
+        let second = update_embedding_sql("samples", "two", "[3,4]");
+        let sql = update_transaction(&[first, second]);
+
+        assert!(sql.starts_with("BEGIN;\n"));
+        assert!(sql.contains("id::text = 'one';\nUPDATE"));
+        assert!(sql.ends_with(";\nCOMMIT;"));
     }
 }

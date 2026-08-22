@@ -30,7 +30,8 @@
   "dropzone": {
     "drag": "ここにドロップ",
     "browse": "フォルダを選択",
-    "release": "ドロップして開始"
+    "release": "ドロップして開始",
+    "timeout": "フォルダ選択がキャンセルされました（30分間操作なし）。"
   },
   "processing": {
     "selected_folder": "選択されたフォルダ",

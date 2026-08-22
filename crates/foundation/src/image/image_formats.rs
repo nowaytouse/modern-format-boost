@@ -23,6 +23,208 @@ pub mod webp {
     use std::fs;
     use std::path::Path;
 
+    #[derive(Clone, Copy)]
+    struct RiffChunk<'a> {
+        id: [u8; 4],
+        payload: &'a [u8],
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FrameCodec {
+        Lossy,
+        Lossless,
+    }
+
+    fn parse_chunk<'a>(
+        data: &'a [u8],
+        pos: usize,
+        end: usize,
+        context: &str,
+    ) -> Result<(RiffChunk<'a>, usize)> {
+        if end > data.len() || end.saturating_sub(pos) < 8 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: truncated chunk header at offset {pos}"
+            )));
+        }
+
+        let id = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
+        let size = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
+            "webp_chunk_size",
+        )
+        .ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk size at offset {pos} does not fit usize"
+            ))
+        })?;
+        let payload_start = pos.checked_add(8).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk header offset overflow at {pos}"
+            ))
+        })?;
+        let payload_end = payload_start.checked_add(size).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk payload offset overflow at {pos}"
+            ))
+        })?;
+        if payload_end > end {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: chunk at offset {pos} claims {size} payload bytes beyond boundary {end}"
+            )));
+        }
+
+        let next = payload_end.checked_add(size & 1).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: padded chunk offset overflow at {pos}"
+            ))
+        })?;
+        if next > end {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: odd-sized chunk at offset {pos} is missing its RIFF padding byte"
+            )));
+        }
+        if size & 1 == 1 && data[payload_end] != 0 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: non-zero RIFF padding byte at offset {payload_end}"
+            )));
+        }
+
+        Ok((
+            RiffChunk {
+                id,
+                payload: &data[payload_start..payload_end],
+            },
+            next,
+        ))
+    }
+
+    fn validate_chunks(data: &[u8], start: usize, end: usize, context: &str) -> Result<()> {
+        let mut pos = start;
+        while pos < end {
+            let (_, next) = parse_chunk(data, pos, end, context)?;
+            pos = next;
+        }
+        Ok(())
+    }
+
+    fn validated_webp_end(data: &[u8]) -> Result<usize> {
+        if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP: invalid or truncated RIFF/WEBP header".to_string(),
+            ));
+        }
+        let riff_size = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+            "webp_riff_size",
+        )
+        .ok_or_else(|| {
+            ImgQualityError::NumericError("WebP: RIFF size does not fit usize".to_string())
+        })?;
+        if riff_size < 4 {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP: RIFF size is smaller than the WEBP FourCC".to_string(),
+            ));
+        }
+        let end = 8usize.checked_add(riff_size).ok_or_else(|| {
+            ImgQualityError::NumericError("WebP: RIFF boundary overflow".to_string())
+        })?;
+        if end > data.len() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP: RIFF declares {end} bytes but input contains only {}",
+                data.len()
+            )));
+        }
+        validate_chunks(data, 12, end, "RIFF")?;
+        Ok(end)
+    }
+
+    fn frame_codec(payload: &[u8]) -> Result<FrameCodec> {
+        if payload.len() < 16 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP ANMF: frame payload is {} bytes; expected at least 16",
+                payload.len()
+            )));
+        }
+        validate_chunks(payload, 16, payload.len(), "ANMF")?;
+
+        let mut pos = 16;
+        let mut codec = None;
+        while pos < payload.len() {
+            let (chunk, next) = parse_chunk(payload, pos, payload.len(), "ANMF")?;
+            let candidate = match &chunk.id {
+                b"VP8 " => Some(FrameCodec::Lossy),
+                b"VP8L" => Some(FrameCodec::Lossless),
+                _ => None,
+            };
+            if let Some(candidate) = candidate
+                && codec.replace(candidate).is_some()
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "WebP ANMF: frame contains more than one VP8/VP8L bitstream".to_string(),
+                ));
+            }
+            pos = next;
+        }
+
+        codec.ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "WebP ANMF: frame contains no VP8 or VP8L bitstream".to_string(),
+            )
+        })
+    }
+
+    fn animation_timing_ms(data: &[u8]) -> Result<Option<(u32, u64)>> {
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
+        let mut has_anim = false;
+        let mut frame_count = 0u32;
+        let mut total_ms = 0u64;
+
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            match &chunk.id {
+                b"ANIM" => {
+                    if chunk.payload.len() < 6 {
+                        return Err(ImgQualityError::AnalysisError(
+                            "WebP ANIM: payload is shorter than 6 bytes".to_string(),
+                        ));
+                    }
+                    has_anim = true;
+                }
+                b"ANMF" => {
+                    frame_codec(chunk.payload)?;
+                    frame_count = frame_count.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::NumericError(
+                            "WebP animation frame count overflow".to_string(),
+                        )
+                    })?;
+                    let duration_ms = u32::from(chunk.payload[12])
+                        | (u32::from(chunk.payload[13]) << 8)
+                        | (u32::from(chunk.payload[14]) << 16);
+                    total_ms = total_ms
+                        .checked_add(u64::from(duration_ms))
+                        .ok_or_else(|| {
+                            ImgQualityError::NumericError(
+                                "WebP animation duration overflow".to_string(),
+                            )
+                        })?;
+                }
+                _ => {}
+            }
+            pos = next;
+        }
+
+        if frame_count == 0 {
+            return Ok(None);
+        }
+        if !has_anim {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP animation contains ANMF frames without an ANIM chunk".to_string(),
+            ));
+        }
+        Ok(Some((frame_count, total_ms)))
+    }
+
     /// Detect WebP animated compression by traversing all ANMF (animation
     /// frame) chunks.
     ///
@@ -34,300 +236,38 @@ pub mod webp {
     /// # Errors
     /// Returns an error if the WebP stream is invalid or truncated.
     pub fn detect_webp_animation_is_lossless(data: &[u8]) -> Result<bool> {
-        // WebP structure: RIFF[size]WEBP[chunks...]
-        // Walk top-level chunks to find ANMF frames
-        if data.len() < 12 {
-            return Err(ImgQualityError::AnalysisError(
-                "WebP: data too small for format identification (need at least 12 bytes for RIFF \
-                 header)"
-                    .to_string(),
-            ));
-        }
-
-        // Verify RIFF header
-        if data.get(0..4) != Some(b"RIFF") {
-            return Err(ImgQualityError::AnalysisError(
-                "WebP: missing RIFF header signature".to_string(),
-            ));
-        }
-
-        if data.get(8..12) != Some(b"WEBP") {
-            return Err(ImgQualityError::AnalysisError(
-                "WebP: missing WEBP fourCC after RIFF header".to_string(),
-            ));
-        }
-
-        let mut pos = 12; // skip RIFF + size + WEBP
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
         let mut found_any_frame = false;
-
-        while pos + 8 <= data.len() {
-            // Explicit bounds check before slice access
-            let chunk_id = data.get(pos..pos + 4).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!("WebP: chunk ID truncated at offset {pos}"))
-            })?;
-
-            let chunk_size_bytes = data.get(pos + 4..pos + 8).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP: chunk size truncated at offset {}",
-                    pos + 4
-                ))
-            })?;
-
-            let chunk_size = crate::numeric_cast::u32_to_usize_strict(
-                u32::from_le_bytes([
-                    chunk_size_bytes[0],
-                    chunk_size_bytes[1],
-                    chunk_size_bytes[2],
-                    chunk_size_bytes[3],
-                ]),
-                "webp_chunk_size",
-            )
-            .ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP chunk size at {pos} is too large for memory (exceeds usize::MAX)"
-                ))
-            })?;
-
-            let payload_start = pos + 8;
-
-            // Validate chunk size doesn't overflow buffer
-            if payload_start > data.len() || chunk_size > data.len() - payload_start {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "WebP: chunk at offset {pos} claims size {chunk_size} but only {} bytes remain",
-                    data.len().saturating_sub(payload_start)
-                )));
-            }
-
-            let payload_end = payload_start + chunk_size;
-
-            if chunk_id == b"ANMF" && payload_start + 16 <= payload_end {
+        let mut all_frames_lossless = true;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == *b"ANMF" {
                 found_any_frame = true;
-                let mut frame_data_pos = payload_start + 16;
-                if frame_data_pos + 8 <= payload_end {
-                    let first_four = &data[frame_data_pos..frame_data_pos + 4];
-                    if first_four != b"VP8 "
-                        && first_four != b"VP8L"
-                        && first_four != b"ALPH"
-                        && payload_start + 24 + 8 <= payload_end
-                    {
-                        let alt_four = &data[payload_start + 24..payload_start + 28];
-                        if alt_four == b"VP8 " || alt_four == b"VP8L" || alt_four == b"ALPH" {
-                            frame_data_pos = payload_start + 24;
-                        }
-                    }
-                }
-
-                while frame_data_pos + 8 <= payload_end {
-                    let sub_chunk_id = &data[frame_data_pos..frame_data_pos + 4];
-                    let sub_chunk_size_bytes = &data[frame_data_pos + 4..frame_data_pos + 8];
-                    let sub_chunk_size = u32::from_le_bytes([
-                        sub_chunk_size_bytes[0],
-                        sub_chunk_size_bytes[1],
-                        sub_chunk_size_bytes[2],
-                        sub_chunk_size_bytes[3],
-                    ]);
-                    let sub_chunk_size = crate::numeric_cast::u32_to_usize_strict(
-                        sub_chunk_size,
-                        "webp_sub_chunk_size",
-                    )
-                    .ok_or_else(|| {
-                        ImgQualityError::AnalysisError(
-                            "WebP: sub-chunk size does not fit usize".to_string(),
-                        )
-                    })?;
-
-                    let sub_payload_start = frame_data_pos + 8;
-                    if sub_payload_start > payload_end
-                        || sub_chunk_size > payload_end - sub_payload_start
-                    {
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "WebP: ANMF sub-chunk at offset {frame_data_pos} claims size \
-                             {sub_chunk_size} but exceeds ANMF boundary"
-                        )));
-                    }
-
-                    if sub_chunk_id == b"VP8 " {
-                        return Ok(false); // Lossy frame detected
-                    } else if sub_chunk_id == b"VP8L" {
-                        // Lossless frame detected, continue checking other
-                        // frames/sub-chunks
-                    } else if sub_chunk_id != b"ALPH" {
-                        return Err(ImgQualityError::AnalysisError(format!(
-                            "Format Audit: WebP unknown frame type at offset {}: {:?}. Expected \
-                             VP8 or VP8L.",
-                            frame_data_pos,
-                            String::from_utf8_lossy(sub_chunk_id)
-                        )));
-                    }
-
-                    let padded = (sub_chunk_size + 1) & !1;
-                    frame_data_pos = sub_payload_start + padded;
+                if frame_codec(chunk.payload)? == FrameCodec::Lossy {
+                    all_frames_lossless = false;
                 }
             }
-
-            // Chunks are padded to even size
-            let padded = (chunk_size + 1) & !1;
-
-            // Check for overflow before advancing position
-            pos = payload_start.checked_add(padded).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP: position overflow when advancing past chunk at offset {payload_start}"
-                ))
-            })?;
-
-            // Safety check: prevent infinite loop on malformed data
-            if pos > data.len() {
-                break;
-            }
+            pos = next;
         }
-
-        if found_any_frame {
-            Ok(true) // All frames were VP8L (or skipped non-frame chunks)
-        } else {
-            // No ANMF frames found in animated WebP — fallback to window search
-            if data.windows(4).any(|w| w == b"VP8L") {
-                Ok(true)
-            } else if data.windows(4).any(|w| w == b"VP8 ") {
-                Ok(false)
-            } else {
-                Err(ImgQualityError::AnalysisError(
-                    "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine \
-                     compression"
-                        .to_string(),
-                ))
-            }
+        if !found_any_frame {
+            return Err(ImgQualityError::AnalysisError(
+                "Animated WebP: no ANMF frames found".to_string(),
+            ));
         }
+        Ok(all_frames_lossless)
     }
 
-    /// Estimate WebP VP8 quality by parsing the bitstream quantization index.
-    /// Estimate quality from raw image bytes.
+    /// Refuse to forge an encoder quality from a decoded WebP bitstream.
     ///
     /// # Errors
     /// Returns an error if the format is unsupported, data is corrupted, or
     /// bounds are violated.
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
-        if data.len() < 12 {
-            return Err(ImgQualityError::AnalysisError(
-                "WebP: data too small for quality estimation (need at least 12 bytes)".to_string(),
-            ));
-        }
-
-        // Verify RIFF/WEBP header
-        if data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
-            return Err(ImgQualityError::AnalysisError(
-                "WebP: invalid RIFF/WEBP header for quality estimation".to_string(),
-            ));
-        }
-
-        let mut pos = 12; // skip RIFF + size + WEBP
-
-        while pos + 8 <= data.len() {
-            // Explicit bounds check for chunk ID
-            let chunk_id = data.get(pos..pos + 4).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: chunk ID truncated at offset {pos}"
-                ))
-            })?;
-
-            // Explicit bounds check for chunk size
-            let chunk_size_bytes = data.get(pos + 4..pos + 8).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: chunk size truncated at offset {}",
-                    pos + 4
-                ))
-            })?;
-
-            let chunk_size = crate::numeric_cast::u32_to_usize_strict(
-                u32::from_le_bytes([
-                    chunk_size_bytes[0],
-                    chunk_size_bytes[1],
-                    chunk_size_bytes[2],
-                    chunk_size_bytes[3],
-                ]),
-                "webp_chunk_size",
-            )
-            .ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: chunk size at {pos} exceeds usize::MAX"
-                ))
-            })?;
-
-            let payload_start = pos + 8;
-
-            // Validate chunk size doesn't overflow buffer
-            if payload_start > data.len() || chunk_size > data.len() - payload_start {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: chunk at offset {pos} claims size {chunk_size} but \
-                     only {} bytes remain",
-                    data.len().saturating_sub(payload_start)
-                )));
-            }
-
-            let chunk_end = payload_start + chunk_size;
-
-            if chunk_id == b"VP8 " {
-                // VP8 lossy chunk found - extract quality from quantization index
-
-                // VP8 bitstream requires at least 11 bytes for header + QI
-                if chunk_size < 11 {
-                    // VP8 chunk too small - skip and continue scanning
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_image_format",
-                        format!(
-                            "WebP quality estimation: VP8 chunk at offset {pos} too small \
-                             ({chunk_size} bytes, need at least 11); skipping"
-                        ),
-                    );
-                    // Continue to next chunk instead of failing
-                } else if let Some(vp8_data) = data.get(payload_start..chunk_end) {
-                    // Verify VP8 frame tag signature (bytes 3-5: 0x9D 0x01 0x2A)
-                    if vp8_data.len() >= 6 && vp8_data.get(3..6) == Some(&[0x9D, 0x01, 0x2A]) {
-                        // Y AC quantization index is at byte 10, lower 7 bits
-                        if let Some(&qi_byte) = vp8_data.get(10) {
-                            let y_ac_qi = qi_byte & 0x7F;
-
-                            // Convert QI to quality: quality = (127 - QI) * 100 / 127
-                            let quality = (u32::from(127 - y_ac_qi) * 100)
-                                .checked_div(127)
-                                .and_then(|q| {
-                                    crate::numeric_cast::u32_to_u8_strict(
-                                        q.min(100),
-                                        "webp_quality",
-                                    )
-                                })
-                                .ok_or_else(|| {
-                                    ImgQualityError::AnalysisError(
-                                        "WebP quality estimation: quality calculation overflow or \
-                                         division error"
-                                            .to_string(),
-                                    )
-                                })?;
-                            return Ok(quality);
-                        }
-                    }
-                    // VP8 frame tag signature mismatch or QI byte missing -
-                    // continue scanning This handles
-                    // non-standard VP8 variants or multi-chunk files
-                }
-            }
-
-            // Advance to next chunk (with padding)
-            let padded = (chunk_size + 1) & !1;
-            pos = payload_start.checked_add(padded).ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "WebP quality estimation: position overflow when advancing past chunk at \
-                     offset {payload_start}"
-                ))
-            })?;
-
-            // Safety check: prevent infinite loop
-            if pos > data.len() {
-                break;
-            }
-        }
-
+        validated_webp_end(data)?;
         Err(ImgQualityError::AnalysisError(
-            "WebP quality estimation: no VP8 lossy chunk found in file".to_string(),
+            "WebP encoder quality is not stored as a recoverable container field; preserving it as unknown"
+                .to_string(),
         ))
     }
 
@@ -340,53 +280,48 @@ pub mod webp {
         estimate_quality_from_bytes(&bytes)
     }
 
-    #[must_use]
-    pub fn is_lossless_from_bytes(data: &[u8]) -> bool {
-        if let Some(features) = ::webp::BitstreamFeatures::new(data)
-            && let Some(format) = features.format()
-        {
-            match format {
-                ::webp::BitstreamFormat::Lossless => return true,
-                ::webp::BitstreamFormat::Lossy => return false,
-                ::webp::BitstreamFormat::Undefined => {} // Fallback for animated or undefined
+    /// Determine whether a WebP bitstream is lossless (VP8L).
+    ///
+    /// Fail-closed: an unparseable RIFF structure or a stream with no
+    /// VP8/VP8L bitstream yields `Err` instead of a silent "lossy" guess —
+    /// callers must never re-encode a possibly-lossless file based on a
+    /// forged default. Static and animated streams are both covered.
+    ///
+    /// # Errors
+    /// Returns an error if the RIFF/WebP structure is invalid, truncated, or
+    /// carries no decodable VP8/VP8L bitstream.
+    pub fn is_lossless_from_bytes(data: &[u8]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
+        if let Some(features) = ::webp::BitstreamFeatures::new(data) {
+            if features.has_animation() {
+                return detect_webp_animation_is_lossless(data);
+            }
+            if let Some(format) = features.format() {
+                match format {
+                    ::webp::BitstreamFormat::Lossless => return Ok(true),
+                    ::webp::BitstreamFormat::Lossy => return Ok(false),
+                    ::webp::BitstreamFormat::Undefined => {}
+                }
             }
         }
-
-        if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
-            return false;
-        }
-
         let mut pos = 12;
-        while pos + 8 <= data.len() {
-            let chunk_id = &data[pos..pos + 4];
-            let chunk_size =
-                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
-            let chunk_size =
-                match crate::numeric_cast::u32_to_usize_strict(chunk_size, "webp_chunk_size") {
-                    Some(value) => value,
-                    None => return false,
-                };
-
-            if chunk_id == b"VP8L" {
-                return true;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == *b"VP8L" {
+                return Ok(true);
             }
-            if chunk_id == b"VP8 " {
-                return false;
+            if chunk.id == *b"VP8 " {
+                return Ok(false);
             }
-
-            if chunk_id == b"ANMF" && pos + 8 + 24 + 4 <= data.len() {
-                let sub_chunk = &data[pos + 8 + 24..pos + 8 + 24 + 4];
-                if sub_chunk == b"VP8L" {
-                    return true;
-                }
-                if sub_chunk == b"VP8 " {
-                    return false;
-                }
+            if chunk.id == *b"ANMF" {
+                return detect_webp_animation_is_lossless(data);
             }
-
-            pos += 8 + ((chunk_size + 1) & !1);
+            pos = next;
         }
-        false
+        Err(ImgQualityError::AnalysisError(format!(
+            "WebP: no VP8/VP8L bitstream chunk found in {} bytes; cannot determine losslessness",
+            data.len()
+        )))
     }
 
     #[must_use]
@@ -403,110 +338,12 @@ pub mod webp {
         false
     }
 
-    /// Canvas dimensions from RIFF/WebP chunk headers (VP8 / VP8L / VP8X /
-    /// ANMF).
+    /// Canvas dimensions reported by the installed libwebp decoder.
     #[must_use]
     pub fn dimensions_from_bytes(data: &[u8]) -> Option<(u32, u32)> {
-        fn read_vp8x(payload: &[u8]) -> Option<(u32, u32)> {
-            if payload.len() < 10 {
-                return None;
-            }
-            let w = (u32::from(payload[4])
-                | (u32::from(payload[5]) << 8)
-                | (u32::from(payload[6]) << 16))
-                + 1;
-            let h = (u32::from(payload[7])
-                | (u32::from(payload[8]) << 8)
-                | (u32::from(payload[9]) << 16))
-                + 1;
-            (w > 0 && h > 0).then_some((w, h))
-        }
-
-        fn read_vp8(payload: &[u8]) -> Option<(u32, u32)> {
-            if payload.len() < 10 {
-                return None;
-            }
-            let w = u16::from_le_bytes([payload[6], payload[7]]) & 0x3FFF;
-            let h = u16::from_le_bytes([payload[8], payload[9]]) & 0x3FFF;
-            (w > 0 && h > 0).then_some((u32::from(w), u32::from(h)))
-        }
-
-        fn read_vp8l(payload: &[u8]) -> Option<(u32, u32)> {
-            if payload.len() < 5 || payload[0] != 0x2F {
-                return None;
-            }
-            let b1 = u32::from(payload[1]);
-            let b2 = u32::from(payload[2]);
-            let b3 = u32::from(payload[3]);
-            let b4 = u32::from(payload[4]);
-            let w = (b1 | ((b2 & 0x3F) << 8)) + 1;
-            let h = (((b2 & 0xC0) >> 6) | (b3 << 2) | ((b4 & 0x0F) << 10)) + 1;
-            (w > 0 && h > 0).then_some((w, h))
-        }
-
-        fn read_anmf(payload: &[u8]) -> Option<(u32, u32)> {
-            if payload.len() < 16 {
-                return None;
-            }
-            let w = u32::from(payload[6])
-                | (u32::from(payload[7]) << 8)
-                | (u32::from(payload[8]) << 16);
-            let h = u32::from(payload[9])
-                | (u32::from(payload[10]) << 8)
-                | (u32::from(payload[11]) << 16);
-            let w = w + 1;
-            let h = h + 1;
-            (w > 0 && h > 0).then_some((w, h))
-        }
-
-        if data.len() < 30 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
-            return None;
-        }
-
-        let chunk = data.get(12..16)?;
-        let first = match chunk {
-            b"VP8 " => read_vp8(data.get(20..)?),
-            b"VP8L" => read_vp8l(data.get(20..)?),
-            b"VP8X" => read_vp8x(data.get(20..)?),
-            _ => None,
-        };
-        if first.is_some() {
-            return first;
-        }
-
-        let mut pos = 12usize;
-        let mut best_canvas: Option<(u32, u32)> = None;
-        while pos + 8 <= data.len() {
-            let chunk_id = data.get(pos..pos + 4)?;
-            let chunk_size =
-                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
-            let chunk_size =
-                crate::numeric_cast::u32_to_usize_strict(chunk_size, "webp_chunk_size")?;
-            let payload_start = pos + 8;
-            if payload_start > data.len() || chunk_size > data.len().saturating_sub(payload_start) {
-                break;
-            }
-            let payload = data.get(payload_start..payload_start + chunk_size)?;
-            let dims = match chunk_id {
-                b"VP8X" => read_vp8x(payload),
-                b"VP8 " => read_vp8(payload),
-                b"VP8L" => read_vp8l(payload),
-                b"ANMF" => read_anmf(payload),
-                _ => None,
-            };
-            if let Some((w, h)) = dims {
-                best_canvas = Some(match best_canvas {
-                    Some((cw, ch)) => (cw.max(w), ch.max(h)),
-                    None => (w, h),
-                });
-            }
-            let padded = (chunk_size + 1) & !1;
-            pos = pos.saturating_add(8).saturating_add(padded);
-            if pos > data.len() {
-                break;
-            }
-        }
-        best_canvas
+        let features = ::webp::BitstreamFeatures::new(data)?;
+        let dimensions = (features.width(), features.height());
+        (dimensions.0 > 0 && dimensions.1 > 0).then_some(dimensions)
     }
 
     /// Read up to 1MiB and parse WebP canvas dimensions when ffprobe reports
@@ -573,249 +410,30 @@ pub mod webp {
     /// Returns an error if a chunk size value overflows usize or data is
     /// malformed.
     pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
-        if data.len() < 12 {
-            return Ok(0);
+        match animation_timing_ms(data)? {
+            Some((frame_count, _)) => Ok(frame_count),
+            None => Ok(0),
         }
-
-        // Verify RIFF/WEBP header
-        if data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
-            return Ok(0);
-        }
-
-        let mut count = 0u32;
-        let mut pos = 12usize; // skip RIFF header + WEBP fourcc
-
-        while pos + 8 <= data.len() {
-            // Explicit bounds check for chunk ID
-            let chunk_id = data.get(pos..pos + 4).ok_or_else(|| {
-                crate::unified_error::ImgQualityError::AnalysisError(format!(
-                    "WebP frame count: chunk ID truncated at offset {pos}"
-                ))
-            })?;
-
-            // Explicit bounds check for chunk size
-            let chunk_size_bytes = data.get(pos + 4..pos + 8).ok_or_else(|| {
-                crate::unified_error::ImgQualityError::AnalysisError(format!(
-                    "WebP frame count: chunk size truncated at offset {}",
-                    pos + 4
-                ))
-            })?;
-
-            let chunk_size = crate::numeric_cast::u32_to_usize_strict(
-                u32::from_le_bytes([
-                    chunk_size_bytes[0],
-                    chunk_size_bytes[1],
-                    chunk_size_bytes[2],
-                    chunk_size_bytes[3],
-                ]),
-                "webp_chunk_size",
-            )
-            .ok_or_else(|| {
-                crate::unified_error::ImgQualityError::NumericError(format!(
-                    "WebP frame count: chunk size at offset {pos} exceeds usize::MAX"
-                ))
-            })?;
-
-            // Validate chunk size doesn't overflow buffer
-            let payload_start = pos + 8;
-            if payload_start > data.len() || chunk_size > data.len() - payload_start {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!(
-                        "WebP frame count: chunk at offset {pos} claims size {chunk_size} but \
-                         only {} bytes remain; stopping traversal",
-                        data.len().saturating_sub(payload_start)
-                    ),
-                );
-                break;
-            }
-
-            if chunk_id == b"ANMF" {
-                count = count.saturating_add(1);
-            }
-
-            // Chunks are padded to even byte boundaries
-            let padded = (chunk_size + 1) & !1;
-
-            // Check for overflow before advancing
-            let Some(p) = (8usize)
-                .checked_add(padded)
-                .and_then(|step| pos.checked_add(step))
-            else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!(
-                        "WebP frame count: position overflow at offset {pos} with chunk size \
-                         {chunk_size}"
-                    ),
-                );
-                break;
-            };
-            pos = p;
-
-            // Safety check: prevent infinite loop
-            if pos > data.len() {
-                break;
-            }
-        }
-
-        Ok(count)
     }
 
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in
     /// seconds.
     ///
-    /// ANMF payload: 24-byte header, bytes 12..15 = frame duration in ms
+    /// ANMF payload: 16-byte header, bytes 12..15 = frame duration in ms
     /// (24-bit LE). Returns None if not animated WebP or no ANMF chunks
     /// with valid durations.
-    #[must_use]
-    pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
-        const MAX_FRAME_DURATION_MS: u32 = 60_000; // 60 seconds per frame is absurd
-        const MAX_TOTAL_DURATION_MS: u64 = 600_000; // 10 minutes total is absurd
-
-        if data.len() < 12 {
-            return None;
-        }
-
-        // Verify RIFF/WEBP header
-        if data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
-            return None;
-        }
-
-        // Check for ANIM chunk (animation marker)
-        if !data.windows(4).any(|w| w == b"ANIM") {
-            return None;
-        }
-
-        let mut pos = 12usize; // RIFF payload start
-        let mut total_ms = 0u64;
-
-        while pos + 8 <= data.len() {
-            // Explicit bounds check for chunk ID
-            let Some(chunk_id) = data.get(pos..pos + 4) else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!("WebP duration: chunk ID truncated at offset {pos}"),
-                );
-                break;
-            };
-
-            // Explicit bounds check for chunk size
-            let Some(chunk_size_bytes) = data.get(pos + 4..pos + 8) else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!("WebP duration: chunk size truncated at offset {}", pos + 4),
-                );
-                break;
-            };
-
-            let chunk_size_u32 = u32::from_le_bytes([
-                chunk_size_bytes[0],
-                chunk_size_bytes[1],
-                chunk_size_bytes[2],
-                chunk_size_bytes[3],
-            ]);
-
-            let Some(chunk_size) =
-                crate::numeric_cast::u32_to_usize_strict(chunk_size_u32, "webp_chunk_size")
-            else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!("WebP duration: chunk size overflow at offset {pos}"),
-                );
-                break;
-            };
-
-            let payload_start = pos + 8;
-
-            // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal
-            if chunk_size > data.len().saturating_sub(payload_start) {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!(
-                        "WebP duration: chunk at offset {pos} claims size {chunk_size} but only \
-                         {} bytes remain",
-                        data.len().saturating_sub(payload_start)
-                    ),
-                );
-                break;
-            }
-
-            // ANMF frame header is 24 bytes. Duration is a 24-bit little-endian integer at
-            // offset 12..15.
-            if chunk_id == b"ANMF" && payload_start + 15 <= data.len() {
-                // Explicit bounds check for duration bytes
-                if let Some(dur_bytes) = data.get(payload_start + 12..payload_start + 15) {
-                    let duration_ms = u32::from(dur_bytes[0])
-                        | (u32::from(dur_bytes[1]) << 8)
-                        | (u32::from(dur_bytes[2]) << 16);
-
-                    // Validate duration is reasonable
-                    if duration_ms > 0 && duration_ms <= MAX_FRAME_DURATION_MS {
-                        total_ms = total_ms.saturating_add(u64::from(duration_ms));
-
-                        // Early exit if total duration exceeds sanity limit
-                        if total_ms > MAX_TOTAL_DURATION_MS {
-                            crate::media_conversion_gate::probe_image_format_batch_audit(
-                                "probe_image_format",
-                                format!(
-                                    "WebP duration: total duration {total_ms} ms exceeds sanity \
-                                     limit {MAX_TOTAL_DURATION_MS} ms"
-                                ),
-                            );
-                            return None;
-                        }
-                    }
-                }
-            }
-
-            // Advance to next chunk (with padding)
-            let padded = (chunk_size + 1) & !1;
-            let Some(p) = payload_start.checked_add(padded) else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_image_format",
-                    format!("WebP duration: position overflow at offset {payload_start}"),
-                );
-                break;
-            };
-            pos = p;
-        }
-
-        // If RIFF traversal failed (common for Safari exports), fall back to marker
-        // scan
+    /// # Errors
+    /// Returns an error if RIFF frame traversal fails.
+    pub fn duration_secs_from_bytes(data: &[u8]) -> crate::unified_error::Result<Option<f32>> {
+        let Some((_, total_ms)) = animation_timing_ms(data)? else {
+            return Ok(None);
+        };
         if total_ms == 0 {
-            for idx in data
-                .windows(4)
-                .enumerate()
-                .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
-            {
-                // ANMF chunk layout: "ANMF" (4) + size (4) + payload...
-                // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
-                let dur_off = idx + 8 + 12;
-                if let Some(dur_bytes) = data.get(dur_off..dur_off + 3) {
-                    let duration_ms = u32::from(dur_bytes[0])
-                        | (u32::from(dur_bytes[1]) << 8)
-                        | (u32::from(dur_bytes[2]) << 16);
-
-                    if duration_ms > 0 && duration_ms <= MAX_FRAME_DURATION_MS {
-                        total_ms = total_ms.saturating_add(u64::from(duration_ms));
-
-                        if total_ms > MAX_TOTAL_DURATION_MS {
-                            return None;
-                        }
-                    }
-                }
-            }
+            return Ok(None);
         }
-
-        // Validate final duration is reasonable
-        if total_ms == 0 || total_ms > MAX_TOTAL_DURATION_MS {
-            return None;
-        }
-
-        Some(crate::numeric_cast::f64_to_f32_lossy(
+        Ok(Some(crate::numeric_cast::f64_to_f32_lossy(
             crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64,
-        ))
+        )))
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -833,14 +451,14 @@ pub mod webp {
     pub fn timing_stats_from_bytes(
         data: &[u8],
     ) -> crate::unified_error::Result<Option<WebpTimingStats>> {
-        let frame_count = count_frames_from_bytes(data)?;
-        if frame_count <= 1 {
-            return Ok(None);
-        }
-        let Some(duration_secs) = duration_secs_from_bytes(data) else {
+        let Some((frame_count, total_ms)) = animation_timing_ms(data)? else {
             return Ok(None);
         };
-        let duration_secs = f64::from(duration_secs);
+        if frame_count <= 1 || total_ms == 0 {
+            return Ok(None);
+        }
+        let duration_secs =
+            crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64;
         if !duration_secs.is_finite() || duration_secs <= 0.0_f64 {
             return Ok(None);
         }
@@ -858,11 +476,12 @@ pub mod webp {
     /// Detects if a WebP file is lossless by reading it from disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read or if the WebP header is
-    /// corrupted.
+    /// Returns an error if the file cannot be read or if the WebP stream is
+    /// invalid, truncated, or carries no VP8/VP8L bitstream (fail-closed; no
+    /// silent "lossy" default).
     pub fn is_lossless(path: &Path) -> Result<bool> {
         let b = fs::read(path)?;
-        Ok(is_lossless_from_bytes(&b))
+        is_lossless_from_bytes(&b)
     }
 
     /// Detects if a WebP file is animated by reading it from disk.
@@ -880,7 +499,7 @@ pub mod webp {
     #[cfg(test)]
     pub(crate) fn synthetic_two_frame_animated_webp_for_test() -> Vec<u8> {
         fn anmf_chunk(duration_ms: u32) -> Vec<u8> {
-            let mut payload = vec![0u8; 24];
+            let mut payload = vec![0u8; 16];
             payload[12] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 0);
             payload[13] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 8);
             payload[14] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 16);
@@ -898,7 +517,7 @@ pub mod webp {
         let vp8x = [
             b'V', b'P', b'8', b'X', 10, 0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0,
         ];
-        let anim = [b'A', b'N', b'I', b'M', 0, 0, 0, 0];
+        let anim = [b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let mut body = Vec::new();
         body.extend_from_slice(&vp8x);
         body.extend_from_slice(&anim);
@@ -1052,7 +671,32 @@ pub mod gif {
     /// # Errors
     /// Returns an error if the animation detection fails due to invalid data.
     pub fn is_animated_from_bytes(data: &[u8]) -> crate::unified_error::Result<bool> {
-        Ok(count_frames_from_bytes(data)? > 1)
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::Indexed);
+        let mut decoder = options.read_info(data).map_err(|err| {
+            ImgQualityError::ResultAnomaly(format!("Failed to decode GIF animation stream: {err}"))
+        })?;
+
+        let has_first_frame = decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some();
+        if !has_first_frame {
+            return Ok(false);
+        }
+
+        Ok(decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some())
     }
 
     /// # Errors
@@ -1075,134 +719,89 @@ pub mod gif {
 }
 
 pub mod avif {
-    use crate::common_utils::find_box_data_recursive;
+    use crate::common_utils::find_all_box_data_recursive;
     use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
 
-    pub(crate) fn parse_pixi_max_depth(pixi_data: &[u8]) -> Result<Option<u8>> {
-        if pixi_data.len() < 5 {
-            return Ok(None);
-        }
-
-        let num_ch = crate::numeric_cast::u8_to_usize_strict(pixi_data[4], "avif_pixi_num_ch")
-            .ok_or_else(|| {
-                ImgQualityError::AnalysisError("AVIF pixi num_ch overflow".to_string())
-            })?;
-        if num_ch == 0 || pixi_data.len() < 5 + num_ch {
-            return Ok(None);
-        }
-
-        Ok(pixi_data
-            .get(5..5 + num_ch)
-            .and_then(|slice| slice.iter().copied().max()))
-    }
-
-    /// Detect AVIF lossless encoding — multi-dimension analysis.
+    /// Classify AVIF compression from container/codec evidence.
     ///
-    /// Dimensions checked (in priority order):
-    /// 1. **av1C chroma subsampling**: 4:2:0 / 4:2:2 → definitely lossy
-    /// 2. **av1C 4:4:4 + colr Identity matrix (MC=0)** → lossless
-    /// 3. **av1C 4:4:4 + `high_bitdepth` / `twelve_bit`** → lossless
-    /// 4. **av1C `seq_profile`**: Profile 0 + 4:4:4 → treat as lossless
-    /// 5. **pixi box**: bit depth ≥ 12 with 4:4:4 → lossless indicator
-    ///
-    /// Check if the image bytes represent a lossless encoding.
+    /// Evidence rules (positive proof only):
+    /// - `av1C` chroma subsampling 4:2:0 / 4:2:2 → `Lossy`. Subsampling
+    ///   discards chroma information; that is positive evidence of loss
+    ///   regardless of how the AV1 bitstream itself is coded.
+    /// - 4:4:4 (and monochrome without subsampling flags) → `Unknown`.
+    ///   Pixel-format properties — 4:4:4, 8/10/12-bit depth, identity `colr`
+    ///   matrix, `pixi` depths — describe the pixel format, not AV1
+    ///   quantization. A 4:4:4 12-bit AVIF can still be lossy, and a true
+    ///   lossless AVIF carries no container-level proof. The AV1 frame-level
+    ///   `coded_lossless` derivation is not recoverable from `av1C`, so
+    ///   compression semantics stay unproven.
     ///
     /// # Errors
-    /// Returns an error if the format cannot be identified or parsed.
-    /// # Panics
-    /// Panics if the AVIF container is corrupted during lossless detection.
-    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
-        if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C")
-            && av1c_data.len() >= 3
-        {
-            let byte1 = av1c_data[1];
-            let byte2 = av1c_data[2];
+    /// Returns an error if no `av1C` box exists (malformed still AVIF) or the
+    /// box walker cannot parse the container.
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
 
-            let seq_profile = (byte1 >> 5_i32) & 0x07;
-            let high_bitdepth = (byte2 >> 6_i32) & 0x01;
-            let twelve_bit = (byte2 >> 5_i32) & 0x01;
-            let monochrome = (byte2 >> 4_i32) & 0x01;
-            let chroma_subsampling_x = (byte2 >> 3_i32) & 0x01;
-            let chroma_subsampling_y = (byte2 >> 2_i32) & 0x01;
+        let av1c_boxes = find_all_box_data_recursive(data, *b"av1C");
+        if av1c_boxes.is_empty() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "AVIF: no av1C configuration box found; cannot determine compression — {}",
+                path.display()
+            )));
+        }
 
-            let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
-            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
-            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
-
-            if is_420 || is_422 {
-                return Ok(false);
-            }
-
-            if monochrome == 1 && !is_444 {
-                return Ok(false);
-            }
-
-            // Dimension 2: colr Identity matrix (MC=0)
-            if let Some(colr_data) = find_box_data_recursive(data, *b"colr")
-                && colr_data.len() >= 11
-                && colr_data.get(0..4) == Some(b"nclx")
-            {
-                let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                if matrix_coefficients == 0 {
-                    return Ok(true);
-                } else if is_444 {
-                    return Ok(false);
-                }
-            }
-
-            // Dimension 3: high_bitdepth/twelve_bit
-            if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
-                return Ok(true);
-            }
-
-            // NOTE: Dimension 4 (Profile 0 + 4:4:4) removed.
-            // AV1 Profile 0 (Main) is 4:2:0 only per spec — the combination
-            // (is_444 && seq_profile == 0) is unreachable for valid AVIF files
-            // and would be a guess for malformed data.
-
-            // Dimension 4: pixi box
-            if is_444 && let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
-                if let Some(max_depth) = parse_pixi_max_depth(pixi_data)? {
-                    if max_depth >= 12 {
-                        return Ok(true);
-                    }
-                } else {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        "AVIF Analysis: pixi depth unavailable; preserving unknown precision \
-                         instead of defaulting to 8-bit for lossless detection",
-                    );
-                }
-            }
-
-            if is_444 && monochrome == 1 {
-                return Ok(true);
-            }
-
-            if is_444 {
+        // AVIF may carry several AV1 item-property configurations (primary,
+        // alpha, thumbnails). A single lossy auxiliary item does not prove the
+        // primary image lossy, so every av1C record must independently carry
+        // positive subsampling evidence before this destructive-route probe
+        // returns Lossy.
+        for av1c_data in av1c_boxes {
+            if av1c_data.len() < 3 {
                 return Err(ImgQualityError::AnalysisError(format!(
-                    "AVIF: 4:4:4 without definitive lossless indicators; refusing to guess — {}",
+                    "AVIF: av1C box is {} bytes (minimum 3 required); cannot determine compression — {}",
+                    av1c_data.len(),
                     path.display()
                 )));
             }
+            if av1c_data[0] != 0x81 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: invalid av1C marker/version byte 0x{:02x}; cannot determine compression — {}",
+                    av1c_data[0],
+                    path.display()
+                )));
+            }
+
+            let byte2 = av1c_data[2];
+            let chroma_subsampling_x = (byte2 >> 3) & 0x01;
+            let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+
+            if !is_420 && !is_422 {
+                // 4:4:4/monochrome is ambiguous. The reserved x=0,y=1
+                // combination is invalid rather than positive lossy evidence.
+                return Ok(CompressionType::Unknown);
+            }
         }
 
-        Err(ImgQualityError::AnalysisError(format!(
-            "AVIF: no av1C box found; cannot determine compression — {}",
-            path.display()
-        )))
+        Ok(CompressionType::Lossy)
     }
 
-    /// Detects if an AVIF file is lossless by reading it from disk.
+    /// Classifies the compression of an AVIF file on disk.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be read, or if the AVIF header is
-    /// missing critical property markers.
-    pub fn is_lossless(path: &Path) -> Result<bool> {
+    /// Returns an error if the file cannot be read, or if the AVIF container
+    /// is missing the `av1C` configuration box.
+    pub fn classify_compression_from_path(
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
         let b = fs::read(path)?;
-        is_lossless_from_bytes(&b, path)
+        classify_compression(&b, path)
     }
 }
 
@@ -1212,12 +811,29 @@ pub mod jxl {
     use std::fs;
     use std::path::Path;
 
-    /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
-    /// Check if the image bytes represent a lossless encoding.
+    /// Classify JXL compression from codestream evidence.
+    ///
+    /// Evidence rules (positive proof only):
+    /// - `jbrd` box → `JpegReconstruction`: the container stores the original
+    ///   JPEG bitstream for bit-exact reconstruction. Its own semantics — not
+    ///   plain `Lossless`.
+    /// - `xyb_encoded` (XYB color transform, `VarDCT` path) → `Lossy`. The XYB
+    ///   transform itself is not information-preserving.
+    /// - Any `VarDCT` frame with `xyb_encoded == false` → `Lossy` (`VarDCT`
+    ///   quantizes DCT coefficients).
+    /// - All-`Modular` with `xyb_encoded == false` → `Unknown`. `Modular` mode
+    ///   covers both true lossless and `Modular`-lossy (quantized modular
+    ///   streams); the available parsers expose no field that separates them,
+    ///   so compression semantics stay unproven instead of guessed.
     ///
     /// # Errors
-    /// Returns an error if the format cannot be identified or parsed.
-    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
+    /// Returns an error if the data is too short or jxl-oxide cannot parse
+    /// the codestream (malformed/truncated).
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
         use std::io::Cursor;
 
         if data.len() < 4 {
@@ -1229,16 +845,26 @@ pub mod jxl {
 
         let is_naked = data.get(0..2) == Some(b"\xFF\x0A");
 
-        // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
         if !is_naked && find_any_box_recursive(data, *b"jbrd") {
-            return Ok(true);
+            return Ok(CompressionType::JpegReconstruction);
         }
 
-        // Dimension 2: Use jxl-oxide to parse the codestream and check xyb_encoded
         match ::jxl_oxide::JxlImage::builder().read(Cursor::new(data)) {
             Ok(image) => {
-                let is_lossy = image.image_header().metadata.xyb_encoded;
-                Ok(!is_lossy)
+                if image.image_header().metadata.xyb_encoded {
+                    return Ok(CompressionType::Lossy);
+                }
+                // Include non-displayed frames (LF/reference-only): a single
+                // VarDCT frame anywhere in the codestream is lossy evidence.
+                for frame_index in 0..image.num_loaded_frames() {
+                    let Some(frame) = image.frame(frame_index) else {
+                        return Ok(CompressionType::Unknown);
+                    };
+                    if frame.header().encoding == ::jxl_oxide::frame::Encoding::VarDct {
+                        return Ok(CompressionType::Lossy);
+                    }
+                }
+                Ok(CompressionType::Unknown)
             }
             Err(e) => Err(ImgQualityError::AnalysisError(format!(
                 "JXL: jxl-oxide failed to parse — {} ({})",
@@ -1495,7 +1121,21 @@ pub mod tiff_family {
                 let bytes_read = f.read(&mut buffer)?;
                 buffer.truncate(bytes_read);
 
-                crate::image_formats::jxl::is_lossless_from_bytes(&buffer, path)
+                match crate::image_formats::jxl::classify_compression(&buffer, path)? {
+                    // A reversible (jbrd) or proven-lossless embedded codestream
+                    // keeps the TIFF strip pixel-exact.
+                    crate::image_detection::CompressionType::Lossless
+                    | crate::image_detection::CompressionType::JpegReconstruction => Ok(true),
+                    crate::image_detection::CompressionType::Lossy => Ok(false),
+                    // Modular-but-unproven embedded JXL: refuse to fabricate a
+                    // TIFF lossless/lossy verdict from unproven semantics.
+                    crate::image_detection::CompressionType::Unknown => {
+                        Err(ImgQualityError::AnalysisError(format!(
+                            "TIFF-embedded JPEG XL compression semantics unproven — {}",
+                            path.display()
+                        )))
+                    }
+                }
             }
             _ => {
                 // Conservative fallback for unknown compressions
@@ -1513,8 +1153,7 @@ mod tests {
 
     #[test]
     fn test_webp_lossless_detection() {
-        // Test WebP lossless detection with simple VP8L header
-        let webp_lossless = b"RIFF\x1A\x00\x00\x00WEBPVP8L\x08\x00\x00\x00\x10\x10\x00\x00";
+        let webp_lossless = b"RIFF\x12\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f\x00\x00\x00\x00\x00";
         let mut file =
             NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(webp_lossless)
@@ -1528,17 +1167,10 @@ mod tests {
 
     #[test]
     fn test_webp_lossy_detection() {
-        let webp_lossy: Vec<u8> = {
-            let mut data = b"RIFF".to_vec();
-            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-            data.extend_from_slice(b"WEBP");
-            data.extend_from_slice(b"VP8 ");
-            data.extend_from_slice(&[0u8; 20]);
-            data
-        };
+        let webp_lossy = b"RIFF\x0c\x00\x00\x00WEBPVP8 \x00\x00\x00\x00";
         let mut file =
             NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
-        file.write_all(&webp_lossy)
+        file.write_all(webp_lossy)
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
@@ -1548,9 +1180,99 @@ mod tests {
     }
 
     #[test]
-    fn test_avif_pixi_max_depth_preserves_unknown_when_channels_missing() {
-        let pixi = [0, 0, 0, 0, 3, 8];
-        assert_eq!(avif::parse_pixi_max_depth(&pixi).unwrap(), None);
+    fn test_webp_lossless_probe_fails_closed_on_truncated_riff() {
+        // RIFF size declares 0x99 bytes but the payload stops after "WEBP":
+        // structurally invalid → Err, never a silent "lossy" verdict.
+        let truncated = b"RIFF\x99\x00\x00\x00WEBP";
+        let err =
+            webp::is_lossless_from_bytes(truncated).expect_err("truncated RIFF must fail closed");
+        assert!(
+            err.to_string().contains("RIFF"),
+            "error should name the RIFF structure problem: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_lossless_probe_fails_closed_without_vp8_bitstream() {
+        // Valid RIFF structure carrying only an unknown chunk: no VP8/VP8L
+        // bitstream → inconclusive → Err instead of guessing lossy.
+        let mut data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
+        let body = b"XXXX\x04\x00\x00\x00junk";
+        let riff_size = u32::try_from(body.len() + 4).unwrap();
+        data[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        data.extend_from_slice(body);
+
+        let err =
+            webp::is_lossless_from_bytes(&data).expect_err("bitstream-less WebP must fail closed");
+        assert!(
+            err.to_string().contains("no VP8/VP8L"),
+            "error should state the missing bitstream: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossless_probe_uses_frame_codecs() {
+        // All-VP8L animation frames → lossless animation (positive evidence).
+        let animated = webp::synthetic_two_frame_animated_webp_for_test();
+        assert!(
+            webp::detect_webp_animation_is_lossless(&animated).expect("VP8L animation must parse"),
+            "all-VP8L ANMF frames must classify as lossless animation"
+        );
+        assert!(
+            webp::is_lossless_from_bytes(&animated).expect("VP8L animation must parse"),
+            "lossless animation routes through the same positive evidence"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossy_probe_detects_vp8_frame() {
+        // One VP8 (lossy) frame in an otherwise VP8L animation → lossy.
+        let mut animated = webp::synthetic_two_frame_animated_webp_for_test();
+        // Replace the first VP8L sub-chunk marker inside the first ANMF
+        // payload with VP8 (lossy). Locate "VP8L" after the ANMF header.
+        let Some(idx) = animated.windows(4).position(|window| window == b"VP8L") else {
+            panic!("synthetic animation must contain a VP8L sub-chunk");
+        };
+        animated[idx + 3] = b' ';
+
+        assert!(
+            !webp::detect_webp_animation_is_lossless(&animated)
+                .expect("mixed-codec animation must parse"),
+            "any VP8 frame makes the animation lossy"
+        );
+    }
+
+    #[test]
+    fn test_jxl_jbrd_container_classifies_as_jpeg_reconstruction() {
+        // JXL container signature box + jbrd box: reversible-to-JPEG semantics.
+        let mut data = Vec::new();
+        data.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+        ]);
+        let jbrd_payload = [0u8; 4];
+        let size = u32::try_from(jbrd_payload.len() + 8).expect("jbrd size fits u32");
+        data.extend_from_slice(&size.to_be_bytes());
+        data.extend_from_slice(b"jbrd");
+        data.extend_from_slice(&jbrd_payload);
+
+        assert_eq!(
+            jxl::classify_compression(&data, std::path::Path::new("jbrd.jxl"))
+                .expect("jbrd container must parse"),
+            crate::image_detection::CompressionType::JpegReconstruction,
+            "jbrd must keep its own reconstruction semantics, not plain lossless"
+        );
+    }
+
+    #[test]
+    fn test_jxl_truncated_codestream_fails_closed() {
+        let error =
+            jxl::classify_compression(&[0xFF, 0x0A, 0x00], std::path::Path::new("truncated.jxl"))
+                .expect_err("truncated JXL codestream must not fabricate a verdict");
+        assert!(
+            error.to_string().contains("jxl-oxide failed")
+                || error.to_string().contains("too short"),
+            "error should name the parse failure: {error}"
+        );
     }
 
     #[test]
@@ -1632,6 +1354,16 @@ mod tests {
         assert_eq!(stats.frame_count, 2);
         assert!((stats.duration_secs - 0.3).abs() < 1.0e-6);
         assert!((stats.fps - (2.0 / 0.3)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn webp_riff_parser_ignores_payload_markers_and_rejects_nonzero_padding() {
+        let mut data = b"RIFF\x12\x00\x00\x00WEBPJUNK\x05\x00\x00\x00ANMF!\x00".to_vec();
+        assert_eq!(webp::count_frames_from_bytes(&data).unwrap(), 0);
+        assert_eq!(webp::duration_secs_from_bytes(&data).unwrap(), None);
+
+        *data.last_mut().expect("padding byte") = 1;
+        assert!(webp::count_frames_from_bytes(&data).is_err());
     }
 
     #[test]

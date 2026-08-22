@@ -26,6 +26,8 @@ Thumbs.db
 
 # AI Tools & IDE Configuration (Privacy - Never commit)
 .agent/
+.agents-inside/
+.mimosa/
 .cache/
 .claude/
 .codebuddy/
@@ -75,6 +77,8 @@ photos_import_large_batch.rs
 *.webp
 *.heic
 *.avif
+*.fixture
+!crates/foundation/tests/fixtures/metadata_clear_baseline.avif.fixture
 *.jxl
 *.bmp
 *.tiff
@@ -105,6 +109,8 @@ photos_import_large_batch.rs
 *.ogv
 *.ts
 !crates/gui/src/composables/useI18n.d.ts
+!crates/gui/src/nativeHost.ts
+!crates/gui/vite.config.ts
 
 # Audio
 *.mp3
@@ -131,6 +137,8 @@ debug_out/
 *.pkl
 *.pb
 *.onnx
+*.photoslibrary/
+*.photolibrary/
 
 # ML/Scientific Data
 *.npy
@@ -210,10 +218,7 @@ rustc-ice-*.txt
 mfb_hardening_prompts.md
 
 # AI Agent Skills & Configs
-.agents/*
-!.agents/harding/
-.agents/harding/*
-!.agents/harding/SSOT.md
+.agents/
 .kilocode/
 skills-lock.json
 

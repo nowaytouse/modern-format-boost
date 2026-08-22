@@ -348,6 +348,7 @@ mod tests {
         // ffmpeg version formats
         assert!(is_version_at_least("ffmpeg version 6.1.1", "6.1"));
         assert!(is_version_at_least("ffmpeg version 7.0", "6.1"));
+        assert!(is_version_at_least("ffmpeg version 9.0.1", "6.1"));
         assert!(!is_version_at_least("ffmpeg version 5.0", "6.1"));
 
         // exiftool version formats (uses -ver flag, returns plain version like "13.55")

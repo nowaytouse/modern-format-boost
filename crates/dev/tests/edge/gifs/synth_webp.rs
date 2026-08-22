@@ -19,6 +19,7 @@ fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
         if let Some(b) = payload.get_mut(14) {
             *b = foundation::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 16);
         }
+        payload.extend_from_slice(b"VP8L\0\0\0\0");
         let mut out = Vec::new();
         out.extend_from_slice(b"ANMF");
         out.extend_from_slice(
@@ -35,7 +36,7 @@ fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
     // This does not need to be a decodable image; it exists to lock animation classification logic.
     let mut bytes = Vec::new();
 
-    // RIFF header (size placeholder; not used by our detectors)
+    // RIFF header (size filled after all chunks are assembled).
     bytes.extend_from_slice(b"RIFF");
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(b"WEBP");
@@ -63,6 +64,9 @@ fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
 
     bytes.extend_from_slice(&anmf_chunk(100));
     bytes.extend_from_slice(&anmf_chunk(120));
+
+    let riff_size = u32::try_from(bytes.len() - 8).expect("synthetic RIFF size fits u32");
+    bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
 
     bytes
 }

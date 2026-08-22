@@ -35,6 +35,14 @@ use std::time::Duration;
 #[cfg(all(target_os = "macos", not(test)))]
 use std::time::Instant;
 
+fn run_fast_img_command_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+    context: &str,
+) -> std::io::Result<std::process::Output> {
+    crate::process_runner::run_command_with_liveness_timeout(command, timeout, timeout, context)
+}
+
 /// Returns `true` when `path` has true JPEG magic bytes.
 ///
 /// Content detection is never extension-only (§Detection). Deep forensic tool
@@ -118,14 +126,16 @@ pub fn verify_jxl_roundtrip_integrity(
     .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: temp alloc failed: {e}")))?;
     let temp_path = temp.path();
 
-    let decode_output = DjxlBuilder::new()
+    let mut decode_command = DjxlBuilder::new()
         .input(jxl_output)
         .output(temp_path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}"))
-        })?;
+        .build();
+    let decode_output = run_fast_img_command_with_timeout(
+        &mut decode_command,
+        FAST_IMG_MEDIA_PROBE_TIMEOUT,
+        "fast-img JXL roundtrip decode",
+    )
+    .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}")))?;
 
     if !decode_output.status.success() {
         let stderr = first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
@@ -202,7 +212,7 @@ pub fn verify_pixel_equivalence_integrity(
 ) -> Result<IntegrityResult> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
-        PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
+        PixelDiffResult, pixel_equivalence_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
     let out_meta = std::fs::metadata(output).map_err(|e| {
@@ -218,7 +228,7 @@ pub fn verify_pixel_equivalence_integrity(
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+    let tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "pixel-equivalence: missing {format:?} orientation policy"
         ))
@@ -308,7 +318,7 @@ pub fn verify_final_delivery_integrity(
 ) -> Result<IntegrityResult> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::orientation::{
-        PixelDiffResult, orientation_diff_tolerance_for_format, verify_orientation_pixel_diff,
+        PixelDiffResult, pixel_equivalence_diff_tolerance_for_format, verify_orientation_pixel_diff,
     };
 
     let out_meta = std::fs::metadata(output).map_err(|e| {
@@ -334,7 +344,7 @@ pub fn verify_final_delivery_integrity(
         )));
     }
 
-    let tolerance = orientation_diff_tolerance_for_format(format).ok_or_else(|| {
+    let tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "final-integrity: missing {format:?} orientation policy"
         ))
@@ -380,7 +390,7 @@ pub fn verify_final_delivery_integrity(
         "final modern format delivery integrity check"
     );
 
-    Ok(IntegrityResult::FinalJxlDelivery {
+    Ok(IntegrityResult::FinalModernDelivery {
         source_hash,
         output_hash,
     })
@@ -396,18 +406,22 @@ fn ensure_no_residual_orientation_tag(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    let output = ExiftoolBuilder::new()
+    let mut command = ExiftoolBuilder::new()
         .arg("-s3")
         .arg("-Orientation")
         .input(path)
-        .build()
-        .output()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!(
-                "final-integrity: Orientation probe failed for {}: {e}",
-                path.display()
-            ))
-        })?;
+        .build();
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_MEDIA_PROBE_TIMEOUT,
+        "fast-img residual Orientation probe",
+    )
+    .map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "final-integrity: Orientation probe failed for {}: {e}",
+            path.display()
+        ))
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ImgQualityError::AnalysisError(format!(
@@ -464,9 +478,9 @@ pub enum IntegrityResult {
         source_hash: String,
         output_hash: String,
     },
-    /// Final delivery JXL passed source/output hash, decode, metadata, and
-    /// orientation proofs.
-    FinalJxlDelivery {
+    /// Final modern-format delivery passed source/output hash, decode,
+    /// metadata, and orientation proofs.
+    FinalModernDelivery {
         source_hash: String,
         output_hash: String,
     },
@@ -513,7 +527,7 @@ pub fn safe_delete_jpeg_source(
             );
             (source_hash, output_hash)
         }
-        IntegrityResult::FinalJxlDelivery {
+        IntegrityResult::FinalModernDelivery {
             source_hash,
             output_hash,
         } => {
@@ -544,7 +558,7 @@ pub fn safe_delete_jpeg_source(
                 "delete-gate 1 FAIL: decode-probe-only integrity is not sufficient for deletion"
             );
             return Err(ImgQualityError::AnalysisError(
-                "delete-gate 1 FAIL: final JXL delivery proof or raw roundtrip proof is required \
+                "delete-gate 1 FAIL: final modern-format delivery proof or raw roundtrip proof is required \
                  before deleting source JPEG"
                     .to_string(),
             ));
@@ -847,20 +861,16 @@ pub fn reverify_modern_lossy_static_photos_custody(
 }
 
 fn preflight_modern_lossy_static_source_deletion(
+    src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
-    gate3_passed: bool,
 ) -> Result<()> {
-    if !gate3_passed {
-        return Err(ImgQualityError::AnalysisError(
-            "tier-2 source delete gate requires Gate 3 passed".to_string(),
-        ));
-    }
     if library_handle.import_error_count != 0 {
         return Err(ImgQualityError::AnalysisError(format!(
             "tier-2 source delete gate refuses import errors: {}",
             library_handle.import_error_count
         )));
     }
+    let mut seen = BTreeSet::new();
     for asset in &library_handle.imported_assets {
         if asset.rel_path.trim().is_empty() || asset.blake3.trim().is_empty() {
             return Err(ImgQualityError::AnalysisError(
@@ -873,6 +883,44 @@ fn preflight_modern_lossy_static_source_deletion(
                 asset.rel_path
             )));
         }
+        let rel = Path::new(&asset.rel_path);
+        if rel
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || !seen.insert(asset.rel_path.as_str())
+        {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete gate rejects unsafe or duplicate relative path: {}",
+                asset.rel_path
+            )));
+        }
+        let source = src_dir.join(rel);
+        if source.exists() {
+            let metadata = std::fs::metadata(&source).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight cannot stat {}: {err}",
+                    source.display()
+                ))
+            })?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight requires a non-empty file: {}",
+                    source.display()
+                )));
+            }
+            let current = crate::common_utils::calculate_blake3_hash(&source).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight BLAKE3 failed for {}: {err}",
+                    source.display()
+                ))
+            })?;
+            if current != asset.blake3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source delete preflight detected source drift: {}",
+                    source.display()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -881,12 +929,11 @@ fn preflight_modern_lossy_static_source_deletion(
 pub fn delete_verified_modern_lossy_static_sources(
     src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
-    gate3_passed: bool,
 ) -> Result<(usize, usize)> {
     if library_handle.imported_assets.is_empty() {
         return Ok((0, 0));
     }
-    preflight_modern_lossy_static_source_deletion(library_handle, gate3_passed)?;
+    preflight_modern_lossy_static_source_deletion(src_dir, library_handle)?;
     reverify_modern_lossy_static_photos_custody(library_handle)?;
 
     let mut deleted = 0usize;
@@ -924,9 +971,15 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
+    for asset in &library.imported_assets {
+        marker
+            .tier2_imported_assets
+            .retain(|persisted| persisted.rel_path != asset.rel_path);
+        marker.tier2_imported_assets.push(asset.clone());
+    }
     marker
         .tier2_imported_assets
-        .clone_from(&library.imported_assets);
+        .sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     Ok(())
 }
 
@@ -1038,7 +1091,6 @@ struct FastImgQueryRecord {
 
 #[derive(Debug)]
 struct VerifiedLibraryProbe {
-    report_rel_path: String,
     probe: FastImgLibraryAssetProbe,
     blake3: String,
 }
@@ -1056,6 +1108,17 @@ struct PhotosImportPendingEntry {
 struct PhotosImportCheckpointPlan {
     pending_entries: Vec<PhotosImportPendingEntry>,
     proven_assets: Vec<LibraryAssetRecord>,
+}
+
+#[derive(Debug, Default)]
+struct PhotosCheckpointImportReport {
+    imported_assets: Vec<LibraryAssetRecord>,
+    failed_count: usize,
+}
+
+enum PhotosImportBatchOutcome {
+    Imported(Vec<LibraryAssetRecord>),
+    DeferredItem { source_rel: String, detail: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1084,7 +1147,7 @@ fn photos_import_fail_fast_enabled() -> bool {
     BatchErrorMode::current().is_fail_fast()
 }
 
-/// Import JXL outputs into Photos and return a concrete verifier handle.
+/// Import fast-img outputs into Photos with per-item UUID checkpoints.
 ///
 /// This deliberately does not use `osxphotos import`: current osxphotos filters
 /// `.JXL` at the CLI media-type layer before Photos.app sees the file. Instead,
@@ -1096,20 +1159,26 @@ fn photos_import_fail_fast_enabled() -> bool {
 /// before every new asset is query-visible. Set
 /// `MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF=1` only when the caller explicitly
 /// accepts that cost. If the selected proof cannot be established,
-/// shortest-path mode fails closed while preserving the JXL-only output
-/// directory and source JPEGs.
-pub fn import_jxl_outputs_with_library_verifier(
+/// shortest-path mode fails closed while preserving its output directory and
+/// source media.
+/// On an explicit resume, persisted UUIDs are re-queried and any asset that
+/// reached the target album before the last process stopped is reconciled
+/// before pending files are imported again.
+pub fn import_media_outputs_with_checkpointed_library_verifier(
     marker: &WorkingCopyMarker,
+    reconcile_existing: bool,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
-    let output_paths = fast_img_marker_output_paths(marker);
+    let output_paths = fast_img_marker_output_paths(marker)?;
+    validate_fast_img_marker_output_hashes(marker)?;
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
     let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-    import_jxl_outputs_with_photos_checkpoint(
+    import_marker_outputs_with_photos_checkpoint(
         marker,
         &output_paths,
+        reconcile_existing,
         query_osxphotos_asset_probes,
         quarantine_probe,
     )
@@ -1144,15 +1213,55 @@ pub fn import_media_outputs_with_library_verifier(
     Ok(library_handle)
 }
 
+fn photos_import_report_pairs_from_persisted_assets(
+    assets: &[LibraryAssetRecord],
+) -> Result<Vec<(String, String)>> {
+    assets
+        .iter()
+        .map(|asset| {
+            let uuid = asset
+                .photos_uuid
+                .as_deref()
+                .filter(|uuid| !uuid.is_empty())
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError(format!(
+                        "persisted Photos import proof has no UUID for {}",
+                        asset.rel_path
+                    ))
+                })?;
+            Ok((asset.rel_path.clone(), uuid.to_string()))
+        })
+        .collect()
+}
+
+/// Re-query previously imported Photos UUIDs without importing the files again.
+pub fn reverify_media_outputs_with_library_verifier(
+    candidates: &[PhotosImportCandidate],
+    persisted_assets: &[LibraryAssetRecord],
+) -> Result<LibraryHandle> {
+    let _photos_import_lock = acquire_photos_import_lock()?;
+    let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
+    #[cfg(target_os = "macos")]
+    let quarantine_probe = path_has_quarantine_xattr;
+    #[cfg(not(target_os = "macos"))]
+    let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+    library_handle_from_media_output_probes(
+        candidates,
+        &report_pairs,
+        query_osxphotos_asset_probes,
+        quarantine_probe,
+    )
+}
+
 /// Build Photos import rows from the exact outputs recorded by a fast-img run.
 ///
 /// Unlike the legacy JXL-only importer, this preserves each marker entry's
 /// output extension so shortest-path AVIF delivery can use the same custody
 /// verification without treating AVIF files as JXL.
-#[must_use]
 pub fn build_fast_img_output_import_candidates(
     marker: &WorkingCopyMarker,
-) -> Vec<PhotosImportCandidate> {
+) -> Result<Vec<PhotosImportCandidate>> {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut candidates = marker
         .blake3_log
         .iter()
@@ -1167,7 +1276,7 @@ pub fn build_fast_img_output_import_candidates(
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
-    candidates
+    Ok(candidates)
 }
 
 /// Build Photos import rows for fast-img tier 2 (lossy modern static originals).
@@ -1220,13 +1329,213 @@ pub fn import_modern_lossy_static_tier(
         return Ok(LibraryHandle::default());
     }
     let import_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
-    import_media_outputs_with_library_verifier(&import_candidates)
+    import_or_reconcile_modern_lossy_static_candidates(&import_candidates)
+}
+
+fn import_or_reconcile_modern_lossy_static_candidates(
+    candidates: &[PhotosImportCandidate],
+) -> Result<LibraryHandle> {
+    let _photos_import_lock = acquire_photos_import_lock()?;
+    validate_photos_import_candidates(candidates)?;
+    let mut imported_assets = Vec::new();
+    let mut failed_count = 0usize;
+    for candidate in candidates {
+        let handle = import_or_reconcile_single_modern_lossy_candidate(candidate)?;
+        imported_assets.extend(handle.imported_assets);
+        failed_count = failed_count
+            .checked_add(handle.import_error_count)
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "tier-2 Photos import failure count overflowed".to_string(),
+                )
+            })?;
+    }
+    imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    Ok(LibraryHandle {
+        imported_assets,
+        import_error_count: failed_count,
+    })
+}
+
+fn reconcile_single_modern_lossy_candidate(
+    candidate: &PhotosImportCandidate,
+) -> Result<Option<LibraryAssetRecord>> {
+    let candidates = std::slice::from_ref(candidate);
+    let manifest_entries = photos_import_candidate_manifest_entries(candidates);
+    let stdout = run_photos_import_applescript_session_mode(
+        "tier-2 media reconciliation",
+        &manifest_entries,
+        "reconcile_all",
+    )?;
+    let candidate_ids = photos_reconciled_candidate_ids(candidates, &stdout)?;
+    if candidate_ids[0].is_empty() {
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    let quarantine_probe = path_has_quarantine_xattr;
+    #[cfg(not(target_os = "macos"))]
+    let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+    for identifier in &candidate_ids[0] {
+        let report_pair = vec![(candidate.rel_path.clone(), identifier.clone())];
+        match library_handle_from_media_output_probes(
+            candidates,
+            &report_pair,
+            query_osxphotos_asset_probes,
+            quarantine_probe,
+        ) {
+            Ok(mut handle) => return Ok(handle.imported_assets.pop()),
+            Err(err) if photos_reconciliation_content_mismatch(&err.to_string()) => {
+                tracing::warn!(
+                    target: "photos_import",
+                    rel_path = %candidate.rel_path,
+                    photos_uuid = %identifier,
+                    error = %err,
+                    "tier-2 filename match had different content; checking remaining matches"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(None)
+}
+
+fn reconcile_single_modern_lossy_candidate_with_recovery(
+    candidate: &PhotosImportCandidate,
+) -> Result<Option<LibraryAssetRecord>> {
+    let mut poisoned_attempts = 0usize;
+    loop {
+        match reconcile_single_modern_lossy_candidate(candidate) {
+            Ok(asset) => return Ok(asset),
+            Err(err) => {
+                let detail = err.to_string();
+                let Some(reason) = photos_import_retry_reason(&detail) else {
+                    return Err(err);
+                };
+                if poisoned_attempts >= FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT {
+                    return Err(err);
+                }
+                handle_photos_import_recovery(
+                    reason,
+                    &mut relaunch_photos_for_import_recovery,
+                    &mut probe_photos_import_session_health,
+                )?;
+                poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
+                    ImgQualityError::AnalysisError(
+                        "tier-2 Photos reconciliation retry counter overflowed".to_string(),
+                    )
+                })?;
+            }
+        }
+    }
+}
+
+fn photos_reconciliation_content_mismatch(detail: &str) -> bool {
+    detail.contains("Photos verifier pixel-equivalence: mismatch")
+        || detail.contains("Photos verifier BLAKE3 mismatch")
+}
+
+fn import_or_reconcile_single_modern_lossy_candidate(
+    candidate: &PhotosImportCandidate,
+) -> Result<LibraryHandle> {
+    if let Some(asset) = reconcile_single_modern_lossy_candidate_with_recovery(candidate)? {
+        return Ok(LibraryHandle {
+            imported_assets: vec![asset],
+            import_error_count: 0,
+        });
+    }
+
+    let candidates = std::slice::from_ref(candidate);
+    let mut attempt = 0usize;
+    loop {
+        let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
+            run_photos_import_applescript_session("media", manifest_entries)
+        };
+        match import_media_outputs_with_photos_applescript_with(
+            candidates,
+            true,
+            &mut run_import_batch,
+        ) {
+            Ok(report) => {
+                #[cfg(target_os = "macos")]
+                let quarantine_probe = path_has_quarantine_xattr;
+                #[cfg(not(target_os = "macos"))]
+                let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+                return library_handle_from_media_output_probes(
+                    candidates,
+                    &report.report_pairs,
+                    query_osxphotos_asset_probes,
+                    quarantine_probe,
+                );
+            }
+            Err(err) => {
+                // A timed-out AppleEvent may have committed. Reconcile content
+                // before every retry so an ambiguous result cannot duplicate it.
+                if let Some(asset) =
+                    reconcile_single_modern_lossy_candidate_with_recovery(candidate)?
+                {
+                    return Ok(LibraryHandle {
+                        imported_assets: vec![asset],
+                        import_error_count: 0,
+                    });
+                }
+                let detail = err.to_string();
+                let retry_reason = photos_import_retry_reason(&detail);
+                if let Some(reason) = retry_reason
+                    && attempt < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                {
+                    handle_photos_import_recovery(
+                        reason,
+                        &mut relaunch_photos_for_import_recovery,
+                        &mut probe_photos_import_session_health,
+                    )?;
+                    attempt = attempt.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "tier-2 Photos retry counter overflowed".to_string(),
+                        )
+                    })?;
+                    continue;
+                }
+                if photos_import_controllable_item_failure(&detail) {
+                    return Ok(LibraryHandle {
+                        imported_assets: Vec::new(),
+                        import_error_count: 1,
+                    });
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+fn photos_reconciled_candidate_ids(
+    candidates: &[PhotosImportCandidate],
+    stdout: &str,
+) -> Result<Vec<Vec<String>>> {
+    let lines = stdout.lines().map(str::trim).collect::<Vec<_>>();
+    if lines.len() != candidates.len() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 Photos reconciliation returned {} row(s) for {} candidate(s)",
+            lines.len(),
+            candidates.len()
+        )));
+    }
+    Ok(lines
+        .into_iter()
+        .map(|identifiers| {
+            identifiers
+                .split('|')
+                .map(str::trim)
+                .filter(|identifier| !identifier.is_empty() && *identifier != "MFB_NOT_FOUND")
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .collect())
 }
 
 const FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT: &str = r#"
 on run argv
-    if (count of argv) is not 6 then
-        error "Photos import expected manifest path, batch size, batch delay, digest pause interval, digest pause seconds, and hard timeout arguments"
+    if (count of argv) is not 7 then
+        error "Photos import expected manifest path, batch size, batch delay, digest pause interval, digest pause seconds, hard timeout, and operation arguments"
     end if
     set manifestPath to item 1 of argv
     set batchSize to (item 2 of argv) as integer
@@ -1234,6 +1543,7 @@ on run argv
     set digestPauseInterval to (item 4 of argv) as integer
     set digestPauseSecs to (item 5 of argv) as integer
     set hardTimeoutSecs to (item 6 of argv) as integer
+    set operationMode to item 7 of argv
     if batchSize < 1 then
         error "Photos import batch size must be at least 1"
     end if
@@ -1249,6 +1559,29 @@ on run argv
     set manifestLines to every text item of manifestText
     if ((count of manifestLines) mod 2) is not 0 then
         error "Photos import manifest expected path/album line pairs"
+    end if
+    if operationMode is "reconcile_all" then
+        set reconciledIds to {}
+        repeat with lineIndex from 1 to (count of manifestLines) by 2
+            set rawPath to item lineIndex of manifestLines
+            set albumName to item (lineIndex + 1) of manifestLines
+            set end of reconciledIds to my mfbFindExistingImportIds(contents of rawPath, contents of albumName)
+        end repeat
+        set resultText to reconciledIds as text
+        set AppleScript's text item delimiters to oldDelimiters
+        return resultText
+    else if operationMode is "reconcile" then
+        set reconciledIds to {}
+        repeat with lineIndex from 1 to (count of manifestLines) by 2
+            set rawPath to item lineIndex of manifestLines
+            set albumName to item (lineIndex + 1) of manifestLines
+            set end of reconciledIds to my mfbFindExistingImportId(contents of rawPath, contents of albumName)
+        end repeat
+        set resultText to reconciledIds as text
+        set AppleScript's text item delimiters to oldDelimiters
+        return resultText
+    else if operationMode is not "import" then
+        error "Photos import received an invalid operation"
     end if
     set importedIds to {}
     set batchNumber to 0
@@ -1323,6 +1656,81 @@ on mfbImportFileList(fileList, rawPaths, albumName, skipDuplicateCheck, batchNum
     return batchIds
 end mfbImportFileList
 
+on mfbPathBasename(rawPath)
+    set savedDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to "/"
+    set pathItems to every text item of rawPath
+    set AppleScript's text item delimiters to savedDelimiters
+    return item (count of pathItems) of pathItems
+end mfbPathBasename
+
+on mfbFindExistingAlbumId(albumPath)
+    set savedDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to "/"
+    set rawPathItems to every text item of albumPath
+    set AppleScript's text item delimiters to savedDelimiters
+    set pathItems to {}
+    repeat with rawPathItem in rawPathItems
+        set pathItem to contents of rawPathItem
+        if pathItem is not "" then set end of pathItems to pathItem
+    end repeat
+    if (count of pathItems) is 0 then return missing value
+    tell application "Photos"
+        try
+            if (count of pathItems) is 1 then
+                return (id of (first album whose name is item 1 of pathItems) as text)
+            end if
+            set targetFolder to first folder whose name is item 1 of pathItems
+            if (count of pathItems) > 2 then
+                repeat with pathIndex from 2 to ((count of pathItems) - 1)
+                    set targetFolder to first folder of targetFolder whose name is item pathIndex of pathItems
+                end repeat
+            end if
+            return (id of (first album of targetFolder whose name is item (count of pathItems) of pathItems) as text)
+        on error
+            return missing value
+        end try
+    end tell
+end mfbFindExistingAlbumId
+
+on mfbFindExistingImportId(rawPath, albumPath)
+    set targetAlbumId to my mfbFindExistingAlbumId(albumPath)
+    if targetAlbumId is missing value then return "MFB_NOT_FOUND"
+    set expectedFilename to my mfbPathBasename(rawPath)
+    tell application "Photos"
+        try
+            set matchingItems to every media item of album id targetAlbumId whose filename is expectedFilename
+            if (count of matchingItems) is 0 then return "MFB_NOT_FOUND"
+            return (id of last item of matchingItems as text)
+        on error
+            return "MFB_NOT_FOUND"
+        end try
+    end tell
+end mfbFindExistingImportId
+
+on mfbFindExistingImportIds(rawPath, albumPath)
+    set targetAlbumId to my mfbFindExistingAlbumId(albumPath)
+    if targetAlbumId is missing value then return "MFB_NOT_FOUND"
+    set expectedFilename to my mfbPathBasename(rawPath)
+    tell application "Photos"
+        try
+            set matchingItems to every media item of album id targetAlbumId whose filename is expectedFilename
+            if (count of matchingItems) is 0 then return "MFB_NOT_FOUND"
+            set matchingIds to {}
+            repeat with matchingItem in matchingItems
+                set end of matchingIds to (id of matchingItem as text)
+            end repeat
+            set savedDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to "|"
+            set resultText to matchingIds as text
+            set AppleScript's text item delimiters to savedDelimiters
+            return resultText
+        on error
+            return "MFB_NOT_FOUND"
+        end try
+    end tell
+end mfbFindExistingImportIds
+
 on mfbEnsureTopLevelFolder(folderName)
     tell application "Photos"
         try
@@ -1388,9 +1796,10 @@ on mfbEnsureAlbumIdForPath(albumPath)
 end mfbEnsureAlbumIdForPath
 "#;
 
-fn import_jxl_outputs_with_photos_checkpoint<Q, P>(
+fn import_marker_outputs_with_photos_checkpoint<Q, P>(
     marker: &WorkingCopyMarker,
     output_paths: &[(String, PathBuf)],
+    reconcile_existing: bool,
     mut query_assets: Q,
     mut is_quarantined: P,
 ) -> Result<LibraryHandle>
@@ -1399,9 +1808,28 @@ where
     P: FnMut(&Path) -> Result<bool>,
 {
     prepare_photos_import_output_paths(output_paths)?;
-    let plan = photos_import_checkpoint_plan(marker, &mut is_quarantined)?;
-    let expected_output_count = marker.expected_output_count();
     let mut checkpoint_marker = marker.clone();
+    let mut plan = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
+    if reconcile_existing {
+        reverify_checkpointed_photos_assets(
+            &checkpoint_marker,
+            &plan.proven_assets,
+            &mut query_assets,
+            &mut is_quarantined,
+        )?;
+        let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
+            run_photos_import_applescript_session_mode("media reconciliation", entries, "reconcile")
+        };
+        reconcile_uncheckpointed_photos_assets(
+            &mut checkpoint_marker,
+            &plan.pending_entries,
+            &mut query_assets,
+            &mut is_quarantined,
+            &mut reconcile_imports,
+        )?;
+        plan = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
+    }
+    let expected_output_count = marker.expected_output_count();
     let PhotosImportCheckpointPlan {
         pending_entries,
         proven_assets,
@@ -1411,7 +1839,7 @@ where
     let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| {
         run_photos_import_applescript_session("JXL", batch_entries)
     };
-    let mut pending_imported = import_pending_jxl_entries_with_checkpoint(
+    let mut pending_report = import_pending_media_entries_with_checkpoint(
         &mut checkpoint_marker,
         &pending_entries,
         photos_import_fail_fast_enabled(),
@@ -1420,14 +1848,19 @@ where
         &mut prepare_import_session,
         &mut run_import_batch,
     )?;
-    imported_assets.append(&mut pending_imported);
+    imported_assets.append(&mut pending_report.imported_assets);
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
-    if imported_assets.len() != expected_output_count {
+    if imported_assets
+        .len()
+        .checked_add(pending_report.failed_count)
+        != Some(expected_output_count)
+    {
         return Err(ImgQualityError::AnalysisError(format!(
-            "Photos AppleScript import established {} verified assets for {} JXL outputs (marker \
-             expected {}). The importer checkpoints each verified window and resumes pending \
-             assets on rerun.",
+            "Photos AppleScript import established {} verified assets and {} controlled failures \
+             for {} outputs (marker expected {}). The importer checkpoints each verified item \
+             and resumes pending assets on rerun.",
             imported_assets.len(),
+            pending_report.failed_count,
             output_paths.len(),
             expected_output_count
         )));
@@ -1441,7 +1874,7 @@ where
     );
     Ok(LibraryHandle {
         imported_assets,
-        import_error_count: 0,
+        import_error_count: pending_report.failed_count,
     })
 }
 
@@ -1470,35 +1903,72 @@ where
         return Ok(PhotosMediaImportReport::default());
     }
     validate_photos_import_candidates(candidates)?;
-    if fail_fast {
-        let manifest_entries = photos_import_candidate_manifest_entries(candidates);
-        let stdout = run_import_batch(&manifest_entries)?;
-        return Ok(PhotosMediaImportReport {
-            report_pairs: photos_import_pairs_from_candidates(candidates, stdout.as_bytes())?,
-            failed_count: 0,
-        });
-    }
-
     let mut report = PhotosMediaImportReport::default();
-    for candidate in candidates {
-        let single_candidate = std::slice::from_ref(candidate);
-        let manifest_entries = photos_import_candidate_manifest_entries(single_candidate);
-        let result = run_import_batch(&manifest_entries).and_then(|stdout| {
-            photos_import_pairs_from_candidates(single_candidate, stdout.as_bytes())
-        });
+    // A short/empty Photos result cannot identify the rejected item; contain that
+    // uncertainty to one Photos transaction instead of widening the custody blast radius.
+    let media_batch_size =
+        fast_img_photos_import_batch_size().min(FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE);
+    let batch_count = candidates.len().div_ceil(media_batch_size);
+    for (batch_index, candidate_batch) in candidates.chunks(media_batch_size).enumerate() {
+        let batch_number = batch_index + 1;
+        let manifest_entries = photos_import_candidate_manifest_entries(candidate_batch);
+        let mut poisoned_attempts = 0usize;
+        let result = loop {
+            let result = run_import_batch(&manifest_entries).and_then(|stdout| {
+                photos_import_pairs_from_candidates(candidate_batch, stdout.as_bytes())
+            });
+            match result {
+                Err(err) if !fail_fast => {
+                    let detail = err.to_string();
+                    if let Some(poison_reason) = photos_import_retry_reason(&detail)
+                        && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                    {
+                        tracing::warn!(
+                            target: "photos_import",
+                            batch_number,
+                            batch_count,
+                            batch_files = candidate_batch.len(),
+                            poisoned_attempts,
+                            poison_reason,
+                            detail = %detail,
+                            "Photos media import hit a recoverable session failure; relaunching Photos and retrying current batch"
+                        );
+                        handle_photos_import_recovery(
+                            "poisoned_session",
+                            &mut relaunch_photos_for_import_recovery,
+                            &mut probe_photos_import_session_health,
+                        )?;
+                        poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
+                            ImgQualityError::AnalysisError(
+                                "Photos media import poison retry counter overflowed".to_string(),
+                            )
+                        })?;
+                        continue;
+                    }
+                    break Err(err);
+                }
+                result => break result,
+            }
+        };
         match result {
             Ok(mut report_pairs) => report.report_pairs.append(&mut report_pairs),
+            Err(err) if fail_fast => return Err(err),
             Err(err) if photos_import_controllable_item_failure(&err.to_string()) => {
-                report.failed_count = report.failed_count.checked_add(1).ok_or_else(|| {
-                    ImgQualityError::AnalysisError(
-                        "Photos media import failure count overflowed".to_string(),
-                    )
-                })?;
+                report.failed_count = report
+                    .failed_count
+                    .checked_add(candidate_batch.len())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "Photos media import failure count overflowed".to_string(),
+                        )
+                    })?;
                 tracing::error!(
                     target: "photos_import",
-                    rel_path = %candidate.rel_path,
+                    batch_number,
+                    batch_count,
+                    batch_files = candidate_batch.len(),
                     detail = %err,
-                    "Photos rejected one media file; continuing normal-mode import"
+                    "Photos returned no imported items for one media batch; preserving its sources and continuing normal-mode import"
                 );
             }
             Err(err) => return Err(err),
@@ -1508,7 +1978,7 @@ where
         target: "photos_import",
         imported = report.report_pairs.len(),
         failed = report.failed_count,
-        batch_size = fast_img_photos_import_batch_size(),
+        batch_size = media_batch_size,
         "Photos AppleScript media import complete"
     );
     Ok(report)
@@ -1521,8 +1991,14 @@ fn photos_import_checkpoint_plan<P>(
 where
     P: FnMut(&Path) -> Result<bool>,
 {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut pending_entries = Vec::new();
     let mut proven_assets = Vec::new();
+    let persisted_assets = marker
+        .photos_imported_assets
+        .iter()
+        .map(|asset| (asset.rel_path.as_str(), asset))
+        .collect::<BTreeMap<_, _>>();
     for (source_rel, entry) in &marker.blake3_log {
         let rel_path = marker_entry_out_rel(source_rel, entry);
         let path = marker.working_copy.join(&rel_path);
@@ -1543,14 +2019,21 @@ where
                 entry.out
             )));
         }
-        proven_assets.push(LibraryAssetRecord {
-            rel_path,
-            blake3: library_asset.clone(),
-            sync_status: "photos_local".to_string(),
-            quarantined: is_quarantined(&path)?,
-            photos_uuid: None,
-            library_blake3: None,
-        });
+        let Some(persisted) = persisted_assets.get(rel_path.as_str()) else {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import checkpoint UUID proof missing for {source_rel}; refusing hash-only resume"
+            )));
+        };
+        if persisted.blake3 != *library_asset
+            || persisted.photos_uuid.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import checkpoint UUID/hash proof invalid for {source_rel}"
+            )));
+        }
+        let mut persisted = (*persisted).clone();
+        persisted.quarantined = is_quarantined(&path)?;
+        proven_assets.push(persisted);
     }
     pending_entries.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     proven_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -1560,7 +2043,301 @@ where
     })
 }
 
-fn import_pending_jxl_entries_with_checkpoint<Q, P, R>(
+fn photos_import_candidate_from_pending(entry: &PhotosImportPendingEntry) -> PhotosImportCandidate {
+    PhotosImportCandidate {
+        path: entry.path.clone(),
+        album_name: entry.album_name.clone(),
+        rel_path: entry.rel_path.clone(),
+        blake3: entry.blake3_entry.out.clone(),
+    }
+}
+
+fn reverify_checkpointed_photos_assets<Q, P>(
+    marker: &WorkingCopyMarker,
+    persisted_assets: &[LibraryAssetRecord],
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+) -> Result<()>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+{
+    if persisted_assets.is_empty() {
+        return Ok(());
+    }
+    let persisted_paths = persisted_assets
+        .iter()
+        .map(|asset| asset.rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let candidates = build_fast_img_output_import_candidates(marker)?
+        .into_iter()
+        .filter(|candidate| persisted_paths.contains(candidate.rel_path.as_str()))
+        .collect::<Vec<_>>();
+    if candidates.len() != persisted_assets.len() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos resume checkpoint candidate count mismatch".to_string(),
+        ));
+    }
+    let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
+    let verified = library_handle_from_media_output_probes(
+        &candidates,
+        &report_pairs,
+        query_assets,
+        is_quarantined,
+    )?;
+    if verified.imported_assets.len() != persisted_assets.len() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos resume checkpoint live verification count mismatch".to_string(),
+        ));
+    }
+    tracing::info!(
+        target: "photos_import",
+        verified = verified.imported_assets.len(),
+        "Reverified persisted Photos UUID checkpoints before resuming import"
+    );
+    Ok(())
+}
+
+fn photos_reconciled_import_pairs(
+    pending_entries: &[PhotosImportPendingEntry],
+    stdout: &str,
+) -> Result<Vec<(String, String)>> {
+    let lines = stdout.lines().map(str::trim).collect::<Vec<_>>();
+    if lines.len() != pending_entries.len() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos resume reconciliation returned {} row(s) for {} pending item(s)",
+            lines.len(),
+            pending_entries.len()
+        )));
+    }
+    Ok(pending_entries
+        .iter()
+        .zip(lines)
+        .filter(|(_, identifier)| !identifier.is_empty() && *identifier != "MFB_NOT_FOUND")
+        .map(|(entry, identifier)| (entry.rel_path.clone(), identifier.to_string()))
+        .collect())
+}
+
+fn reconcile_uncheckpointed_photos_assets<Q, P, R>(
+    marker: &mut WorkingCopyMarker,
+    pending_entries: &[PhotosImportPendingEntry],
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+    recover_import_ids: &mut R,
+) -> Result<usize>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+    R: FnMut(&[(PathBuf, String)]) -> Result<String>,
+{
+    if pending_entries.is_empty() {
+        return Ok(0);
+    }
+    let manifest_entries = pending_entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.album_name.clone()))
+        .collect::<Vec<_>>();
+    let stdout = recover_import_ids(&manifest_entries)?;
+    let report_pairs = photos_reconciled_import_pairs(pending_entries, &stdout)?;
+    if report_pairs.is_empty() {
+        return Ok(0);
+    }
+    let recovered_paths = report_pairs
+        .iter()
+        .map(|(rel_path, _)| rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let recovered_entries = pending_entries
+        .iter()
+        .filter(|entry| recovered_paths.contains(entry.rel_path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let candidates = recovered_entries
+        .iter()
+        .map(photos_import_candidate_from_pending)
+        .collect::<Vec<_>>();
+    let verified = library_handle_from_media_output_probes(
+        &candidates,
+        &report_pairs,
+        query_assets,
+        is_quarantined,
+    )?;
+    checkpoint_photos_import_window(marker, &recovered_entries, &verified.imported_assets)?;
+    tracing::info!(
+        target: "photos_import",
+        recovered = verified.imported_assets.len(),
+        "Recovered Photos assets imported before the previous process stopped"
+    );
+    Ok(verified.imported_assets.len())
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn reconcile_photos_batch_after_session_failure<Q, P>(
+    marker: &mut WorkingCopyMarker,
+    batch_entries: &[PhotosImportPendingEntry],
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+) -> Result<Option<Vec<LibraryAssetRecord>>>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+{
+    let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
+        run_photos_import_applescript_session_mode(
+            "same-run media reconciliation",
+            entries,
+            "reconcile",
+        )
+    };
+    let recovered = reconcile_uncheckpointed_photos_assets(
+        marker,
+        batch_entries,
+        query_assets,
+        is_quarantined,
+        &mut reconcile_imports,
+    )?;
+    if recovered != batch_entries.len() {
+        return Ok(None);
+    }
+
+    let batch_paths = batch_entries
+        .iter()
+        .map(|entry| entry.rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let recovered_assets = marker
+        .photos_imported_assets
+        .iter()
+        .filter(|asset| batch_paths.contains(asset.rel_path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if recovered_assets.len() != batch_entries.len() {
+        return Ok(None);
+    }
+    tracing::info!(
+        target: "photos_import",
+        recovered,
+        "Photos error occurred after commit; recovered verified assets instead of importing duplicates"
+    );
+    Ok(Some(recovered_assets))
+}
+
+// `marker` is only mutated by the macOS production recovery branch; the
+// test/non-macOS cfg leaves it read-only, which trips needless_pass_by_ref_mut.
+#[cfg_attr(
+    any(not(target_os = "macos"), test),
+    allow(clippy::needless_pass_by_ref_mut)
+)]
+fn import_photos_batch_with_recovery<Q, P, R>(
+    marker: &mut WorkingCopyMarker,
+    batch_entries: &[PhotosImportPendingEntry],
+    fail_fast: bool,
+    window_start: usize,
+    batch_number: usize,
+    batch_count: usize,
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+    run_import_batch: &mut R,
+) -> Result<PhotosImportBatchOutcome>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+    R: FnMut(&[(PathBuf, String)]) -> Result<String>,
+{
+    let manifest_entries = batch_entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.album_name.clone()))
+        .collect::<Vec<_>>();
+    let output_paths = batch_entries
+        .iter()
+        .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
+        .collect::<Vec<_>>();
+    let mut poisoned_attempts = 0usize;
+    loop {
+        let attempt_result = (|| {
+            let stdout = run_import_batch(&manifest_entries)?;
+            let report_pairs = fast_img_pairs_from_photos_import_ids(
+                &output_paths,
+                stdout.as_bytes(),
+                batch_entries.len(),
+            )?;
+            library_records_from_pending_import(
+                batch_entries,
+                &report_pairs,
+                query_assets,
+                is_quarantined,
+            )
+        })();
+        match attempt_result {
+            Ok(batch_assets) => return Ok(PhotosImportBatchOutcome::Imported(batch_assets)),
+            Err(err) => {
+                let detail = err.to_string();
+                if fail_fast {
+                    return Err(err);
+                }
+                if let Some(poison_reason) = photos_import_retry_reason(&detail)
+                    && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
+                {
+                    tracing::warn!(
+                        target: "photos_import",
+                        window_start,
+                        batch_number,
+                        batch_count,
+                        poisoned_attempts,
+                        poison_reason,
+                        detail = %detail,
+                        "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
+                    );
+                    handle_photos_import_recovery(
+                        "poisoned_session",
+                        &mut relaunch_photos_for_import_recovery,
+                        &mut probe_photos_import_session_health,
+                    )?;
+                    poisoned_attempts = poisoned_attempts.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "Photos import poison retry counter overflowed".to_string(),
+                        )
+                    })?;
+                    tracing::info!(
+                        target: "photos_import",
+                        window_start,
+                        batch_number,
+                        batch_count,
+                        poisoned_attempts,
+                        poison_reason,
+                        "Photos import recovery complete; automatically retrying current batch"
+                    );
+                    #[cfg(all(target_os = "macos", not(test)))]
+                    if let Some(recovered_assets) = reconcile_photos_batch_after_session_failure(
+                        marker,
+                        batch_entries,
+                        query_assets,
+                        is_quarantined,
+                    )? {
+                        return Ok(PhotosImportBatchOutcome::Imported(recovered_assets));
+                    }
+                    // Non-macOS/test builds never take the marker-based
+                    // recovery branch above; the parameter exists for the
+                    // contract shared with those builds.
+                    #[cfg(any(not(target_os = "macos"), test))]
+                    let _ = marker;
+                    continue;
+                }
+                if batch_entries.len() == 1 && photos_import_controllable_item_failure(&detail) {
+                    let source_rel = batch_entries[0].source_rel.clone();
+                    tracing::error!(
+                        target: "photos_import",
+                        source_rel = %source_rel,
+                        detail = %detail,
+                        "Photos rejected one file; continuing normal-mode import and deferring final failure"
+                    );
+                    return Ok(PhotosImportBatchOutcome::DeferredItem { source_rel, detail });
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+fn import_pending_media_entries_with_checkpoint<Q, P, R>(
     marker: &mut WorkingCopyMarker,
     pending_entries: &[PhotosImportPendingEntry],
     fail_fast: bool,
@@ -1568,14 +2345,14 @@ fn import_pending_jxl_entries_with_checkpoint<Q, P, R>(
     is_quarantined: &mut P,
     prepare_import_session: &mut impl FnMut(&str) -> Result<()>,
     run_import_batch: &mut R,
-) -> Result<Vec<LibraryAssetRecord>>
+) -> Result<PhotosCheckpointImportReport>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     P: FnMut(&Path) -> Result<bool>,
     R: FnMut(&[(PathBuf, String)]) -> Result<String>,
 {
     if pending_entries.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PhotosCheckpointImportReport::default());
     }
     let strategy = photos_import_strategy(pending_entries.len());
     tracing::info!(
@@ -1614,9 +2391,10 @@ where
             handle_photos_import_recovery(
                 "periodic_window_boundary",
                 &mut relaunch_photos_for_import_recovery,
+                &mut probe_photos_import_session_health,
             )?;
         }
-        let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, entries.len());
+        let batch_sizes = photos_import_batch_sizes(entries.len());
         let batch_count = batch_sizes.len();
         let mut offset = 0usize;
         for (batch_index, batch_size) in batch_sizes.into_iter().enumerate() {
@@ -1634,10 +2412,6 @@ where
                     entries.len()
                 ))
             })?;
-            let manifest_entries = batch_entries
-                .iter()
-                .map(|entry| (entry.path.clone(), entry.album_name.clone()))
-                .collect::<Vec<_>>();
             tracing::info!(
                 target: "photos_import",
                 window_start = window.start,
@@ -1647,106 +2421,23 @@ where
                 batch_files = batch_entries.len(),
                 "Starting Photos import batch"
             );
-            let mut poisoned_attempts = 0usize;
-            let stdout = loop {
-                match run_import_batch(&manifest_entries) {
-                    Ok(stdout) => break Some(stdout),
-                    Err(err) => {
-                        let detail = err.to_string();
-                        if fail_fast {
-                            return Err(err);
-                        }
-                        if let Some(poison_reason) = photos_import_poison_reason(&detail)
-                            && poisoned_attempts < FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT
-                        {
-                            tracing::warn!(
-                                target: "photos_import",
-                                window_start = window.start,
-                                batch_number,
-                                batch_count,
-                                poisoned_attempts,
-                                poison_reason,
-                                detail = %detail,
-                                "Photos import batch hit a recoverable session failure; relaunching Photos and retrying"
-                            );
-                            handle_photos_import_recovery(
-                                "poisoned_session",
-                                &mut relaunch_photos_for_import_recovery,
-                            )?;
-                            poisoned_attempts =
-                                poisoned_attempts.checked_add(1).ok_or_else(|| {
-                                    ImgQualityError::AnalysisError(
-                                        "Photos import poison retry counter overflowed".to_string(),
-                                    )
-                                })?;
-                            tracing::info!(
-                                target: "photos_import",
-                                window_start = window.start,
-                                batch_number,
-                                batch_count,
-                                poisoned_attempts,
-                                poison_reason,
-                                "Photos import recovery complete; automatically retrying current batch"
-                            );
-                            continue;
-                        }
-                        if batch_entries.len() == 1
-                            && photos_import_controllable_item_failure(&detail)
-                        {
-                            let source_rel = batch_entries[0].source_rel.clone();
-                            tracing::error!(
-                                target: "photos_import",
-                                source_rel = %source_rel,
-                                detail = %detail,
-                                "Photos rejected one file; continuing normal-mode import and deferring final failure"
-                            );
-                            deferred_item_failures.push((source_rel, detail));
-                            break None;
-                        }
-                        return Err(err);
-                    }
-                }
-            };
-            let Some(stdout) = stdout else {
-                offset = end;
-                continue;
-            };
-            let output_paths = batch_entries
-                .iter()
-                .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
-                .collect::<Vec<_>>();
-            let batch_assets = (|| {
-                let report_pairs = fast_img_pairs_from_photos_import_ids(
-                    &output_paths,
-                    stdout.as_bytes(),
-                    batch_entries.len(),
-                )?;
-                library_records_from_pending_import(
-                    batch_entries,
-                    &report_pairs,
-                    query_assets,
-                    is_quarantined,
-                )
-            })();
-            let mut batch_assets = match batch_assets {
-                Ok(batch_assets) => batch_assets,
-                Err(err)
-                    if !fail_fast
-                        && batch_entries.len() == 1
-                        && photos_import_controllable_item_failure(&err.to_string()) =>
-                {
-                    let source_rel = batch_entries[0].source_rel.clone();
-                    tracing::error!(
-                        target: "photos_import",
-                        source_rel = %source_rel,
-                        detail = %err,
-                        "Photos returned no usable proof for one file; continuing normal-mode import and deferring final failure"
-                    );
-                    deferred_item_failures.push((source_rel, err.to_string()));
+            let mut batch_assets = match import_photos_batch_with_recovery(
+                marker,
+                batch_entries,
+                fail_fast,
+                window.start,
+                batch_number,
+                batch_count,
+                query_assets,
+                is_quarantined,
+                run_import_batch,
+            )? {
+                PhotosImportBatchOutcome::Imported(batch_assets) => batch_assets,
+                PhotosImportBatchOutcome::DeferredItem { source_rel, detail } => {
+                    deferred_item_failures.push((source_rel, detail));
                     offset = end;
                     continue;
                 }
-                Err(err) => return Err(err),
             };
             checkpoint_photos_import_window(marker, batch_entries, &batch_assets)?;
             imported_assets.append(&mut batch_assets);
@@ -1770,7 +2461,7 @@ where
                 ));
             }
         }
-        if !cfg!(test) && window.start + window.len < pending_entries.len() {
+        if !cfg!(test) && end < pending_entries.len() {
             std::thread::sleep(Duration::from_secs(
                 FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS,
             ));
@@ -1782,12 +2473,17 @@ where
             .map(|(source_rel, _)| source_rel.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(ImgQualityError::AnalysisError(format!(
-            "Photos import continued after {} controllable file rejection(s); verified successes were checkpointed and all sources remain protected. Pending failures: {failed_files}",
-            deferred_item_failures.len()
-        )));
+        tracing::error!(
+            target: "photos_import",
+            failed = deferred_item_failures.len(),
+            pending = %failed_files,
+            "Photos import exhausted bounded retries for controllable files; verified successes remain checkpointed"
+        );
     }
-    Ok(imported_assets)
+    Ok(PhotosCheckpointImportReport {
+        imported_assets,
+        failed_count: deferred_item_failures.len(),
+    })
 }
 
 fn library_records_from_pending_import<Q, P>(
@@ -1817,15 +2513,17 @@ where
     let mut verified_probes = verified_library_probes_from_query(probes)?;
     let mut records = Vec::new();
     for entry in entries {
-        if !report_index.contains_key(&entry.rel_path) {
+        let Some(import_identifier) = report_index.get(&entry.rel_path) else {
             return Err(ImgQualityError::AnalysisError(format!(
                 "Photos verifier missing import identifier for {}",
                 entry.rel_path
             )));
-        }
-        let verified_probe = remove_matching_library_probe_by_hash(
+        };
+        let expected_uuid = osxphotos_uuid_from_photos_import_identifier(import_identifier)?;
+        let verified_probe = remove_matching_library_probe_by_uuid(
             &mut verified_probes,
             &entry.rel_path,
+            expected_uuid,
             &entry.blake3_entry.out,
             &entry.path,
             "Import aborted before checkpoint because Photos library bytes do not match the \
@@ -1836,7 +2534,7 @@ where
             blake3: entry.blake3_entry.out.clone(),
             sync_status: photos_sync_status(&verified_probe.probe).to_string(),
             quarantined: is_quarantined(&entry.path)?,
-            photos_uuid: None,
+            photos_uuid: Some(verified_probe.probe.uuid.clone()),
             library_blake3: None,
         });
     }
@@ -1863,56 +2561,50 @@ fn verified_library_probes_from_query(
                     probe.path.display()
                 ))
             })?;
-            Ok(VerifiedLibraryProbe {
-                report_rel_path,
-                probe,
-                blake3,
-            })
+            Ok(VerifiedLibraryProbe { probe, blake3 })
         })
         .collect()
 }
 
-fn remove_matching_library_probe_by_hash(
+fn remove_matching_library_probe_by_uuid(
     verified_probes: &mut Vec<VerifiedLibraryProbe>,
     rel_path: &str,
+    expected_uuid: &str,
     expected_hash: &str,
     output_path: &Path,
     error_suffix: &str,
 ) -> Result<VerifiedLibraryProbe> {
-    if let Some(index) = verified_probes
+    let Some(index) = verified_probes
         .iter()
-        .position(|verified| verified.blake3 == expected_hash)
-    {
-        return Ok(verified_probes.remove(index));
-    }
-
-    let candidate = verified_probes
-        .iter()
-        .find(|verified| verified.report_rel_path == rel_path)
-        .or_else(|| verified_probes.first());
-    if let Some(candidate) = candidate {
-        tracing::error!(
-            target: "photos_import",
-            rel_path = %rel_path,
-            output = %expected_hash,
-            library = %candidate.blake3,
-            output_path = %output_path.display(),
-            library_path = %candidate.probe.path.display(),
-            "Photos imported bytes diverged from working copy"
-        );
+        .position(|verified| verified.probe.uuid == expected_uuid)
+    else {
         return Err(ImgQualityError::AnalysisError(format!(
-            "Photos verifier BLAKE3 mismatch for {rel_path}: output={expected_hash} library={} \
-             output_path={} library_path={}. {error_suffix}",
-            candidate.blake3,
-            output_path.display(),
-            candidate.probe.path.display()
+            "Photos verifier missing library probe for {rel_path}: uuid={expected_uuid} \
+             output={expected_hash} output_path={}",
+            output_path.display()
         )));
+    };
+    let candidate = verified_probes.remove(index);
+    if candidate.blake3 == expected_hash {
+        return Ok(candidate);
     }
 
+    tracing::error!(
+        target: "photos_import",
+        rel_path = %rel_path,
+        photos_uuid = %expected_uuid,
+        output = %expected_hash,
+        library = %candidate.blake3,
+        output_path = %output_path.display(),
+        library_path = %candidate.probe.path.display(),
+        "Photos imported bytes diverged from working copy"
+    );
     Err(ImgQualityError::AnalysisError(format!(
-        "Photos verifier missing library probe for {rel_path}: output={expected_hash} \
-         output_path={}",
-        output_path.display()
+        "Photos verifier BLAKE3 mismatch for {rel_path}: output={expected_hash} library={} \
+         output_path={} library_path={}. {error_suffix}",
+        candidate.blake3,
+        output_path.display(),
+        candidate.probe.path.display()
     )))
 }
 
@@ -1946,6 +2638,15 @@ fn checkpoint_photos_import_window(
         }
         marker_entry.library_asset = Some(asset.blake3.clone());
     }
+    for asset in assets {
+        marker
+            .photos_imported_assets
+            .retain(|persisted| persisted.rel_path != asset.rel_path);
+        marker.photos_imported_assets.push(asset.clone());
+    }
+    marker
+        .photos_imported_assets
+        .sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     write_marker_atomic(marker).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "write Photos import checkpoint marker failed: {err}"
@@ -2048,6 +2749,14 @@ fn run_photos_import_applescript_session(
     media_kind: &str,
     manifest_entries: &[(PathBuf, String)],
 ) -> Result<String> {
+    run_photos_import_applescript_session_mode(media_kind, manifest_entries, "import")
+}
+
+fn run_photos_import_applescript_session_mode(
+    media_kind: &str,
+    manifest_entries: &[(PathBuf, String)],
+    operation: &str,
+) -> Result<String> {
     use std::io::Write as _;
 
     if manifest_entries.is_empty() {
@@ -2109,7 +2818,8 @@ fn run_photos_import_applescript_session(
             .arg(FAST_IMG_PHOTOS_IMPORT_BATCH_DELAY_MS.to_string())
             .arg(FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL.to_string())
             .arg(FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_SECS.to_string())
-            .arg(timeout.as_secs().to_string());
+            .arg(timeout.as_secs().to_string())
+            .arg(operation);
 
         let output = crate::process_runner::ManagedProcess::spawn(&mut command)
             .and_then(|process| {
@@ -2207,9 +2917,13 @@ fn photos_import_session_timeout(batch_count: usize) -> Result<Duration> {
 fn log_photos_resource_state(chunk_number: usize, phase: &str) {
     match get_photos_pid() {
         Ok(Some(pid)) => {
-            let output = std::process::Command::new("ps")
-                .args(["-p", &pid, "-o", "rss=,vsz="])
-                .output();
+            let mut command = std::process::Command::new(MACOS_PS_PATH);
+            command.args(["-p", &pid, "-o", "rss=,vsz="]);
+            let output = run_fast_img_command_with_timeout(
+                &mut command,
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+                "Photos process memory probe",
+            );
 
             match output {
                 Ok(output) if output.status.success() => {
@@ -2240,7 +2954,7 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
                         chunk_number,
                         phase,
                         photos_pid = %pid,
-                        "Photos process memory probe spawn failed: {err}"
+                        "Photos process memory probe command failed: {err}"
                     );
                 }
             }
@@ -2263,7 +2977,12 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
         }
     }
 
-    match std::process::Command::new("vm_stat").output() {
+    let mut command = std::process::Command::new(MACOS_VM_STAT_PATH);
+    match run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos system memory probe",
+    ) {
         Ok(output) if output.status.success() => {
             let vm_stat = String::from_utf8_lossy(&output.stdout);
             if let Some(free_line) = vm_stat.lines().find(|l| l.contains("Pages free:")) {
@@ -2291,23 +3010,27 @@ fn log_photos_resource_state(chunk_number: usize, phase: &str) {
                 target: "photos_import",
                 chunk_number,
                 phase,
-                "vm_stat probe spawn failed: {err}"
+                "vm_stat probe command failed: {err}"
             );
         }
     }
 }
 
 fn get_photos_pid() -> Result<Option<String>> {
-    let output = std::process::Command::new("pgrep")
-        .args(["-x", "Photos"])
-        .output()
-        .map_err(|err| {
-            tracing::warn!(
-                target: "photos_import",
-                "Photos process lookup spawn failed: {err}"
-            );
-            ImgQualityError::AnalysisError(format!("Photos process lookup spawn failed: {err}"))
-        })?;
+    let mut command = std::process::Command::new(MACOS_PGREP_PATH);
+    command.args(["-x", "Photos"]);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos process lookup",
+    )
+    .map_err(|err| {
+        tracing::warn!(
+            target: "photos_import",
+            "Photos process lookup command failed: {err}"
+        );
+        ImgQualityError::AnalysisError(format!("Photos process lookup command failed: {err}"))
+    })?;
 
     if output.status.success() {
         let stdout = String::from_utf8(output.stdout).map_err(|err| {
@@ -2341,12 +3064,34 @@ fn get_photos_pid() -> Result<Option<String>> {
     }
 }
 
-fn photos_import_poison_reason(detail: &str) -> Option<&'static str> {
+fn photos_import_retry_reason(detail: &str) -> Option<&'static str> {
     let lower = detail.to_ascii_lowercase();
-    if photos_zero_import_context(detail).is_some()
+    if lower.contains("not authorized")
+        || lower.contains("not permitted")
+        || lower.contains("permission denied")
+        || lower.contains("(-1743)")
+        || lower.contains("unsupported format")
+        || lower.contains("no such file")
+        || lower.contains("file is corrupt")
+        || lower.contains("blake3 mismatch")
+        || lower.contains("pixel-equivalence")
+        || lower.contains("uuid mismatch")
+        || lower.contains("unexpected uuid")
+        || lower.contains("duplicate uuid")
+        || detail.contains("没有权限")
+        || detail.contains("不允许")
+        || detail.contains("文件已损坏")
+    {
+        None
+    } else if photos_zero_import_context(detail).is_some()
         || lower.contains("photos returned 0 imported items")
+        || lower.contains("photos applescript import returned 0 ids for ")
     {
         Some("zero_import_items")
+    } else if (lower.contains("photos returned") && lower.contains(" imported items for "))
+        || (lower.contains("photos applescript import returned") && lower.contains(" ids for "))
+    {
+        None
     } else if lower.contains("invalid connection")
         || lower.contains("connection is invalid")
         || lower.contains("(-609)")
@@ -2355,12 +3100,13 @@ fn photos_import_poison_reason(detail: &str) -> Option<&'static str> {
         Some("invalid_connection")
     } else if lower.contains("(-1712)")
         || lower.contains("timed out at hard timeout")
+        || (lower.contains("photos applescript import chunk") && lower.contains("timed out after"))
         || detail.contains("超时")
         || detail.contains("AppleEvent已超时")
     {
         Some("appleevent_timeout")
     } else {
-        None
+        Some("unknown_photos_error")
     }
 }
 
@@ -2368,12 +3114,14 @@ fn photos_import_controllable_item_failure(detail: &str) -> bool {
     let lower = detail.to_ascii_lowercase();
     photos_zero_import_context(detail).is_some()
         || lower.contains("photos returned 0 imported items")
-        || lower.contains("photos applescript import returned 0 ids for 1 ")
+        || lower.contains("photos applescript import returned 0 ids for ")
+        || (lower.contains("photos verifier has") && lower.contains("without required proof after"))
 }
 
 fn handle_photos_import_recovery(
     reason: &str,
     relaunch: &mut impl FnMut(&str) -> Result<()>,
+    probe_session_health: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     match relaunch(reason) {
         Ok(()) => Ok(()),
@@ -2382,38 +3130,101 @@ fn handle_photos_import_recovery(
                 target: "photos_import",
                 reason,
                 error = %err,
-                "Periodic Photos recovery failed; checking if Photos is still responsive"
+                "Periodic Photos recovery failed; proving the existing session is still responsive"
             );
-
-            #[cfg(all(target_os = "macos", not(test)))]
-            match get_photos_pid() {
-                Ok(Some(_pid)) => {
-                    tracing::warn!(
-                        target: "photos_import",
-                        reason,
-                        "Photos still running after recovery failure; session may be degraded"
-                    );
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        target: "photos_import",
-                        reason,
-                        error = %e,
-                        "Failed to check if Photos is running after recovery failure"
-                    );
-                }
-            }
-
+            probe_session_health().map_err(|probe_err| {
+                tracing::error!(
+                    target: "photos_import",
+                    reason,
+                    recovery_error = %err,
+                    probe_error = %probe_err,
+                    "Periodic Photos recovery and functional session probe both failed"
+                );
+                ImgQualityError::AnalysisError(format!(
+                    "Periodic Photos recovery failed ({err}); functional session probe also failed ({probe_err})"
+                ))
+            })?;
             tracing::warn!(
                 target: "photos_import",
                 reason,
-                "Continuing with best-effort session; import verifier remains authoritative"
+                "Periodic recovery failed, but a bounded Photos AppleEvent probe proved the existing session responsive; continuing import"
             );
             Ok(())
         }
         Err(err) => Err(err),
     }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn probe_photos_import_session_health() -> Result<()> {
+    let osascript = resolve_osascript_command();
+    let mut command = std::process::Command::new(&osascript);
+    command.arg("-e").arg(
+        r#"with timeout of 15 seconds
+tell application "Photos" to get version
+end timeout"#,
+    );
+    let output = crate::process_runner::ManagedProcess::spawn(&mut command)
+        .and_then(|process| {
+            process.wait_timeout(
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+                "Photos import recovery health probe",
+            )
+        })
+        .map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "Photos recovery health probe failed via {}: {err}",
+                osascript.display()
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos recovery health probe exited unsuccessfully: {}",
+            output.stderr.trim()
+        )));
+    }
+    let version = output.stdout.trim();
+    if version.is_empty() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos recovery health probe returned an empty version".to_string(),
+        ));
+    }
+    tracing::info!(
+        target: "photos_import",
+        photos_version = version,
+        "Photos recovery health probe succeeded"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unnecessary_wraps)]
+const fn probe_photos_import_session_health() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "macos"), not(test)))]
+fn probe_photos_import_session_health() -> Result<()> {
+    Err(ImgQualityError::AnalysisError(
+        "Photos import recovery health probe is only supported on macOS".to_string(),
+    ))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn complete_photos_quit_recovery(
+    reason: &str,
+    quit_result: Result<()>,
+    wait_for_quit: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    if let Err(err) = quit_result {
+        tracing::warn!(
+            target: "photos_import",
+            reason,
+            error = %err,
+            "Photos graceful quit failed; falling back to process-state recovery"
+        );
+    }
+    wait_for_quit()
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
@@ -2428,49 +3239,41 @@ fn relaunch_photos_for_import_recovery(reason: &str) -> Result<()> {
     quit_command
         .arg("-e")
         .arg("if application \"Photos\" is running then tell application \"Photos\" to quit");
-    let quit_output = crate::process_runner::ManagedProcess::spawn(&mut quit_command)
+    let quit_result = crate::process_runner::ManagedProcess::spawn(&mut quit_command)
         .and_then(|process| {
             process.wait_timeout(
-                Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
                 "Photos import recovery quit",
             )
         })
         .map_err(|err| {
-            tracing::error!(
-                target: "photos_import",
-                reason,
-                "Photos recovery quit command failed via {}: {err}",
-                osascript.display()
-            );
             ImgQualityError::AnalysisError(format!(
                 "Photos recovery quit command failed via {}: {err}",
                 osascript.display()
             ))
-        })?;
-    if !quit_output.status.success() {
-        let stderr = quit_output.stderr.trim();
-        tracing::error!(
-            target: "photos_import",
-            reason,
-            status = ?quit_output.status.code(),
-            stderr = %stderr,
-            "Photos recovery quit command exited unsuccessfully"
-        );
-        return Err(ImgQualityError::AnalysisError(format!(
-            "Photos recovery quit command exited unsuccessfully: {stderr}"
-        )));
-    }
-
-    wait_for_photos_process_state(false, "quit")?;
+        })
+        .and_then(|quit_output| {
+            if quit_output.status.success() {
+                Ok(())
+            } else {
+                Err(ImgQualityError::AnalysisError(format!(
+                    "Photos recovery quit command exited unsuccessfully: {}",
+                    quit_output.stderr.trim()
+                )))
+            }
+        });
+    complete_photos_quit_recovery(reason, quit_result, &mut || {
+        wait_for_photos_process_state(false, "quit")
+    })?;
 
     let mut last_launch_error = None;
     for attempt in 1..=FAST_IMG_PHOTOS_IMPORT_RELAUNCH_OPEN_ATTEMPTS {
-        let mut open_command = std::process::Command::new("open");
+        let mut open_command = std::process::Command::new(MACOS_OPEN_PATH);
         open_command.args(["-a", "Photos"]);
         let open_output = crate::process_runner::ManagedProcess::spawn(&mut open_command)
             .and_then(|process| {
                 process.wait_timeout(
-                    Duration::from_secs(FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS),
+                    FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
                     "Photos import recovery launch",
                 )
             })
@@ -2584,6 +3387,33 @@ fn prepare_photos_import_session(reason: &str) -> Result<()> {
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
+fn attempt_photos_force_kill(signal: &str, phase: &str) {
+    let mut command = std::process::Command::new(MACOS_KILLALL_PATH);
+    command.args([signal, "Photos"]);
+    match run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "Photos force-kill",
+    ) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            target: "photos_import",
+            phase,
+            signal,
+            status = ?output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "Photos force-kill command exited unsuccessfully"
+        ),
+        Err(err) => tracing::warn!(
+            target: "photos_import",
+            phase,
+            signal,
+            "Photos force-kill command failed: {err}"
+        ),
+    }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
 fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(
@@ -2624,9 +3454,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             "Photos failed to quit gracefully after {}s, forcing termination via killall -9",
             FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS
         );
-        let _ = std::process::Command::new("killall")
-            .args(["-9", "Photos"])
-            .status();
+        attempt_photos_force_kill("-9", phase);
         std::thread::sleep(Duration::from_secs(2)); // Wait for kill to take effect
 
         // Verify kill succeeded
@@ -2645,9 +3473,7 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
             phase,
             "First killall failed, retrying with -KILL signal"
         );
-        let _ = std::process::Command::new("killall")
-            .args(["-KILL", "Photos"])
-            .status();
+        attempt_photos_force_kill("-KILL", phase);
         std::thread::sleep(Duration::from_secs(2));
 
         if get_photos_pid()?.is_none() {
@@ -2822,6 +3648,22 @@ fn validate_photos_import_candidates(candidates: &[PhotosImportCandidate]) -> Re
                 candidate.path.display()
             )));
         }
+        let current_hash =
+            crate::common_utils::calculate_blake3_hash(&candidate.path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos import preflight BLAKE3 failed for {} ({}): {err}",
+                    candidate.rel_path,
+                    candidate.path.display()
+                ))
+            })?;
+        if current_hash != candidate.blake3 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import preflight BLAKE3 mismatch for {} ({}): expected={} actual={current_hash}",
+                candidate.rel_path,
+                candidate.path.display(),
+                candidate.blake3
+            )));
+        }
         #[cfg(target_os = "macos")]
         clear_quarantine_xattr(&candidate.path).map_err(|err| {
             ImgQualityError::AnalysisError(format!(
@@ -2832,6 +3674,28 @@ fn validate_photos_import_candidates(candidates: &[PhotosImportCandidate]) -> Re
         })?;
         #[cfg(not(target_os = "macos"))]
         clear_quarantine_xattr(&candidate.path);
+    }
+    Ok(())
+}
+
+fn validate_fast_img_marker_output_hashes(marker: &WorkingCopyMarker) -> Result<()> {
+    for (source_rel, entry) in &marker.blake3_log {
+        let rel_path = marker_entry_out_rel(source_rel, entry);
+        let output_path = marker.working_copy.join(&rel_path);
+        let current_hash =
+            crate::common_utils::calculate_blake3_hash(&output_path).map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos import preflight BLAKE3 failed for {rel_path} ({}): {err}",
+                    output_path.display()
+                ))
+            })?;
+        if current_hash != entry.out {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos import preflight BLAKE3 mismatch for {rel_path} ({}): expected={} actual={current_hash}",
+                output_path.display(),
+                entry.out
+            )));
+        }
     }
     Ok(())
 }
@@ -2861,6 +3725,12 @@ fn fast_img_pairs_from_photos_import_ids(
     stdout: &[u8],
     full_expected_count: usize,
 ) -> Result<Vec<(String, String)>> {
+    if output_paths.len() != 1 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos UUID order is undefined; each import transaction must contain exactly one JXL output, got {}",
+            output_paths.len()
+        )));
+    }
     let stdout = std::str::from_utf8(stdout).map_err(|e| {
         ImgQualityError::AnalysisError(format!("parse Photos AppleScript import IDs failed: {e}"))
     })?;
@@ -2924,18 +3794,7 @@ fn photos_import_candidate_manifest_entries(
         .collect()
 }
 
-#[cfg(test)]
 fn photos_import_batch_sizes(total: usize) -> Vec<usize> {
-    photos_import_batch_sizes_for_strategy(photos_import_strategy(total), total)
-}
-
-fn photos_import_batch_sizes_for_strategy(
-    _strategy: PhotosImportStrategy,
-    total: usize,
-) -> Vec<usize> {
-    if total == 0 {
-        return Vec::new();
-    }
     vec![1; total]
 }
 
@@ -3173,7 +4032,7 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
         if library_blake3 != candidate.blake3 {
             let fmt = crate::image::format_detect::detect_true_format(&candidate.path)?;
             if let Some(tolerance) =
-                crate::image::orientation::orientation_diff_tolerance_for_format(fmt)
+                crate::image::orientation::pixel_equivalence_diff_tolerance_for_format(fmt)
             {
                 match verify_pixel_diff(&candidate.path, &probe.path, fmt, tolerance) {
                     Ok(crate::image::orientation::PixelDiffResult::Match) => {
@@ -3200,16 +4059,6 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
                             "Photos verifier pixel-equivalence: mismatch for {} (uuid={}): max_delta={max_delta} channel={channel:?}",
                             target.rel_path, probe.uuid
                         )));
-                    }
-                    Err(ImgQualityError::AnalysisError(msg))
-                        if msg.contains("dimension mismatch") =>
-                    {
-                        tracing::warn!(
-                            target: "photos_import",
-                            rel_path = %target.rel_path,
-                            "Photos verifier pixel-equivalence: {msg} (allowed for modern format due to Apple Photos original/cropped de-duplication)"
-                        );
-                        final_library_blake3 = Some(library_blake3);
                     }
                     Err(err) => return Err(err),
                 }
@@ -3268,6 +4117,7 @@ fn library_handle_from_batch_probes(
     mut query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
 ) -> Result<LibraryHandle> {
+    validate_fast_img_marker_path_contract(marker)?;
     let expected_output_count = marker.expected_output_count();
     if report_pairs.len() != expected_output_count {
         return Err(ImgQualityError::AnalysisError(format!(
@@ -3358,81 +4208,58 @@ pub fn apply_library_assets_to_marker(
         }
         entry.library_asset = Some(asset.blake3.clone());
     }
+    marker
+        .photos_imported_assets
+        .clone_from(&library.imported_assets);
     Ok(())
 }
 
-pub fn library_handle_from_marker_import_proof(
-    marker: &WorkingCopyMarker,
-) -> Result<Option<LibraryHandle>> {
-    #[cfg(target_os = "macos")]
-    {
-        library_handle_from_marker_import_proof_with(marker, path_has_quarantine_xattr)
+fn query_osxphotos_asset_probes_in_libraries_with<Q>(
+    uuids: &[String],
+    libraries: &[PathBuf],
+    mut query_library: Q,
+) -> Result<(Vec<FastImgLibraryAssetProbe>, Option<PathBuf>)>
+where
+    Q: FnMut(&Path, &[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+{
+    if libraries.is_empty() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos verifier has no candidate library to query".to_string(),
+        ));
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        library_handle_from_marker_import_proof_with(marker, |path| {
-            Ok(path_has_quarantine_xattr(path))
-        })
-    }
-}
-
-fn library_handle_from_marker_import_proof_with(
-    marker: &WorkingCopyMarker,
-    mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
-) -> Result<Option<LibraryHandle>> {
-    let proof_count = marker
-        .blake3_log
-        .values()
-        .filter(|entry| entry.library_asset.is_some())
-        .count();
-    if proof_count == 0 {
-        return Ok(None);
-    }
-    let expected_output_count = marker.expected_output_count();
-    if proof_count != marker.blake3_log.len() || proof_count != expected_output_count {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "fast-img marker has partial Photos import proof: \
-             {proof_count}/{expected_output_count} entries"
-        )));
-    }
-
-    let mut imported_assets = Vec::new();
-    for (source_rel, entry) in &marker.blake3_log {
-        let rel_path = marker_entry_out_rel(source_rel, entry);
-        let Some(library_asset) = entry.library_asset.as_ref() else {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "fast-img marker import proof missing for {source_rel}"
-            )));
-        };
-        if entry.out != *library_asset {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "fast-img marker import proof hash drift for {source_rel}: output={} \
-                 library={library_asset}",
-                entry.out
-            )));
+    let mut pending = uuids.to_vec();
+    let mut probes = Vec::new();
+    let mut resolved_library = None;
+    for library in libraries {
+        if pending.is_empty() {
+            break;
         }
-        let output_path = marker.working_copy.join(&rel_path);
-        imported_assets.push(LibraryAssetRecord {
-            rel_path,
-            blake3: library_asset.clone(),
-            sync_status: "photos_local".to_string(),
-            quarantined: is_quarantined(&output_path)?,
-            photos_uuid: None,
-            library_blake3: None,
-        });
+        match query_library(library, &pending) {
+            Ok(library_probes) => {
+                if !library_probes.is_empty() {
+                    resolved_library = Some(library.clone());
+                }
+                for probe in library_probes {
+                    let Some(position) = pending.iter().position(|uuid| uuid == &probe.uuid) else {
+                        return Err(ImgQualityError::AnalysisError(format!(
+                            "Photos verifier library query returned duplicate or unexpected UUID {}",
+                            probe.uuid
+                        )));
+                    };
+                    pending.remove(position);
+                    probes.push(probe);
+                }
+            }
+            Err(err) => return Err(err),
+        }
     }
-    imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
-    Ok(Some(LibraryHandle {
-        imported_assets,
-        import_error_count: 0,
-    }))
+    Ok((probes, resolved_library))
 }
 
-fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
-    query_osxphotos_asset_probes_once(uuids)
-}
-
-fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+fn query_osxphotos_asset_probes_from_library(
+    uuids: &[String],
+    library: &Path,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
@@ -3457,7 +4284,7 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
     command
         .arg("query")
         .arg("--db")
-        .arg(crate::common_utils::photos_library_path()?)
+        .arg(library)
         .arg("--uuid-from-file")
         .arg(uuid_file.path())
         .arg("--mute")
@@ -3467,6 +4294,7 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         target: "photos_import",
         uuid_count = uuids.len(),
         timeout_secs = timeout.as_secs(),
+        library = %library.display(),
         "Starting osxphotos query"
     );
     let start = std::time::Instant::now();
@@ -3476,14 +4304,12 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         })
         .map_err(|e| ImgQualityError::AnalysisError(format!("osxphotos query failed: {e}")))?;
     let elapsed = start.elapsed();
-
-    // Record actual startup time for adaptive timeout (success path)
     record_osxphotos_query_startup_time(elapsed.as_secs());
-
     tracing::info!(
         target: "photos_import",
         uuid_count = uuids.len(),
         elapsed_secs = elapsed.as_secs(),
+        library = %library.display(),
         "osxphotos query completed"
     );
     if !output.status.success() {
@@ -3502,7 +4328,6 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
             "osxphotos query blocked by system permissions or locked DB: {stderr}"
         )));
     }
-
     let records: Vec<FastImgQueryRecord> = serde_json::from_str(&output.stdout).map_err(|e| {
         ImgQualityError::AnalysisError(format!("parse osxphotos query JSON failed: {e}"))
     })?;
@@ -3527,6 +4352,39 @@ fn query_osxphotos_asset_probes_once(uuids: &[String]) -> Result<Vec<FastImgLibr
         .collect()
 }
 
+fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    if uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut libraries = crate::common_utils::photos_library_paths()?;
+    let library_hint = OSXPHOTOS_IMPORT_LIBRARY_HINT
+        .lock()
+        .map_err(|_| {
+            ImgQualityError::AnalysisError(
+                "Photos verifier library hint lock is poisoned".to_string(),
+            )
+        })?
+        .clone();
+    if let Some(library_hint) = library_hint
+        && library_hint.is_dir()
+    {
+        libraries.retain(|library| library != &library_hint);
+        libraries.insert(0, library_hint);
+    }
+    let (probes, resolved_library) =
+        query_osxphotos_asset_probes_in_libraries_with(uuids, &libraries, |library, uuids| {
+            query_osxphotos_asset_probes_from_library(uuids, library)
+        })?;
+    if let Some(resolved_library) = resolved_library {
+        *OSXPHOTOS_IMPORT_LIBRARY_HINT.lock().map_err(|_| {
+            ImgQualityError::AnalysisError(
+                "Photos verifier library hint lock is poisoned".to_string(),
+            )
+        })? = Some(resolved_library);
+    }
+    Ok(probes)
+}
+
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_ENV: &str = "MFB_FAST_IMG_ICLOUD_VERIFY_ATTEMPTS";
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_ENV: &str = "MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE";
 const FAST_IMG_ICLOUD_VERIFY_DELAY_MS_ENV: &str = "MFB_FAST_IMG_ICLOUD_VERIFY_DELAY_MS";
@@ -3534,7 +4392,19 @@ const FAST_IMG_OSXPHOTOS_QUERY_TIMEOUT_SECS_ENV: &str = "MFB_FAST_IMG_OSXPHOTOS_
 const FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF_ENV: &str = "MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF";
 const FAST_IMG_PHOTOS_IMPORT_TIMEOUT_SECS_ENV: &str = "MFB_FAST_IMG_PHOTOS_IMPORT_TIMEOUT_SECS";
 const FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE_ENV: &str = "MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE";
-const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_DEFAULT: usize = 3;
+const MACOS_OSASCRIPT_PATH: &str = "/usr/bin/osascript";
+const MACOS_PS_PATH: &str = "/bin/ps";
+const MACOS_VM_STAT_PATH: &str = "/usr/bin/vm_stat";
+const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
+const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const FAST_IMG_MEDIA_PROBE_TIMEOUT: Duration = Duration::from_mins(5);
+#[cfg(target_os = "macos")]
+const MACOS_OPEN_PATH: &str = "/usr/bin/open";
+#[cfg(target_os = "macos")]
+const MACOS_KILLALL_PATH: &str = "/usr/bin/killall";
+#[cfg(target_os = "macos")]
+const MACOS_XATTR_PATH: &str = "/usr/bin/xattr";
+const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_DEFAULT: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_MAX: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_DEFAULT: usize = 64;
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_MAX: usize = 128;
@@ -3550,6 +4420,10 @@ const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_INTERVAL_FILES: usize = 500; // Increased 
 /// storage" bug.
 static OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(120);
+/// Ordering hint only: every proof query still asks osxphotos for its pending
+/// UUIDs and continues through other libraries when the hint is incomplete.
+static OSXPHOTOS_IMPORT_LIBRARY_HINT: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
 
 /// Session-level flag tracking whether osxphotos has been proven responsive.
 /// First successful query sets this to true, enabling faster subsequent
@@ -3560,9 +4434,9 @@ const FAST_IMG_PHOTOS_IMPORT_BATCH_DELAY_MS: u64 = 2_000;
 const FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_INTERVAL: usize = 20;
 const FAST_IMG_PHOTOS_IMPORT_DIGEST_PAUSE_SECS: u64 = 30;
 const FAST_IMG_PHOTOS_IMPORT_WINDOW_PAUSE_SECS: u64 = 60;
-const FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT: usize = 1;
-#[cfg(all(target_os = "macos", not(test)))]
-const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_COMMAND_TIMEOUT_SECS: u64 = 60; // Increased from 30s
+// Initial attempt + four bounded recovery attempts. Permanent authorization,
+// unsupported-format, missing-file, and corruption errors are never retried.
+const FAST_IMG_PHOTOS_IMPORT_POISON_RETRY_LIMIT: usize = 4;
 #[cfg(all(target_os = "macos", not(test)))]
 const FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS: u64 = 120; // Increased from 45s
 #[cfg(all(target_os = "macos", not(test)))]
@@ -3588,9 +4462,15 @@ struct FastImgImportProbeTarget {
 fn fast_img_import_probe_targets(
     report_pairs: &[(String, String)],
 ) -> Result<Vec<FastImgImportProbeTarget>> {
+    let mut rel_paths = BTreeSet::new();
     report_pairs
         .iter()
         .map(|(rel_path, import_identifier)| {
+            if !rel_paths.insert(rel_path) {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Photos import report duplicated relative path {rel_path}"
+                )));
+            }
             Ok(FastImgImportProbeTarget {
                 rel_path: rel_path.clone(),
                 import_identifier: import_identifier.clone(),
@@ -3850,6 +4730,7 @@ where
     let mut verified = BTreeMap::new();
     let mut last_states = BTreeMap::new();
     for attempt in 1..=attempts {
+        let mut query_round_failed = false;
         let pending_targets = targets
             .iter()
             .filter(|target| !verified.contains_key(&target.rel_path))
@@ -3867,8 +4748,26 @@ where
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
+            let queried = match query_assets(&query_uuids) {
+                Ok(probes) => probes,
+                Err(err)
+                    if attempt < attempts
+                        && photos_import_retry_reason(&err.to_string()).is_some() =>
+                {
+                    tracing::warn!(
+                        target: "photos_import",
+                        attempt,
+                        attempts,
+                        error = %err,
+                        "Photos verifier query failed transiently; retrying the proof query"
+                    );
+                    query_round_failed = true;
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             let mut probes_by_uuid = BTreeMap::new();
-            for probe in query_assets(&query_uuids)? {
+            for probe in queried {
                 if !queried_uuid_set.contains(probe.uuid.as_str()) {
                     return Err(ImgQualityError::AnalysisError(format!(
                         "Photos verifier batch query returned unexpected UUID {}",
@@ -3919,6 +4818,11 @@ where
                     ),
                 );
             }
+        }
+
+        if query_round_failed {
+            sleep(delay);
+            continue;
         }
 
         if verified.len() == targets.len() {
@@ -4021,8 +4925,7 @@ fn resolve_osxphotos_command() -> Result<PathBuf> {
 }
 
 fn resolve_osascript_command() -> PathBuf {
-    crate::common_utils::resolve_tool_path("osascript")
-        .unwrap_or_else(|| PathBuf::from("/usr/bin/osascript"))
+    PathBuf::from(MACOS_OSASCRIPT_PATH)
 }
 
 #[derive(Debug)]
@@ -4099,14 +5002,16 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
 
 #[cfg(target_os = "macos")]
 fn clear_quarantine_xattr(path: &Path) -> Result<()> {
-    let output = std::process::Command::new("xattr")
-        .arg("-d")
-        .arg("com.apple.quarantine")
-        .arg(path)
-        .output()
-        .map_err(|err| {
-            ImgQualityError::AnalysisError(format!("xattr quarantine clear spawn failed: {err}"))
-        })?;
+    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
+    command.arg("-d").arg("com.apple.quarantine").arg(path);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "fast-img quarantine clear",
+    )
+    .map_err(|err| {
+        ImgQualityError::AnalysisError(format!("xattr quarantine clear command failed: {err}"))
+    })?;
     if output.status.success() {
         return Ok(());
     }
@@ -4128,12 +5033,14 @@ const fn clear_quarantine_xattr(path: &Path) {
 
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
-    let output = std::process::Command::new("xattr")
-        .arg("-p")
-        .arg("com.apple.quarantine")
-        .arg(path)
-        .output()
-        .map_err(|e| ImgQualityError::AnalysisError(format!("xattr probe failed: {e}")))?;
+    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
+    command.arg("-p").arg("com.apple.quarantine").arg(path);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
+        "fast-img quarantine probe",
+    )
+    .map_err(|e| ImgQualityError::AnalysisError(format!("xattr probe failed: {e}")))?;
     Ok(output.status.success())
 }
 
@@ -4158,14 +5065,23 @@ fn marker_entry_out_rel(source_rel: &str, entry: &Blake3Entry) -> String {
     })
 }
 
-fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Vec<(String, PathBuf)> {
+fn validate_fast_img_marker_path_contract(marker: &WorkingCopyMarker) -> Result<()> {
+    marker
+        .validate_checkpoint_path_contract(&marker.working_copy)
+        .map_err(|err| {
+            ImgQualityError::AnalysisError(format!("fast-img marker path validation failed: {err}"))
+        })
+}
+
+fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Result<Vec<(String, PathBuf)>> {
+    validate_fast_img_marker_path_contract(marker)?;
     let mut outputs = Vec::new();
     for (source_rel, entry) in &marker.blake3_log {
         let out_rel = marker_entry_out_rel(source_rel, entry);
         outputs.push((out_rel.clone(), marker.working_copy.join(out_rel)));
     }
     outputs.sort_by(|left, right| left.0.cmp(&right.0));
-    outputs
+    Ok(outputs)
 }
 
 /// Prompt the user for a yes/no confirmation (§Import confirm gate, GAP-3).
@@ -4175,7 +5091,14 @@ fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Vec<(String, Path
 /// # Errors
 /// Returns an error on I/O failure.
 pub fn prompt_user_confirm(message: &str) -> Result<bool> {
-    use std::io::{BufRead, Write};
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        tracing::warn!(
+            target: "fast_img_confirm",
+            "confirmation required without an interactive terminal; treating as explicit no"
+        );
+        return Ok(false);
+    }
     print!("{message}");
     std::io::stdout()
         .flush()
@@ -4308,7 +5231,7 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
         let err =
             fast_img_pairs_from_photos_import_ids(&output_paths, b"\n", marker.src_jpeg_count)
@@ -4367,7 +5290,7 @@ mod tests {
     }
 
     #[test]
-    fn photos_import_ids_pair_with_sorted_marker_outputs() -> Result<()> {
+    fn photos_import_ids_reject_ambiguous_multi_file_order() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("src_optimized");
@@ -4391,22 +5314,19 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
-        let pairs = fast_img_pairs_from_photos_import_ids(
+        let err = fast_img_pairs_from_photos_import_ids(
             &output_paths,
-            b"UUID-A\nUUID-B\n",
+            b"UUID-B\nUUID-A\n",
             marker.src_jpeg_count,
-        )?;
+        )
+        .expect_err("Photos UUID order is undefined for multi-file import output");
 
-        assert_eq!(
-            pairs,
-            vec![
-                ("a.JXL".to_string(), "UUID-A".to_string()),
-                ("nested/b.JXL".to_string(), "UUID-B".to_string()),
-            ]
+        assert!(
+            err.to_string().contains("exactly one JXL output"),
+            "unexpected: {err}"
         );
-        Ok(())
     }
 
     #[test]
@@ -4455,6 +5375,7 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Batch_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
         marker.blake3_log.insert(
             "微信/a.jpg".to_string(),
@@ -4465,7 +5386,7 @@ mod tests {
                 library_asset: None,
             },
         );
-        let output_paths = fast_img_marker_output_paths(&marker);
+        let output_paths = fast_img_marker_output_paths(&marker).unwrap();
 
         let entries = fast_img_photos_import_manifest_entries(&marker, &output_paths);
 
@@ -4479,6 +5400,7 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Meme_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
         marker.blake3_log.insert(
             "nested/source.png".to_string(),
@@ -4490,7 +5412,7 @@ mod tests {
             },
         );
 
-        let candidates = build_fast_img_output_import_candidates(&marker);
+        let candidates = build_fast_img_output_import_candidates(&marker).unwrap();
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].rel_path, "nested/source.avif");
@@ -4620,6 +5542,105 @@ mod tests {
     }
 
     #[test]
+    fn photos_import_preflight_rejects_candidate_hash_drift() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("candidate.webp");
+        std::fs::write(&path, b"original").unwrap();
+        let original_hash = crate::common_utils::calculate_blake3_hash(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        let candidate = PhotosImportCandidate {
+            rel_path: "candidate.webp".to_string(),
+            path,
+            blake3: original_hash,
+            album_name: "tier2".to_string(),
+        };
+
+        let err = validate_photos_import_candidates(&[candidate])
+            .expect_err("changed candidate must not reach Photos");
+        assert!(
+            err.to_string()
+                .contains("Photos import preflight BLAKE3 mismatch"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn checkpointed_import_preflight_rejects_marker_output_hash_drift() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let src_root = temp_dir.path().join("src");
+        let working_copy = temp_dir.path().join("src_optimized");
+        std::fs::create_dir_all(&working_copy).unwrap();
+        let output = working_copy.join("a.AVIF");
+        std::fs::write(&output, b"original").unwrap();
+        let original_hash = crate::common_utils::calculate_blake3_hash(&output).unwrap();
+        let mut marker =
+            WorkingCopyMarker::new(src_root, working_copy, 1).with_strategy("avif".to_string());
+        marker.blake3_log.insert(
+            "a.png".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.AVIF".to_string()),
+                src: "source-hash".to_string(),
+                out: original_hash,
+                library_asset: None,
+            },
+        );
+        std::fs::write(&output, b"replacement").unwrap();
+
+        let err = validate_fast_img_marker_output_hashes(&marker)
+            .expect_err("changed output must not reach Photos");
+        assert!(
+            err.to_string()
+                .contains("Photos import preflight BLAKE3 mismatch"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn tier2_marker_proofs_merge_across_cleanup_resume() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut marker = WorkingCopyMarker::new(
+            temp_dir.path().join("src"),
+            temp_dir.path().join("src_optimized"),
+            0,
+        );
+        let asset = |rel_path: &str, blake3: &str, uuid: &str| LibraryAssetRecord {
+            rel_path: rel_path.to_string(),
+            blake3: blake3.to_string(),
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: Some(uuid.to_string()),
+            library_blake3: None,
+        };
+        apply_tier2_library_assets_to_marker(
+            &mut marker,
+            &LibraryHandle {
+                imported_assets: vec![asset("a.webp", "hash-a", "UUID-A")],
+                import_error_count: 0,
+            },
+        )?;
+        apply_tier2_library_assets_to_marker(
+            &mut marker,
+            &LibraryHandle {
+                imported_assets: vec![
+                    asset("a.webp", "hash-a-new", "UUID-A2"),
+                    asset("b.jxl", "hash-b", "UUID-B"),
+                ],
+                import_error_count: 0,
+            },
+        )?;
+
+        assert_eq!(marker.tier2_imported_assets.len(), 2);
+        assert_eq!(marker.tier2_imported_assets[0].rel_path, "a.webp");
+        assert_eq!(marker.tier2_imported_assets[0].blake3, "hash-a-new");
+        assert_eq!(
+            marker.tier2_imported_assets[0].photos_uuid.as_deref(),
+            Some("UUID-A2")
+        );
+        assert_eq!(marker.tier2_imported_assets[1].rel_path, "b.jxl");
+        Ok(())
+    }
+
+    #[test]
     fn generic_media_import_handle_records_library_blake3_after_pixel_proof() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let out = temp_dir.path().join("tier2/a.webp");
@@ -4678,6 +5699,33 @@ mod tests {
             handle.imported_assets[0].photos_uuid.as_deref(),
             Some("UUID-A")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_reconciliation_keeps_all_filename_matches_for_content_proof() -> Result<()> {
+        let candidates = vec![
+            PhotosImportCandidate {
+                rel_path: "a.webp".to_string(),
+                path: PathBuf::from("a.webp"),
+                blake3: "a".to_string(),
+                album_name: "album".to_string(),
+            },
+            PhotosImportCandidate {
+                rel_path: "b.jxl".to_string(),
+                path: PathBuf::from("b.jxl"),
+                blake3: "b".to_string(),
+                album_name: "album".to_string(),
+            },
+        ];
+        assert_eq!(
+            photos_reconciled_candidate_ids(&candidates, "UUID-WRONG|UUID-A\nMFB_NOT_FOUND\n")?,
+            vec![
+                vec!["UUID-WRONG".to_string(), "UUID-A".to_string()],
+                Vec::<String>::new(),
+            ]
+        );
+        assert!(photos_reconciled_candidate_ids(&candidates, "UUID-A\n").is_err());
         Ok(())
     }
 
@@ -4751,10 +5799,11 @@ mod tests {
     }
 
     #[test]
-    fn generic_media_import_continues_normal_mode_and_fails_fast_in_debug_mode() -> Result<()> {
+    fn generic_media_import_batches_candidates_and_fails_closed() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut candidates = Vec::new();
-        for name in ["a", "b", "c"] {
+        for index in 0..11 {
+            let name = format!("f{index:02}");
             let path = temp_dir.path().join(format!("{name}.AVIF"));
             std::fs::write(&path, name.as_bytes()).unwrap();
             candidates.push(PhotosImportCandidate {
@@ -4765,37 +5814,52 @@ mod tests {
             });
         }
 
-        let mut normal_calls = Vec::new();
+        let mut normal_batch_sizes = Vec::new();
         let report = import_media_outputs_with_photos_applescript_with(
             &candidates,
             false,
             &mut |manifest_entries: &[(PathBuf, String)]| {
-                assert_eq!(manifest_entries.len(), 1);
-                let stem = manifest_entries[0]
-                    .0
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .ok_or_else(|| {
-                        ImgQualityError::AnalysisError("missing test file stem".to_string())
-                    })?
-                    .to_string();
-                normal_calls.push(stem.clone());
-                if stem == "b" {
-                    Ok(String::new())
-                } else {
-                    Ok(format!("UUID-{stem}\n"))
-                }
+                normal_batch_sizes.push(manifest_entries.len());
+                Ok(manifest_entries
+                    .iter()
+                    .map(|(path, _)| {
+                        format!(
+                            "UUID-{}",
+                            path.file_stem()
+                                .and_then(|stem| stem.to_str())
+                                .expect("test path has UTF-8 stem")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
             },
         )?;
-        assert_eq!(normal_calls, ["a", "b", "c"]);
-        assert_eq!(report.failed_count, 1);
+        assert_eq!(normal_batch_sizes, [10, 1]);
+        assert_eq!(report.failed_count, 0);
         assert_eq!(
-            report.report_pairs,
-            [
-                ("a.AVIF".to_string(), "UUID-a".to_string()),
-                ("c.AVIF".to_string(), "UUID-c".to_string())
-            ]
+            report.report_pairs.first(),
+            Some(&("f00.AVIF".to_string(), "UUID-f00".to_string()))
         );
+        assert_eq!(
+            report.report_pairs.last(),
+            Some(&("f10.AVIF".to_string(), "UUID-f10".to_string()))
+        );
+
+        let mut normal_failure_batch_sizes = Vec::new();
+        let report = import_media_outputs_with_photos_applescript_with(
+            &candidates,
+            false,
+            &mut |manifest_entries: &[(PathBuf, String)]| {
+                normal_failure_batch_sizes.push(manifest_entries.len());
+                Ok(String::new())
+            },
+        )?;
+        assert_eq!(
+            normal_failure_batch_sizes,
+            [10, 10, 10, 10, 10, 1, 1, 1, 1, 1]
+        );
+        assert_eq!(report.failed_count, 11);
+        assert_eq!(report.report_pairs.len(), 0);
 
         let mut fail_fast_calls = 0usize;
         let err = import_media_outputs_with_photos_applescript_with(
@@ -4803,7 +5867,7 @@ mod tests {
             true,
             &mut |manifest_entries: &[(PathBuf, String)]| {
                 fail_fast_calls += 1;
-                assert_eq!(manifest_entries.len(), 3);
+                assert_eq!(manifest_entries.len(), 10);
                 Err(ImgQualityError::AnalysisError(
                     "Photos returned 0 imported items".to_string(),
                 ))
@@ -4813,6 +5877,146 @@ mod tests {
         assert_eq!(fail_fast_calls, 1);
         assert!(err.to_string().contains("Photos returned 0 imported items"));
         Ok(())
+    }
+
+    #[test]
+    fn generic_media_import_recovers_poisoned_photos_session_once() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("a.AVIF");
+        std::fs::write(&path, b"avif-a").unwrap();
+        let candidates = [PhotosImportCandidate {
+            rel_path: "a.AVIF".to_string(),
+            blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+            path,
+            album_name: "✨media".to_string(),
+        }];
+        let mut attempts = 0usize;
+
+        let report = import_media_outputs_with_photos_applescript_with(
+            &candidates,
+            false,
+            &mut |_| {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(ImgQualityError::AnalysisError(
+                        "Photos AppleScript media import chunk 1/1 failed: timed out at hard timeout after 120s"
+                            .to_string(),
+                    ))
+                } else {
+                    Ok("UUID-a\n".to_string())
+                }
+            },
+        )?;
+
+        assert_eq!(attempts, 2);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(
+            report.report_pairs,
+            [("a.AVIF".to_string(), "UUID-a".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generic_media_import_aggressively_retries_unknown_photos_errors() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("a.AVIF");
+        std::fs::write(&path, b"avif-a").unwrap();
+        let candidates = [PhotosImportCandidate {
+            rel_path: "a.AVIF".to_string(),
+            blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+            path,
+            album_name: "✨media".to_string(),
+        }];
+        let mut attempts = 0usize;
+
+        let report =
+            import_media_outputs_with_photos_applescript_with(&candidates, false, &mut |_| {
+                attempts += 1;
+                if attempts < 5 {
+                    Err(ImgQualityError::AnalysisError(
+                        "Photos import failed: unknown error".to_string(),
+                    ))
+                } else {
+                    Ok("UUID-a\n".to_string())
+                }
+            })?;
+
+        assert_eq!(attempts, 5);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(
+            report.report_pairs,
+            [("a.AVIF".to_string(), "UUID-a".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generic_media_import_does_not_retry_permanent_photos_errors() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("a.AVIF");
+        std::fs::write(&path, b"avif-a").unwrap();
+        let candidates = [PhotosImportCandidate {
+            rel_path: "a.AVIF".to_string(),
+            blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+            path,
+            album_name: "✨media".to_string(),
+        }];
+        let mut attempts = 0usize;
+
+        let err =
+            import_media_outputs_with_photos_applescript_with(&candidates, false, &mut |_| {
+                attempts += 1;
+                Err(ImgQualityError::AnalysisError(
+                    "Photos import failed: not authorized (-1743)".to_string(),
+                ))
+            })
+            .unwrap_err();
+
+        assert_eq!(attempts, 1);
+        assert!(err.to_string().contains("not authorized"));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[serial_test::serial]
+    fn photos_system_commands_ignore_path_override() {
+        let _path_guard = crate::common_utils::EnvGuard::set("PATH", "/tmp/untrusted");
+        assert_eq!(
+            resolve_osascript_command(),
+            PathBuf::from(MACOS_OSASCRIPT_PATH)
+        );
+        for path in [
+            MACOS_OSASCRIPT_PATH,
+            MACOS_PS_PATH,
+            MACOS_VM_STAT_PATH,
+            MACOS_PGREP_PATH,
+            MACOS_OPEN_PATH,
+            MACOS_KILLALL_PATH,
+            MACOS_XATTR_PATH,
+        ] {
+            assert!(
+                Path::new(path).is_absolute(),
+                "system tool is not absolute: {path}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fast_img_command_timeout_terminates_hung_child() {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30");
+        let started = std::time::Instant::now();
+        let err = run_fast_img_command_with_timeout(
+            &mut command,
+            Duration::from_millis(20),
+            "fast-img timeout regression",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
@@ -4896,7 +6100,30 @@ mod tests {
         assert!(
             FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("with timeout of hardTimeoutSecs seconds")
         );
+        assert!(FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("operationMode is \"reconcile\""));
+        assert!(FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("mfbFindExistingImportId"));
+        assert!(FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("whose filename is expectedFilename"));
         assert!(!FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT.contains("86400"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn photos_import_applescript_compiles() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let source = temp_dir.path().join("photos-import.applescript");
+        let output = temp_dir.path().join("photos-import.scpt");
+        std::fs::write(&source, FAST_IMG_PHOTOS_IMPORT_APPLESCRIPT).unwrap();
+        let compiled = std::process::Command::new("/usr/bin/osacompile")
+            .args(["-o"])
+            .arg(&output)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "Photos AppleScript syntax error: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
     }
 
     #[test]
@@ -4996,9 +6223,17 @@ mod tests {
                 out_rel: Some("a.JXL".to_string()),
                 src: "src-a".to_string(),
                 out: proven_hash.clone(),
-                library_asset: Some(proven_hash),
+                library_asset: Some(proven_hash.clone()),
             },
         );
+        marker.photos_imported_assets.push(LibraryAssetRecord {
+            rel_path: "a.JXL".to_string(),
+            blake3: proven_hash,
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: Some("UUID-A/L0/001".to_string()),
+            library_blake3: None,
+        });
         marker.blake3_log.insert(
             "b.jpg".to_string(),
             Blake3Entry {
@@ -5019,6 +6254,145 @@ mod tests {
         assert_eq!(plan.pending_entries[0].path, pending);
         assert_eq!(plan.pending_entries[0].album_name, "✨/✨Batch");
         Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn photos_resume_reconciles_uncheckpointed_asset_before_reimport() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let _home_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            temp_dir.path().to_str().unwrap(),
+        );
+        let src_root = temp_dir.path().join("src");
+        let wc = temp_dir.path().join("Batch_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let output = wc.join("a.AVIF");
+        std::fs::write(&output, b"avif-a").unwrap();
+        let hash = crate::common_utils::calculate_blake3_hash(&output)?;
+        let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.AVIF".to_string()),
+                src: "src-a".to_string(),
+                out: hash.clone(),
+                library_asset: None,
+            },
+        );
+        let mut is_quarantined = |_path: &Path| Ok(false);
+        let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut import_called = false;
+        let recovered = reconcile_uncheckpointed_photos_assets(
+            &mut marker,
+            &pending,
+            &mut |uuids: &[String]| {
+                assert_eq!(uuids, ["UUID-A"]);
+                Ok(vec![FastImgLibraryAssetProbe {
+                    uuid: "UUID-A".to_string(),
+                    path: output.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                }])
+            },
+            &mut is_quarantined,
+            &mut |manifest_entries: &[(PathBuf, String)]| {
+                import_called = true;
+                assert_eq!(manifest_entries.len(), 1);
+                Ok("UUID-A/L0/001\n".to_string())
+            },
+        )?;
+
+        assert!(import_called);
+        assert_eq!(recovered, 1);
+        assert!(
+            photos_import_checkpoint_plan(&marker, &mut is_quarantined)?
+                .pending_entries
+                .is_empty()
+        );
+        assert_eq!(marker.photos_imported_assets.len(), 1);
+        assert_eq!(
+            marker
+                .blake3_log
+                .get("a.jpg")
+                .and_then(|entry| entry.library_asset.as_deref()),
+            Some(hash.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn photos_resume_reverifies_persisted_uuid_before_skipping() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let src_root = temp_dir.path().join("src");
+        let wc = temp_dir.path().join("Batch_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let output = wc.join("a.AVIF");
+        std::fs::write(&output, b"avif-a").unwrap();
+        let hash = crate::common_utils::calculate_blake3_hash(&output)?;
+        let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.AVIF".to_string()),
+                src: "src-a".to_string(),
+                out: hash.clone(),
+                library_asset: Some(hash.clone()),
+            },
+        );
+        marker.photos_imported_assets.push(LibraryAssetRecord {
+            rel_path: "a.AVIF".to_string(),
+            blake3: hash,
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: Some("UUID-A/L0/001".to_string()),
+            library_blake3: None,
+        });
+        let mut is_quarantined = |_path: &Path| Ok(false);
+        let plan = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?;
+        let mut query_calls = 0usize;
+
+        reverify_checkpointed_photos_assets(
+            &marker,
+            &plan.proven_assets,
+            &mut |uuids: &[String]| {
+                query_calls += 1;
+                assert_eq!(uuids, ["UUID-A"]);
+                Ok(vec![FastImgLibraryAssetProbe {
+                    uuid: "UUID-A".to_string(),
+                    path: output.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                }])
+            },
+            &mut is_quarantined,
+        )?;
+
+        assert_eq!(query_calls, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_photos_resume_proof_requires_uuid() {
+        let mut asset = LibraryAssetRecord {
+            rel_path: "a.JXL".to_string(),
+            blake3: "hash".to_string(),
+            sync_status: "photos_local".to_string(),
+            quarantined: false,
+            photos_uuid: None,
+            library_blake3: None,
+        };
+        assert!(
+            photos_import_report_pairs_from_persisted_assets(std::slice::from_ref(&asset)).is_err()
+        );
+
+        asset.photos_uuid = Some("UUID-A/L0/001".to_string());
+        assert_eq!(
+            photos_import_report_pairs_from_persisted_assets(&[asset]).unwrap(),
+            [("a.JXL".to_string(), "UUID-A/L0/001".to_string())]
+        );
     }
 
     #[test]
@@ -5091,7 +6465,7 @@ mod tests {
         let mut checkpoint_marker = marker.clone();
         let pending =
             photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?.pending_entries;
-        let err = import_pending_jxl_entries_with_checkpoint(
+        let err = import_pending_media_entries_with_checkpoint(
             &mut checkpoint_marker,
             &pending,
             true,
@@ -5131,12 +6505,14 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn photos_import_normal_mode_continues_after_one_rejected_file() -> Result<()> {
+    fn photos_import_normal_mode_continues_after_one_unverified_file() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
             temp_dir.path().to_str().unwrap(),
         );
+        let _verify_delay_guard =
+            crate::common_utils::EnvGuard::set(FAST_IMG_ICLOUD_VERIFY_DELAY_MS_ENV, "0");
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("Batch_optimized");
         std::fs::create_dir_all(&wc).unwrap();
@@ -5167,15 +6543,12 @@ mod tests {
                 })?
                 .to_string();
             import_calls.push(stem.clone());
-            if stem == "b" {
-                Ok(String::new())
-            } else {
-                Ok(format!("UUID-{stem}\n"))
-            }
+            Ok(format!("UUID-{stem}\n"))
         };
         let mut query_assets = |uuids: &[String]| {
             uuids
                 .iter()
+                .filter(|uuid| uuid.as_str() != "UUID-b")
                 .map(|uuid| {
                     let stem = uuid.trim_start_matches("UUID-");
                     Ok(FastImgLibraryAssetProbe {
@@ -5190,7 +6563,7 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
-        let err = import_pending_jxl_entries_with_checkpoint(
+        let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
             false,
@@ -5198,15 +6571,11 @@ mod tests {
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
             &mut run_import_batch,
-        )
-        .unwrap_err();
+        )?;
 
-        assert_eq!(import_calls, ["a", "b", "c"]);
-        assert!(
-            err.to_string()
-                .contains("continued after 1 controllable file rejection")
-        );
-        assert!(err.to_string().contains("b.jpg"));
+        assert_eq!(import_calls, ["a", "b", "b", "b", "b", "b", "c"]);
+        assert_eq!(report.imported_assets.len(), 2);
+        assert_eq!(report.failed_count, 1);
         assert!(
             marker
                 .blake3_log
@@ -5272,7 +6641,7 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
-        let err = import_pending_jxl_entries_with_checkpoint(
+        let err = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
             false,
@@ -5367,7 +6736,7 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
-        let records = import_pending_jxl_entries_with_checkpoint(
+        let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
             false,
@@ -5388,12 +6757,15 @@ mod tests {
                 Ok(format!("UUID-{}\n", stem.to_ascii_uppercase()))
             },
         )?;
+        let records = &report.imported_assets;
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].rel_path, "a.JXL");
         assert_eq!(records[0].blake3, hash_a);
+        assert_eq!(records[0].photos_uuid.as_deref(), Some("UUID-A"));
         assert_eq!(records[1].rel_path, "b.JXL");
         assert_eq!(records[1].blake3, hash_b);
+        assert_eq!(records[1].photos_uuid.as_deref(), Some("UUID-B"));
         assert_eq!(
             marker
                 .blake3_log
@@ -5478,7 +6850,7 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
-        let records = import_pending_jxl_entries_with_checkpoint(
+        let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
             false,
@@ -5494,11 +6866,13 @@ mod tests {
         );
         assert_eq!(run_batch_sizes.len(), total);
         assert!(run_batch_sizes.iter().all(|batch_size| *batch_size == 1));
-        assert_eq!(records.len(), total);
+        assert_eq!(report.imported_assets.len(), total);
+        assert_eq!(report.failed_count, 0);
         Ok(())
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_import_stable_path_keeps_warmup_and_windowed_batches() -> Result<()> {
         let strategy = photos_import_strategy(FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP + 1);
         let windows = photos_import_windows(
@@ -5514,7 +6888,7 @@ mod tests {
             windows.iter().map(|window| window.len).collect::<Vec<_>>(),
             vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP, 51]
         );
-        let batch_sizes = photos_import_batch_sizes_for_strategy(strategy, windows[0].len);
+        let batch_sizes = photos_import_batch_sizes(windows[0].len);
         assert_eq!(batch_sizes.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
         assert!(batch_sizes.iter().all(|batch_size| *batch_size == 1));
         Ok(())
@@ -5547,30 +6921,95 @@ mod tests {
     }
 
     #[test]
-    fn periodic_photos_recovery_timeout_does_not_abort_import_window() {
+    fn periodic_photos_recovery_continues_only_after_functional_health_proof() {
         let mut recovery_calls = Vec::new();
-        let result =
-            handle_photos_import_recovery("periodic_window_boundary", &mut |reason: &str| {
+        let mut health_probe_calls = 0usize;
+        let result = handle_photos_import_recovery(
+            "periodic_window_boundary",
+            &mut |reason: &str| {
                 recovery_calls.push(reason.to_string());
                 Err(ImgQualityError::AnalysisError(
                     "timed out waiting for Photos process quit state".to_string(),
                 ))
-            });
+            },
+            &mut || {
+                health_probe_calls += 1;
+                Ok(())
+            },
+        );
 
         assert!(
             result.is_ok(),
-            "periodic relaunch recovery is best-effort because import proof still gates success"
+            "a functional Photos health proof may preserve the current import window"
         );
         assert_eq!(recovery_calls, vec!["periodic_window_boundary"]);
+        assert_eq!(health_probe_calls, 1);
+    }
+
+    #[test]
+    fn periodic_photos_recovery_fails_when_functional_health_probe_fails() {
+        let result = handle_photos_import_recovery(
+            "periodic_window_boundary",
+            &mut |_reason: &str| {
+                Err(ImgQualityError::AnalysisError(
+                    "timed out waiting for Photos process quit state".to_string(),
+                ))
+            },
+            &mut || {
+                Err(ImgQualityError::AnalysisError(
+                    "AppleEvent probe timed out".to_string(),
+                ))
+            },
+        );
+
+        let err = result.expect_err("unproven Photos session health must fail closed");
+        let detail = err.to_string();
+        assert!(
+            detail.contains("timed out waiting for Photos process quit state")
+                && detail.contains("AppleEvent probe timed out"),
+            "both recovery and health-probe failures must remain visible: {err}"
+        );
+    }
+
+    #[test]
+    fn failed_graceful_quit_still_reaches_force_kill_recovery() {
+        let mut waited_for_quit = false;
+        let result = complete_photos_quit_recovery(
+            "poisoned_session",
+            Err(ImgQualityError::AnalysisError(
+                "Photos recovery quit command timed out".to_string(),
+            )),
+            &mut || {
+                waited_for_quit = true;
+                Ok(())
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "quit timeout must fall through to process recovery"
+        );
+        assert!(
+            waited_for_quit,
+            "process recovery must get a chance to force-quit Photos"
+        );
     }
 
     #[test]
     fn poisoned_photos_recovery_timeout_remains_fatal() {
-        let result = handle_photos_import_recovery("poisoned_session", &mut |_reason: &str| {
-            Err(ImgQualityError::AnalysisError(
-                "timed out waiting for Photos process quit state".to_string(),
-            ))
-        });
+        let mut health_probe_called = false;
+        let result = handle_photos_import_recovery(
+            "poisoned_session",
+            &mut |_reason: &str| {
+                Err(ImgQualityError::AnalysisError(
+                    "timed out waiting for Photos process quit state".to_string(),
+                ))
+            },
+            &mut || {
+                health_probe_called = true;
+                Ok(())
+            },
+        );
 
         let err = result.expect_err("poisoned Photos session recovery must fail closed");
         assert!(
@@ -5578,63 +7017,51 @@ mod tests {
                 .contains("timed out waiting for Photos process quit state"),
             "unexpected err: {err}"
         );
+        assert!(
+            !health_probe_called,
+            "poisoned sessions must not be rescued by the periodic-boundary health probe"
+        );
     }
 
     #[test]
     fn photos_import_batch_sizes_use_one_file_transactions() {
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 1),
-            vec![1]
-        );
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 11),
-            vec![1; 11]
-        );
-        assert_eq!(
-            photos_import_batch_sizes_for_strategy(PhotosImportStrategy::StableCheckpointed, 21),
-            vec![1; 21]
-        );
+        for total in [
+            0,
+            1,
+            2,
+            11,
+            21,
+            FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP,
+            FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP + 1,
+        ] {
+            assert_eq!(
+                photos_import_batch_sizes(total),
+                vec![1; total],
+                "every Photos import path must checkpoint one file at a time"
+            );
+        }
     }
 
     #[test]
-    fn photos_import_batch_sizes_use_fast_path_for_small_pending_sets() {
-        assert_eq!(photos_import_batch_sizes(2), vec![1; 2]);
-        assert_eq!(
-            photos_import_batch_sizes(FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP),
-            vec![1; FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP]
-        );
-        assert_eq!(
-            photos_import_batch_sizes(150),
-            vec![1; 150],
-            "FastSmallSet must checkpoint one file at a time"
-        );
-    }
-
-    #[test]
-    fn photos_import_batch_sizes_keep_stable_path_for_large_pending_sets() {
-        assert_eq!(
-            photos_import_batch_sizes(151),
-            vec![1; 151],
-            "StableCheckpointed must checkpoint one file at a time"
-        );
-    }
-
-    #[test]
-    #[ignore = "macOS-only live Photos smoke test"]
+    #[ignore = "writes to the macOS System Photo Library; explicit consent required"]
     #[cfg(target_os = "macos")]
     #[serial_test::serial]
-    fn photos_import_live_smoke_debug_library() -> Result<()> {
-        use std::process::Command;
-
-        let home = std::env::var_os("HOME")
+    fn photos_import_live_smoke_system_library_requires_explicit_consent() -> Result<()> {
+        if std::env::var("MFB_LIVE_PHOTOS_SMOKE_ALLOW_SYSTEM_LIBRARY").as_deref() != Ok("1") {
+            return Err(ImgQualityError::AnalysisError(
+                "live Photos smoke writes to the System Photo Library; set \
+                 MFB_LIVE_PHOTOS_SMOKE_ALLOW_SYSTEM_LIBRARY=1 to confirm"
+                    .to_string(),
+            ));
+        }
+        let input = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_INPUT")
             .map(PathBuf::from)
-            .ok_or_else(|| ImgQualityError::AnalysisError("HOME is unset".to_string()))?;
-        let input = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_INPUT").map_or_else(
-            || home.join("Downloads/Final 2/Telegram_optimized/IMG_9644.JXL"),
-            PathBuf::from,
-        );
-        let library = std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_LIBRARY")
-            .map_or_else(|| home.join("Pictures/debug.photoslibrary"), PathBuf::from);
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "MFB_LIVE_PHOTOS_SMOKE_INPUT must name an explicit synthetic fixture"
+                        .to_string(),
+                )
+            })?;
 
         if !input.exists() {
             return Err(ImgQualityError::AnalysisError(format!(
@@ -5642,75 +7069,177 @@ mod tests {
                 input.display()
             )));
         }
-        if !library.exists() {
+        let input_name = input
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "live Photos smoke input has no UTF-8 file name: {}",
+                    input.display()
+                ))
+            })?;
+        if !input_name.starts_with("mfb-photos-smoke-") {
             return Err(ImgQualityError::AnalysisError(format!(
-                "live Photos smoke library missing: {}",
-                library.display()
+                "live Photos smoke input must use the mfb-photos-smoke-* synthetic-fixture prefix: {}",
+                input.display()
             )));
         }
+        prepare_photos_import_session("live_system_library_smoke")?;
 
-        let open_status = Command::new("open")
-            .arg("-a")
-            .arg("Photos")
-            .arg(&library)
-            .status()
-            .map_err(|e| {
-                ImgQualityError::AnalysisError(format!("open Photos for live smoke failed: {e}"))
-            })?;
-        if !open_status.success() {
-            return Err(ImgQualityError::AnalysisError(
-                "open Photos for live smoke returned non-zero".to_string(),
-            ));
-        }
+        let output = run_photos_import_applescript_session(
+            "live system-library smoke",
+            &[(input.clone(), "✨system-library-smoke".to_string())],
+        )?;
+        let rel_path = input_name.to_string();
+        let report_pairs = fast_img_pairs_from_photos_import_ids(
+            &[(rel_path.clone(), input.clone())],
+            output.as_bytes(),
+            1,
+        )?;
+        let candidates = [PhotosImportCandidate {
+            rel_path: rel_path.clone(),
+            path: input.clone(),
+            blake3: crate::common_utils::calculate_blake3_hash(&input)?,
+            album_name: "✨system-library-smoke".to_string(),
+        }];
+        let handle = library_handle_from_media_output_probes(
+            &candidates,
+            &report_pairs,
+            query_osxphotos_asset_probes,
+            path_has_quarantine_xattr,
+        )?;
 
-        std::thread::sleep(Duration::from_secs(3));
-
-        let output =
-            run_photos_import_applescript_session("JXL", &[(input, "✨debug-smoke".to_string())])?;
-        let ids = output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .count();
-
-        assert_eq!(ids, 1, "unexpected import id output: {output}");
+        assert_eq!(handle.imported_assets.len(), 1);
+        assert!(
+            handle.imported_assets[0]
+                .photos_uuid
+                .as_deref()
+                .is_some_and(|uuid| !uuid.is_empty()),
+            "live Photos smoke must preserve the verified UUID"
+        );
+        let reconciled_output = run_photos_import_applescript_session_mode(
+            "media reconciliation",
+            &[(input.clone(), "✨system-library-smoke".to_string())],
+            "reconcile",
+        )?;
+        let reconciled_identifier = reconciled_output.trim();
+        assert_ne!(reconciled_identifier, "MFB_NOT_FOUND");
+        let reconciled_handle = library_handle_from_media_output_probes(
+            &candidates,
+            &[(rel_path, reconciled_identifier.to_string())],
+            query_osxphotos_asset_probes,
+            path_has_quarantine_xattr,
+        )?;
+        assert_eq!(reconciled_handle.imported_assets.len(), 1);
         Ok(())
     }
 
     #[test]
-    fn photos_import_poison_detection_covers_zero_import_invalid_connection_and_timeout() {
+    fn photos_import_retry_detection_covers_zero_import_invalid_connection_and_timeout() {
         assert!(
-            photos_import_poison_reason(
+            photos_import_retry_reason(
                 "execution error: Photos returned 0 imported items for /tmp/a.JXL (-2700)"
             )
             .is_some()
         );
         assert!(
-            photos_import_poison_reason("execution error: “Photos”遇到一个错误：连接无效。 (-609)")
+            photos_import_retry_reason("execution error: “Photos”遇到一个错误：连接无效。 (-609)")
                 .is_some()
         );
         assert!(
-            photos_import_poison_reason(
+            photos_import_retry_reason(
                 "execution error: “Photos”遇到一个错误：AppleEvent已超时。 (-1712)"
             )
             .is_some()
         );
         assert_eq!(
-            photos_import_poison_reason(
+            photos_import_retry_reason(
                 "execution error: “Photos”遇到一个错误：AppleEvent已超时。 (-1712)"
             ),
             Some("appleevent_timeout")
         );
         assert_eq!(
-            photos_import_poison_reason(
+            photos_import_retry_reason(
                 "Photos AppleScript import chunk timed out at hard timeout after 120s"
             ),
             Some("appleevent_timeout")
         );
         assert_eq!(
-            photos_import_poison_reason("Photos returned 4 imported items for 10 files"),
+            photos_import_retry_reason(
+                "Photos AppleScript import chunk timed out after 1800.045210458s / 1800s +                 (subprocess killed, exit_code=-1)"
+            ),
+            Some("appleevent_timeout"),
+            "the historical Photos timeout wording must trigger the bounded recovery path"
+        );
+        assert_eq!(
+            photos_import_retry_reason("Photos returned 4 imported items for 10 files"),
             None,
             "a partial import must not retry already imported files"
+        );
+    }
+
+    #[test]
+    fn photos_verifier_live_queries_pending_uuids_when_library_changes() -> Result<()> {
+        let requested = ["UUID-OLD".to_string(), "UUID-NEW".to_string()];
+        let previous_library = PathBuf::from("previous.photoslibrary");
+        let current_library = PathBuf::from("current.photoslibrary");
+        let libraries = [previous_library.clone(), current_library.clone()];
+        let mut queries = Vec::new();
+
+        let (probes, resolved_library) = query_osxphotos_asset_probes_in_libraries_with(
+            &requested,
+            &libraries,
+            |library, uuids| {
+                queries.push((library.to_path_buf(), uuids.to_vec()));
+                if library == previous_library {
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-OLD".to_string(),
+                        path: PathBuf::from("previous.photoslibrary/originals/old.AVIF"),
+                        iscloudasset: true,
+                        incloud: Some(true),
+                        ismissing: false,
+                    }])
+                } else {
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-NEW".to_string(),
+                        path: PathBuf::from("current.photoslibrary/originals/new.AVIF"),
+                        iscloudasset: true,
+                        incloud: Some(true),
+                        ismissing: false,
+                    }])
+                }
+            },
+        )?;
+
+        assert_eq!(
+            queries,
+            [
+                (previous_library, requested.to_vec()),
+                (current_library.clone(), vec!["UUID-NEW".to_string()]),
+            ]
+        );
+        assert_eq!(resolved_library.as_ref(), Some(&current_library));
+        assert_eq!(
+            probes
+                .iter()
+                .map(|probe| probe.uuid.as_str())
+                .collect::<Vec<_>>(),
+            ["UUID-OLD", "UUID-NEW"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn photos_import_probe_targets_reject_duplicate_report_paths() {
+        let err = fast_img_import_probe_targets(&[
+            ("a.AVIF".to_string(), "UUID-A/L0/001".to_string()),
+            ("a.AVIF".to_string(), "UUID-A/L0/001".to_string()),
+        ])
+        .expect_err("one Photos asset must not prove the same relative path twice");
+
+        assert!(
+            err.to_string().contains("duplicated relative path a.AVIF"),
+            "unexpected duplicate-report error: {err}"
         );
     }
 
@@ -5829,6 +7358,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_local_verifier_retries_bounded_visibility_lag() -> Result<()> {
         let targets = vec![FastImgImportProbeTarget {
             rel_path: "a.JXL".to_string(),
@@ -5871,8 +7401,52 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn photos_local_verifier_retries_transient_query_errors() -> Result<()> {
+        let targets = vec![FastImgImportProbeTarget {
+            rel_path: "a.AVIF".to_string(),
+            import_identifier: "UUID-A/L0/001".to_string(),
+            osxphotos_uuid: "UUID-A".to_string(),
+        }];
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let library_asset = temp_dir.path().join("a.AVIF");
+        std::fs::write(&library_asset, b"avif").unwrap();
+        let query_processes = Cell::new(0);
+        let mut query_assets = |uuids: &[String]| {
+            query_processes.set(query_processes.get() + 1);
+            if query_processes.get() < 3 {
+                return Err(ImgQualityError::AnalysisError(
+                    "osxphotos query failed: database is temporarily busy".to_string(),
+                ));
+            }
+            Ok(vec![FastImgLibraryAssetProbe {
+                uuid: uuids[0].clone(),
+                path: library_asset.clone(),
+                iscloudasset: false,
+                incloud: Some(false),
+                ismissing: false,
+            }])
+        };
+
+        let probes = query_uploaded_asset_probes_batch_with_retry(
+            &targets,
+            5,
+            1,
+            Duration::ZERO,
+            false,
+            &mut query_assets,
+            |_| {},
+        )?;
+
+        assert_eq!(query_processes.get(), 3);
+        assert_eq!(probes.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn photos_upload_verifier_defaults_are_low_process_pressure() {
-        assert_eq!(fast_img_icloud_upload_verify_attempts(), 3);
+        assert_eq!(fast_img_icloud_upload_verify_attempts(), 5);
         assert!(fast_img_icloud_upload_verify_batch_size() <= 64);
         assert!(fast_img_icloud_upload_verify_delay() >= Duration::from_secs(2));
         assert!(fast_img_photos_import_timeout() <= Duration::from_secs(120));
@@ -5992,7 +7566,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("final JXL delivery proof or raw roundtrip proof is required"),
+                .contains("final modern-format delivery proof or raw roundtrip proof is required"),
             "unexpected: {err}"
         );
         assert!(src.path().exists());
@@ -6046,7 +7620,7 @@ mod tests {
         let source_hash = crate::common_utils::calculate_blake3_hash(src.path()).unwrap();
         let output_hash = crate::common_utils::calculate_blake3_hash(out.path()).unwrap();
         let src_path = src.path().to_path_buf();
-        let integrity = IntegrityResult::FinalJxlDelivery {
+        let integrity = IntegrityResult::FinalModernDelivery {
             source_hash,
             output_hash,
         };
@@ -6088,6 +7662,25 @@ mod tests {
             err.to_string().contains("does not exist"),
             "unexpected: {err}"
         );
+    }
+
+    #[test]
+    fn tier2_batch_delete_rejects_path_traversal_before_photos_query() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let handle = crate::pipeline::verification::LibraryHandle {
+            imported_assets: vec![crate::pipeline::verification::LibraryAssetRecord {
+                rel_path: "../escape.webp".to_string(),
+                blake3: "claimed".to_string(),
+                sync_status: "local".to_string(),
+                quarantined: false,
+                photos_uuid: Some("uuid".to_string()),
+                library_blake3: None,
+            }],
+            import_error_count: 0,
+        };
+        let error = delete_verified_modern_lossy_static_sources(src_dir.path(), &handle)
+            .expect_err("unsafe relative path must fail before external verification");
+        assert!(error.to_string().contains("unsafe or duplicate"));
     }
 
     #[test]

@@ -1719,7 +1719,8 @@ pub mod messages {
     pub const JXL_STRIPPED_TAIL_RETRY: &str = "JXL: retry with stripped tail metadata";
     pub const AVIF_MATHEMATICAL_LOSSLESS_WARNING: &str =
         "AVIF: mathematical lossless warning (colorspace shift possible)";
-    pub const JXL_E10_FAILURE_KEEP_E7: &str = "JXL E10 failed; keeping E7 candidate";
+    pub const JXL_FINALIST_FAILURE_KEEP_BASELINE: &str =
+        "JXL finalist verification failed; keeping the d0 baseline";
     pub const SIPS_TRY_FIRST: &str = "SIPS: trying primary conversion";
     pub const SIPS_SUCCESS: &str = "SIPS conversion successful";
     pub const SIPS_FAIL_TRY_MAGICK: &str = "SIPS failed; falling back to ImageMagick";
@@ -1803,8 +1804,6 @@ pub mod messages {
     pub const MSG_ANALYZER_HEIC_VENDOR: &str =
         "Analyzer Audit: HEIC vendor-specific metadata found for {}";
     pub const MSG_ANALYZER_CACHE_HIT: &str = "Analyzer Audit: Cache hit for {}";
-    pub const MSG_ANALYZER_APNG_DEEP_RESEARCH: &str =
-        "Analyzer Audit: Initiating APNG deep bitstream research for {}";
     pub const MSG_ANALYZER_WEBP_JOINT_AUDIT: &str =
         "Analyzer Audit: Initiating joint WebP/Video forensic audit for {}";
     pub const MSG_ANALYZER_STATIC_GIF: &str =

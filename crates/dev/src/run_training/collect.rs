@@ -3,7 +3,7 @@ use super::types::{Args, QualityGroup, RulesConfig, Sample, SampleSources, Train
 use crate::infra::fabrication_policy::fail_closed_training_enabled;
 use crate::infra::training_scan::plan_scan_segments;
 use crate::media::scope::{is_animated_gif, is_animated_jxl, is_animated_png, is_animated_webp};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use foundation::probe_loop_intent;
 use foundation::training_tier_audit::probe_static_still_image;
 use serde_json::Value;
@@ -13,20 +13,22 @@ use std::path::Path;
 /// True when a file should be routed to `loop_intent` training (animated raster
 /// or video). Mirrors py `is_animated_for_static_quality_skip` +
 /// `passes_loop_raster_animation_gate`.
-fn is_animated_for_loop_collect(path: &Path) -> bool {
+fn is_animated_for_loop_collect(path: &Path) -> Result<bool> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     match ext.as_str() {
-        "gif" => is_animated_gif(path).unwrap_or(false),
-        "webp" => is_animated_webp(path).unwrap_or(false),
-        "png" => is_animated_png(path).unwrap_or(false),
-        "jxl" => is_animated_jxl(path).unwrap_or(false),
+        "gif" => is_animated_gif(path),
+        "webp" => is_animated_webp(path),
+        "png" => is_animated_png(path),
+        "jxl" => is_animated_jxl(path),
         // apng, avif/heic/heif: treat as potentially animated (conservative); video containers
-        "apng" | "avif" | "heic" | "heif" | "hif" | "mp4" | "mov" | "webm" | "mkv" | "avi" => true,
-        _ => false,
+        "apng" | "avif" | "heic" | "heif" | "hif" | "mp4" | "mov" | "webm" | "mkv" | "avi" => {
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -176,7 +178,7 @@ pub fn collect_plan_samples(args: &Args, rules: &RulesConfig) -> Result<Vec<Samp
                     .get("low_quality")
                     .cloned()
                     .unwrap_or_else(empty_quality_group);
-                all_samples.extend(collect_loop_local_from_media_dirs(&high_group, &low_group));
+                all_samples.extend(collect_loop_local_from_media_dirs(&high_group, &low_group)?);
             }
 
             let mut urls_loop = Vec::new();
@@ -260,7 +262,8 @@ fn collect_static_local_unified(
         );
 
         // Scan plan
-        let segments = plan_scan_segments(root, super::scanner::is_junk_path).unwrap_or_default();
+        let segments = plan_scan_segments(root, super::scanner::is_junk_path)
+            .with_context(|| format!("plan static training scan for {}", root.display()))?;
         for seg in segments {
             for seg_root in seg.roots {
                 for item in iter_media_files(&seg_root) {
@@ -425,7 +428,7 @@ fn loop_collect_quality_group(rules: &RulesConfig, label: &str) -> QualityGroup 
 fn collect_loop_local_from_media_dirs(
     high_group: &QualityGroup,
     low_group: &QualityGroup,
-) -> Vec<Sample> {
+) -> Result<Vec<Sample>> {
     let mut dirs = HashSet::new();
     for d in &high_group.sources.local_dirs {
         if !d.is_empty() {
@@ -448,11 +451,12 @@ fn collect_loop_local_from_media_dirs(
             continue;
         }
 
-        let segments = plan_scan_segments(root, super::scanner::is_junk_path).unwrap_or_default();
+        let segments = plan_scan_segments(root, super::scanner::is_junk_path)
+            .with_context(|| format!("plan loop training scan for {}", root.display()))?;
         for seg in segments {
             for seg_root in seg.roots {
                 for item in iter_media_files(&seg_root) {
-                    if is_animated_for_loop_collect(&item) {
+                    if is_animated_for_loop_collect(&item)? {
                         let mut audit = serde_json::Map::new();
                         audit.insert("loop_intent".to_string(), Value::from("uncertain"));
                         samples.push(Sample {
@@ -467,7 +471,7 @@ fn collect_loop_local_from_media_dirs(
             }
         }
     }
-    samples
+    Ok(samples)
 }
 
 #[must_use]
@@ -797,4 +801,21 @@ fn warn_static_balance_skew(
          low-quality stills or corpus lacks lows — see training_tier_audit / \
          static_image.low_quality rules"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_loop_raster_is_not_silently_classified_as_static() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let malformed = dir.path().join("malformed.gif");
+        std::fs::write(&malformed, b"GIF89a\x01\x00").expect("write malformed GIF");
+
+        let error = is_animated_for_loop_collect(&malformed)
+            .expect_err("malformed loop media must stop training collection");
+        assert!(error.to_string().contains("GIF animation probe failed"));
+        assert!(error.to_string().contains("malformed.gif"));
+    }
 }

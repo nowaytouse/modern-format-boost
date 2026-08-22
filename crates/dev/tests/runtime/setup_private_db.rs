@@ -55,6 +55,21 @@ fn typed_connection_string_overrides_default() -> Result<()> {
     assert_connstr(repo.path(), "postgresql://typed/db")
 }
 
+#[test]
+fn eof_cancels_without_writing_default_config() -> Result<()> {
+    let repo = temp_git_repo()?;
+
+    run_setup(repo.path(), "")?;
+
+    assert!(
+        !repo
+            .path()
+            .join(".modern_format_boost/local_env.json")
+            .exists()
+    );
+    Ok(())
+}
+
 fn temp_git_repo() -> Result<tempfile::TempDir> {
     let repo = tempdir()?;
     let status = Command::new("git")

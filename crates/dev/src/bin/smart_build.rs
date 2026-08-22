@@ -43,7 +43,8 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
 const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
 const GUI_SOURCE_EXTENSIONS: &[&str] = &[
-    "css", "html", "ico", "js", "json", "lock", "png", "svg", "toml", "ts", "tsx", "vue",
+    "css", "html", "icns", "ico", "js", "json", "lock", "plist", "png", "sh", "svg", "swift",
+    "toml", "ts", "tsx", "vue",
 ];
 const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
     ".git",
@@ -101,12 +102,12 @@ impl Style {
 }
 
 /// Smart Build — builds img / vid plus the packaged terminal launcher and
-/// verification tool, and optionally the Tauri GUI.
+/// verification tool, and optionally the native macOS GUI.
 ///
 /// Default (no flags): build img + vid + verify + drag_and_drop_processor if
 /// sources are newer than binaries.
 #[derive(Parser, Debug)]
-#[command(about = "Smart Build System — incremental Rust + Tauri builder")]
+#[command(about = "Smart Build System — incremental Rust + native macOS builder")]
 struct Args {
     /// Force rebuild even when binaries are up-to-date
     #[arg(long, short = 'f')]
@@ -120,7 +121,7 @@ struct Args {
     #[arg(long, short = 'v')]
     verbose: bool,
 
-    /// Build every Rust binary packaged inside the app, then refresh the Tauri GUI only when its inputs changed
+    /// Build every Rust binary packaged inside the app, then refresh the native GUI only when its inputs changed
     #[arg(long, short = 'a')]
     all: bool,
 
@@ -140,11 +141,11 @@ struct Args {
     #[arg(long, short = 'u')]
     update: bool,
 
-    /// Build the Tauri Vue GUI and sync the .app bundle
+    /// Build the native Vue GUI and sync the .app bundle
     #[arg(long)]
     gui: bool,
 
-    /// Build Rust binaries only — skip Tauri/Vue GUI step
+    /// Build Rust binaries only — skip the native Vue GUI step
     #[arg(long, short = 'r')]
     rust_only: bool,
 
@@ -184,13 +185,11 @@ fn vue_dir(project_root: &Path) -> PathBuf {
     project_root.join("crates").join("gui")
 }
 
-fn tauri_dir(project_root: &Path) -> PathBuf {
-    project_root.join("crates").join("gui").join("src-tauri")
+fn native_gui_dir(project_root: &Path) -> PathBuf {
+    project_root.join("crates").join("gui").join("src-macos")
 }
 
-fn tauri_app_bundle_path(project_root: &Path) -> PathBuf {
-    // Tauri build output is redirected to the workspace root target via
-    // tauri/.cargo/config.toml (target-dir = "../../../target").
+fn native_app_bundle_path(project_root: &Path) -> PathBuf {
     project_root
         .join("target")
         .join("release")
@@ -555,14 +554,8 @@ fn get_newest_binary_source_mtime(
 
 fn gui_needs_rebuild(project_root: &Path) -> bool {
     let vue_root = vue_dir(project_root);
-    let mut newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
-    // Tauri's Rust entry points belong to the GUI bundle, but ordinary dev-bin
-    // changes are copied into an existing app bundle after their own incremental build.
-    newest_input = newest_input.max(newest_source_mtime_in_dir(
-        &tauri_dir(project_root),
-        RUST_SOURCE_EXTENSIONS,
-    ));
-    let bundle_binary = tauri_app_bundle_path(project_root)
+    let newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
+    let bundle_binary = native_app_bundle_path(project_root)
         .join("Contents")
         .join("MacOS")
         .join("Modern Format Boost");
@@ -1291,7 +1284,7 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
             let status = Command::new("codesign")
                 .arg("--force")
                 .arg("--sign")
-                .arg(app_bundle_codesign_identity())
+                .arg(app_bundle_codesign_identity()?)
                 .arg(destination)
                 .status()
                 .with_context(|| format!("codesign {}", destination.display()))?;
@@ -1372,16 +1365,14 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
         anyhow::bail!("codesign not found; cannot seal Modern Format Boost.app");
     }
 
-    let entitlements = tauri_dir(project_root).join("entitlements.plist");
+    let entitlements = native_gui_dir(project_root).join("entitlements.plist");
     let app_resources = app_bundle.join("Contents").join("Resources");
+    let signing_identity = app_bundle_codesign_identity()?;
     for bin in changed_bins {
         let bundled = app_resources.join(bin);
         if bundled.is_file() {
             let mut command = Command::new("codesign");
-            command
-                .arg("--force")
-                .arg("--sign")
-                .arg(app_bundle_codesign_identity());
+            command.arg("--force").arg("--sign").arg(&signing_identity);
             if entitlements.is_file() {
                 command.arg("--entitlements").arg(&entitlements);
             }
@@ -1393,10 +1384,7 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
     }
 
     let mut command = Command::new("codesign");
-    command
-        .arg("--force")
-        .arg("--sign")
-        .arg(app_bundle_codesign_identity());
+    command.arg("--force").arg("--sign").arg(&signing_identity);
     if entitlements.is_file() {
         command.arg("--entitlements").arg(&entitlements);
     }
@@ -1408,45 +1396,204 @@ fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) ->
 
     println!(
         "{}App Bundle signed with {}.{}",
-        style.green,
-        app_bundle_codesign_identity(),
-        style.reset
+        style.green, signing_identity, style.reset
     );
     Ok(())
 }
 
-fn app_bundle_codesign_identity() -> &'static str {
-    APP_BUNDLE_CODESIGN_IDENTITY
+/// Resolve the codesign identity to use for the app bundle.
+///
+/// Priority:
+///   1. `CODESIGN_IDENTITY` environment variable (CI / release override)
+///   2. `MFB-Dev-Signing` if the certificate is present in the local keychain
+fn app_bundle_codesign_identity() -> Result<String> {
+    // 1. Explicit env override
+    match std::env::var("CODESIGN_IDENTITY") {
+        Ok(id) => {
+            let id = id.trim().to_owned();
+            if !id.is_empty() {
+                return Ok(id);
+            }
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => anyhow::bail!("CODESIGN_IDENTITY is not valid Unicode: {error}"),
+    }
+    // 2. MFB-Dev-Signing if the certificate exists in the keychain
+    let available = Command::new("/usr/bin/security")
+        .args(["find-identity", "-v", "-p", "codesigning"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("MFB-Dev-Signing"))
+        .unwrap_or(false);
+    if available {
+        return Ok(APP_BUNDLE_CODESIGN_IDENTITY.to_owned());
+    }
+    anyhow::bail!(concat!(
+        "No stable code-signing identity found. Install MFB-Dev-Signing or set ",
+        "CODESIGN_IDENTITY explicitly; refusing ad-hoc signing because it invalidates ",
+        "persistent Photos Automation grants."
+    ))
+}
+
+/// Compile the Swift native host and assemble the macOS .app bundle at
+/// `target/release/bundle/macos/Modern Format Boost.app`.
+///
+/// This replaces the former `crates/gui/src-macos/build.sh` shell script
+/// and is invoked by `build_and_sync_gui()` after the Vue build.
+fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
+    let native_dir = native_gui_dir(project_root);
+    let gui_dir = vue_dir(project_root);
+    let bundle = native_app_bundle_path(project_root);
+    let macos_dir = bundle.join("Contents").join("MacOS");
+    let resources_dir = bundle.join("Contents").join("Resources");
+
+    // Detect host architecture (arm64 or x86_64)
+    let arch_out = Command::new("uname")
+        .arg("-m")
+        .output()
+        .context("uname -m")?;
+    let arch = String::from_utf8_lossy(&arch_out.stdout).trim().to_owned();
+    match arch.as_str() {
+        "arm64" | "x86_64" => {}
+        other => anyhow::bail!("Unsupported macOS architecture: {other}"),
+    }
+
+    // Verify the Vue build output exists
+    let index_html = gui_dir.join("dist").join("index.html");
+    if !index_html.is_file() {
+        anyhow::bail!("Vue build output missing: {}", index_html.display());
+    }
+    // Guard against WKWebView-incompatible module attributes
+    let index_content = fs::read_to_string(&index_html).context("read dist/index.html")?;
+    if index_content.contains("type=\"module\"") || index_content.contains("crossorigin") {
+        anyhow::bail!(
+            "Vue entry point contains type=\"module\" or crossorigin attributes, \
+             which are incompatible with bundled WKWebView file loading"
+        );
+    }
+
+    // (Re-)create the bundle skeleton
+    if bundle.exists() {
+        fs::remove_dir_all(&bundle)
+            .with_context(|| format!("remove stale app bundle {}", bundle.display()))?;
+    }
+    fs::create_dir_all(&macos_dir).context("create bundle MacOS dir")?;
+    fs::create_dir_all(&resources_dir).context("create bundle Resources dir")?;
+
+    println!(
+        "{}  Compiling Swift native host ({arch})...{}",
+        style.cyan, style.reset
+    );
+    let swift_src = native_dir.join("main.swift");
+    let host_binary = macos_dir.join("Modern Format Boost");
+    let target_triple = format!("{arch}-apple-macos13.0");
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-swift-version",
+            "5",
+            "-O",
+            "-target",
+            &target_triple,
+            "-framework",
+            "AppKit",
+            "-framework",
+            "CoreServices",
+            "-framework",
+            "WebKit",
+        ])
+        .arg(&swift_src)
+        .arg("-o")
+        .arg(&host_binary)
+        .status()
+        .context("xcrun swiftc")?;
+    if !status.success() {
+        anyhow::bail!("Swift native host compilation failed");
+    }
+
+    // Copy bundle resources
+    let info_src = native_dir.join("Info.plist");
+    let info_dst = bundle.join("Contents").join("Info.plist");
+    fs::copy(&info_src, &info_dst)
+        .with_context(|| format!("copy Info.plist to {}", info_dst.display()))?;
+
+    let icon_src = native_dir.join("icon.icns");
+    let icon_dst = resources_dir.join("icon.icns");
+    fs::copy(&icon_src, &icon_dst)
+        .with_context(|| format!("copy icon.icns to {}", icon_dst.display()))?;
+
+    let dist_src = gui_dir.join("dist");
+    let dist_dst = resources_dir.join("dist");
+    let status = Command::new("ditto")
+        .arg(&dist_src)
+        .arg(&dist_dst)
+        .status()
+        .context("ditto dist -> Resources/dist")?;
+    if !status.success() {
+        anyhow::bail!("ditto failed copying Vue dist");
+    }
+
+    // Validate plists
+    for plist in [&info_dst, &native_dir.join("entitlements.plist")] {
+        if plist.is_file() {
+            let s = Command::new("plutil")
+                .arg("-lint")
+                .arg(plist)
+                .status()
+                .with_context(|| format!("plutil -lint {}", plist.display()))?;
+            if !s.success() {
+                anyhow::bail!("plutil -lint failed for {}", plist.display());
+            }
+        }
+    }
+
+    // Run native host self-test before signing
+    println!(
+        "{}  Running native host self-test...{}",
+        style.cyan, style.reset
+    );
+    let test_status = Command::new(&host_binary)
+        .arg("--self-test")
+        .status()
+        .context("native host --self-test")?;
+    if !test_status.success() {
+        anyhow::bail!("Native host self-test failed");
+    }
+
+    println!(
+        "{}  Swift native host compiled and assembled.{}",
+        style.green, style.reset
+    );
+    Ok(())
 }
 
 fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
     println!(
-        "\n{}{} Building Tauri GUI...{}",
+        "\n{}{} Building native macOS GUI...{}",
         style.bold, style.cyan, style.reset
     );
     let vue_dir = vue_dir(project_root);
 
+    // Step 1: Vue frontend build (dist/ only — Swift compilation handled below)
     let status = Command::new("npm")
         .arg("run")
-        .arg("tauri")
         .arg("build")
-        .arg("--")
-        .arg("--bundles")
-        .arg("app")
         .current_dir(&vue_dir)
         .status()?;
-
     if !status.success() {
-        anyhow::bail!("Tauri build failed");
+        anyhow::bail!("Vue frontend build failed");
     }
 
+    // Step 2: Compile Swift native host and assemble .app bundle skeleton
+    compile_swift_native_host(project_root, style)?;
+
     println!("{}Syncing App bundle...{}", style.dim, style.reset);
-    let src_bundle = tauri_app_bundle_path(project_root);
+    let src_bundle = native_app_bundle_path(project_root);
     let dest_bundle = project_root.join("Modern Format Boost.app");
 
     if src_bundle.exists() {
         if dest_bundle.exists() {
-            let _ = fs::remove_dir_all(&dest_bundle);
+            fs::remove_dir_all(&dest_bundle)
+                .with_context(|| format!("remove stale app bundle {}", dest_bundle.display()))?;
         }
 
         let cp_status = Command::new("cp")
@@ -1467,7 +1614,7 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         anyhow::bail!("Built app bundle not found at {:?}", src_bundle);
     }
 
-    // Make sure we sync the Rust binaries into the newly created App bundle
+    // Step 3: Sync Rust binaries and sign the final bundle
     sync_app_bundle(project_root, style, false)?;
 
     Ok(())
@@ -1544,8 +1691,7 @@ fn process_name_matches_project_tool(name: &str, cmd_joined: &str) -> bool {
         "drag_and_drop_processor",
     ];
     let name_lower = name.to_lowercase();
-    let is_project_vite_node =
-        name == "node" && (cmd_joined.contains("vite") || cmd_joined.contains("tauri"));
+    let is_project_vite_node = name == "node" && cmd_joined.contains("vite");
     target_names.contains(&name) || name_lower.contains("vite") || is_project_vite_node
 }
 
@@ -1554,10 +1700,7 @@ fn should_terminate_process_identity(
     cmd_joined: &str,
     belongs_to_project: bool,
 ) -> bool {
-    if name == "Modern Format Boost"
-        || name.contains("Modern Format Boost")
-        || name == "mfb_launcher"
-    {
+    if name == "Modern Format Boost" || name.contains("Modern Format Boost") {
         return true;
     }
     belongs_to_project && process_name_matches_project_tool(name, cmd_joined)
@@ -1843,7 +1986,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Build the GUI only when its own Vue/Tauri inputs changed. Running it after
+    // Build the GUI only when its own Vue/native-host inputs changed. Running it after
     // native compilation ensures the generated app receives the current bundled
     // binaries during the following sync step.
     if (args.gui || args.all) && !args.rust_only {
@@ -2008,10 +2151,9 @@ mod tests {
     }
 
     #[test]
-    fn test_app_bundle_codesign_identity_is_stable() {
-        let identity = app_bundle_codesign_identity();
-        assert_eq!(identity, "MFB-Dev-Signing");
-        assert_ne!(identity, "-");
+    fn test_default_app_bundle_codesign_identity_is_stable() {
+        assert_eq!(APP_BUNDLE_CODESIGN_IDENTITY, "MFB-Dev-Signing");
+        assert_ne!(APP_BUNDLE_CODESIGN_IDENTITY, "-");
     }
 
     #[test]
@@ -2050,10 +2192,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tauri_app_bundle_path_matches_workspace_root_target() {
+    fn test_native_app_bundle_path_matches_workspace_root_target() {
         let project_root = Path::new("/tmp/mfb");
         assert_eq!(
-            tauri_app_bundle_path(project_root),
+            native_app_bundle_path(project_root),
             Path::new("/tmp/mfb")
                 .join("target")
                 .join("release")
@@ -2077,7 +2219,7 @@ mod tests {
         fs::write(&vue_source, "<template><main /></template>")?;
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let bundle_binary = tauri_app_bundle_path(root)
+        let bundle_binary = native_app_bundle_path(root)
             .join("Contents")
             .join("MacOS")
             .join("Modern Format Boost");

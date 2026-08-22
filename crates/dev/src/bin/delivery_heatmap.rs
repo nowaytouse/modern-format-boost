@@ -1,7 +1,5 @@
 //! Delivery heatmap auditor for Rust conversion bins.
 //!
-//! Port of `crates/dev/scripts/media_conversion_delivery_heatmap.py`.
-//!
 //! Scans `crates/*/src/bin/*.rs` delivery files for production segment tags,
 //! cross-checks an allowlist, and prints a coverage report or deep-audits
 //! each bin for undeclared segments.
@@ -19,7 +17,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Tag that marks a Rust bin as owning a delivery segment.
-/// Mirrors the Python `PRODUCTION_SEGMENT_TAG` constant.
 const PRODUCTION_SEGMENT_TAG: &str = "//! PRODUCTION_SEGMENT:";
 
 /// Default allowlist file relative to project root.
@@ -28,8 +25,7 @@ const DEFAULT_ALLOWLIST_PATH: &str = "crates/dev/scripts/delivery_allowlist.toml
 #[derive(Parser, Debug)]
 #[command(
     name = "delivery_heatmap",
-    about = "Audit Rust conversion bins for delivery segment coverage (port of \
-             media_conversion_delivery_heatmap.py)"
+    about = "Audit Rust conversion bins for delivery segment coverage"
 )]
 struct Args {
     /// Print segment report (default when no flag given)

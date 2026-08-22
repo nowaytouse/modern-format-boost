@@ -48,7 +48,7 @@ class TestFastModePaths(unittest.TestCase):
             )
 
     def test_fastmode_state_root_defaults_to_user_home_for_app_launch(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home:  # noqa: SIM117
             with patch.dict(os.environ, {"HOME": home, "FROM_APP": "1"}, clear=True):
                 self.assertEqual(
                     fastmode_paths.default_mfb_state_root(),
@@ -235,7 +235,7 @@ class TestFastModePaths(unittest.TestCase):
 
         self.assertIn("pub fn choose_fast_img_action", source)
         self.assertIn("Enter = Shortest Path", source)
-        self.assertIn('"3" => FastImgAction::RestoreJpeg', source)
+        self.assertIn('"3" if strategy != "avif" => FastImgAction::RestoreJpeg', source)
         self.assertIn("_ => FastImgAction::ShortestPath", source)
 
     def test_drag_processor_archives_session_logs(self):

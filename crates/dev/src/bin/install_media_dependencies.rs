@@ -37,6 +37,8 @@ const APT_PACKAGES: &[&str] = &[
     "libx265-dev",
     "libaom-dev",
     "libdav1d-dev",
+    "libopus-dev",
+    "libvpx-dev",
     "exiftool",
     "imagemagick",
     "jpeginfo",
@@ -377,6 +379,8 @@ fn main() -> Result<()> {
             "--enable-libx265",
             "--enable-libaom",
             "--enable-libdav1d",
+            "--enable-libopus",
+            "--enable-libvpx",
             "--enable-libsvtav1",
             "--enable-libvmaf",
             "--disable-debug",
@@ -392,14 +396,21 @@ fn main() -> Result<()> {
     let filters = capture("ffmpeg", ["-hide_banner", "-filters"])?;
     require_output(&filters, "libvmaf", "ffmpeg -filters")?;
     let encoders = capture("ffmpeg", ["-hide_banner", "-encoders"])?;
-    for encoder in ["libx264", "libx265", "libaom-av1", "libsvtav1"] {
+    for encoder in [
+        "libx264",
+        "libx265",
+        "libaom-av1",
+        "libopus",
+        "libvpx-vp9",
+        "libsvtav1",
+    ] {
         require_output(&encoders, encoder, "ffmpeg -encoders")?;
     }
 
-    println!("--- Building libheif 1.21.0 ---");
+    println!("--- Building libheif 1.23.1 ---");
     let libheif_archive = workdir.join("libheif-src.tar.gz");
     download(
-        "https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz",
+        "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz",
         &libheif_archive,
         workdir,
     )?;
@@ -412,7 +423,7 @@ fn main() -> Result<()> {
         "cmake",
         [
             "-S",
-            "libheif-1.21.0",
+            "libheif-1.23.1",
             "-B",
             "libheif-build",
             "-G",
@@ -422,7 +433,7 @@ fn main() -> Result<()> {
             "-DCMAKE_WARN_DEPRECATED=OFF",
             "-DWITH_EXAMPLES=OFF",
             "-DBUILD_TESTING=OFF",
-            "-DWITH_OPENH264=OFF",
+            "-DWITH_OpenH264_DECODER=OFF",
         ],
         Some(workdir),
     )?;

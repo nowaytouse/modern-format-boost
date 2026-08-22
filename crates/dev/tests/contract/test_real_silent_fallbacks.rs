@@ -3019,7 +3019,6 @@ fn fabrication_scan_skip_file(path: &Path) -> bool {
         name == std::ffi::OsStr::new("ssim_mapping.rs")
             || name == std::ffi::OsStr::new("algorithm_audit.rs")
             || name == std::ffi::OsStr::new("constants.rs")
-            || name == std::ffi::OsStr::new("media_conversion_delivery_heatmap.py")
     })
 }
 
@@ -3944,8 +3943,8 @@ fn media_conversion_numeric_prior_unified_scan_m233() {
         hits.join("\n")
     );
 
-    let heatmap = root.join("crates/dev/scripts/media_conversion_delivery_heatmap.py");
-    assert!(heatmap.is_file(), "heatmap audit script must exist");
+    let heatmap = root.join("crates/dev/src/bin/delivery_heatmap.rs");
+    assert!(heatmap.is_file(), "Rust heatmap audit binary must exist");
     let heatmap_hits = silent_fabrication_offenders_in_files(
         &root,
         &[heatmap],
@@ -3953,7 +3952,7 @@ fn media_conversion_numeric_prior_unified_scan_m233() {
     );
     assert!(
         heatmap_hits.is_empty(),
-        "heatmap.py is allowlisted from numeric-prior scan (pattern catalog only):\n{}",
+        "delivery_heatmap.rs must not contain numeric-prior fabrication:\n{}",
         heatmap_hits.join("\n")
     );
 }
@@ -8668,7 +8667,7 @@ fn media_conversion_hardening_audit_snapshot() {
     let audit_path = root.join("crates/dev/src/fixtures/media_conversion_deep_audit.json");
     assert!(
         audit_path.is_file(),
-        "run: python3 crates/dev/scripts/media_conversion_delivery_heatmap.py --deep"
+        "run: cargo run --locked -p dev --bin delivery_heatmap -- --deep-audit"
     );
     let audit: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&audit_path).expect("audit json readable")) // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -8800,9 +8799,10 @@ fn media_conversion_gpu_coarse_fallback_audit_m77() {
         "crates/foundation/src/video_explorer/ssim_calculator.rs",
     ))
     .expect("ssim_calculator.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
+    let ssim_prod = production_scope(&ssim_calc);
     assert!(
-        production_scope(&ssim_calc).contains("parse_explore_vmaf_y_metric_token"),
-        "VMAF-Y parse must use central token helper (M77)"
+        ssim_prod.contains("pooled_metric_mean_from_json") && ssim_prod.contains("seal_vmaf_y"),
+        "VMAF-Y JSON parse must use the central pooled parser and metric seal (M77)"
     );
 }
 
@@ -8903,8 +8903,8 @@ fn media_conversion_explore_ssim_policy_m79() {
     let ssim = fs::read_to_string(&ssim_path).expect("ssim_calculator.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let prod = production_scope(&ssim);
     assert!(
-        prod.contains("parse_explore_cambi_metric_token"),
-        "CAMBI JSON parse must use central token helper (M79)"
+        prod.contains("pooled_metric_mean_from_json") && prod.contains("seal_cambi"),
+        "CAMBI JSON parse must use the central pooled parser and metric seal (M79)"
     );
     assert!(
         prod.contains("explore_ssim_metric_degraded_audit"),
@@ -9772,9 +9772,16 @@ fn media_conversion_apng_timing_m115() {
         prod.contains("apng_timing_stats_from_bytes"),
         "image_detection must export apng_timing_stats_from_bytes (M115)"
     );
+    let png_validation = fs::read_to_string(join_legacy_aware(
+        &root,
+        "crates/foundation/src/image/png_validation.rs",
+    ))
+    .expect("png_validation.rs must be readable");
     assert!(
-        prod.contains("apng_frame_delay_secs"),
-        "APNG delay must use fcTL delay_num/delay_den (M115)"
+        png_validation.contains("parse_apng_animation")
+            && png_validation.contains("delay_num")
+            && png_validation.contains("delay_den"),
+        "central APNG parser must derive timing from fcTL delay_num/delay_den (M115)"
     );
 
     let analyzer = fs::read_to_string(join_legacy_aware(
@@ -15605,7 +15612,8 @@ fn media_conversion_dynamic_calibration_audit_m81() {
     for needle in [
         "explore_calibration_degraded_audit",
         "explore_calibration_duration_optional",
-        "explore_calibration_probe_size_optional",
+        "measure_strict_pure_media",
+        "explore_gpu_coarse_explore_audit",
     ] {
         assert!(
             prod.contains(needle),
@@ -17637,9 +17645,9 @@ fn media_conversion_delivery_layer_sealed() {
          visibility"
     );
     assert!(
-        root.join("crates/dev/scripts/media_conversion_delivery_heatmap.py")
+        root.join("crates/dev/src/bin/delivery_heatmap.rs")
             .is_file(),
-        "delivery heatmap script must exist for M39 audits"
+        "Rust delivery_heatmap binary must exist for M39 audits"
     );
     assert!(
         !read_hardening_doc(&root, "MEDIA_CONVERSION_DISCIPLINE_SEAL.md").is_empty(),

@@ -56,6 +56,16 @@ pub struct ConversionConfig {
 
 impl ConversionConfig {
     #[must_use]
+    fn size_policy(&self) -> foundation::exploration_policy::SizePolicy {
+        foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
+            foundation::media_conversion_gate::effective_allow_size_tolerance(
+                self.allow_size_tolerance(),
+            ),
+            foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        )
+    }
+
+    #[must_use]
     pub const fn force(&self) -> bool {
         self.flags.contains(ConfigFlags::FORCE)
     }
@@ -232,6 +242,22 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                     quality_arg
                 ),
                 expected_reduction: foundation::constants::EXPECTED_REDUCTION_AVIF_LOSSY_STATIC,
+            })
+        }
+
+        // Unproven compression semantics must not unlock a lossy re-encode:
+        // a possibly-lossless source could suffer a second-generation loss.
+        // Same for jbrd JXL sources — they belong to the reversible-JPEG
+        // route, not a lossy AVIF strategy.
+        (ImageType::Static, CompressionType::Unknown | CompressionType::JpegReconstruction, _) => {
+            Ok(ConversionStrategy {
+                target: TargetFormat::NoConversion,
+                reason: format!(
+                    "Compression semantics unproven for {}; refusing lossy re-encode (fail-closed)",
+                    detection.format.as_str()
+                ),
+                command: String::new(),
+                expected_reduction: 0.0,
             })
         }
     }
@@ -426,13 +452,13 @@ fn finalize_conversion_output(
         }
     });
 
-    // Compress mode: goal is a strictly smaller encoded image payload.
+    // Compress mode uses the same pure-media policy as the encoder gate.
     if config.compress() {
         let input_payload = foundation::image::static_payload::measure(input_path)
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
         let output_payload = foundation::image::static_payload::measure(output_path)
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        if output_payload >= input_payload {
+        if !config.size_policy().fits(output_payload, input_payload) {
             cleanup_output_file(output_path, "oversized output in compress mode");
             foundation::copy_on_skip_or_fail(
                 input_path,
@@ -446,9 +472,8 @@ fn finalize_conversion_output(
                 output_path: input_path.display().to_string(),
                 skipped: true,
                 ignored: false,
-                message:
-                    "Skipped: encoded image payload unchanged or larger (compression goal not achieved)"
-                        .to_string(),
+                message: "Skipped: encoded image payload is outside the active size policy"
+                    .to_string(),
                 original_size: detection.file_size,
                 output_size: None,
                 size_reduction: None,
@@ -570,12 +595,10 @@ fn convert_to_jxl(
     builder
         .input(&input_abs)
         .output(&output_abs)
-        .effort(
-            foundation::jxl_effort_policy::direct_encode_effort_for_archive(
-                config.archive_mode(),
-                false,
-            ),
-        )
+        .effort(foundation::jxl_effort_policy::encoder_effort_for_mode(
+            config.ultimate_mode(),
+            config.archive_mode(),
+        ))
         .threads(max_threads);
 
     if *format == DetectedFormat::JPEG {
@@ -627,10 +650,11 @@ fn convert_to_jxl(
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
         let output_payload = foundation::image::static_payload::jxl(output)
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        if output_payload >= input_payload {
+        if !config.size_policy().fits(output_payload, input_payload) {
             cleanup_output_file(output, "non-compressing JXL output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: JXL payload ({output_payload} bytes) not smaller than source payload ({input_payload} bytes)"
+                "Compress mode: JXL payload ({output_payload} bytes) is outside the active \
+                 size policy for source payload ({input_payload} bytes)"
             )));
         }
     }
@@ -700,10 +724,11 @@ fn convert_to_avif(
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
         let output_payload = foundation::image::static_payload::isobmff_mdat(output)
             .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        if output_payload >= input_payload {
+        if !config.size_policy().fits(output_payload, input_payload) {
             cleanup_output_file(output, "non-compressing AVIF output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: AVIF payload ({output_payload} bytes) not smaller than source payload ({input_payload} bytes)"
+                "Compress mode: AVIF payload ({output_payload} bytes) is outside the active \
+                 size policy for source payload ({input_payload} bytes)"
             )));
         }
     }
@@ -815,7 +840,7 @@ mod tests {
         let output = execute_conversion(&detection, &strategy, &ConversionConfig::default())?;
         assert!(output.ignored);
         assert!(!output.skipped);
-        assert!(output.output_path.is_empty());
+        assert_eq!(output.output_path, "");
         Ok(())
     }
 
