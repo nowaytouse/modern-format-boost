@@ -94,7 +94,7 @@ def build_fast_img_command(
     if archive:
         command.append("--archive")
     if shortest_path:
-        command.extend(["--shortest-path", "--auto-import"])
+        command.append("--shortest-path")
     return command
 
 

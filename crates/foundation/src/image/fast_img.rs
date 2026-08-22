@@ -1837,7 +1837,7 @@ where
     let mut imported_assets = proven_assets;
     let mut prepare_import_session = prepare_photos_import_session;
     let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| {
-        run_photos_import_applescript_session("JXL", batch_entries)
+        run_photos_import_applescript_session("fast-img", batch_entries)
     };
     let mut pending_report = import_pending_media_entries_with_checkpoint(
         &mut checkpoint_marker,

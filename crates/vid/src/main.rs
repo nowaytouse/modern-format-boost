@@ -118,8 +118,6 @@ enum Commands {
         #[arg(long = "shortest-path", default_value_t = false)]
         shortest_path: bool,
         #[arg(long, default_value_t = false)]
-        auto_import: bool,
-        #[arg(long, default_value_t = false)]
         apple_compat: bool,
         #[arg(long, value_parser = ["default", "avif"], default_value = "default")]
         strategy: String,
@@ -581,13 +579,9 @@ fn run_fast_gif(
     recursive: bool,
     force: bool,
     shortest_path: bool,
-    auto_import: bool,
     apple_compat: bool,
     strategy: &str,
 ) -> anyhow::Result<()> {
-    if auto_import && !shortest_path {
-        anyhow::bail!("fast-gif --auto-import requires --shortest-path");
-    }
     let effective_strategy = fast_gif_effective_strategy(apple_compat, strategy);
     let delivery_label = fast_gif_delivery_label(effective_strategy);
     let required_tools = fast_gif_required_tools(effective_strategy);
@@ -686,7 +680,7 @@ fn run_fast_gif(
             output_root.display()
         )
     })?;
-    if auto_import {
+    if shortest_path {
         let candidates = fast_gif_photos_import_candidates(&deliveries, &output_root)?;
         if !candidates.is_empty() {
             let library = foundation::image::fast_img::import_media_outputs_with_library_verifier(
@@ -1030,7 +1024,6 @@ fn main() -> anyhow::Result<()> {
             recursive,
             force,
             shortest_path,
-            auto_import,
             apple_compat,
             strategy,
         } => {
@@ -1041,7 +1034,6 @@ fn main() -> anyhow::Result<()> {
                 recursive,
                 force,
                 shortest_path,
-                auto_import,
                 apple_compat,
                 &strategy,
             )?;
@@ -1413,7 +1405,6 @@ mod fast_gif_tests {
             "/media/in_originals",
             "--recursive",
             "--shortest-path",
-            "--auto-import",
         ])?;
 
         let Commands::FastGif {
@@ -1423,7 +1414,6 @@ mod fast_gif_tests {
             recursive,
             force,
             shortest_path,
-            auto_import,
             apple_compat,
             strategy,
         } = parsed.command
@@ -1436,7 +1426,6 @@ mod fast_gif_tests {
         assert!(recursive);
         assert!(!force);
         assert!(shortest_path);
-        assert!(auto_import);
         assert!(!apple_compat);
         assert_eq!(strategy, "default");
         Ok(())
@@ -1451,7 +1440,6 @@ mod fast_gif_tests {
             recursive: true,
             force: false,
             shortest_path: false,
-            auto_import: false,
             apple_compat: false,
             strategy: "default".to_string(),
         };

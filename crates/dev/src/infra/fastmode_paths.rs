@@ -84,9 +84,8 @@ pub fn build_fast_img_command(
     if archive {
         command.push("--archive".to_string());
     }
-    if shortest_path && strategy == Some("avif") {
+    if shortest_path {
         command.push("--shortest-path".to_string());
-        command.push("--auto-import".to_string());
     }
     if extreme_precision && strategy == Some("avif") {
         command.push("--extreme-precision".to_string());
@@ -135,7 +134,6 @@ pub fn build_fast_vid_command(
     ];
     if shortest_path {
         command.push("--shortest-path".to_string());
-        command.push("--auto-import".to_string());
     }
     command.push("--strategy".to_string());
     command.push(
@@ -262,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fastmode_avif_shortest_path_command_auto_imports_after_shared_delivery() {
+    fn test_fastmode_avif_shortest_path_command_uses_single_delivery_flag() {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
@@ -282,7 +280,6 @@ mod tests {
                 "--recursive".to_string(),
                 "--archive".to_string(),
                 "--shortest-path".to_string(),
-                "--auto-import".to_string(),
                 "--strategy".to_string(),
                 "avif".to_string(),
             ]
@@ -290,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fastmode_jxl_shortest_path_request_stays_local() {
+    fn test_fastmode_jxl_shortest_path_reaches_verified_delivery() {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
@@ -301,10 +298,19 @@ mod tests {
             Some("jxl"),
             true,
         );
-        assert!(!command.contains(&"--shortest-path".to_string()));
-        assert!(!command.contains(&"--auto-import".to_string()));
-        assert!(!command.contains(&"--extreme-precision".to_string()));
-        assert!(command.windows(2).any(|pair| pair == ["--strategy", "jxl"]));
+        assert_eq!(
+            command,
+            vec![
+                "/opt/mfb/img".to_string(),
+                "fast-img".to_string(),
+                "/Users/example/Pictures/Album".to_string(),
+                "--recursive".to_string(),
+                "--archive".to_string(),
+                "--shortest-path".to_string(),
+                "--strategy".to_string(),
+                "jxl".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -429,7 +435,7 @@ mod tests {
         );
         assert!(command.contains(&"fast-gif".to_string()));
         assert!(command.contains(&"--shortest-path".to_string()));
-        assert!(command.contains(&"--auto-import".to_string()));
+        assert!(!command.contains(&"--auto-import".to_string()));
         assert_eq!(
             command
                 .windows(2)

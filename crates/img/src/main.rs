@@ -213,11 +213,7 @@ enum Commands {
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Skip per-file interactive confirm before photo library import. Requires --shortest-path. [D10]
-        #[arg(long, default_value_t = false)]
-        auto_import: bool,
-
-        /// Enable verified AVIF Photos import after Gate 1. JXL stays local-only.
+        /// Import verified outputs into Photos after Gate 1, then run custody Gates 2/3.
         #[arg(long = "shortest-path", default_value_t = false)]
         shortest_path: bool,
 
@@ -641,7 +637,6 @@ fn main_inner() -> anyhow::Result<()> {
             delete_source,
             dry_run,
             recursive,
-            auto_import,
             shortest_path,
             archive,
             retry,
@@ -656,7 +651,6 @@ fn main_inner() -> anyhow::Result<()> {
                 delete_source: DeleteSourceFlag(delete_source),
                 dry_run: DryRunFlag(dry_run),
                 recursive: RecursiveFlag(recursive),
-                auto_import: AutoImportFlag(auto_import),
                 shortest_path: ShortestPathFlag(shortest_path),
                 retry: RetryFlag(retry),
                 fresh: FreshFlag(no_resume),
@@ -2307,9 +2301,6 @@ struct DryRunFlag(bool);
 struct RecursiveFlag(bool);
 
 #[derive(Clone, Copy)]
-struct AutoImportFlag(bool);
-
-#[derive(Clone, Copy)]
 struct ShortestPathFlag(bool);
 
 #[derive(Clone, Copy)]
@@ -2331,7 +2322,6 @@ struct FastImgRunOptions<'a> {
     delete_source: DeleteSourceFlag,
     dry_run: DryRunFlag,
     recursive: RecursiveFlag,
-    auto_import: AutoImportFlag,
     shortest_path: ShortestPathFlag,
     retry: RetryFlag,
     fresh: FreshFlag,
@@ -2420,14 +2410,6 @@ fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<
         tracing::warn!(
             target: "fast_img",
             "--delete-source is redundant; fast-img always deletes verified source files"
-        );
-    }
-    if options.auto_import.0 && !options.shortest_path.0 {
-        anyhow::bail!("--auto-import requires --shortest-path");
-    }
-    if options.strategy == "jxl" && options.shortest_path.0 {
-        anyhow::bail!(
-            "JXL shortest-path Photos import is disabled because it can leave Photos/iCloud uploads stuck. No files were changed. Use local reversible JXL encoding without --shortest-path, or use --strategy avif --shortest-path for verified Photos import."
         );
     }
     if options.strategy == "avif"
@@ -2937,7 +2919,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         delete_source: _,
         dry_run,
         recursive,
-        auto_import,
         shortest_path,
         retry,
         fresh,
@@ -3208,7 +3189,6 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         retry_failed_sources_from_cleanup,
         resume_local_delivery_for_shortest_path,
         shortest_path,
-        auto_import,
         reuse_marker_import_proof,
         &modern_lossy_candidates,
         strategy,
@@ -7878,7 +7858,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
     retry_failed_sources_from_cleanup: bool,
     resume_local_delivery_for_shortest_path: bool,
     shortest_path: ShortestPathFlag,
-    _auto_import: AutoImportFlag,
     reuse_marker_import_proof: bool,
     modern_lossy_candidates: &[ModernLossyStaticCandidate],
     strategy: &str,
@@ -8038,7 +8017,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             reconcile_interrupted_import,
         )
         .map_err(|err| {
-            anyhow::anyhow!("fast-img shortest-path AVIF import verifier failed: {err}")
+            anyhow::anyhow!("fast-img shortest-path {ext_name} import verifier failed: {err}")
         })?;
         apply_library_assets_to_marker(marker, &library_handle)
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
@@ -8389,7 +8368,7 @@ mod fast_img_hardening_tests {
         clippy::assertions_on_constants
     )]
     use super::{
-        ArchiveFlag, AutoImportFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
+        ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
         ExpertOptionsFlag, FastImgCleanupCompleteSourceState, FastImgInputPlan,
         FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, FreshFlag, RecursiveFlag,
         RetryFlag, ShortestPathFlag, command_requires_database,
@@ -9009,7 +8988,6 @@ mod fast_img_hardening_tests {
             delete_source: DeleteSourceFlag(false),
             dry_run: DryRunFlag(true),
             recursive: RecursiveFlag(true),
-            auto_import: AutoImportFlag(false),
             shortest_path: ShortestPathFlag(false),
             retry: RetryFlag(false),
             fresh: FreshFlag(false),
@@ -9174,7 +9152,6 @@ mod fast_img_hardening_tests {
             delete_source: DeleteSourceFlag(false),
             dry_run: DryRunFlag(true),
             recursive: RecursiveFlag(true),
-            auto_import: AutoImportFlag(false),
             shortest_path: ShortestPathFlag(false),
             retry: RetryFlag(false),
             fresh: FreshFlag(false),
@@ -10309,6 +10286,27 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn jxl_shortest_path_is_a_valid_verified_delivery_mode() {
+        let options = FastImgRunOptions {
+            input: Path::new("/tmp/media"),
+            output_dir: None,
+            delete_source: DeleteSourceFlag(false),
+            dry_run: DryRunFlag(true),
+            recursive: RecursiveFlag(true),
+            shortest_path: ShortestPathFlag(true),
+            retry: RetryFlag(false),
+            fresh: FreshFlag(false),
+            archive: false,
+            allow_expert_options: false,
+            strategy: "jxl",
+            extreme_precision: false,
+        };
+
+        super::validate_fast_img_options(&options)
+            .expect("JXL shortest-path must reach the verified Photos delivery pipeline");
+    }
+
+    #[test]
     fn unfinished_fast_img_marker_requires_explicit_resume_decision() {
         let mut marker = WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("wc"), 1);
         assert!(fast_img_requires_resume_decision(
@@ -10378,7 +10376,6 @@ mod fast_img_hardening_tests {
             delete_source: false,
             dry_run: true,
             recursive: true,
-            auto_import: false,
             shortest_path: false,
             archive: false,
             retry: false,
@@ -11803,7 +11800,6 @@ mod fast_img_hardening_tests {
             delete_source: DeleteSourceFlag(false),
             dry_run: DryRunFlag(false),
             recursive: RecursiveFlag(true),
-            auto_import: AutoImportFlag(false),
             shortest_path: ShortestPathFlag(false),
             retry: RetryFlag(false),
             fresh: FreshFlag(false),

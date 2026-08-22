@@ -150,7 +150,9 @@ type ResumeAction = "resume" | "fresh" | "cancel";
 
 const shouldUseShortestPath = () =>
   mfbToggles.shortestPath &&
-  (outputMode.value === "fast_img_avif" || outputMode.value === "fast_vid");
+  (outputMode.value === "fast_img" ||
+    outputMode.value === "fast_img_avif" ||
+    outputMode.value === "fast_vid");
 
 const currentProcessorRequest = (isResume: boolean, isFresh = false) => {
   const targetOutputMode =

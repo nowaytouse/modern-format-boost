@@ -2362,16 +2362,6 @@ pub const fn gate3_complete_or_later(stage: &FastImgStageName) -> bool {
 }
 
 #[must_use]
-pub const fn confirm_scan_required(_stage: &FastImgStageName) -> bool {
-    false
-}
-
-#[must_use]
-pub const fn confirm_import_required(stage: &FastImgStageName, auto_import: bool) -> bool {
-    !auto_import && !import_complete_or_later(stage)
-}
-
-#[must_use]
 pub const fn resume_action(stage: &FastImgStageName) -> &'static str {
     match stage {
         FastImgStageName::ScanComplete => "prepare_output_then_encode",
@@ -2767,8 +2757,7 @@ mod fast_gate_policy_tests {
 #[cfg(test)]
 mod rev2_policy_tests {
     use super::{
-        FastImgStageName, confirm_import_required, confirm_scan_required,
-        deep_scan_complete_or_later, dir_checksum, encode_complete_or_later,
+        FastImgStageName, deep_scan_complete_or_later, dir_checksum, encode_complete_or_later,
         gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
         import_complete_or_later, output_prepared_or_later, prepare_jxl_output_dir, resume_action,
         retry_resume_stage, stage_requires_retry,
@@ -2829,19 +2818,6 @@ mod rev2_policy_tests {
             retry_resume_stage(&FastImgStageName::Gate1Failed, false),
             FastImgStageName::Gate1Failed
         );
-    }
-
-    #[test]
-    fn scan_delete_notice_is_non_interactive_but_import_confirm_remains() {
-        assert!(!confirm_scan_required(&FastImgStageName::ScanComplete));
-        assert!(confirm_import_required(
-            &FastImgStageName::Gate1Passed,
-            false
-        ));
-        assert!(!confirm_import_required(
-            &FastImgStageName::Gate1Passed,
-            true
-        ));
     }
 
     #[test]

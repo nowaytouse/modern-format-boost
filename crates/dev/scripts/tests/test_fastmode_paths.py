@@ -106,7 +106,7 @@ class TestFastModePaths(unittest.TestCase):
             ],
         )
 
-    def test_fastmode_shortest_path_command_auto_imports_after_shared_delivery(self):
+    def test_fastmode_shortest_path_command_uses_single_delivery_flag(self):
         command = fastmode_paths.build_fast_img_command(
             Path("/opt/mfb/img"),
             Path("/Users/example/Pictures/Album"),
@@ -123,9 +123,9 @@ class TestFastModePaths(unittest.TestCase):
                 "--recursive",
                 "--archive",
                 "--shortest-path",
-                "--auto-import",
             ],
         )
+        self.assertNotIn("--auto-import", command)
 
     def test_fastmode_retry_flag_is_explicit(self):
         command = fastmode_paths.build_fast_img_command(

@@ -537,8 +537,9 @@ working copy. State handling is explicit:
   11 to reversible JPEG→JXL encoding.
 - `img run --apple-compat`: enabled by default; selects Apple-safe JXL box
   handling and Apple-aware metadata policy. `--no-apple-compat` disables it.
-- `img fast-img --shortest-path`: only valid for `--strategy avif`; adds
-  verified Photos import after local gates. JXL shortest-path import is rejected.
+- `img fast-img --shortest-path`: for both JXL and AVIF strategies, runs local
+  verification, verified Photos import, UUID/hash custody Gates 2/3, and only
+  then permits source/output cleanup. No second import flag is required.
 - `img fast-img --retry`: resumes only after the stored source identity and
   live delivery state match. `--no-resume` starts an isolated task.
 - `--allow-size-tolerance`: relaxes the default strict output-size gate.

@@ -169,11 +169,13 @@ All notable changes to this project will be documented in this file.
   that need metadata cleaning are decoded and re-encoded without source
   Exif/XMP/ICC/gain-map data. Damaged supported media remains explicitly
   counted and retained instead of disappearing during static-container scan.
-- **Photos Import Safety**: FastImg JXL shortest-path import is rejected before
-  writes. `icloud_import` now performs a no-side-effect preflight that detects
-  JXL by extension and container/codestream signature before it can rename a
-  directory or invoke Photos; verified AVIF output uses the recorded output
-  paths for generic library-side verification. Normal-mode delivery isolates
+- **Photos Import Safety**: FastImg JXL and AVIF shortest-path delivery now use
+  the single `--shortest-path` flag and the shared checkpointed Photos importer;
+  each verified asset is bound to its UUID/hash proof before cleanup.
+  `icloud_import` performs a no-side-effect preflight that detects JXL by
+  extension and container/codestream signature before it can rename a directory
+  or invoke Photos; verified output uses the recorded output paths for generic
+  library-side verification. Normal-mode delivery isolates
   media in one-file transactions, preserves verified successes across
   controllable rejections, and uses filtered Photos folder/album lookup instead
   of repeatedly enumerating a large library; debug mode remains fail-fast.
@@ -784,7 +786,7 @@ evidence should be stronger than the linear sum.
 - Fixed fastmode aborts on malformed JPEG EXIF `Orientation=0`: the shared orientation verifier now treats `0` as an invalid/no-op orientation for visual proof (`orientation=1`), while other out-of-range values still fail closed.
 - Hardened JPEG→JXL Type-B reconstruction fallback: `cjxl --lossless_jpeg=1 --allow_jpeg_reconstruction=0`, sanitized-tail retries, and explicitly opted-in ImageMagick repair paths now use decoded pixel-equivalence proof instead of incorrectly requiring byte-identical JPEG roundtrip reconstruction.
 - Hardened JPEG→JXL Type-A failure policy: non-Type-B `cjxl --lossless_jpeg=1` failures now fail closed by default instead of silently falling through to ImageMagick pixel re-encode; callers must explicitly opt in with `ALLOW_JPEG_PIXEL_REENCODE_FALLBACK`.
-- Added drag-and-drop Fast Image Mode: the image-only menu launches a Fast Mode path choice where Shortest Path runs Rust `fast-img --shortest-path --auto-import` and Normal Mode keeps local adjacent JXL-only delivery.
+- Added drag-and-drop Fast Image Mode: the image-only menu launches a Fast Mode path choice where `--shortest-path` alone performs verified Photos delivery and Normal Mode keeps local adjacent JXL-only delivery.
 - Added fastmode post-run verification UI: drag-and-drop fastmode now invokes `verify.py --fast-img-delivery --print-integrity-summary` after a successful Rust run, then falls through to the normal final summary UI instead of exiting immediately.
 - Fixed fastmode wrapper completion: a successful Rust `fast-img` run now skips the normal img/vid pipeline, requires `verify.py` to produce a parseable CLEAN/WARNINGS result, and exits non-zero after the final summary UI when delivery verification reports integrity issues.
 - Fixed shortest-path reruns after local fastmode delivery: `cleanup_complete` markers without Gate2/Gate3 proof now resume from verified local JXL output into Photos import instead of returning early, while missing JXL delivery files remain fail-closed with an explicit restore action.
