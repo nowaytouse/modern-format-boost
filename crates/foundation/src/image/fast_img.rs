@@ -274,11 +274,13 @@ pub fn verify_pixel_equivalence_integrity(
 /// Verify a final delivered JXL is safe to use as the sole retained
 /// JPEG-derived asset.
 ///
-/// The final JXL may no longer decode back to a byte-identical JPEG after
-/// metadata preservation and Orientation tag cleanup. This check therefore
-/// proves the mechanically verifiable post-delivery state: current source hash,
-/// current output hash, non-empty output, decoder readability,
-/// orientation-correct pixels, and no residual output Orientation tag.
+/// The final JXL first rechecks byte-identical JPEG reconstruction after
+/// metadata preservation. When that stronger proof still holds, the pixel
+/// audit verifies orientation/structure without treating cross-decoder channel
+/// rounding as media damage. Outputs without reconstruction data retain the
+/// strict pixel-equivalence gate. Both paths also verify current hashes and
+/// decoder readability. A byte-reconstructible JXL may retain the source JPEG
+/// Orientation required by `jbrd`; other JXL outputs must not retain one.
 ///
 /// # Errors
 /// Returns an error if any proof step fails.
@@ -306,8 +308,8 @@ pub fn verify_final_avif_delivery_integrity(
 /// retained JPEG-derived asset.
 ///
 /// Supports JXL, AVIF, and other modern formats. Checks source/output hash,
-/// non-empty output, decoder readability, orientation-correct pixels, and
-/// (for JXL) no residual Orientation tag.
+/// non-empty output, decoder readability, and orientation-correct pixels.
+/// Non-reconstructible JXL must additionally have no residual Orientation tag.
 ///
 /// # Errors
 /// Returns an error if any proof step fails.
@@ -344,11 +346,34 @@ pub fn verify_final_delivery_integrity(
         )));
     }
 
-    let tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
+    let pixel_tolerance = pixel_equivalence_diff_tolerance_for_format(format).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "final-integrity: missing {format:?} orientation policy"
         ))
     })?;
+    let jxl_byte_reconstructible = if format == crate::image::format_detect::FormatKind::Jxl {
+        match verify_jxl_roundtrip_integrity(source_jpeg, output) {
+            Ok(IntegrityResult::RoundtripMatch { .. }) => true,
+            Ok(_) => false,
+            Err(error) => {
+                tracing::debug!(
+                    target: "fast_img_integrity",
+                    source = %source_jpeg.display(),
+                    output = %output.display(),
+                    error = %error,
+                    "final JXL is not byte-reconstructible; retaining strict pixel-equivalence proof"
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let tolerance = if jxl_byte_reconstructible {
+        crate::image::orientation::DiffTolerance::JxlOrientation
+    } else {
+        pixel_tolerance
+    };
     match verify_orientation_pixel_diff(source_jpeg, output, format, tolerance)? {
         PixelDiffResult::Match => {}
         PixelDiffResult::SkippedToolAbsent { tool } => {
@@ -366,10 +391,10 @@ pub fn verify_final_delivery_integrity(
         }
     }
 
-    // Residual orientation-tag check is JXL-specific (AVIF handles orientation
-    // via container metadata, not EXIF Orientation, so the check is a no-op and
-    // would error when djxl/exiftool disagree on AVIF container structure).
-    if format == crate::image::format_detect::FormatKind::Jxl {
+    // Exact JPEG reconstruction includes the source Exif Orientation. Removing
+    // it invalidates jbrd; the codestream Orientation remains authoritative.
+    // Pixel-encoded JXL has no such exception and must stay normalized.
+    if format == crate::image::format_detect::FormatKind::Jxl && !jxl_byte_reconstructible {
         ensure_no_residual_orientation_tag(output)?;
     }
 

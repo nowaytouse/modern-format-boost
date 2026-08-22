@@ -1642,7 +1642,7 @@ pub fn commit_temp_to_output_with_metadata(
     force: bool,
     original: Option<&Path>,
 ) -> std::io::Result<bool> {
-    commit_temp_to_output_with_metadata_inner(temp, output, force, original, false)
+    commit_temp_to_output_with_metadata_inner(temp, output, force, original, false, false)
 }
 
 /// Same as [`commit_temp_to_output_with_metadata`] but skips the pixel-diff
@@ -1660,7 +1660,45 @@ pub fn commit_temp_to_output_with_metadata_pixel_already_verified(
     force: bool,
     original: Option<&Path>,
 ) -> std::io::Result<bool> {
-    commit_temp_to_output_with_metadata_inner(temp, output, force, original, true)
+    commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, false)
+}
+
+/// Commit a JPEG-reconstructible JXL without rewriting its codec-carried Exif.
+///
+/// libjxl 0.12's double-orientation fix applies to JXL input decoded to pixels;
+/// it does not remove JPEG Exif stored for bitstream reconstruction.
+/// `cjxl --lossless_jpeg=1` stores the original JPEG metadata as part of the
+/// reconstruction contract. Filesystem metadata is still preserved, while the
+/// embedded payload remains untouched so `djxl --reconstruct_jpeg` stays exact.
+///
+/// # Errors
+/// Returns an `io::Result` if commit or filesystem metadata preservation fails.
+pub fn commit_reconstructible_jxl_to_output_with_metadata(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+) -> std::io::Result<bool> {
+    let source = original.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "JPEG-reconstructible JXL commit requires its source JPEG",
+        )
+    })?;
+    let committed =
+        commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)?;
+    if committed
+        && let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+    {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "JPEG reconstruction invalidated during metadata commit",
+            output,
+        );
+        return Err(std::io::Error::other(format!(
+            "JPEG reconstruction proof failed after metadata commit: {error}"
+        )));
+    }
+    Ok(committed)
 }
 
 fn commit_temp_to_output_with_metadata_inner(
@@ -1669,6 +1707,7 @@ fn commit_temp_to_output_with_metadata_inner(
     force: bool,
     original: Option<&Path>,
     pixel_audit_already_done: bool,
+    preserve_codec_embedded_metadata: bool,
 ) -> std::io::Result<bool> {
     validate_temp_output_commit_paths(temp, output)?;
 
@@ -1724,7 +1763,12 @@ fn commit_temp_to_output_with_metadata_inner(
         // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
         // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes
         // timestamps
-        match crate::metadata::preserve_for_delivery(src, output) {
+        let metadata_result = if preserve_codec_embedded_metadata {
+            crate::metadata::preserve_filesystem_for_delivery(src, output)
+        } else {
+            crate::metadata::preserve_for_delivery(src, output)
+        };
+        match metadata_result {
             Ok(report)
                 if matches!(
                     report.exif,

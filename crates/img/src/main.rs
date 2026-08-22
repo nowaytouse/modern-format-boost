@@ -20,9 +20,6 @@ use foundation::fast_img::{
     verify_final_avif_delivery_integrity, verify_final_jxl_delivery_integrity,
 };
 use foundation::image::format_detect::FormatKind;
-use foundation::image::orientation::{
-    PixelDiffResult, pixel_equivalence_diff_tolerance_for_format, verify_orientation_pixel_diff,
-};
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
     Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
@@ -4563,38 +4560,20 @@ fn fast_img_run_encode_job_inner(
     })?;
 
     let is_avif_output = strategy == "avif";
-    let orientation_tolerance = if is_avif_output {
-        pixel_equivalence_diff_tolerance_for_format(FormatKind::Avif).ok_or_else(|| {
-            anyhow::anyhow!("missing shared orientation tolerance for AVIF output")
-        })?
-    } else {
-        pixel_equivalence_diff_tolerance_for_format(FormatKind::Jxl)
-            .ok_or_else(|| anyhow::anyhow!("missing shared orientation tolerance for JXL output"))?
-    };
-    let output_format = if is_avif_output {
-        FormatKind::Avif
-    } else {
-        FormatKind::Jxl
-    };
-    match verify_orientation_pixel_diff(
-        &job.source,
-        out_path,
-        output_format,
-        orientation_tolerance,
-    )? {
-        PixelDiffResult::Match => {}
-        PixelDiffResult::SkippedToolAbsent { tool } => {
-            anyhow::bail!(
-                "orientation pixel diff unavailable for {}: missing {tool}",
+    if is_avif_output {
+        verify_final_avif_delivery_integrity(&job.source, out_path).map_err(|error| {
+            anyhow::anyhow!(
+                "final AVIF delivery verification failed for {}: {error}",
                 out_path.display()
-            );
-        }
-        PixelDiffResult::Mismatch { max_delta, channel } => {
-            anyhow::bail!(
-                "orientation pixel diff failed for {}: max_delta={max_delta} channel={channel}",
+            )
+        })?;
+    } else {
+        verify_final_jxl_delivery_integrity(&job.source, out_path).map_err(|error| {
+            anyhow::anyhow!(
+                "final JXL delivery verification failed for {}: {error}",
                 out_path.display()
-            );
-        }
+            )
+        })?;
     }
 
     let src_hash = match fast_img_verify_source_hash_unchanged(&job.source, &job.src_hash) {

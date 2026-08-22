@@ -133,6 +133,7 @@ fn commit_with_size_check(
     format_label: &str,
     extra_info: Option<&str>,
     pixel_audit: PixelAudit,
+    preserve_codec_embedded_metadata: bool,
 ) -> Result<CommitOutcome> {
     let input_label = foundation::media_conversion_gate::path_file_name_for_log(input);
 
@@ -146,7 +147,14 @@ fn commit_with_size_check(
         extra_info
     ));
 
-    let committed = if pixel_audit.already_verified() {
+    let committed = if preserve_codec_embedded_metadata {
+        foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
+            temp_output,
+            output,
+            options.force(),
+            Some(input),
+        )?
+    } else if pixel_audit.already_verified() {
         foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
             temp_output,
             output,
@@ -166,7 +174,6 @@ fn commit_with_size_check(
             input, output,
         )?));
     }
-
     if options.compress() || options.require_output_delivery() {
         let payload_sizes =
             foundation::image::static_payload::measure(input).and_then(|input_payload| {
@@ -240,6 +247,7 @@ fn finalize_with_size_check(
         format_label,
         extra_info,
         PixelAudit::RequiredAtCommit,
+        false,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -258,6 +266,7 @@ fn finalize_with_verified_pixels_and_size_check(
     options: &ConvertOptions,
     format_label: &str,
     extra_info: Option<&str>,
+    preserve_codec_embedded_metadata: bool,
 ) -> Result<TaskResult> {
     match commit_with_size_check(
         input,
@@ -269,6 +278,7 @@ fn finalize_with_verified_pixels_and_size_check(
         format_label,
         extra_info,
         PixelAudit::VerifiedByCaller,
+        preserve_codec_embedded_metadata,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -298,6 +308,7 @@ fn finalize_with_exact_metadata_and_size_check(
         format_label,
         extra_info,
         PixelAudit::VerifiedByCaller,
+        false,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -338,6 +349,7 @@ fn finalize_with_sidecars_and_size_check(
         format_label,
         extra_info,
         PixelAudit::RequiredAtCommit,
+        false,
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
@@ -2319,6 +2331,7 @@ fn commit_jpeg_to_jxl_success(
         &final_options,
         label,
         None,
+        proof == JpegTranscodeProof::BitstreamReconstruction,
     )
 }
 
@@ -3389,6 +3402,7 @@ pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
                 options,
                 LABEL_AVIF,
                 None,
+                false,
             )
         }
         Ok(output_cmd) => {
@@ -4249,6 +4263,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
                 options,
                 "Lossless AVIF",
                 None,
+                false,
             )
         }
         Ok(output_cmd) => {
@@ -6192,6 +6207,97 @@ mod tests {
             foundation::image::format_detect::detect_true_format(&output)
                 .unwrap_or_else(|err| panic!("format detect failed: {err}")),
             foundation::image::format_detect::FormatKind::Jxl
+        );
+    }
+
+    #[test]
+    fn jpeg_reconstruction_final_delivery_preserves_orientation_and_bitstream() {
+        for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
+            if !test_tool_available(tool) {
+                eprintln!("Skipping JPEG reconstruction delivery test: {tool} is unavailable");
+                return;
+            }
+        }
+
+        let tmp = tempdir().expect("tempdir");
+        let input = tmp.path().join("decoder_drift.jpg");
+        let magick = foundation::common_utils::resolve_tool_path("magick")
+            .expect("magick must pass the shared runtime health check for this test");
+        let generate_fixture = |seed: &str| {
+            Command::new(&magick)
+                .arg("-seed")
+                .arg(seed)
+                .arg("-size")
+                .arg("512x384")
+                .arg("plasma:fractal")
+                .arg("-colorspace")
+                .arg("sRGB")
+                .arg("-sampling-factor")
+                .arg("1x1")
+                .arg("-quality")
+                .arg("55")
+                .arg(&input)
+                .status()
+                .expect("generate decoder-drift JPEG fixture")
+        };
+        assert!(
+            generate_fixture("42").success(),
+            "failed to generate JPEG fixture"
+        );
+        let exiftool = foundation::common_utils::resolve_tool_path("exiftool")
+            .expect("exiftool must pass the shared runtime health check for this test");
+        assert!(
+            Command::new(&exiftool)
+                .arg("-overwrite_original")
+                .arg("-Orientation#=6")
+                .arg(&input)
+                .status()
+                .expect("write source orientation")
+                .success(),
+            "failed to write source orientation"
+        );
+
+        let mut options = ConvertOptions::default();
+        options.output_dir = Some(tmp.path().to_path_buf());
+        options.flags.set(ConvertFlags::FORCE, true);
+        options
+            .flags
+            .set(ConvertFlags::REQUIRE_OUTPUT_DELIVERY, true);
+        options
+            .flags
+            .set(ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION, true);
+        options.child_threads = 1;
+
+        let result = convert_jpeg_to_jxl(&input, &options, None).expect("conversion succeeds");
+        let output = result.output_path.expect("conversion output path");
+        foundation::fast_img::verify_jxl_roundtrip_integrity(&input, Path::new(&output))
+            .expect("finalized JXL must still reconstruct the source JPEG exactly");
+        foundation::fast_img::verify_final_jxl_delivery_integrity(&input, Path::new(&output))
+            .expect("byte-reconstructible JXL must pass final delivery verification");
+        let output_orientation = Command::new(&exiftool)
+            .arg("-s3")
+            .arg("-Orientation#")
+            .arg(&output)
+            .output()
+            .expect("read finalized JXL orientation");
+        assert!(output_orientation.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output_orientation.stdout).trim(),
+            "6",
+            "reversible JXL must retain the source Orientation required by JPEG reconstruction"
+        );
+
+        assert!(
+            generate_fixture("43").success(),
+            "failed to generate unrelated JPEG fixture"
+        );
+        assert!(
+            foundation::fast_img::verify_final_jxl_delivery_integrity(
+                &input,
+                Path::new(&output)
+            )
+            .is_err(),
+            "an unrelated source must not inherit the byte-reconstruction proof"
         );
     }
 

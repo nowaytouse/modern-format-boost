@@ -33,6 +33,7 @@ pub use delivery_policy::{
     MetadataDeliveryReport, MetadataLayerOutcome, apply_file_timestamps_for_delivery,
     preserve_for_delivery,
 };
+pub(crate) use delivery_policy::preserve_filesystem_for_delivery;
 pub use exif::preserve_internal;
 pub use output_audit::{
     MetadataOutputPolicy, OutputMetadataAudit, verify_output_embedded_metadata,
@@ -1096,6 +1097,7 @@ pub(super) fn preserve_pro_for_delivery(
     src: &Path,
     dst: &Path,
     report: &mut MetadataDeliveryReport,
+    copy_internal_metadata: bool,
 ) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -1107,7 +1109,9 @@ pub(super) fn preserve_pro_for_delivery(
             );
             record_xattr_delivery_result(copy_preservable_xattrs(src, dst), report);
         }
-        record_exif_delivery_result(exif::preserve_internal(src, dst), report);
+        if copy_internal_metadata {
+            record_exif_delivery_result(exif::preserve_internal(src, dst), report);
+        }
         record_xattr_delivery_result(network::preserve_network_metadata(src, dst), report);
         record_xattr_delivery_result(copy_supplemental_xattrs(src, dst), report);
         record_xattr_delivery_result(
@@ -1144,7 +1148,9 @@ pub(super) fn preserve_pro_for_delivery(
 
     #[cfg(not(target_os = "macos"))]
     {
-        record_exif_delivery_result(exif::preserve_internal(src, dst), report);
+        if copy_internal_metadata {
+            record_exif_delivery_result(exif::preserve_internal(src, dst), report);
+        }
         #[cfg(target_os = "linux")]
         if let Err(e) = linux::preserve_linux_attributes(src, dst) {
             crate::media_conversion_gate::delivery_metadata_batch_audit(

@@ -94,9 +94,10 @@ pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<Di
 /// Strip the residual `Orientation` EXIF tag from an output file (§Orientation,
 /// all formats).
 ///
-/// Root cause: `cjxl` re-orients pixels correctly but retains the EXIF tag.
-/// Non-compliant viewers (Win Explorer, Win Photos) re-apply it →
-/// double-rotate.
+/// Pixel-encoded outputs may retain or regain the EXIF tag through metadata
+/// copying. Non-compliant viewers can re-apply it and double-rotate. Do not use
+/// this mutation on JPEG-reconstructible JXL: its original Exif is part of the
+/// `jbrd` contract.
 ///
 /// # Errors
 /// Returns an error if exiftool is unavailable or exits non-zero.

@@ -107,6 +107,27 @@ pub(in crate::metadata) fn is_metadata_delivery_soft_error(err: &io::Error) -> b
 /// or unreadable `src` yields [`MetadataDeliveryReport`] with skipped layers
 /// and `Ok`.
 pub fn preserve_for_delivery(src: &Path, dst: &Path) -> io::Result<MetadataDeliveryReport> {
+    preserve_for_delivery_inner(src, dst, true)
+}
+
+/// Preserve filesystem metadata while leaving codec-carried embedded metadata
+/// untouched.
+///
+/// JPEG-reconstructible JXL already contains the source JPEG metadata. Rewriting
+/// its Exif box invalidates the `jbrd` proof, so that delivery path copies only
+/// attributes, permissions, and timestamps.
+pub(crate) fn preserve_filesystem_for_delivery(
+    src: &Path,
+    dst: &Path,
+) -> io::Result<MetadataDeliveryReport> {
+    preserve_for_delivery_inner(src, dst, false)
+}
+
+fn preserve_for_delivery_inner(
+    src: &Path,
+    dst: &Path,
+    copy_internal_metadata: bool,
+) -> io::Result<MetadataDeliveryReport> {
     let mut report = MetadataDeliveryReport::default();
 
     match std::fs::metadata(src) {
@@ -134,7 +155,7 @@ pub fn preserve_for_delivery(src: &Path, dst: &Path) -> io::Result<MetadataDeliv
         )
     })?;
 
-    super::preserve_pro_for_delivery(src, dst, &mut report)?;
+    super::preserve_pro_for_delivery(src, dst, &mut report, copy_internal_metadata)?;
     Ok(report)
 }
 

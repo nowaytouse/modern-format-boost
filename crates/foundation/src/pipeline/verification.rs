@@ -108,7 +108,7 @@ impl VerificationGate for Gate1Local {
             check_blake3_logged_outputs(ctx),
             check_metadata_policy(ctx),
             check_nonzero_size(ctx.expected_count, &jxl_files),
-            check_orientation_absent(&jxl_files),
+            check_orientation_policy(ctx, &jxl_files),
             check_decode_probe(&jxl_files),
         ];
         gate_result(checks)
@@ -664,32 +664,92 @@ fn check_nonzero_size(expected: usize, files: &[PathBuf]) -> CheckDetail {
     )
 }
 
-fn check_orientation_absent(files: &[PathBuf]) -> CheckDetail {
+fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail {
     if !is_command_available("exiftool") {
         return detail(
             "orient",
             false,
-            "exiftool available and no Orientation tags".to_string(),
+            "exiftool available and no unsafe Orientation tags".to_string(),
             "exiftool unavailable".to_string(),
             files.to_vec(),
         );
     }
 
-    check_orientation_absent_with_probe(files, orientation_tag_present)
+    check_orientation_policy_with_probes(
+        ctx,
+        files,
+        orientation_tag_present,
+        |source, output| {
+            if crate::image::format_detect::detect_true_format(output)
+                .map_err(|err| std::io::Error::other(err.to_string()))?
+                != crate::image::format_detect::FormatKind::Jxl
+            {
+                return Ok(false);
+            }
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+                .map(|result| {
+                    matches!(
+                        result,
+                        crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
+                    )
+                })
+                .map_err(|err| std::io::Error::other(err.to_string()))
+        },
+    )
 }
 
-fn check_orientation_absent_with_probe<F>(files: &[PathBuf], mut probe: F) -> CheckDetail
+fn check_orientation_policy_with_probes<F, R>(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    mut orientation_probe: F,
+    mut reconstruction_probe: R,
+) -> CheckDetail
 where
     F: FnMut(&Path) -> std::io::Result<bool>,
+    R: FnMut(&Path, &Path) -> std::io::Result<bool>,
 {
+    let source_by_output = ctx
+        .blake3_log
+        .iter()
+        .map(|(rel_path, entry)| {
+            let out_rel = entry.out_rel.as_deref().map_or_else(
+                || PathBuf::from(rel_path).with_extension("JXL"),
+                PathBuf::from,
+            );
+            (
+                ctx.working_copy.join(out_rel),
+                ctx.src_dir.join(rel_path),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut failures = Vec::new();
     let mut tagged_count = 0usize;
+    let mut reconstructible_count = 0usize;
     let mut probe_errors = Vec::new();
     for path in files {
-        match probe(path) {
+        match orientation_probe(path) {
             Ok(true) => {
                 tagged_count += 1;
-                failures.push(path.clone());
+                let Some(source) = source_by_output.get(path) else {
+                    failures.push(path.clone());
+                    probe_errors.push(format!("{}: source mapping absent", path.display()));
+                    continue;
+                };
+                match reconstruction_probe(source, path) {
+                    Ok(true) => reconstructible_count += 1,
+                    Ok(false) => failures.push(path.clone()),
+                    Err(err) => {
+                        crate::media_conversion_gate::delivery_pipeline_path_audit(
+                            "fast_img_gate1_orientation_reconstruction",
+                            path,
+                            format!(
+                                "Orientation tag lacks exact JPEG reconstruction proof: {err}"
+                            ),
+                        );
+                        probe_errors.push(format!("{}: {err}", path.display()));
+                        failures.push(path.clone());
+                    }
+                }
             }
             Ok(false) => {}
             Err(err) => {
@@ -705,17 +765,17 @@ where
     }
     let actual = if let Some(first_error) = probe_errors.first() {
         format!(
-            "{tagged_count} files with Orientation tag; {} orientation probe errors; first \
-             {first_error}",
+            "{tagged_count} tagged, {reconstructible_count} exact-reconstructible; {} orientation \
+             proof errors; first {first_error}",
             probe_errors.len()
         )
     } else {
-        format!("{tagged_count} files with Orientation tag")
+        format!("{tagged_count} tagged, {reconstructible_count} exact-reconstructible")
     };
     detail(
         "orient",
         failures.is_empty(),
-        "no Orientation tags".to_string(),
+        "Orientation absent unless required by exact JPEG reconstruction".to_string(),
         actual,
         failures,
     )
@@ -1159,10 +1219,21 @@ mod tests {
     #[test]
     fn orientation_check_preserves_probe_error_detail() {
         let files = vec![PathBuf::from("/tmp/mfb-orientation-probe-error.JXL")];
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: Blake3Log::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+        };
 
-        let check = super::check_orientation_absent_with_probe(&files, |_| {
-            Err(std::io::Error::other("synthetic exiftool failure"))
-        });
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &files,
+            |_| Err(std::io::Error::other("synthetic exiftool failure")),
+            |_, _| Ok(false),
+        );
 
         assert!(!check.passed);
         assert_eq!(check.affected_files, files);
@@ -1171,6 +1242,53 @@ mod tests {
             "probe failure must be preserved in check detail: {}",
             check.actual
         );
+    }
+
+    #[test]
+    fn orientation_check_accepts_tag_only_with_exact_reconstruction() {
+        let output = PathBuf::from("/tmp/oriented.JXL");
+        let source = PathBuf::from("/tmp/oriented.jpg");
+        let files = vec![output.clone()];
+        let mut log = Blake3Log::new();
+        log.insert(
+            "oriented.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("oriented.JXL".to_string()),
+                ..Blake3Entry::default()
+            },
+        );
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: log,
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+        };
+
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &files,
+            |_| Ok(true),
+            |actual_source, actual_output| {
+                assert_eq!(actual_source, source);
+                assert_eq!(actual_output, output);
+                Ok(true)
+            },
+        );
+
+        assert!(check.passed);
+        assert!(check.affected_files.is_empty());
+        assert!(check.actual.contains("1 exact-reconstructible"));
+
+        let rejected = super::check_orientation_policy_with_probes(
+            &ctx,
+            &files,
+            |_| Ok(true),
+            |_, _| Ok(false),
+        );
+        assert!(!rejected.passed);
+        assert_eq!(rejected.affected_files, files);
     }
 
     #[test]
