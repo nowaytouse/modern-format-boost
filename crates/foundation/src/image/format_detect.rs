@@ -296,12 +296,21 @@ pub const fn forensic_tool_for_format(format: FormatKind) -> Option<ForensicForm
             args_before_path: &["-q"],
             purpose: "PNG chunk/CRC check",
         }),
-        FormatKind::Heic | FormatKind::Heif => Some(ForensicFormatTool {
-            format,
-            tool: crate::constants::TOOL_HEIF_INFO,
-            args_before_path: &[],
-            purpose: "HEIF box parser check",
-        }),
+        FormatKind::Heic | FormatKind::Heif => {
+            #[cfg(feature = "v1_21")]
+            {
+                None
+            }
+            #[cfg(not(feature = "v1_21"))]
+            {
+                Some(ForensicFormatTool {
+                    format,
+                    tool: crate::constants::TOOL_HEIF_INFO,
+                    args_before_path: &[],
+                    purpose: "HEIF box parser check",
+                })
+            }
+        }
         FormatKind::Avif => Some(ForensicFormatTool {
             format,
             tool: crate::constants::TOOL_AVIFDEC,
@@ -380,6 +389,10 @@ pub fn validate_format_forensic(path: &Path, expected: FormatKind) -> Result<For
             path.display()
         )));
     }
+    #[cfg(feature = "v1_21")]
+    if matches!(expected, FormatKind::Heic | FormatKind::Heif) {
+        return validate_heif_with_project_limits(path, expected);
+    }
     let Some(policy) = forensic_tool_for_format(expected) else {
         return Err(forensic_validation_error(format!(
             "forensic validation has no policy for {expected:?}: {}",
@@ -394,6 +407,55 @@ pub fn validate_format_forensic(path: &Path, expected: FormatKind) -> Result<For
         ))
     })?;
     validate_format_with_tool(path, policy, &tool)
+}
+
+#[cfg(feature = "v1_21")]
+fn validate_heif_with_project_limits(
+    path: &Path,
+    format: FormatKind,
+) -> Result<ForensicFormatCheck> {
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+    )
+    .map_err(|error| {
+        forensic_validation_error(format!(
+            "HEIF forensic size validation failed for {}: {error}",
+            path.display()
+        ))
+    })?;
+    let data = std::fs::read(path).map_err(|error| {
+        forensic_validation_error(format!(
+            "HEIF forensic read failed for {}: {error}",
+            path.display()
+        ))
+    })?;
+    let ctx = crate::image_heic_analysis::read_heif_context_with_project_limits(&data).map_err(
+        |error| {
+            forensic_validation_error(format!(
+                "HEIF forensic parse failed for {}: {error}",
+                path.display()
+            ))
+        },
+    )?;
+    ctx.primary_image_handle().map_err(|error| {
+        forensic_validation_error(format!(
+            "HEIF forensic primary-image validation failed for {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    tracing::debug!(
+        target: "mfb.format_detect",
+        format = ?format,
+        path = %path.display(),
+        purpose = "HEIF bounded in-process parser check",
+        "forensic format validation passed"
+    );
+    Ok(ForensicFormatCheck {
+        format,
+        tool: "libheif-rs (project security limits)".to_string(),
+    })
 }
 
 /// Validate a magic-identified JPEG with the shared JPEG audit tool.
@@ -729,13 +791,31 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "v1_21")]
+    #[test]
+    #[ignore = "requires MFB_COMPLEX_HEIC_FIXTURE pointing to a local complex HEIC"]
+    fn tier2_complex_heic_uses_project_limits_without_quarantine() {
+        let fixture = std::env::var("MFB_COMPLEX_HEIC_FIXTURE")
+            .expect("MFB_COMPLEX_HEIC_FIXTURE must name a local complex HEIC");
+
+        let check = validate_format_forensic(Path::new(&fixture), FormatKind::Heic)
+            .expect("project security limits must accept a valid complex HEIC");
+        assert_eq!(check.format, FormatKind::Heic);
+        assert_eq!(check.tool, "libheif-rs (project security limits)");
+
+        let candidate = crate::image::modern_lossy_static::probe_modern_lossy_static(Path::new(
+            &fixture,
+        ))
+        .expect("tier-2 probe must not quarantine a valid complex HEIC")
+        .expect("lossy static HEIC must remain eligible for tier-2 delivery");
+        assert_eq!(candidate.format, FormatKind::Heic);
+    }
+
     #[test]
     fn forensic_tool_policy_covers_known_formats() {
         for format in [
             FormatKind::Jpeg,
             FormatKind::Png,
-            FormatKind::Heic,
-            FormatKind::Heif,
             FormatKind::Avif,
             FormatKind::WebP,
             FormatKind::Gif,
@@ -760,6 +840,17 @@ mod tests {
                 "missing forensic policy for {format:?}"
             );
         }
+        #[cfg(feature = "v1_21")]
+        for format in [FormatKind::Heic, FormatKind::Heif] {
+            assert!(
+                forensic_tool_for_format(format).is_none(),
+                "HEIF must use the bounded in-process validator for {format:?}"
+            );
+        }
+        #[cfg(not(feature = "v1_21"))]
+        for format in [FormatKind::Heic, FormatKind::Heif] {
+            assert!(forensic_tool_for_format(format).is_some());
+        }
         assert!(forensic_tool_for_format(FormatKind::Unknown).is_none());
     }
 
@@ -768,8 +859,6 @@ mod tests {
         let dedicated: &[(FormatKind, &str, &[&str])] = &[
             (FormatKind::Jpeg, crate::constants::TOOL_JPEGINFO, &["-c"]),
             (FormatKind::Png, crate::constants::TOOL_PNGCHECK, &["-q"]),
-            (FormatKind::Heic, crate::constants::TOOL_HEIF_INFO, &[]),
-            (FormatKind::Heif, crate::constants::TOOL_HEIF_INFO, &[]),
             (
                 FormatKind::Avif,
                 crate::constants::TOOL_AVIFDEC,
@@ -822,6 +911,14 @@ mod tests {
             assert_eq!(policy.tool, crate::constants::TOOL_IDENTIFY);
             assert_eq!(policy.args_before_path, ["-quiet"]);
         }
+
+        #[cfg(not(feature = "v1_21"))]
+        for format in [FormatKind::Heic, FormatKind::Heif] {
+            let policy = forensic_tool_for_format(format)
+                .unwrap_or_else(|| panic!("missing HEIF fallback policy for {format:?}"));
+            assert_eq!(policy.tool, crate::constants::TOOL_HEIF_INFO);
+            assert!(policy.args_before_path.is_empty());
+        }
     }
 
     #[test]
@@ -830,8 +927,6 @@ mod tests {
         for format in [
             FormatKind::Jpeg,
             FormatKind::Png,
-            FormatKind::Heic,
-            FormatKind::Heif,
             FormatKind::Avif,
             FormatKind::WebP,
             FormatKind::Gif,
@@ -861,6 +956,14 @@ mod tests {
                 "missing-tool error must identify {} for {format:?}: {err}",
                 policy.tool
             );
+        }
+
+        #[cfg(not(feature = "v1_21"))]
+        for format in [FormatKind::Heic, FormatKind::Heif] {
+            let policy = forensic_tool_for_format(format)
+                .unwrap_or_else(|| panic!("missing HEIF fallback policy for {format:?}"));
+            let missing_tool = Path::new("/definitely/missing").join(policy.tool);
+            assert!(validate_format_with_tool(f.path(), policy, &missing_tool).is_err());
         }
     }
 

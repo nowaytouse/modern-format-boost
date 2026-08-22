@@ -696,7 +696,7 @@ fn resolve_probe_duration(
         }
     }
 
-    if duration.is_none() {
+    if duration.is_none() && format_name.contains("png") {
         let data = read_native_probe_bytes(path, "apng duration fallback")?;
         if let Some(stats) = crate::image_detection::apng_timing_stats_from_bytes(&data)
             && stats.duration_secs > 0.0_f64
@@ -1714,6 +1714,29 @@ mod tests {
         assert!((secs - 2.0).abs() < f64::EPSILON);
         assert!(probe_duration_from_frame_count_and_fps(None, Some(24.0), None).is_none());
         assert!(probe_duration_from_frame_count_and_fps(Some(10), None, None).is_none());
+    }
+
+    #[test]
+    fn duration_probe_scopes_apng_fallback_to_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_heic = dir.path().join("missing.heic");
+        let stream = serde_json::json!({});
+
+        let duration = resolve_probe_duration(None, &stream, "heic", &missing_heic)
+            .expect("HEIC without duration must not enter APNG parsing");
+
+        assert_eq!(duration, None);
+
+        let apng = dir.path().join("timed.png");
+        std::fs::write(
+            &apng,
+            crate::image_detection::synthetic_two_frame_apng_for_test(),
+        )
+        .expect("write synthetic APNG");
+        let duration = resolve_probe_duration(None, &stream, "apng", &apng)
+            .expect("APNG must retain native timing fallback")
+            .expect("synthetic APNG duration");
+        assert!((duration - 0.03).abs() < f64::EPSILON);
     }
 
     #[test]

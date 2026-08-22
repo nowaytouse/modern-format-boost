@@ -627,6 +627,42 @@ fn parse_pps_rbsp_for_transquant_bypass(pps_payload: &[u8]) -> Option<(bool, boo
     ))
 }
 
+#[cfg(feature = "v1_21")]
+fn project_heif_security_limits() -> libheif_rs::SecurityLimits {
+    let mut limits = libheif_rs::SecurityLimits::default();
+    limits.set_max_total_memory(crate::constants::HEIC_MAX_MEMORY_LIMIT);
+    limits.set_max_children_per_box(crate::constants::HEIC_MAX_CHILDREN_PER_BOX);
+    limits.set_max_items(crate::constants::HEIC_MAX_ITEMS);
+    limits.set_max_components(crate::constants::HEIC_MAX_COMPONENTS);
+    limits.set_max_iloc_extents_per_item(crate::constants::HEIC_MAX_EXTENTS);
+    limits
+}
+
+/// Parse HEIF bytes with the same explicit limits used by the full HEIC decoder.
+///
+/// # Errors
+/// Returns an error when the context cannot be created, configured, or parsed.
+pub(crate) fn read_heif_context_with_project_limits(data: &[u8]) -> Result<HeifContext> {
+    let mut ctx = HeifContext::new().map_err(|error| {
+        ImgQualityError::ImageReadError(format!("Failed to create HEIF context: {error}"))
+    })?;
+
+    #[cfg(feature = "v1_21")]
+    ctx.set_security_limits(&project_heif_security_limits())
+        .map_err(|error| {
+            ImgQualityError::ImageReadError(format!(
+                "Failed to configure HEIF project security limits: {error}"
+            ))
+        })?;
+
+    ctx.read_bytes(data).map_err(|error| {
+        ImgQualityError::ImageReadError(format!(
+            "Failed to parse HEIF with project security limits: {error}"
+        ))
+    })?;
+    Ok(ctx)
+}
+
 /// Multi-dimensional HEIC analysis (using both libheif and metadata
 /// inspection).
 ///
@@ -638,25 +674,8 @@ fn parse_pps_rbsp_for_transquant_bypass(pps_payload: &[u8]) -> Option<(bool, boo
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 
-    // 🛡️ Create security limits BEFORE reading the file
     #[cfg(feature = "v1_21")]
-    let mut limits = libheif_rs::SecurityLimits::default();
-
-    #[cfg(feature = "v1_21")]
-    {
-        // Set to 15GB memory limit for large/complex HEIC files (e.g., from Weibo)
-        limits.set_max_total_memory(crate::constants::HEIC_MAX_MEMORY_LIMIT);
-
-        // Increase ipco box child limit from default 100 to 50000
-        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded"
-        // errors
-        limits.set_max_children_per_box(crate::constants::HEIC_MAX_CHILDREN_PER_BOX);
-
-        // Increase other limits for complex HEIC files
-        limits.set_max_items(crate::constants::HEIC_MAX_ITEMS);
-        limits.set_max_components(crate::constants::HEIC_MAX_COMPONENTS);
-        limits.set_max_iloc_extents_per_item(crate::constants::HEIC_MAX_EXTENTS);
-    }
+    let limits = project_heif_security_limits();
 
     let data = std::fs::read(path)?;
 

@@ -574,7 +574,7 @@ pub fn detect_animation(
             // strategy as HEIC below) instead of declaring static from brands
             // alone. Do not fabricate frame_count=1 (M248).
             let data = std::fs::read(path)?;
-            match libheif_rs::HeifContext::read_from_bytes(&data) {
+            match crate::image_heic_analysis::read_heif_context_with_project_limits(&data) {
                 Ok(ctx) => {
                     let ids = ctx.image_ids();
                     if ids.len() > 1 {
@@ -604,7 +604,7 @@ pub fn detect_animation(
             )
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            match libheif_rs::HeifContext::read_from_bytes(&data) {
+            match crate::image_heic_analysis::read_heif_context_with_project_limits(&data) {
                 Ok(ctx) => {
                     let ids = ctx.image_ids();
                     let count = ids.len();

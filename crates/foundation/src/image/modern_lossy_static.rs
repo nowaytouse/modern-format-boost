@@ -226,6 +226,9 @@ fn detect_modern_compression_authoritative(
     let tool_available = forensic_tool
         .and_then(crate::common_utils::resolve_tool_path)
         .is_some();
+    let in_process_validator_available = cfg!(feature = "v1_21")
+        && matches!(format, FormatKind::Heic | FormatKind::Heif);
+    let forensic_validator_available = tool_available || in_process_validator_available;
 
     // JXL's compression classifier already performs an in-process structural
     // decode and, for Modular streams, one bounded jxlinfo query. Avoid a
@@ -257,7 +260,7 @@ fn detect_modern_compression_authoritative(
                 "forensic format validation passed before compression probe"
             );
         }
-        Err(err) if tool_available => {
+        Err(err) if forensic_validator_available => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "forensic validation rejected modern format candidate {} ({format:?}): {err}",
                 path.display()

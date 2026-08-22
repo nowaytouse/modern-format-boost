@@ -16,6 +16,20 @@ All notable changes to this project will be documented in this file.
   first-tile COD/COC wavelet overrides through the shared bounded parser. Mixed,
   malformed, generic HEIF, monochrome-only, and otherwise inconclusive evidence
   stays `unknown` and cannot enter Tier 2 cleanup.
+- **Bounded complex-HEIC validation**: HEIC/HEIF forensic admission and animation
+  detection now share the same in-process libheif security limits as the full
+  decoder. Valid containers with more than libheif's default 100 `ipco`
+  properties no longer get quarantined by `heif-info`; primary-image parsing and
+  the existing finite memory/item/property limits remain fail-closed.
+- **Format-scoped timing fallback**: FFprobe duration recovery invokes the APNG
+  parser only for PNG demuxers. Duration-less HEIC files no longer emit repeated
+  `Invalid PNG signature` and rare-error messages while Tier 2 is inspecting
+  otherwise healthy media.
+- **Reconstructible-JXL metadata custody**: JPEG-reconstruction outputs preserve
+  codec-carried Exif instead of rewriting it, then re-prove byte-identical JPEG
+  reconstruction after the filesystem metadata commit. Gate 1 permits an
+  Orientation tag only for that exact reconstruction path; pixel-encoded JXL
+  continues to require orientation-normalized pixels with no residual tag.
 - **Explicit task identity and resume**: FastImg binds checkpoints to relative
   source paths and BLAKE3 identities. Matching interrupted work requires an
   explicit interactive resume or `--retry`; changed, restored, or newly
@@ -68,8 +82,10 @@ All notable changes to this project will be documented in this file.
   dependency-approval, workspace-preservation, and privacy-upload rules are now
   maintained in the local mandatory policy; obsolete duplicate policy templates
   were removed.
-- **Dependency refresh**: `num-integer` and `whoami` lock entries were refreshed
-  with `cargo update`; no manifest dependency was added or changed.
+- **Dependency refresh**: `cargo update` refreshed registry packages including
+  `num-integer`, `whoami`, `bit-set`, `bit-vec`, `cc`, `cfg-expr`, and `either`,
+  plus the pinned Git revisions for the existing CLI, error, JXL, progress, XML,
+  and property-testing dependencies. No manifest dependency was added or changed.
 - **External-sample calibration**: Healthy public JPEG, PNG, and WebP samples
   were downloaded into a temporary directory for AVIF speed calibration; no
   local media or Photos library content was read or copied. Speed 6 provided a
