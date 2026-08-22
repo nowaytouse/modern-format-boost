@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "anyhow"
 version = "1.0.104"
-source = "git+https://github.com/dtolnay/anyhow#bf3ed9149f4334c984c1ad252b534107b307078c"
+source = "git+https://github.com/dtolnay/anyhow#c63b279f3f4af2b02ca6267d9eb47d6d10497f69"
 
 [[package]]
 name = "arbitrary"
@@ -223,18 +223,22 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bit-set"
-version = "0.8.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
 dependencies = [
  "bit-vec",
 ]
 
 [[package]]
 name = "bit-vec"
-version = "0.8.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+checksum = "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
+dependencies = [
+ "borsh",
+ "serde",
+]
 
 [[package]]
 name = "bit_field"
@@ -315,6 +319,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsh"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a88b7ea17d208c4193f2c1e6de3c35fe71f98c96982d5ced308bdcc749ff6e1f"
+dependencies = [
+ "borsh-derive",
+ "bytes",
+ "cfg_aliases",
+]
+
+[[package]]
+name = "borsh-derive"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8f347189c62a579b8cd5f80714efa178f52e461dc2e6d701d264f5ff22e566c"
+dependencies = [
+ "once_cell",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,9 +390,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -385,9 +413,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-expr"
-version = "0.20.8"
+version = "0.20.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb693542bcafa528e198be0ebd9d3632ca5b7c93dbe7237460e199910835997c"
+checksum = "fe4ece8474b5f766c63426647e7b4b316b67431ade1036a8313cee24a03ae917"
 dependencies = [
  "smallvec",
  "target-lexicon",
@@ -432,7 +460,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#5b81f1012da19f1474decfe7ffcfb437f59ccba4"
+source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -441,7 +469,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#5b81f1012da19f1474decfe7ffcfb437f59ccba4"
+source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -452,7 +480,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.4"
-source = "git+https://github.com/clap-rs/clap#5b81f1012da19f1474decfe7ffcfb437f59ccba4"
+source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -463,7 +491,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#5b81f1012da19f1474decfe7ffcfb437f59ccba4"
+source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
 
 [[package]]
 name = "cmake"
@@ -719,9 +747,9 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.17.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "encode_unicode"
@@ -1195,7 +1223,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#a65379f78d51d84478adac17ed742e843a5db945"
+source = "git+https://github.com/console-rs/indicatif#16356d7b28314a3716843377b9b95acbe5df917d"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1295,7 +1323,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "jpegxl-rs"
 version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
+source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
 dependencies = [
  "bon",
  "byteorder",
@@ -1307,7 +1335,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
+source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
 dependencies = [
  "cmake",
 ]
@@ -1315,7 +1343,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#f3f98b6cb88c79e08d25dec4c0e5a5c4c51cad28"
+source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -2135,6 +2163,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-crate"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2163,7 +2200,7 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.11.0"
-source = "git+https://github.com/proptest-rs/proptest#a4ad984690d689a14b6b0c9fd7232eda5bb9681a"
+source = "git+https://github.com/proptest-rs/proptest#a6f033cf83adfd55557b86e6065e6f4df054ec70"
 dependencies = [
  "bit-set",
  "bit-vec",
@@ -2223,7 +2260,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.41.0"
-source = "git+https://github.com/tafia/quick-xml#a4c403c3bf6cccec4287b6b7458a4127472a09d5"
+source = "git+https://github.com/tafia/quick-xml#9f4c66aa6db6abf7447f4c37fc3de2bccb510fb5"
 dependencies = [
  "memchr",
 ]
@@ -2793,7 +2830,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#8336b8407fbfe69177c504cdbc379db20cf6f131"
+source = "git+https://github.com/dtolnay/thiserror#ef9383b37d7c96b01e10df35d3e9e313c7b98b5a"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2801,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#8336b8407fbfe69177c504cdbc379db20cf6f131"
+source = "git+https://github.com/dtolnay/thiserror#ef9383b37d7c96b01e10df35d3e9e313c7b98b5a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2952,6 +2989,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.13+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "winnow",
 ]
 
 [[package]]
@@ -3549,6 +3598,9 @@ name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wit-bindgen"
