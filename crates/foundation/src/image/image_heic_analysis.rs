@@ -2,7 +2,7 @@
 //!
 //! Uses libheif-rs to decode and analyze HEIC/HEIF images
 
-use crate::common_utils::find_box_data_recursive;
+use crate::common_utils::{find_all_box_data_recursive, find_box_data_recursive};
 use crate::unified_error::{ImgQualityError, Result};
 use image::DynamicImage;
 use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
@@ -60,16 +60,16 @@ pub fn extract_hevc_bit_depths(hvcc_data: &[u8]) -> Result<(u8, u8)> {
 /// Evidence ladder (positive proof only):
 /// 1. **hvcC `chroma_format_idc` 4:2:0 / 4:2:2** → `Lossy` (subsampling
 ///    discards chroma information).
-/// 2. **hvcC `profile_idc` Main(1)/Main10(2)/MainStillPicture(3)** → `Lossy`
-///    (these profiles are 4:2:0-only by spec).
-/// 3. **hvcC RExt(4)/SCC(9) + non-4:4:4 chroma** → `Lossy`.
-/// 4. **RExt/SCC + 4:4:4 + PPS `transquant_bypass_enabled_flag == 0`** →
+/// 2. Multiple hvcC records → `Lossy` only when every record independently
+///    proves 4:2:0/4:2:2; mixed primary/auxiliary evidence stays `Unknown`.
+/// 3. **RExt/SCC + monochrome/4:4:4 + PPS
+///    `transquant_bypass_enabled_flag == 0`** →
 ///    `Lossy` (quantization bypass disabled: every CU is quantized).
-/// 5. **RExt/SCC + 4:4:4 + PPS bypass == 1** → `Unknown`: the flag only
+/// 4. **RExt/SCC + monochrome/4:4:4 + PPS bypass == 1** → `Unknown`: the flag only
 ///    permits per-CU bypass; it does not prove every coded unit used it.
-/// 6. **RExt/SCC + 4:4:4 but PPS unparsable** → `Unknown` (insufficient
+/// 5. **RExt/SCC + monochrome/4:4:4 but PPS unparsable** → `Unknown` (insufficient
 ///    evidence; previously fabricated as an error or lossy).
-/// 7. **`profile_idc` outside 1-4/9** (reserved profiles) → `Unknown`
+/// 6. **`profile_idc` outside 1-4/9** (reserved profiles) → `Unknown`
 ///    (previously silently defaulted to lossy).
 ///
 /// Missing/truncated hvcC → `Err` (malformed still HEIC).
@@ -86,23 +86,42 @@ pub fn classify_heic_compression(
 ) -> Result<crate::image_detection::CompressionType> {
     use crate::image_detection::CompressionType;
 
-    // Try find_box_data_recursive first, then fallback to direct magic byte search
-    // This handles cases where boxes are inside full boxes (e.g. meta box with
-    // version/flags)
-    let hvcc_from_recursive = find_box_data_recursive(data, *b"hvcC");
-    let hvcc_from_magic = find_box_payload_by_magic(data, *b"hvcC");
+    let hvcc_boxes = find_all_box_data_recursive(data, *b"hvcC");
 
     crate::log_debug!(
         crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
         &format!(
-            "Checking lossless status for '{}' | Forensic: hvcc_recursive={}, hvcc_magic={}",
+            "Checking lossless status for '{}' | Forensic: hvcc_records={}",
             path.display(),
-            hvcc_from_recursive.is_some(),
-            hvcc_from_magic.is_some()
+            hvcc_boxes.len()
         )
     );
 
-    let hvcc_data = hvcc_from_recursive.or(hvcc_from_magic);
+    if hvcc_boxes.len() > 1 {
+        // HEIF may carry independent primary, thumbnail and auxiliary codec
+        // configurations. Only admit the container when every hvcC record has
+        // direct chroma-subsampling proof; otherwise the primary item's
+        // compression semantics are not established without resolving ipma.
+        for hvcc_data in &hvcc_boxes {
+            if hvcc_data.len() < 20 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "HEIC: hvcC box is {} bytes (minimum 20 required); cannot determine compression — {}",
+                    hvcc_data.len(),
+                    path.display()
+                )));
+            }
+            extract_hevc_bit_depths(hvcc_data)?;
+            let chroma_format_idc = hvcc_data[16] & 0x03;
+            if chroma_format_idc != crate::constants::HEIC_CHROMA_420
+                && chroma_format_idc != crate::constants::HEIC_CHROMA_422
+            {
+                return Ok(CompressionType::Unknown);
+            }
+        }
+        return Ok(CompressionType::Lossy);
+    }
+
+    let hvcc_data = hvcc_boxes.first().copied();
 
     if let Some(hvcc_data) = hvcc_data {
         crate::log_debug!(
@@ -162,15 +181,16 @@ pub fn classify_heic_compression(
                 return Ok(CompressionType::Lossy);
             }
 
-            // Dimension 1: Main/Main10/MainStillPicture → always 4:2:0 → always lossy
+            // Main/Main10/MainStillPicture with a contradictory non-4:2:0
+            // hvcC record is malformed/ambiguous, not positive lossy evidence.
             if profile_idc == crate::constants::HEIC_PROFILE_MAIN
                 || profile_idc == crate::constants::HEIC_PROFILE_MAIN10
                 || profile_idc == crate::constants::HEIC_PROFILE_MAIN_STILL
             {
-                return Ok(CompressionType::Lossy);
+                return Ok(CompressionType::Unknown);
             }
 
-            // Dimension 2: RExt (4) or SCC (9) profiles can be lossless
+            // Dimension 1: RExt (4) or SCC (9) profiles can be lossless
             if profile_idc == crate::constants::HEIC_PROFILE_REXT
                 || profile_idc == crate::constants::HEIC_PROFILE_SCC
             {
@@ -191,15 +211,11 @@ pub fn classify_heic_compression(
                     })
                     .is_some_and(|matrix| matrix == 0);
 
-                // LAYER 1: Fast Exclusion based on Chroma Subsampling
-                // True lossless MUST be 4:4:4. If chroma_format_idc is NOT 3 (4:4:4), it's definitely lossy.
-                // This filters out 99%+ of consumer HEIC files instantly.
-                if chroma_format_idc != crate::constants::HEIC_CHROMA_444 {
-                    return Ok(CompressionType::Lossy);
-                }
+                // 4:2:0/4:2:2 already returned above. Both monochrome and
+                // 4:4:4 can use HEVC lossless coding, so neither is lossy
+                // evidence by itself; inspect PPS instead.
 
                 // LAYER 2: PPS transquant_bypass_enabled_flag Check
-                // If it IS 4:4:4, we check the PPS flag. If this flag is 0, it's definitely lossy.
                 // If it is 1, it only PERMITS per-CU lossless coding. A PPS flag
                 // cannot prove that every CU/slice used bypass, regardless of
                 // sign-data-hiding or encoder profile.

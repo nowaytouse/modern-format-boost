@@ -2,6 +2,8 @@
 //!
 //! Uses the same authoritative-tools-first, cascading-fallback strategy as PNG
 //! validation. Only static, modern-format, lossy images are admitted.
+//! Generic HEIF is retained because its brand does not identify the primary
+//! item's codec; HEIC has a separate codec-constrained route.
 
 use crate::image_detection::{CompressionType, DetectedFormat, detect_compression};
 use crate::unified_error::{ImgQualityError, Result};
@@ -24,12 +26,7 @@ pub struct ModernLossyStaticCandidate {
 pub const fn is_modern_static_image_format(format: FormatKind) -> bool {
     matches!(
         format,
-        FormatKind::WebP
-            | FormatKind::Jp2
-            | FormatKind::Jxl
-            | FormatKind::Avif
-            | FormatKind::Heic
-            | FormatKind::Heif
+        FormatKind::WebP | FormatKind::Jp2 | FormatKind::Jxl | FormatKind::Avif | FormatKind::Heic
     )
 }
 
@@ -40,7 +37,6 @@ const fn detected_format_from_kind(format: FormatKind) -> Option<DetectedFormat>
         FormatKind::Jxl => Some(DetectedFormat::JXL),
         FormatKind::Avif => Some(DetectedFormat::AVIF),
         FormatKind::Heic => Some(DetectedFormat::HEIC),
-        FormatKind::Heif => Some(DetectedFormat::HEIF),
         _ => None,
     }
 }
@@ -238,6 +234,19 @@ fn detect_modern_compression_authoritative(
         return detect_compression(detected, path);
     }
 
+    // The internal JP2 parser proves the effective first-tile wavelet but is
+    // intentionally not a full codestream decoder. Require the existing
+    // ImageMagick/OpenJPEG-backed structural validation before its positive
+    // result can reach the destructive tier; absence of the tool is a retain.
+    if format == FormatKind::Jp2 && !tool_available {
+        tracing::debug!(
+            target: "modern_lossy_static",
+            path = %path.display(),
+            "retaining JP2 because authoritative structural validation is unavailable"
+        );
+        return Ok(CompressionType::Unknown);
+    }
+
     match validate_format_forensic(path, format) {
         Ok(check) => {
             tracing::debug!(
@@ -276,6 +285,11 @@ mod tests {
     fn modern_static_format_filter() {
         assert!(is_modern_static_image_format(FormatKind::WebP));
         assert!(is_modern_static_image_format(FormatKind::Avif));
+        assert!(is_modern_static_image_format(FormatKind::Heic));
+        assert!(
+            !is_modern_static_image_format(FormatKind::Heif),
+            "generic HEIF has no codec guarantee; retain it until the primary item/property association is resolved"
+        );
         assert!(!is_modern_static_image_format(FormatKind::Jpeg));
         assert!(!is_modern_static_image_format(FormatKind::Png));
         assert!(!is_modern_static_image_format(FormatKind::Gif));

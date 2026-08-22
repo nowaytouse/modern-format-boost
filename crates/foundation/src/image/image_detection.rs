@@ -36,21 +36,21 @@
 //! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy,
 //!   others→lossless. Supports both standard TIFF and `BigTIFF` (0x002B). No
 //!   tag → assumed lossless.
-//! - **AVIF**: av1C chroma 4:2:0/4:2:2→lossy; 4:4:4/monochrome remains
-//!   unknown because pixel format does not prove AV1 quantization state.
-//!   Err only when required structure is missing/malformed.
-//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy;
-//!   Main/Main10/MSP→lossy; RExt/SCC + 4:4:4 + PPS bypass merely permits
-//!   lossless CUs and therefore remains unknown). Err when hvcC is malformed.
+//! - **AVIF**: every av1C record must prove 4:2:0/4:2:2 before a lossy verdict;
+//!   4:4:4/monochrome remains unknown because pixel format does not prove AV1
+//!   quantization state. Err when required structure is missing/malformed.
+//! - **HEIC**: every hvcC record must prove 4:2:0/4:2:2, or a sole RExt/SCC
+//!   record must prove PPS bypass disabled. Monochrome/4:4:4 with bypass
+//!   permission remains unknown. Err when hvcC is malformed.
 //! - **JXL**: Container jbrd box→JPEG-reconstruction semantics; VarDCT/XYB
 //!   and jxlinfo-confirmed Modular lossy→lossy; hedged "possibly lossless"
 //!   Modular streams remain unknown.
 //! - **JPEG**: Always lossy; JXL transcoding does not require quality judgment.
 //! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless;
 //!   PXR24/B44/B44A/DWAA/DWAB→lossy).
-//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: COD marker wavelet
-//!   transform (9/7 irreversible→lossy, 5/3 reversible→lossless); fallback
-//!   lossy if COD not found.
+//! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: resolves main COD/COC
+//!   plus first-tile overrides; an effective 9/7 component proves lossy, while
+//!   all-reversible or incomplete evidence remains unknown/fails closed.
 //! - **ICO**: Parses directory entries; embedded PNG checked for quantization
 //!   (tRNS + indexed, tool signatures). BMP/DIB entries → lossless.
 //! - **TGA, PSD, DDS**: Treated as lossless.
@@ -76,7 +76,7 @@
 //! | GIF    | Assumed     | N/A           | Treated as lossless. |
 //! | EXR    | High        | Yes (attr)    | Parses compression attr. No attr → lossless. |
 //! | QOI/FLIF/PNM | Assumed | N/A        | Treated as lossless. |
-//! | JP2    | High        | Yes (COD wavelet)| Fallback lossy if COD not found. |
+//! | JP2    | High        | Positive (effective first-tile COD/COC)| Reversible/incomplete evidence → Unknown or Err. |
 //! | ICO    | Medium      | Partial       | Embedded PNG checked for quantization. |
 //! | TGA/PSD/DDS | Assumed | N/A         | Treated as lossless. |
 //!
@@ -4621,34 +4621,26 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
         )));
     }
 
-    // Determine where the codestream starts
-    let cs_start = if data.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
-        // Raw codestream
-        0
+    let cs = if data.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
+        data.as_slice()
     } else {
-        // JP2 container — find jp2c box
-        find_jp2c_offset(&data).ok_or_else(|| {
+        crate::common_utils::find_box_data_recursive(&data, *b"jp2c").ok_or_else(|| {
             ImgQualityError::AnalysisError(
                 "Could not find JPEG 2000 codestream (jp2c box)".to_string(),
             )
         })?
     };
 
-    // Scan for COD and COC markers in the codestream header area
-    // COD/COC must appear before the first tile-part, so limit scan to first 4KB of
-    // codestream
-    let scan_end = (cs_start + 4096).min(data.len());
-    let cs = data.get(cs_start..scan_end).ok_or_else(|| {
-        ImgQualityError::AnalysisError("Required byte slice missing (out of bounds)".to_string())
-    })?;
-
-    let (cod_wavelet, coc_wavelets) = find_jp2_wavelets(cs);
-
-    // Check COD default wavelet
-    if let Some(wavelet) = cod_wavelet {
+    // Resolve main-header COD/COC defaults plus first-tile overrides exactly.
+    // Inspecting only the main COD is unsafe: a tile COD can replace it for
+    // every component. Conversely, one effective 9/7 component in a real tile
+    // is sufficient positive proof that the codestream is lossy.
+    let wavelets = first_jp2_tile_wavelets(cs)?;
+    for (component, wavelet) in wavelets.iter().copied().enumerate() {
         if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
             crate::log_detail!(&format!(
-                "   📊 JP2 COD wavelet: {} ({})",
+                "   📊 JP2 first-tile component {} wavelet: {} ({})",
+                component,
                 wavelet,
                 if wavelet == 1 {
                     "5/3 reversible — losslessness unproven"
@@ -4657,28 +4649,8 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 }
             ));
         }
-        // If COD is lossy and no COC overrides, it's lossy
-        if wavelet == 0 && coc_wavelets.is_empty() {
-            return Ok(CompressionType::Lossy);
-        }
-    }
-
-    // Check COC component-specific wavelets
-    for (component, wavelet) in &coc_wavelets {
-        if std::env::var(crate::constants::ENV_VERBOSE).is_ok() {
-            crate::log_detail!(&format!(
-                "   📊 JP2 COC component {} wavelet: {} ({})",
-                component,
-                wavelet,
-                if *wavelet == 1 {
-                    "5/3 reversible — losslessness unproven"
-                } else {
-                    "9/7 irreversible — lossy"
-                }
-            ));
-        }
         // Any lossy component → entire file is lossy
-        if *wavelet == 0 {
+        if wavelet == 0 {
             return Ok(CompressionType::Lossy);
         }
     }
@@ -4687,165 +4659,221 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     // quantization and component transforms must also be reversible. Until the
     // complete main header is proven, retain the source rather than fabricating
     // a Lossless verdict.
-    if cod_wavelet == Some(1) || !coc_wavelets.is_empty() {
-        return Ok(CompressionType::Unknown);
-    }
-
-    // No COD marker: the JPEG 2000 main header always carries one, so a
-    // missing COD means a malformed or unparseable codestream. Refuse to
-    // guess "lossy" — that would green-light lossy re-encode of unknown data.
-    Err(ImgQualityError::AnalysisError(format!(
-        "JP2: no COD coding-style marker found before the first tile-part; \
-         cannot determine compression — {}",
-        path.display()
-    )))
+    Ok(CompressionType::Unknown)
 }
 
-/// Find the offset of the jp2c (contiguous codestream) box payload in a JP2
-/// container.
-fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
-    let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_strict(
-            data.get_u32_be_strict(pos, "JP2 box size")?,
-            "jp2_box_size",
-        )?;
-        let box_type = crate::media_conversion_gate::probe_jpeg_buffer_slice(
-            data,
-            (pos + 4)..(pos + 8),
-            "jp2 box type",
-        );
-
-        if box_type == b"jp2c" {
-            return Some(pos + 8);
-        }
-
-        if size == 0 {
-            break;
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                break;
-            }
-            let ext = crate::numeric_cast::u64_to_usize_strict(
-                data.get_u64_be_strict(pos + 8, "JP2 extended box size")?,
-                "jp2_ext_box_size",
-            )?;
-            pos += ext;
-        } else if size < 8 {
-            break;
-        } else {
-            pos += size;
-        }
+/// Resolve the effective wavelet for every component of the first real tile.
+/// Main-header parameters are copied to each tile; tile COD replaces all
+/// component defaults, then tile COC replaces one component.
+fn first_jp2_tile_wavelets(cs: &[u8]) -> Result<Vec<u8>> {
+    if !cs.starts_with(&[0xFF, 0x4F]) {
+        return Err(ImgQualityError::AnalysisError(
+            "JP2: codestream does not start with SOC".to_string(),
+        ));
     }
-    None
-}
 
-/// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform
-/// types. Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
-/// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible
-/// (not by itself proof of losslessness). COC: component-specific overrides.
-fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
-    let mut cod_wavelet: Option<u8> = None;
-    let mut coc_wavelets: Vec<(u16, u8)> = Vec::new();
-
-    // Walk markers: each marker is FF xx, followed by 2-byte length (except
-    // SOC=FF4F, SOD=FF93)
+    let mut main_wavelets: Option<Vec<Option<u8>>> = None;
+    let mut tile_wavelets: Option<Vec<Option<u8>>> = None;
     let mut pos = 0;
     while pos + 2 <= cs.len() {
         if cs.get(pos) != Some(&0xFF) {
-            pos += 1;
-            continue;
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: expected marker at codestream offset {pos}"
+            )));
         }
         let Some(marker) = cs.get_byte_strict(pos + 1, "JP2 marker") else {
-            break;
+            return Err(ImgQualityError::AnalysisError(
+                "JP2: truncated marker".to_string(),
+            ));
         };
 
-        // SOC (FF 4F) — no length field
         if marker == 0x4F {
+            if pos != 0 {
+                return Err(ImgQualityError::AnalysisError(
+                    "JP2: duplicate SOC marker".to_string(),
+                ));
+            }
             pos += 2;
             continue;
         }
-        // SOD (FF 93) — start of data, stop scanning
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
         if marker == 0x93 {
-            break;
+            let wavelets = tile_wavelets.ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "JP2: SOD encountered before a first-tile SOT marker".to_string(),
+                )
+            })?;
+            return wavelets
+                .into_iter()
+                .enumerate()
+                .map(|(component, wavelet)| {
+                    wavelet.ok_or_else(|| {
+                        ImgQualityError::AnalysisError(format!(
+                            "JP2: no effective COD/COC wavelet for component {component}"
+                        ))
+                    })
+                })
+                .collect();
         }
 
-        // COD marker (FF 52)
-        if marker == 0x52 && pos + 4 <= cs.len() {
-            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COD segment length") else {
-                break;
-            };
-            let Some(seg_len) =
-                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
-            else {
-                break;
-            };
-            // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
-            // SPcod starts at offset 5 within segment data
-            // SPcod layout: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
-            // So transform byte is at segment_data[5 + 4] = segment_data[9]
-            // segment_data starts at pos+4, so transform is at pos+4+9 = pos+13
-            let transform_offset = pos + 4 + 9;
-            if transform_offset < cs.len() && seg_len >= 10 {
-                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COD wavelet") else {
-                    break;
-                };
-                if wavelet <= 1 {
-                    cod_wavelet = Some(wavelet);
-                }
-            }
-        }
-
-        // COC marker (FF 53) — component-specific coding style
-        if marker == 0x53 && pos + 4 <= cs.len() {
-            let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 COC segment length") else {
-                break;
-            };
-            let Some(seg_len) =
-                crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_coc_seg_len")
-            else {
-                break;
-            };
-            // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
-            // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
-            // We'll assume 1 byte for simplicity (most common case)
-            // SPcoc layout is same as SPcod: NL(1) + cb_width(1) + cb_height(1) +
-            // cb_style(1) + transform(1)
-            let component_offset = pos + 4;
-            let spcoc_offset = component_offset + 1; // Ccoc (1 byte) + Scoc (1 byte) = 2 bytes before SPcoc
-            let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
-
-            if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let Some(comp_idx) =
-                    cs.get_byte_strict(component_offset, "JP2 COC component index")
-                else {
-                    break;
-                };
-                let component = u16::from(comp_idx);
-                let Some(wavelet) = cs.get_byte_strict(transform_offset, "JP2 COC wavelet") else {
-                    break;
-                };
-                if wavelet <= 1 {
-                    coc_wavelets.push((component, wavelet));
-                }
-            }
-        }
-
-        // Skip marker segment
         if pos + 4 > cs.len() {
-            break;
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: truncated marker segment 0xff{marker:02x}"
+            )));
         }
-        let Some(seg_len_u16) = cs.get_u16_be_strict(pos + 2, "JP2 segment length") else {
-            break;
-        };
-        let Some(seg_len) = crate::numeric_cast::u16_to_usize_strict(seg_len_u16, "jp2_seg_len")
-        else {
-            break;
-        };
-        pos += 2 + seg_len;
+        let seg_len = usize::from(
+            cs.get_u16_be_strict(pos + 2, "JP2 segment length")
+                .ok_or_else(|| {
+                    ImgQualityError::AnalysisError("JP2: missing segment length".to_string())
+                })?,
+        );
+        if seg_len < 2 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: invalid segment length {seg_len} for marker 0xff{marker:02x}"
+            )));
+        }
+        let next = pos
+            .checked_add(2)
+            .and_then(|v| v.checked_add(seg_len))
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError("JP2: marker boundary overflow".to_string())
+            })?;
+        if next > cs.len() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: marker 0xff{marker:02x} exceeds codestream boundary"
+            )));
+        }
+        let segment = crate::media_conversion_gate::probe_jpeg_buffer_slice(
+            cs,
+            pos..next,
+            "JP2 marker segment",
+        );
+        if segment.len() != next - pos {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JP2: marker 0xff{marker:02x} slice is incomplete"
+            )));
+        }
+
+        match marker {
+            0x51 => {
+                if main_wavelets.is_some() || tile_wavelets.is_some() || seg_len < 41 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: invalid or duplicate SIZ marker".to_string(),
+                    ));
+                }
+                let components = usize::from(
+                    segment
+                        .get_u16_be_strict(38, "JP2 SIZ component count")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError("JP2: truncated SIZ marker".to_string())
+                        })?,
+                );
+                let expected = 38usize
+                    .checked_add(components.checked_mul(3).ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: SIZ component count overflow".to_string(),
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: SIZ length overflow".to_string())
+                    })?;
+                if components == 0 || seg_len != expected {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: SIZ length {seg_len} does not match {components} components"
+                    )));
+                }
+                main_wavelets = Some(vec![None; components]);
+            }
+            0x52 => {
+                if seg_len < 12 {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: COD marker is too short".to_string(),
+                    ));
+                }
+                let wavelet = segment
+                    .get_byte_strict(13, "JP2 COD wavelet")
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: truncated COD marker".to_string())
+                    })?;
+                if wavelet > 1 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: invalid COD wavelet {wavelet}"
+                    )));
+                }
+                let target = tile_wavelets
+                    .as_mut()
+                    .or(main_wavelets.as_mut())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: COD encountered before SIZ".to_string(),
+                        )
+                    })?;
+                target.fill(Some(wavelet));
+            }
+            0x53 => {
+                let target = tile_wavelets
+                    .as_mut()
+                    .or(main_wavelets.as_mut())
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "JP2: COC encountered before SIZ".to_string(),
+                        )
+                    })?;
+                let component_bytes = if target.len() <= 256 { 1 } else { 2 };
+                let minimum = 8 + component_bytes;
+                if seg_len < minimum {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: COC marker is too short".to_string(),
+                    ));
+                }
+                let component = if component_bytes == 1 {
+                    usize::from(segment.get_byte_strict(4, "JP2 COC component").ok_or_else(
+                        || ImgQualityError::AnalysisError("JP2: truncated COC marker".to_string()),
+                    )?)
+                } else {
+                    usize::from(
+                        segment
+                            .get_u16_be_strict(4, "JP2 COC component")
+                            .ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "JP2: truncated COC marker".to_string(),
+                                )
+                            })?,
+                    )
+                };
+                let wavelet = segment
+                    .get_byte_strict(9 + component_bytes, "JP2 COC wavelet")
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError("JP2: truncated COC marker".to_string())
+                    })?;
+                if component >= target.len() || wavelet > 1 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "JP2: invalid COC component/wavelet ({component}, {wavelet})"
+                    )));
+                }
+                target[component] = Some(wavelet);
+            }
+            0x90 => {
+                if tile_wavelets.is_some() {
+                    return Err(ImgQualityError::AnalysisError(
+                        "JP2: second SOT encountered before first SOD".to_string(),
+                    ));
+                }
+                tile_wavelets = Some(main_wavelets.clone().ok_or_else(|| {
+                    ImgQualityError::AnalysisError("JP2: SOT encountered before SIZ".to_string())
+                })?);
+            }
+            _ => {}
+        }
+        pos = next;
     }
 
-    (cod_wavelet, coc_wavelets)
+    Err(ImgQualityError::AnalysisError(
+        "JP2: first tile header ended without SOD".to_string(),
+    ))
 }
 
 /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.

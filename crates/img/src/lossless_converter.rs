@@ -1771,7 +1771,8 @@ fn run_cjxl_jpeg_encode_with_effort(
     effort: u8,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let run = |selected_effort: u8,
-               allow_expert: bool|
+               allow_expert: bool,
+               apple_compat: bool|
      -> anyhow::Result<foundation::process_runner::ProcessOutput> {
         let mut builder = foundation::CjxlBuilder::new();
         builder
@@ -1781,7 +1782,7 @@ fn run_cjxl_jpeg_encode_with_effort(
             .allow_expert_options(allow_expert)
             .effort(selected_effort)
             .threads(max_threads)
-            .apple_compat(options.apple_compat());
+            .apple_compat(apple_compat);
 
         if let Some(v) = allow_jpeg_reconstruction {
             builder.allow_jpeg_reconstruction(v != 0);
@@ -1795,33 +1796,68 @@ fn run_cjxl_jpeg_encode_with_effort(
         )
     };
 
-    let first = run(effort, options.allow_expert_options())?;
-    if first.status.success() || !cjxl_rejected_expert_option(effort, &first.stderr) {
-        return Ok(first);
+    let mut selected_effort = effort;
+    let mut allow_expert = options.allow_expert_options();
+    let mut apple_compat = options.apple_compat();
+    loop {
+        let output = run(selected_effort, allow_expert, apple_compat)?;
+        if output.status.success() {
+            return Ok(output);
+        }
+        // Lossless-JPEG e11 itself requires the expert switch in CjxlBuilder,
+        // even when the broader expert-options flag is off.
+        if cjxl_rejected_expert_option(selected_effort, &output.stderr) {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "cjxl_expert_compat_retry",
+                temp_output,
+            );
+            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                "cjxl_expert_option_unsupported",
+                input,
+                format!(
+                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
+                    foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
+                    foundation::constants::JXL_DEEP_EFFORT,
+                ),
+            );
+            selected_effort = foundation::constants::JXL_DEEP_EFFORT;
+            allow_expert = false;
+            continue;
+        }
+        if apple_compat && cjxl_rejected_apple_compat_option(&output.stderr) {
+            foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                "cjxl_apple_compat_retry",
+                temp_output,
+            );
+            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+                "cjxl_compress_boxes_option_unsupported",
+                input,
+                format!(
+                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction without the unsupported box-compression control",
+                    foundation::constants::JXL_ARG_COMPRESS_BOXES,
+                ),
+            );
+            apple_compat = false;
+            continue;
+        }
+        return Ok(output);
     }
-
-    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-        "cjxl_expert_compat_retry",
-        temp_output,
-    );
-    foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-        "cjxl_expert_option_unsupported",
-        input,
-        format!(
-            "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
-            foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
-            foundation::constants::JXL_DEEP_EFFORT,
-        ),
-    );
-    run(foundation::constants::JXL_DEEP_EFFORT, false)
 }
 
 fn cjxl_rejected_expert_option(effort: u8, stderr: &str) -> bool {
     if effort != foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT {
         return false;
     }
+    cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
+}
+
+fn cjxl_rejected_apple_compat_option(stderr: &str) -> bool {
+    cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_COMPRESS_BOXES)
+}
+
+fn cjxl_rejected_option(stderr: &str, option: &str) -> bool {
     let stderr = stderr.to_ascii_lowercase();
-    stderr.contains(foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
+    stderr.contains(&option.to_ascii_lowercase())
         && [
             "unknown argument",
             "unknown option",
@@ -6076,6 +6112,18 @@ mod tests {
         assert!(!cjxl_rejected_expert_option(
             e11,
             "Error while decoding the JPEG image"
+        ));
+        assert!(cjxl_rejected_apple_compat_option(
+            "Unknown argument: --compress_boxes=0"
+        ));
+        assert!(cjxl_rejected_apple_compat_option(
+            "unrecognized option '--compress_boxes=0'"
+        ));
+        assert!(!cjxl_rejected_apple_compat_option(
+            "Error while compressing JPEG XL boxes"
+        ));
+        assert!(!cjxl_rejected_apple_compat_option(
+            "Unknown argument: --allow_expert_options"
         ));
     }
 

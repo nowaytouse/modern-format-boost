@@ -227,7 +227,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         archive: bool,
 
-        /// Retry a previous `gate*_failed` working-copy marker.
+        /// Explicitly resume a verified matching interrupted task. Changed inputs are rejected.
         #[arg(long, default_value_t = false)]
         retry: bool,
 
@@ -2389,6 +2389,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         extreme_precision,
     } = options;
     let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
+    let mut retry_requested = retry.0;
 
     if extreme_precision {
         println!(
@@ -2578,34 +2579,47 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 marker.stage.as_str(),
                 working_copy.display()
             );
-        } else if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
-            println!(
-                "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
-                marker.stage.as_str(),
-                archived.display()
-            );
-            tracing::warn!(
-                target: "fast_img",
-                stage = %marker.stage.as_str(),
-                working_copy = %working_copy.display(),
-                archived = %archived.display(),
-                marker_count = marker.src_jpeg_count,
-                source_count = source_jpegs.len(),
-                "fast-img stale marker was archived before rebuilding from current sources"
-            );
         } else {
-            println!(
-                "[RESUME  ] existing {} marker has stale inputs, but prior output is already absent; rebuilding",
-                marker.stage.as_str()
-            );
-            tracing::warn!(
-                target: "fast_img",
-                stage = %marker.stage.as_str(),
-                working_copy = %working_copy.display(),
-                marker_count = marker.src_jpeg_count,
-                source_count = source_jpegs.len(),
-                "fast-img stale marker had no working copy; rebuilding from current sources"
-            );
+            if retry_requested {
+                anyhow::bail!(
+                    "MFB_RESUME_INPUT_CHANGED: --retry cannot resume fast-img because the source path, strategy, relative paths, or BLAKE3 identities no longer match the saved task; use --no-resume for an isolated new output directory"
+                );
+            }
+            fast_img_require_interactive_confirmation(
+                "[STATE   ] Saved fast-img state does not match the media currently at this path. Archive the saved output and start a new task from the current media? [y/N] ",
+                "MFB_RESUME_DECISION_REQUIRED: current inputs differ from saved state; no files were archived. Rerun with --no-resume to start an isolated new task",
+            )?;
+        }
+        if !dry_run.0 {
+            if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
+                println!(
+                    "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
+                    marker.stage.as_str(),
+                    archived.display()
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    stage = %marker.stage.as_str(),
+                    working_copy = %working_copy.display(),
+                    archived = %archived.display(),
+                    marker_count = marker.src_jpeg_count,
+                    source_count = source_jpegs.len(),
+                    "fast-img stale marker was archived before rebuilding from current sources"
+                );
+            } else {
+                println!(
+                    "[RESUME  ] existing {} marker has stale inputs, but prior output is already absent; rebuilding",
+                    marker.stage.as_str()
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    stage = %marker.stage.as_str(),
+                    working_copy = %working_copy.display(),
+                    marker_count = marker.src_jpeg_count,
+                    source_count = source_jpegs.len(),
+                    "fast-img stale marker had no working copy; rebuilding from current sources"
+                );
+            }
         }
         existing_marker = None;
     }
@@ -2625,6 +2639,15 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         ) {
             Ok(FastImgCleanupCompleteSourceState::RestoredOriginal) => {
                 if !dry_run.0 {
+                    if retry_requested {
+                        anyhow::bail!(
+                            "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task after its original sources were restored; use --no-resume for an isolated new task"
+                        );
+                    }
+                    fast_img_require_interactive_confirmation(
+                        "[STATE   ] This path has a completed fast-img task, but its original source media are present again. Archive the completed output and start a new task? [y/N] ",
+                        "MFB_RESUME_DECISION_REQUIRED: restored original sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
+                    )?;
                     if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
                         println!(
                             "[RESUME  ] archived completed output at {} before rebuilding restored sources",
@@ -2651,6 +2674,15 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             Ok(FastImgCleanupCompleteSourceState::DeletedConverted) => {}
             Ok(FastImgCleanupCompleteSourceState::StaleCurrent) => {
                 if !dry_run.0 {
+                    if retry_requested {
+                        anyhow::bail!(
+                            "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task because current relative paths or BLAKE3 identities differ; use --no-resume for an isolated new task"
+                        );
+                    }
+                    fast_img_require_interactive_confirmation(
+                        "[STATE   ] This path has a completed fast-img task, but the current media differ from its recorded inputs. Archive the completed output and start a new task? [y/N] ",
+                        "MFB_RESUME_DECISION_REQUIRED: changed sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
+                    )?;
                     if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
                         println!(
                             "[RESUME  ] archived stale completed output at {} before rebuilding",
@@ -2678,6 +2710,34 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         }
     }
 
+    if let Some(marker) = &existing_marker
+        && !dry_run.0
+        && !retry_requested
+        && fast_img_requires_resume_decision(marker, shortest_path)
+    {
+        let prompt = format!(
+            "[STATE   ] Found a saved fast-img task at stage {}. Its source path, relative paths, and recorded BLAKE3 identities match. Reconcile durable state and resume it? [y/N] ",
+            marker.stage.as_str()
+        );
+        fast_img_require_interactive_confirmation(
+            &prompt,
+            "MFB_RESUME_DECISION_REQUIRED: saved task was not resumed; no state was changed. Rerun with --retry to resume or --no-resume to start an isolated new task",
+        )?;
+        retry_requested = true;
+    }
+
+    if let Some(marker) = &existing_marker
+        && !dry_run.0
+        && !retry_requested
+        && fast_img_completed_marker_has_new_tier2_work(marker, modern_lossy_candidates.len())
+    {
+        fast_img_require_interactive_confirmation(
+            "[STATE   ] A completed fast-img task exists, and modern lossy static media are present at the same source path. Reconcile each file with Photos and run a new verified Tier-2 delivery? [y/N] ",
+            "MFB_RESUME_DECISION_REQUIRED: completed state was not reused for new Tier-2 media; no Photos import or source deletion was attempted. Rerun with --retry to proceed or --no-resume to isolate a new task",
+        )?;
+        retry_requested = true;
+    }
+
     if strategy == "jxl"
         && (existing_marker
             .as_ref()
@@ -2697,7 +2757,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         let Some(marker) = existing_marker.as_mut() else {
             anyhow::bail!("fast-img cleanup-complete marker disappeared before tier-2 delivery");
         };
-        if marker.tier2_in_progress && !retry.0 {
+        if marker.tier2_in_progress && !retry_requested {
             anyhow::bail!(
                 "MFB_RESUME_DECISION_REQUIRED: fast-img tier-2 Photos delivery was interrupted; rerun with --retry to reconcile Photos custody and resume cleanup"
             );
@@ -2711,7 +2771,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     }
 
     if let Some(marker) = &existing_marker
-        && !retry.0
+        && !retry_requested
         && fast_img_requires_resume_decision(marker, shortest_path)
     {
         anyhow::bail!(
@@ -2730,7 +2790,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             source_jpegs.len(),
             &current_source_hashes,
         )?;
-        if !retry.0 {
+        if !retry_requested {
             anyhow::bail!(
                 "fast-img previous cleanup completed with {} failed source(s); rerun with --retry to retry retained source files",
                 marker.failed_sources.len()
@@ -2757,7 +2817,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     };
     let retry_failed_sources_before_cleanup = if let Some(marker) = existing_marker.as_mut()
         && marker.stage != FastImgStageName::CleanupComplete
-        && retry.0
+        && retry_requested
         && !marker.failed_sources.is_empty()
     {
         println!(
@@ -2812,7 +2872,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     };
     if let Some(marker) = &existing_marker
         && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
-        && !retry.0
+        && !retry_requested
     {
         anyhow::bail!(
             "fast-img previous run stopped at {}; inspect {} or rerun with --retry",
@@ -2880,7 +2940,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let mut resume_stage = if resume_local_delivery_for_shortest_path {
         FastImgStageName::Gate1Passed
     } else {
-        retry_resume_stage(&marker.stage, retry.0)
+        retry_resume_stage(&marker.stage, retry_requested)
     };
     let refresh_jxl_metadata =
         encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
@@ -3008,6 +3068,23 @@ fn fast_img_requires_resume_decision(
         || marker.stage != FastImgStageName::CleanupComplete
         || !marker.failed_sources.is_empty()
         || fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path)
+}
+
+fn fast_img_require_interactive_confirmation(prompt: &str, declined: &str) -> anyhow::Result<()> {
+    if foundation::fast_img::prompt_user_confirm(prompt)? {
+        Ok(())
+    } else {
+        anyhow::bail!("{declined}")
+    }
+}
+
+fn fast_img_completed_marker_has_new_tier2_work(
+    marker: &WorkingCopyMarker,
+    modern_lossy_candidate_count: usize,
+) -> bool {
+    marker.stage == FastImgStageName::CleanupComplete
+        && !marker.tier2_in_progress
+        && modern_lossy_candidate_count != 0
 }
 
 fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool {
@@ -8254,13 +8331,13 @@ mod fast_img_hardening_tests {
         fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
-        fast_img_container_is_static, fast_img_delete_notice_message,
-        fast_img_delete_verified_source_jpegs_with, fast_img_effective_encode_parallelism,
-        fast_img_effective_expected_count, fast_img_effective_verify_parallelism,
-        fast_img_marker_entry_output_path, fast_img_marker_input_state_is_stale,
-        fast_img_marker_outputs_current, fast_img_pipeline_ctx, fast_img_planned_output_rel,
-        fast_img_post_gate1_policy, fast_img_prune_empty_source_dirs,
-        fast_img_reconcile_unrecorded_source_disposition,
+        fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
+        fast_img_delete_notice_message, fast_img_delete_verified_source_jpegs_with,
+        fast_img_effective_encode_parallelism, fast_img_effective_expected_count,
+        fast_img_effective_verify_parallelism, fast_img_marker_entry_output_path,
+        fast_img_marker_input_state_is_stale, fast_img_marker_outputs_current,
+        fast_img_pipeline_ctx, fast_img_planned_output_rel, fast_img_post_gate1_policy,
+        fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
         fast_img_recover_non_directory_working_copy, fast_img_refresh_reused_jxl_delivery,
         fast_img_remove_failed_encode_output, fast_img_requires_resume_decision,
         fast_img_resolve_working_copy_for_run, fast_img_reuses_marker_import_proof_on_resume,
@@ -10179,6 +10256,22 @@ mod fast_img_hardening_tests {
             ShortestPathFlag(false)
         ));
         marker.tier2_in_progress = true;
+        assert!(fast_img_requires_resume_decision(
+            &marker,
+            ShortestPathFlag(false)
+        ));
+    }
+
+    #[test]
+    fn completed_marker_requires_explicit_decision_for_reappeared_tier2_media() {
+        let mut marker = WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("wc"), 0);
+        marker.stage = FastImgStageName::CleanupComplete;
+
+        assert!(!fast_img_completed_marker_has_new_tier2_work(&marker, 0));
+        assert!(fast_img_completed_marker_has_new_tier2_work(&marker, 1));
+
+        marker.tier2_in_progress = true;
+        assert!(!fast_img_completed_marker_has_new_tier2_work(&marker, 1));
         assert!(fast_img_requires_resume_decision(
             &marker,
             ShortestPathFlag(false)

@@ -1499,8 +1499,8 @@ mod fast_gif_tests {
     }
 
     #[test]
-    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() {
-        let root = TempDir::new().unwrap();
+    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
         let without_apple =
             fast_gif_convert_options(root.path(), root.path(), false, false, "Meme Mode");
         let with_apple =
@@ -1516,13 +1516,16 @@ mod fast_gif_tests {
                 .flags
                 .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
         );
+        Ok(())
     }
 
     #[test]
     fn normal_vid_run_rejects_manual_avif_strategy() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["vid", "run", "/media/in", "--strategy", "avif"])?;
 
-        let error = validate_command_strategy(&parsed.command).unwrap_err();
+        let Err(error) = validate_command_strategy(&parsed.command) else {
+            anyhow::bail!("normal vid run unexpectedly accepted --strategy avif");
+        };
         assert!(error.to_string().contains("vid fast-gif --strategy avif"));
         Ok(())
     }

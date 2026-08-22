@@ -5091,7 +5091,14 @@ fn fast_img_marker_output_paths(marker: &WorkingCopyMarker) -> Result<Vec<(Strin
 /// # Errors
 /// Returns an error on I/O failure.
 pub fn prompt_user_confirm(message: &str) -> Result<bool> {
-    use std::io::{BufRead, Write};
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        tracing::warn!(
+            target: "fast_img_confirm",
+            "confirmation required without an interactive terminal; treating as explicit no"
+        );
+        return Ok(false);
+    }
     print!("{message}");
     std::io::stdout()
         .flush()

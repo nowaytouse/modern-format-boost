@@ -719,7 +719,7 @@ pub mod gif {
 }
 
 pub mod avif {
-    use crate::common_utils::find_box_data_recursive;
+    use crate::common_utils::find_all_box_data_recursive;
     use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
@@ -747,38 +747,49 @@ pub mod avif {
     ) -> Result<crate::image_detection::CompressionType> {
         use crate::image_detection::CompressionType;
 
-        let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") else {
+        let av1c_boxes = find_all_box_data_recursive(data, *b"av1C");
+        if av1c_boxes.is_empty() {
             return Err(ImgQualityError::AnalysisError(format!(
                 "AVIF: no av1C configuration box found; cannot determine compression — {}",
                 path.display()
             )));
-        };
-        if av1c_data.len() < 3 {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "AVIF: av1C box is {} bytes (minimum 3 required); cannot determine compression — {}",
-                av1c_data.len(),
-                path.display()
-            )));
         }
 
-        let byte2 = av1c_data[2];
-        let chroma_subsampling_x = (byte2 >> 3) & 0x01;
-        let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+        // AVIF may carry several AV1 item-property configurations (primary,
+        // alpha, thumbnails). A single lossy auxiliary item does not prove the
+        // primary image lossy, so every av1C record must independently carry
+        // positive subsampling evidence before this destructive-route probe
+        // returns Lossy.
+        for av1c_data in av1c_boxes {
+            if av1c_data.len() < 3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: av1C box is {} bytes (minimum 3 required); cannot determine compression — {}",
+                    av1c_data.len(),
+                    path.display()
+                )));
+            }
+            if av1c_data[0] != 0x81 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: invalid av1C marker/version byte 0x{:02x}; cannot determine compression — {}",
+                    av1c_data[0],
+                    path.display()
+                )));
+            }
 
-        let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
-        let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+            let byte2 = av1c_data[2];
+            let chroma_subsampling_x = (byte2 >> 3) & 0x01;
+            let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
 
-        if is_420 || is_422 {
-            return Ok(CompressionType::Lossy);
+            if !is_420 && !is_422 {
+                // 4:4:4/monochrome is ambiguous. The reserved x=0,y=1
+                // combination is invalid rather than positive lossy evidence.
+                return Ok(CompressionType::Unknown);
+            }
         }
 
-        if chroma_subsampling_x == 1 || chroma_subsampling_y == 1 {
-            // Reserved/subset combinations that still declare subsampled
-            // chroma: information is discarded, same positive-loss evidence.
-            return Ok(CompressionType::Lossy);
-        }
-
-        Ok(CompressionType::Unknown)
+        Ok(CompressionType::Lossy)
     }
 
     /// Classifies the compression of an AVIF file on disk.

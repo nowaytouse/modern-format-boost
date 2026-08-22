@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-20
+## [Unreleased] - 2026-08-22
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
@@ -11,6 +11,16 @@ All notable changes to this project will be documented in this file.
   proven lossy sources, and preserves unknown, lossless, animated, or JPEG-
   reconstruction inputs. Photos custody is reconciled by content proof before
   resumable source cleanup; partial imports and deletes retain durable state.
+- **Exact destructive admission**: AVIF and HEIC inspect every codec
+  configuration instead of trusting one auxiliary item, while JP2 evaluates
+  first-tile COD/COC wavelet overrides through the shared bounded parser. Mixed,
+  malformed, generic HEIF, monochrome-only, and otherwise inconclusive evidence
+  stays `unknown` and cannot enter Tier 2 cleanup.
+- **Explicit task identity and resume**: FastImg binds checkpoints to relative
+  source paths and BLAKE3 identities. Matching interrupted work requires an
+  explicit interactive resume or `--retry`; changed, restored, or newly
+  reappeared inputs require a fresh-run decision and cannot silently inherit an
+  old task. Non-interactive sessions fail closed instead of waiting forever.
 - **Four-state compression safety**: AVIF Meme Mode no longer collapses unknown
   compression into `lossy`. JP2's reversible 5/3 wavelet is treated as
   insufficient lossless evidence until quantization and component transforms
@@ -18,7 +28,9 @@ All notable changes to this project will be documented in this file.
 - **Linux cjxl compatibility**: JPEG reconstruction still uses expert e11 when
   supported. If an installed official `cjxl` explicitly rejects the expert
   option, the same reversible encode is retried once at compatible e8; unrelated
-  encoder failures are not retried or hidden.
+  encoder failures are not retried or hidden. Older official builds that reject
+  `--compress_boxes=0` receive one additional bounded retry without that optional
+  box-control flag, preserving the encoded media semantics.
 - **Dependency security refresh**: The GUI lock now contains patched
   `brace-expansion`, `nanoid`, and `postcss`; the obsolete Tauri/GTK dependency
   tree and unused `libavif` binding were removed, eliminating the stale `glib`

@@ -505,14 +505,41 @@ fn test_all_control_groups_lossless_lossy() {
 /// length field itself (marker not included), and the walker advances
 /// `marker(2) + Lxxx`, so every filler span below is sized to keep the next
 /// marker aligned.
-fn synthetic_jp2_raw_codestream(transform: Option<u8>) -> Vec<u8> {
+fn synthetic_jp2_raw_codestream(
+    components: u16,
+    main_transform: Option<u8>,
+    tile_transform: Option<u8>,
+    tile_component_transform: Option<(u16, u8)>,
+) -> Vec<u8> {
     let mut cs = vec![0xFF, 0x4F]; // SOC
-    cs.extend_from_slice(&[0xFF, 0x51, 0x00, 0x0C]); // SIZ, Lsiz=12
-    cs.extend_from_slice(&[0; 10]); // SIZ payload filler (skipped by length)
-    if let Some(transform) = transform {
+    let siz_len = 38 + 3 * components;
+    cs.extend_from_slice(&[0xFF, 0x51]);
+    cs.extend_from_slice(&siz_len.to_be_bytes());
+    let mut siz_payload = vec![0u8; usize::from(siz_len - 2)];
+    siz_payload[34..36].copy_from_slice(&components.to_be_bytes());
+    cs.extend_from_slice(&siz_payload);
+    if let Some(transform) = main_transform {
         cs.extend_from_slice(&[0xFF, 0x52, 0x00, 0x0C]); // COD, Lcod=12
         // Scod(1) + SGcod(4) + SPcod: NL, cb_w, cb_h, cb_style, transform
         cs.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, transform]);
+    }
+    cs.extend_from_slice(&[0xFF, 0x90, 0x00, 0x0A]); // SOT, Lsot=10
+    cs.extend_from_slice(&[0; 8]); // Isot, Psot, TPsot, TNsot
+    if let Some(transform) = tile_transform {
+        cs.extend_from_slice(&[0xFF, 0x52, 0x00, 0x0C]);
+        cs.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, transform]);
+    }
+    if let Some((component, transform)) = tile_component_transform {
+        let component_bytes = if components <= 256 { 1 } else { 2 };
+        let coc_len = 8 + component_bytes;
+        cs.extend_from_slice(&[0xFF, 0x53]);
+        cs.extend_from_slice(&(coc_len as u16).to_be_bytes());
+        if component_bytes == 1 {
+            cs.push(u8::try_from(component).expect("one-byte component"));
+        } else {
+            cs.extend_from_slice(&component.to_be_bytes());
+        }
+        cs.extend_from_slice(&[0, 0, 0, 0, 0, transform]);
     }
     cs.extend_from_slice(&[0xFF, 0x93]); // SOD
     cs.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]); // tile data filler
@@ -524,7 +551,11 @@ fn jp2_compression_uses_cod_wavelet_transform() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let lossy_path = dir.path().join("lossy.j2k");
-    std::fs::write(&lossy_path, synthetic_jp2_raw_codestream(Some(0))).expect("write lossy jp2");
+    std::fs::write(
+        &lossy_path,
+        synthetic_jp2_raw_codestream(1, Some(0), None, None),
+    )
+    .expect("write lossy jp2");
     assert_eq!(
         detect_compression(&DetectedFormat::JP2, &lossy_path).expect("lossy jp2 codestream"),
         CompressionType::Lossy,
@@ -532,7 +563,10 @@ fn jp2_compression_uses_cod_wavelet_transform() {
     );
 
     let reversible_path = dir.path().join("reversible-wavelet.j2k");
-    std::fs::write(&reversible_path, synthetic_jp2_raw_codestream(Some(1)))
+    std::fs::write(
+        &reversible_path,
+        synthetic_jp2_raw_codestream(1, Some(1), None, None),
+    )
         .expect("write reversible-wavelet jp2");
     assert_eq!(
         detect_compression(&DetectedFormat::JP2, &reversible_path)
@@ -543,16 +577,51 @@ fn jp2_compression_uses_cod_wavelet_transform() {
 }
 
 #[test]
+fn jp2_compression_resolves_tile_and_wide_component_overrides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let tile_reversible = dir.path().join("tile-reversible.j2k");
+    std::fs::write(
+        &tile_reversible,
+        synthetic_jp2_raw_codestream(1, Some(0), Some(1), None),
+    )
+    .expect("write tile override");
+    assert_eq!(
+        detect_compression(&DetectedFormat::JP2, &tile_reversible)
+            .expect("tile override jp2"),
+        CompressionType::Unknown,
+        "tile COD must replace a lossy main-header default before admission"
+    );
+
+    let wide_component = dir.path().join("wide-component.j2k");
+    std::fs::write(
+        &wide_component,
+        synthetic_jp2_raw_codestream(257, Some(1), None, Some((256, 0))),
+    )
+    .expect("write wide-component override");
+    assert_eq!(
+        detect_compression(&DetectedFormat::JP2, &wide_component)
+            .expect("wide-component jp2"),
+        CompressionType::Lossy,
+        "COC must use a two-byte component index when Csiz exceeds 256"
+    );
+}
+
+#[test]
 fn jp2_compression_fails_closed_without_cod_marker() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("codless.j2k");
-    std::fs::write(&path, synthetic_jp2_raw_codestream(None)).expect("write codless jp2");
+    std::fs::write(
+        &path,
+        synthetic_jp2_raw_codestream(1, None, None, None),
+    )
+    .expect("write codless jp2");
 
     let error = detect_compression(&DetectedFormat::JP2, &path)
         .expect_err("missing COD marker must not fabricate a lossy verdict");
     assert!(
-        error.to_string().contains("no COD"),
-        "error should name the missing COD marker: {error}"
+        error.to_string().contains("no effective COD/COC"),
+        "error should name the missing effective coding style: {error}"
     );
 }
 
@@ -598,7 +667,11 @@ fn detect_compression_is_explicit_for_jpeg_and_fails_closed_for_non_still_media(
 fn static_by_spec_formats_are_confirmed_static_only() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("image.j2k");
-    std::fs::write(&path, synthetic_jp2_raw_codestream(Some(0))).expect("write jp2");
+    std::fs::write(
+        &path,
+        synthetic_jp2_raw_codestream(1, Some(0), None, None),
+    )
+    .expect("write jp2");
 
     // JP2 carries no animation capability in-spec: admission paths (tier-2
     // modern lossy import) must confirm it static instead of silently
@@ -718,6 +791,34 @@ fn avif_compression_identity_colr_is_not_lossless_proof() {
         detect_compression(&DetectedFormat::AVIF, &path).expect("identity-colr avif"),
         CompressionType::Unknown,
         "identity matrix is a pixel-format property, not lossless proof"
+    );
+}
+
+#[test]
+fn avif_compression_requires_every_codec_configuration_to_be_lossy() {
+    let mut data = synthetic_avif_with_av1c(0x0C); // 4:2:0 auxiliary/thumbnail
+    let av1c_444 = [0x81, 0x00, 0x00];
+    let size = u32::try_from(av1c_444.len() + 8).expect("av1C size fits u32");
+    data.extend_from_slice(&size.to_be_bytes());
+    data.extend_from_slice(b"av1C");
+    data.extend_from_slice(&av1c_444);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mixed_path = dir.path().join("mixed-config.avif");
+    std::fs::write(&mixed_path, data).expect("write mixed-config avif");
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &mixed_path).expect("mixed avif"),
+        CompressionType::Unknown,
+        "one lossy auxiliary av1C must not classify an ambiguous primary item"
+    );
+
+    let invalid_path = dir.path().join("invalid-config.avif");
+    std::fs::write(&invalid_path, synthetic_avif_with_av1c(0x04))
+        .expect("write reserved-subsampling avif");
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &invalid_path).expect("reserved avif"),
+        CompressionType::Unknown,
+        "reserved x=0,y=1 must not become fabricated lossy evidence"
     );
 }
 
