@@ -1070,6 +1070,10 @@ fn run_post_adjacent_steps(
     Ok(())
 }
 
+fn fast_img_uses_shortest_path(args: &Args) -> bool {
+    args.shortest_path && args.strategy.as_deref() == Some("avif")
+}
+
 fn run_fast_img_post_success(
     args: &Args,
     project_root: &Path,
@@ -1118,7 +1122,7 @@ fn run_fast_img_post_success(
         summary.img.skipped = counts.skipped_count;
         summary.img.failed = counts.failed_count;
     }
-    if args.shortest_path && verify.warnings == Some(false) {
+    if fast_img_uses_shortest_path(args) && verify.warnings == Some(false) {
         match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
             Ok(true) => {
                 summary.fast_img_size_after_override = summary
@@ -1211,7 +1215,7 @@ fn run_fast_img_task(
     let command = LaunchCommand::from_argv(build_fast_img_command(
         &img_bin,
         target,
-        args.shortest_path,
+        fast_img_uses_shortest_path(args),
         true,
         retry,
         args.no_resume,
@@ -1322,7 +1326,7 @@ fn plan_cli_invocations(
                 commands.push(LaunchCommand::from_argv(build_fast_img_command(
                     &img_bin,
                     input,
-                    args.shortest_path,
+                    fast_img_uses_shortest_path(args),
                     args.archive,
                     args.retry || args.resume,
                     args.no_resume,
@@ -2568,6 +2572,33 @@ fn report_drag_drop_failure(result: &Result<()>) {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn fast_img_shortest_path_is_effective_only_for_avif() {
+        let jxl = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--shortest-path",
+            "--strategy",
+            "jxl",
+            "/tmp/media",
+        ])
+        .unwrap();
+        let avif = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--shortest-path",
+            "--strategy",
+            "avif",
+            "/tmp/media",
+        ])
+        .unwrap();
+
+        assert!(!fast_img_uses_shortest_path(&jxl));
+        assert!(fast_img_uses_shortest_path(&avif));
+    }
 
     #[test]
     fn drag_drop_error_policy_continues_only_classified_recoverable_errors() {

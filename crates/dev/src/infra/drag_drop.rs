@@ -405,45 +405,40 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     let dim = if colors_enabled() { "\x1b[2m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
     println!("\n{green}FAST MODE SELECTED{reset}{cyan} [{strategy}]{reset}");
-    println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
-    if strategy == "avif" {
-        println!(
-            "       {dim}AVIF-only (Meme Mode) delivery, strict verification, automatic iCloud Photos import, then \
-             local AVIF folder cleanup.{reset}"
-        );
-    } else {
-        println!(
-            "       {dim}JXL-only delivery, strict verification, automatic iCloud Photos import, then \
-             local JXL folder cleanup.{reset}"
-        );
-    }
-    println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
-    if strategy == "avif" {
-        println!(
-            "       {dim}AVIF-only adjacent output; user imports manually. Source images are still \
-             deleted after strict verification.{reset}"
-        );
-    } else {
-        println!(
-            "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still \
-             deleted after strict verification.{reset}"
-        );
-    }
     if strategy != "avif" {
-        println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
+        println!("   {bold}1{reset} - {green}Normal Mode (Default){reset}");
         println!(
-            "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure \
-             preserved.{reset}"
+            "       {dim}JXL-only adjacent output with strict verification. Source JPEGs are deleted only after local delivery is proven.{reset}"
         );
+        println!("   {bold}2{reset} - {cyan}Restore to JPEG{reset}");
+        println!(
+            "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure preserved.{reset}"
+        );
+        let answer = read_line(&format!(
+            "\n   {bold}Choose Fast Mode path [1/2] ({green}Enter = Normal Mode{reset}{bold}): {reset}"
+        ))?;
+        return Ok(if answer.trim() == "2" {
+            FastImgAction::RestoreJpeg
+        } else {
+            FastImgAction::Normal
+        });
     }
-    let choices = if strategy == "avif" { "1/2" } else { "1/2/3" };
+
+    println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
+    println!(
+        "       {dim}AVIF-only (Meme Mode) delivery, strict verification, automatic iCloud Photos import, then \
+         local AVIF folder cleanup.{reset}"
+    );
+    println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
+    println!(
+        "       {dim}AVIF-only adjacent output; user imports manually. Source images are still \
+         deleted after strict verification.{reset}"
+    );
     let answer = read_line(&format!(
-        "\n   {bold}Choose Fast Mode path [{choices}] ({green}Enter = Shortest Path{reset}{bold}): \
-         {reset}"
+        "\n   {bold}Choose Fast Mode path [1/2] ({green}Enter = Shortest Path{reset}{bold}): {reset}"
     ))?;
     Ok(match answer.trim() {
         "2" => FastImgAction::Normal,
-        "3" if strategy != "avif" => FastImgAction::RestoreJpeg,
         _ => FastImgAction::ShortestPath,
     })
 }

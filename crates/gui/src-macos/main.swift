@@ -256,7 +256,8 @@ private enum ProcessorCommand {
             arguments += ["--mode", mode]
         }
 
-        if let strategy = values["strategy"] as? String, !strategy.isEmpty {
+        let strategy = values["strategy"] as? String
+        if let strategy, !strategy.isEmpty {
             guard ["avif", "jxl"].contains(strategy) else {
                 throw HostError(message: "process_media received an invalid strategy")
             }
@@ -265,9 +266,13 @@ private enum ProcessorCommand {
         for (key, flag) in [
             ("ultimate", "--ultimate"),
             ("verbose", "--verbose"),
-            ("shortestPath", "--shortest-path"),
         ] where values[key] as? Bool == true {
             arguments.append(flag)
+        }
+        if values["shortestPath"] as? Bool == true,
+           outputMode != "fast_img" || strategy == "avif"
+        {
+            arguments.append("--shortest-path")
         }
         if values["resume"] as? Bool == true {
             arguments.append("--resume")
@@ -298,13 +303,15 @@ private enum ProcessorCommand {
 }
 
 /// Returns true when the requested operation will send Apple Events to Photos.app.
-/// Both "fast_img" with --shortest-path (verified Photos import) and "icloud_import"
+/// Both AVIF "fast_img" with --shortest-path (verified Photos import) and "icloud_import"
 /// (explicit Photos/iCloud import mode) require the user to have granted Automation access
 /// to Photos before the backend process is launched.
 private func processingRequiresPhotosAutomation(_ values: [String: Any]) -> Bool {
     guard let mode = values["outputMode"] as? String else { return false }
     if mode == "icloud_import" { return true }
-    return mode == "fast_img" && values["shortestPath"] as? Bool == true
+    return mode == "fast_img"
+        && values["strategy"] as? String == "avif"
+        && values["shortestPath"] as? Bool == true
 }
 
 private enum PhotosAutomationPreflightError: LocalizedError {
@@ -1088,16 +1095,37 @@ private func runSelfTest() -> Int32 {
         ])
         let expected = [
             "--images-only", "--mode", "fast-img", "--strategy", "jxl", "--ultimate",
-            "--verbose", "--shortest-path", "--resume", "--retry", "/tmp/media",
+            "--verbose", "--resume", "--retry", "/tmp/media",
         ]
         guard arguments == expected else {
             fputs("native-host self-test argument mismatch: \(arguments)\n", stderr)
             return 1
         }
+        let avifArguments = try ProcessorCommand.arguments(from: [
+            "targetPath": "/tmp/media",
+            "processingMode": "images_only",
+            "outputMode": "fast_img",
+            "strategy": "avif",
+            "shortestPath": true,
+        ])
+        guard avifArguments == [
+            "--images-only", "--mode", "fast-img", "--strategy", "avif",
+            "--shortest-path", "/tmp/media",
+        ] else {
+            fputs("native-host self-test AVIF shortest-path mismatch: \(avifArguments)\n", stderr)
+            return 1
+        }
         guard
-            // fast_img + shortestPath → requires Photos Automation
+            // JXL fast_img remains local even if stale UI state requests shortestPath.
+            !processingRequiresPhotosAutomation([
+                "outputMode": "fast_img",
+                "strategy": "jxl",
+                "shortestPath": true,
+            ]),
+            // AVIF fast_img + shortestPath → requires Photos Automation
             processingRequiresPhotosAutomation([
                 "outputMode": "fast_img",
+                "strategy": "avif",
                 "shortestPath": true,
             ]),
             // fast_img without shortestPath → does NOT require

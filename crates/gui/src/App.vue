@@ -148,6 +148,10 @@ const appendLog = (entry: string) => {
 
 type ResumeAction = "resume" | "fresh" | "cancel";
 
+const shouldUseShortestPath = () =>
+  mfbToggles.shortestPath &&
+  (outputMode.value === "fast_img_avif" || outputMode.value === "fast_vid");
+
 const currentProcessorRequest = (isResume: boolean, isFresh = false) => {
   const targetOutputMode =
     outputMode.value === "fast_img_avif" ? "fast_img" : outputMode.value;
@@ -158,7 +162,6 @@ const currentProcessorRequest = (isResume: boolean, isFresh = false) => {
   } else if (outputMode.value === "fast_img") {
     strategy = "jxl";
   }
-
   return {
     targetPath: folderPath.value,
     processingMode: processingMode.value,
@@ -168,7 +171,7 @@ const currentProcessorRequest = (isResume: boolean, isFresh = false) => {
     verbose: mfbToggles.verboseMode,
     resume: isResume,
     fresh: isFresh,
-    shortestPath: mfbToggles.shortestPath,
+    shortestPath: shouldUseShortestPath(),
   };
 };
 
@@ -314,6 +317,9 @@ const generateCliCommand = () => {
   if (mfbToggles.ultimateMode) command += " --ultimate";
   if (mfbToggles.verboseMode) command += " --verbose";
   if (mfbToggles.resumeMode) command += " --resume";
+  if (shouldUseShortestPath()) {
+    command += " --shortest-path";
+  }
 
   command += ` ${shellQuote(targetPath)}`;
   return command;
