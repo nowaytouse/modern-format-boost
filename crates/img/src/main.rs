@@ -574,7 +574,7 @@ fn main_inner() -> anyhow::Result<()> {
                 base_dir,
                 flags: config_flags,
                 child_threads: 0,
-                cache: cache.clone(),
+                cache,
                 static_delivery: img_static_delivery,
                 error_mode: foundation::BatchErrorMode::current(),
             };
@@ -616,107 +616,11 @@ fn main_inner() -> anyhow::Result<()> {
         }
 
         Commands::CacheStats => {
-            if let Some(cache) = cache {
-                match cache.get_statistics() {
-                    Ok(stats) => {
-                        log_summary_header!(
-                            foundation::infra::static_logs::messages::LABEL_CACHE_AUDIT
-                        );
-                        let records = stats.total_records();
-                        let size_mb = stats.db_size_mb();
-                        foundation::log_stat!(
-                            foundation::infra::static_logs::messages::LABEL_CACHE_INVENTORY,
-                            format!(
-                                "Persistent Cache Audit: {records} records, database size {size_mb:.2} MB"
-                            )
-                        );
-                        let permille = {
-                            let ratio = Rational::from(stats.db_size_bytes)
-                                / Rational::from(
-                                    foundation::analysis_cache::CACHE_SIZE_LIMIT_BYTES.max(1),
-                                );
-                            let res: Rational = ratio * Rational::from(10_000);
-                            res.to_f64()
-                        };
-                        let usage_percent = permille / 100.0;
-                        let limit_gb =
-                            foundation::constants::CACHE_SIZE_LIMIT_BYTES / 1024 / 1024 / 1024;
-
-                        foundation::log_stat!(
-                            foundation::infra::static_logs::messages::LABEL_CACHE_STORAGE,
-                            format!(
-                                "Persistent Cache Audit: Capacity utilization at {usage_percent:.1}% (limit {limit_gb} GB)"
-                            )
-                        );
-                        let schema = stats.schema_version;
-                        let algorithm = stats.current_algorithm_version;
-                        foundation::log_stat!(
-                            foundation::infra::static_logs::messages::LABEL_CACHE_SCHEMA,
-                            format!(
-                                "Persistent Cache Audit: schema v{schema}, current algorithm v{algorithm}"
-                            )
-                        );
-
-                        if !stats.algorithm_version_distribution.is_empty() {
-                            let mut versions: Vec<_> =
-                                stats.algorithm_version_distribution.iter().collect();
-                            versions.sort_by_key(|(v, _)| *v);
-                            for (version, count) in versions {
-                                let marker = match (*version).cmp(&stats.current_algorithm_version)
-                                {
-                                    core::cmp::Ordering::Less => "(legacy/stale)",
-                                    core::cmp::Ordering::Equal => "(active/current)",
-                                    core::cmp::Ordering::Greater => {
-                                        foundation::modern_ui::symbols::pick(
-                                            "❓ (experimental)",
-                                            "[?] (experimental)",
-                                        )
-                                    }
-                                };
-                                foundation::log_detail!(format!(
-                                    "Persistent Cache Audit: algorithm v{version} -> {count} records {marker}"
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log_fatal!(
-                            "Cache Audit",
-                            format!("Persistent Cache Audit: Integrity scan failed: {e}")
-                        );
-                        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-                    }
-                }
-            } else {
-                log_fatal!(
-                    "System Audit",
-                    "Cache infrastructure is not initialized or unavailable in the current context."
-                );
-                std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-            }
+            report_cache_statistics(cache);
         }
 
         Commands::LockCheck { input } => {
-            let input_abs = foundation::media_conversion_gate::canonicalize_for_tool_input(&input);
-            if input_abs.is_dir() {
-                // Try to acquire lock. If it fails, report and exit immediately with code 3.
-                match foundation::acquire_dir_lock(&input_abs) {
-                    Ok(_lock) => {
-                        foundation::log_success!(
-                            foundation::infra::static_logs::messages::LABEL_SUCCESS,
-                            "Directory Lock acquired: path is available for processing."
-                        );
-                    }
-                    Err(e) => {
-                        log_fatal!(
-                            "Directory Lock Audit",
-                            &foundation::infra::static_logs::messages::MSG_MAIN_LOCK_FAIL
-                                .replace("{}", &e.to_string())
-                        );
-                        std::process::exit(foundation::constants::EXIT_CODE_LOCK_FAILURE);
-                    }
-                }
-            }
+            check_directory_lock(&input);
         }
 
         Commands::PathHash { input } => {
@@ -724,153 +628,11 @@ fn main_inner() -> anyhow::Result<()> {
             foundation::log_detail!(&hash);
         }
         Commands::DbHealth => {
-            foundation::log_info!(
-                foundation::infra::static_logs::messages::LABEL_INFRASTRUCTURE_AUDIT,
-                foundation::infra::static_logs::messages::DB_HEALTH_START
-            );
-            match foundation::database::check_database_health() {
-                Ok(report) => {
-                    foundation::log_info!(
-                        foundation::infra::static_logs::messages::LABEL_SESSION_SUMMARY,
-                        foundation::infra::static_logs::messages::DB_HEALTH_FINALIZED
-                    );
-                    foundation::log_info!(
-                        foundation::infra::static_logs::messages::LABEL_REPORT,
-                        &foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN.replacen(
-                            "{}",
-                            if report.connected {
-                                foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN_OK
-                            } else {
-                                foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN_FAIL
-                            },
-                            1
-                        )
-                    );
-                }
-                Err(e) => {
-                    foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                        "db_health_abort",
-                        foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_ABORT
-                            .replace("{}", &e.to_string()),
-                    );
-                }
-            }
+            report_database_health();
         }
 
         Commands::IngestSamples { input, label } => {
-            let mut conn = foundation::database::open_pg_client()?;
-            foundation::image_quality_db::init_quality_schema(&mut conn)?;
-
-            if let Some(lbl) = &label {
-                log_detail!(format!(
-                    "{save} Active Learning Audit: Ingesting labeled samples [{lbl}] from {input_path}",
-                    save = foundation::modern_ui::symbols::SAVE,
-                    input_path = input.display(),
-                ));
-            } else {
-                log_detail!(format!(
-                    "{save} Active Learning Audit: Ingesting raw samples from {input_path}",
-                    save = foundation::modern_ui::symbols::SAVE,
-                    input_path = input.display(),
-                ));
-            }
-
-            let mut count = 0;
-            let mut failures = Vec::new();
-            let mut dirs_to_visit = vec![input];
-
-            while let Some(dir) = dirs_to_visit.pop() {
-                let entries = match std::fs::read_dir(&dir) {
-                    Ok(entries) => entries,
-                    Err(e) => {
-                        let message = format!("Failed to read directory {}: {}", dir.display(), e);
-                        foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                            "ingest", &message,
-                        );
-                        failures.push(message);
-                        continue;
-                    }
-                };
-
-                for entry in entries {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(e) => {
-                            let message = format!(
-                                "Failed to inspect directory entry under {}: {}",
-                                dir.display(),
-                                e
-                            );
-                            foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                                "ingest", &message,
-                            );
-                            failures.push(message);
-                            continue;
-                        }
-                    };
-
-                    let path = entry.path();
-                    if path.is_dir() {
-                        dirs_to_visit.push(path);
-                    } else if path.is_file() {
-                        let ext =
-                            foundation::media_conversion_gate::path_extension_lowercase_or_empty(
-                                &path,
-                                &format!("ingest scan {}", path.display()),
-                            );
-
-                        if [
-                            "jpg", "jpeg", "png", "heic", "heif", "jxl", "tiff", "bmp", "webp",
-                        ]
-                        .contains(&ext.as_str())
-                        {
-                            let default_label =
-                                foundation::media_conversion_gate::ingest_quality_label_or_default(
-                                    label.as_deref(),
-                                );
-                            if let Err(e) = foundation::image_quality_db::ingest_quality_sample(
-                                &mut conn,
-                                &path,
-                                &default_label,
-                                "fusion_v1",
-                            ) {
-                                let message = format!("Failed to ingest {}: {}", path.display(), e);
-                                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                                    "ingest", &message,
-                                );
-                                failures.push(message);
-                            } else {
-                                count += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            foundation::log_success!(
-                foundation::infra::static_logs::messages::LABEL_SUCCESS,
-                format!(
-                    "{check} Active Learning Audit: Successfully ingested {count} feature vectors",
-                    check = foundation::modern_ui::symbols::CHECK,
-                )
-            );
-            if !failures.is_empty() {
-                let sample_failures = failures
-                    .iter()
-                    .take(3)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                anyhow::bail!(
-                    "Ingest completed with {} successful samples and {} failures{}",
-                    count,
-                    failures.len(),
-                    if sample_failures.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; sample failures: {sample_failures}")
-                    }
-                );
-            }
+            ingest_quality_samples(input, label.as_deref())?;
         }
 
         Commands::FastImg {
@@ -916,10 +678,244 @@ fn main_inner() -> anyhow::Result<()> {
         }
     }
 
-    // Historically waited for macOS UI confirmation via foundation::macos_ui.
-    // The foundation crate no longer exposes that module; keep this as a no-op.
-
     Ok(())
+}
+
+fn report_cache_statistics(cache: Option<Arc<AnalysisCache>>) {
+    let Some(cache) = cache else {
+        log_fatal!(
+            "System Audit",
+            "Cache infrastructure is not initialized or unavailable in the current context."
+        );
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    };
+
+    let stats = match cache.get_statistics() {
+        Ok(stats) => stats,
+        Err(e) => {
+            log_fatal!(
+                "Cache Audit",
+                format!("Persistent Cache Audit: Integrity scan failed: {e}")
+            );
+            std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+        }
+    };
+
+    log_summary_header!(foundation::infra::static_logs::messages::LABEL_CACHE_AUDIT);
+    let records = stats.total_records();
+    let size_mb = stats.db_size_mb();
+    foundation::log_stat!(
+        foundation::infra::static_logs::messages::LABEL_CACHE_INVENTORY,
+        format!("Persistent Cache Audit: {records} records, database size {size_mb:.2} MB")
+    );
+    let ratio = Rational::from(stats.db_size_bytes)
+        / Rational::from(foundation::analysis_cache::CACHE_SIZE_LIMIT_BYTES.max(1));
+    let usage_percent = (ratio * Rational::from(10_000)).to_f64() / 100.0;
+    let limit_gb = foundation::constants::CACHE_SIZE_LIMIT_BYTES / 1024 / 1024 / 1024;
+
+    foundation::log_stat!(
+        foundation::infra::static_logs::messages::LABEL_CACHE_STORAGE,
+        format!(
+            "Persistent Cache Audit: Capacity utilization at {usage_percent:.1}% (limit {limit_gb} GB)"
+        )
+    );
+    let schema = stats.schema_version;
+    let algorithm = stats.current_algorithm_version;
+    foundation::log_stat!(
+        foundation::infra::static_logs::messages::LABEL_CACHE_SCHEMA,
+        format!("Persistent Cache Audit: schema v{schema}, current algorithm v{algorithm}")
+    );
+
+    let mut versions: Vec<_> = stats.algorithm_version_distribution.iter().collect();
+    versions.sort_by_key(|(version, _)| *version);
+    for (version, count) in versions {
+        let marker = match (*version).cmp(&stats.current_algorithm_version) {
+            core::cmp::Ordering::Less => "(legacy/stale)",
+            core::cmp::Ordering::Equal => "(active/current)",
+            core::cmp::Ordering::Greater => {
+                foundation::modern_ui::symbols::pick("❓ (experimental)", "[?] (experimental)")
+            }
+        };
+        foundation::log_detail!(format!(
+            "Persistent Cache Audit: algorithm v{version} -> {count} records {marker}"
+        ));
+    }
+}
+
+fn check_directory_lock(input: &Path) {
+    let input_abs = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
+    if !input_abs.is_dir() {
+        return;
+    }
+
+    match foundation::acquire_dir_lock(&input_abs) {
+        Ok(_lock) => {
+            foundation::log_success!(
+                foundation::infra::static_logs::messages::LABEL_SUCCESS,
+                "Directory Lock acquired: path is available for processing."
+            );
+        }
+        Err(e) => {
+            log_fatal!(
+                "Directory Lock Audit",
+                &foundation::infra::static_logs::messages::MSG_MAIN_LOCK_FAIL
+                    .replace("{}", &e.to_string())
+            );
+            std::process::exit(foundation::constants::EXIT_CODE_LOCK_FAILURE);
+        }
+    }
+}
+
+fn report_database_health() {
+    foundation::log_info!(
+        foundation::infra::static_logs::messages::LABEL_INFRASTRUCTURE_AUDIT,
+        foundation::infra::static_logs::messages::DB_HEALTH_START
+    );
+    match foundation::database::check_database_health() {
+        Ok(report) => {
+            foundation::log_info!(
+                foundation::infra::static_logs::messages::LABEL_SESSION_SUMMARY,
+                foundation::infra::static_logs::messages::DB_HEALTH_FINALIZED
+            );
+            foundation::log_info!(
+                foundation::infra::static_logs::messages::LABEL_REPORT,
+                &foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN.replacen(
+                    "{}",
+                    if report.connected {
+                        foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN_OK
+                    } else {
+                        foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_CONN_FAIL
+                    },
+                    1
+                )
+            );
+        }
+        Err(e) => {
+            foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                "db_health_abort",
+                foundation::infra::static_logs::messages::MSG_MAIN_DB_HEALTH_ABORT
+                    .replace("{}", &e.to_string()),
+            );
+        }
+    }
+}
+
+fn ingest_quality_samples(input: PathBuf, label: Option<&str>) -> anyhow::Result<()> {
+    let mut conn = foundation::database::open_pg_client()?;
+    foundation::image_quality_db::init_quality_schema(&mut conn)?;
+
+    match label {
+        Some(label) => log_detail!(format!(
+            "{save} Active Learning Audit: Ingesting labeled samples [{label}] from {input_path}",
+            save = foundation::modern_ui::symbols::SAVE,
+            input_path = input.display(),
+        )),
+        None => log_detail!(format!(
+            "{save} Active Learning Audit: Ingesting raw samples from {input_path}",
+            save = foundation::modern_ui::symbols::SAVE,
+            input_path = input.display(),
+        )),
+    }
+
+    let mut count = 0;
+    let mut failures = Vec::new();
+    let mut dirs_to_visit = vec![input];
+    while let Some(dir) = dirs_to_visit.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                let message = format!("Failed to read directory {}: {e}", dir.display());
+                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                    "ingest", &message,
+                );
+                failures.push(message);
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    let message = format!(
+                        "Failed to inspect directory entry under {}: {e}",
+                        dir.display()
+                    );
+                    foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                        "ingest", &message,
+                    );
+                    failures.push(message);
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            if path.is_dir() {
+                dirs_to_visit.push(path);
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+
+            let ext = foundation::media_conversion_gate::path_extension_lowercase_or_empty(
+                &path,
+                &format!("ingest scan {}", path.display()),
+            );
+            if ![
+                "jpg", "jpeg", "png", "heic", "heif", "jxl", "tiff", "bmp", "webp",
+            ]
+            .contains(&ext.as_str())
+            {
+                continue;
+            }
+
+            let default_label =
+                foundation::media_conversion_gate::ingest_quality_label_or_default(label);
+            if let Err(e) = foundation::image_quality_db::ingest_quality_sample(
+                &mut conn,
+                &path,
+                &default_label,
+                "fusion_v1",
+            ) {
+                let message = format!("Failed to ingest {}: {e}", path.display());
+                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                    "ingest", &message,
+                );
+                failures.push(message);
+            } else {
+                count += 1;
+            }
+        }
+    }
+
+    foundation::log_success!(
+        foundation::infra::static_logs::messages::LABEL_SUCCESS,
+        format!(
+            "{check} Active Learning Audit: Successfully ingested {count} feature vectors",
+            check = foundation::modern_ui::symbols::CHECK,
+        )
+    );
+    if failures.is_empty() {
+        return Ok(());
+    }
+
+    let sample_failures = failures
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    anyhow::bail!(
+        "Ingest completed with {} successful samples and {} failures{}",
+        count,
+        failures.len(),
+        if sample_failures.is_empty() {
+            String::new()
+        } else {
+            format!("; sample failures: {sample_failures}")
+        }
+    );
 }
 
 fn verify_conversion(
@@ -1657,6 +1653,427 @@ fn dispatch_static_conversion(
     })
 }
 
+#[derive(Default)]
+struct ImageBatchCounters {
+    success: AtomicUsize,
+    skipped: AtomicUsize,
+    failed: AtomicUsize,
+    ignored: AtomicUsize,
+    processed: AtomicUsize,
+    input_bytes: core::sync::atomic::AtomicU64,
+    output_bytes: core::sync::atomic::AtomicU64,
+}
+
+struct ImageBatchWorker<'a> {
+    config: &'a AutoConvertConfig,
+    checkpoint: Option<&'a foundation::checkpoint::Manager>,
+    counters: &'a ImageBatchCounters,
+    failed_paths: &'a std::sync::Mutex<Vec<(PathBuf, String)>>,
+    pause_controller: &'a PauseController,
+    abort_requested: &'a AtomicBool,
+    abort_reason: &'a std::sync::Mutex<Option<String>>,
+    progress_bar: &'a foundation::CoarseProgressBar,
+    start_time: Instant,
+    total: usize,
+}
+
+impl ImageBatchWorker<'_> {
+    fn advance(&self, path: &Path) {
+        let current = self.counters.processed.fetch_add(1, Ordering::Relaxed) + 1;
+        foundation::progress_mode::write_progress_line_to_run_log(
+            self.start_time.elapsed().as_secs(),
+            foundation::numeric_cast::usize_to_u64(current),
+            foundation::numeric_cast::usize_to_u64(self.total),
+            &foundation::media_conversion_gate::path_file_name_for_log(path),
+        );
+        self.progress_bar
+            .set(foundation::numeric_cast::usize_to_u64(current));
+    }
+
+    fn record_failure(&self, path: &Path, reason: &str, request_abort: bool) {
+        self.counters.failed.fetch_add(1, Ordering::Relaxed);
+        foundation::progress_mode::image_processed_failure();
+        foundation::media_conversion_gate::mutex_guard_or_recover(
+            "failed_paths_acc",
+            self.failed_paths.lock(),
+        )
+        .push((path.to_path_buf(), reason.to_string()));
+        if request_abort && !self.abort_requested.swap(true, Ordering::SeqCst) {
+            *foundation::media_conversion_gate::mutex_guard_or_recover(
+                "img_batch_abort_reason",
+                self.abort_reason.lock(),
+            ) = Some(format!("{}: {reason}", path.display()));
+        }
+    }
+
+    fn process(&self, path: &Path) {
+        let file_name = foundation::media_conversion_gate::path_file_name_for_log(path);
+        let span = tracing::info_span!("image_processing", file = %path.display());
+        let _enter = span.enter();
+
+        self.progress_bar.set_message(&file_name);
+        foundation::infra::static_logs::log_task_start_path(
+            Some(path),
+            &path.display().to_string(),
+        );
+
+        if let Some(checkpoint) = self.checkpoint
+            && checkpoint.is_completed(path)
+        {
+            foundation::progress_mode::image_skipped(
+                path,
+                "resume checkpoint: already completed in progress file",
+            );
+            self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+            self.advance(path);
+            return;
+        }
+
+        match auto_convert_single_file(path, self.config) {
+            Ok(result) => {
+                if result.ignored {
+                    self.counters.ignored.fetch_add(1, Ordering::Relaxed);
+                } else if result.skipped {
+                    self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+                } else if let Some(e) = self
+                    .checkpoint
+                    .and_then(|checkpoint| checkpoint.mark_completed(path).err())
+                {
+                    foundation::media_conversion_gate::delivery_api_path_fallback_audit(
+                        "checkpoint_mark_completed",
+                        path,
+                        format!("failed to mark completed: {e}"),
+                    );
+                    self.record_failure(
+                        path,
+                        &format!("failed to mark checkpoint complete: {e}"),
+                        true,
+                    );
+                } else {
+                    foundation::infra::static_logs::log_success_at_with_pipeline(
+                        &format!(
+                            "{} Convert Audit",
+                            foundation::modern_ui::symbols::pick(
+                                foundation::modern_ui::symbols::SUCCESS,
+                                foundation::modern_ui::symbols::plain::SUCCESS
+                            )
+                        ),
+                        "img",
+                        Some(path),
+                        &result.message,
+                    );
+                    self.counters.success.fetch_add(1, Ordering::Relaxed);
+                    foundation::progress_mode::image_processed_success();
+                    self.counters
+                        .input_bytes
+                        .fetch_add(result.original_size, Ordering::Relaxed);
+                    if let Some(output_size) = result.output_size {
+                        self.counters
+                            .output_bytes
+                            .fetch_add(output_size, Ordering::Relaxed);
+                    }
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                if let Some(reason) = disk_full_pause_reason(&error_text) {
+                    if self.pause_controller.request_pause(path, reason.clone()) {
+                        foundation::log_detail!(
+                            "⏸ [Batch] Paused at {}: {}",
+                            path.display(),
+                            reason
+                        );
+                    }
+                    return;
+                }
+
+                let unified = error.chain().find_map(|cause| {
+                    cause.downcast_ref::<foundation::unified_error::UnifiedError>()
+                });
+                let is_skip = unified.map_or_else(
+                    || error_text.starts_with("Skipped:"),
+                    foundation::unified_error::UnifiedError::is_skip,
+                );
+                if is_skip {
+                    let copy_error = self.config.output_dir.as_ref().and_then(|output_dir| {
+                        foundation::copy_on_skip_or_fail(
+                            path,
+                            Some(output_dir),
+                            self.config.base_dir.as_deref(),
+                            self.config.verbose(),
+                        )
+                        .err()
+                    });
+                    if let Some(copy_error) = copy_error {
+                        log_fatal!(
+                            "Fatal Integrity Violation",
+                            &format!(
+                                "Critical Data Link failure after skip ({}): {}. DATA LOSS RISK!",
+                                path.display(),
+                                copy_error
+                            )
+                        );
+                        self.record_failure(
+                            path,
+                            &format!("failed to preserve skipped source: {copy_error}"),
+                            true,
+                        );
+                    } else {
+                        foundation::progress_mode::image_skipped(path, &error_text);
+                        self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+                        foundation::progress_mode::image_processed_success();
+                    }
+                } else {
+                    if error_text.contains("Failed to open file")
+                        || error_text.contains("ImageReadError")
+                    {
+                        foundation::log_auto_error!(
+                            "Image analysis",
+                            "Failed to read/analyze {}: {}. Original file will be preserved.",
+                            path.display(),
+                            error
+                        );
+                    } else {
+                        foundation::log_auto_error!(
+                            "Image conversion",
+                            "Failed {}: {}. Output discarded (Hard Error).",
+                            path.display(),
+                            error
+                        );
+                    }
+                    foundation::infra::static_logs::log_file_outcome_audit(
+                        "img",
+                        "failed",
+                        path,
+                        &error_text,
+                    );
+                    let request_abort = image_batch_should_abort(self.config.error_mode, &error);
+                    self.record_failure(path, &error_text, request_abort);
+                }
+            }
+        }
+        self.advance(path);
+    }
+}
+
+fn process_image_batch(
+    pool: &rayon::ThreadPool,
+    files: &[PathBuf],
+    max_threads: usize,
+    worker: &ImageBatchWorker<'_>,
+) {
+    let next_index = AtomicUsize::new(0);
+    pool.install(|| {
+        rayon::scope(|scope| {
+            for _ in 0..max_threads {
+                let next_index = &next_index;
+                scope.spawn(|_| {
+                    loop {
+                        if worker.pause_controller.is_paused()
+                            || worker.abort_requested.load(Ordering::SeqCst)
+                        {
+                            break;
+                        }
+
+                        let index = next_index.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = files.get(index) else {
+                            break;
+                        };
+                        worker.process(path);
+                    }
+                });
+            }
+        });
+    });
+}
+
+struct ImageBatchFinalization<'a> {
+    config: &'a AutoConvertConfig,
+    recursive: bool,
+    saved_dir_timestamps: Option<&'a foundation::metadata::DirectoryTimestampsMap>,
+    checkpoint: Option<foundation::checkpoint::Manager>,
+    counters: &'a ImageBatchCounters,
+    pause_controller: &'a PauseController,
+    abort_reason: Option<String>,
+    failed_paths: &'a std::sync::Mutex<Vec<(PathBuf, String)>>,
+    start_time: Instant,
+    total: usize,
+}
+
+impl ImageBatchFinalization<'_> {
+    fn finish(self) -> anyhow::Result<()> {
+        let success_count = self.counters.success.load(Ordering::Relaxed);
+        let skipped_count = self.counters.skipped.load(Ordering::Relaxed);
+        let failed_count = self.counters.failed.load(Ordering::Relaxed);
+        let ignored_count = self.counters.ignored.load(Ordering::Relaxed);
+        let processed_count = self.counters.processed.load(Ordering::Relaxed);
+
+        let mut result = Summary::new();
+        let mut post_run_errors = Vec::new();
+        result.succeeded = success_count;
+        result.failed = failed_count;
+        result.skipped = skipped_count;
+        result.ignored = ignored_count;
+        result.total = processed_count;
+        if let Some(pause) = self.pause_controller.pause_info() {
+            result.pause(
+                pause.path,
+                pause.reason,
+                self.total.saturating_sub(processed_count),
+            );
+        }
+
+        if !result.paused
+            && self.abort_reason.is_none()
+            && let Some(output_dir) = self.config.output_dir.as_ref()
+        {
+            log_detail!("");
+            foundation::log_static!(
+                info,
+                foundation::infra::static_logs::messages::COPYING_UNSUPPORTED
+            );
+            let unsupported_base = foundation::media_conversion_gate::base_dir_or_default(
+                self.config.base_dir.as_deref(),
+                "copy_unsupported_base",
+            );
+            foundation::siegfried::audit_unsupported_identities(
+                &foundation::collect_unsupported_files(unsupported_base, self.recursive),
+            );
+            let copy_result =
+                foundation::copy_unsupported_files(unsupported_base, output_dir, self.recursive);
+            if copy_result.copied > 0 {
+                log_detail!(&format!("Copied {} unsupported files", copy_result.copied));
+            }
+            if copy_result.failed > 0 {
+                log_failure!(
+                    "Unsupported Files",
+                    &format!("Failed to copy {} files", copy_result.failed),
+                );
+                post_run_errors.push(format!(
+                    "Unsupported file copy failed for {} files in {}",
+                    copy_result.failed,
+                    output_dir.display()
+                ));
+            }
+
+            auto_convert_directory_output_completeness_verification(
+                self.config,
+                output_dir,
+                self.recursive,
+                ignored_count,
+                failed_count,
+                &mut result,
+                &mut post_run_errors,
+            );
+        }
+
+        if !result.paused
+            && self.abort_reason.is_none()
+            && let Some(output_dir) = self.config.output_dir.as_ref()
+            && let Some(base_dir) = self.config.base_dir.as_ref()
+        {
+            log_detail!("");
+            foundation::log_static!(
+                info,
+                foundation::infra::static_logs::messages::METADATA_SYNC
+            );
+            if let Err(e) = foundation::preserve_directory(base_dir, output_dir) {
+                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                    "metadata_tree_sync_failed",
+                    foundation::infra::static_logs::messages::MSG_METADATA_TREE_FAIL
+                        .replace("{}", &e.to_string()),
+                );
+                post_run_errors.push(format!(
+                    "Directory metadata synchronization failed for {} -> {}: {e}",
+                    base_dir.display(),
+                    output_dir.display()
+                ));
+            }
+        }
+
+        if let Some(saved) = self.saved_dir_timestamps {
+            if !result.paused
+                && self.abort_reason.is_none()
+                && let Some(output_dir) = self.config.output_dir.as_ref()
+                && let Some(base_dir) = self.config.base_dir.as_ref()
+                && let Err(e) =
+                    foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
+            {
+                post_run_errors.push(format!(
+                    "Failed to apply saved directory timestamps to {}: {e}",
+                    output_dir.display()
+                ));
+            }
+            if let Err(e) = foundation::restore_directory_timestamps(saved) {
+                post_run_errors.push(format!(
+                    "Failed to restore source directory timestamps after batch run: {e}"
+                ));
+            }
+            log_detail!(foundation::infra::static_logs::messages::DIR_TIMESTAMPS_RESTORED);
+        }
+
+        foundation::infra::static_logs::log_batch_complete_audit(
+            "img",
+            success_count,
+            skipped_count,
+            ignored_count,
+            failed_count,
+            processed_count,
+        );
+        print_summary(
+            &result,
+            self.start_time.elapsed(),
+            self.counters.input_bytes.load(Ordering::Relaxed),
+            self.counters.output_bytes.load(Ordering::Relaxed),
+            "Image Conversion",
+        );
+
+        if let Some(checkpoint) = self.checkpoint {
+            let cleanup = !result.paused && failed_count == 0 && self.abort_reason.is_none();
+            let checkpoint_result = if cleanup {
+                checkpoint.cleanup()
+            } else {
+                checkpoint.release_lock()
+            };
+            if let Err(e) = checkpoint_result {
+                if cleanup {
+                    foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                        "checkpoint_cleanup_failed",
+                        format!("cleanup failed: {e}"),
+                    );
+                    post_run_errors.push(format!("Checkpoint cleanup failed: {e}"));
+                } else {
+                    foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+                        "checkpoint_lock_release_failed",
+                        format!("release lock failed: {e}"),
+                    );
+                    post_run_errors.push(format!("Checkpoint lock release failed: {e}"));
+                }
+            }
+        }
+
+        if !post_run_errors.is_empty() {
+            anyhow::bail!(post_run_errors.join(" | "));
+        }
+        if failed_count == 0 {
+            return Ok(());
+        }
+
+        let paths = foundation::media_conversion_gate::mutex_guard_or_recover(
+            "failed_paths_enum",
+            self.failed_paths.lock(),
+        );
+        for (path, reason) in paths.iter() {
+            foundation::log_auto_error!("Failed file", "{}: {}", path.display(), reason);
+        }
+        drop(paths);
+        if let Some(reason) = self.abort_reason {
+            anyhow::bail!("Batch aborted by error policy after {reason}");
+        }
+        anyhow::bail!("Batch completed with {failed_count} failed file(s)");
+    }
+}
+
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1790,17 +2207,10 @@ fn auto_convert_directory(
 
     auto_convert_directory_disk_space_precheck(input, config, &files);
 
-    let success = AtomicUsize::new(0);
-    let skipped = AtomicUsize::new(0);
-    let failed = AtomicUsize::new(0);
-    let ignored = AtomicUsize::new(0);
-    let processed = AtomicUsize::new(0);
+    let counters = ImageBatchCounters::default();
     // Collect (path, reason) for every hard failure so we can enumerate them at
     // session end instead of asking the user to grep log shards.
-    let failed_paths: Arc<std::sync::Mutex<Vec<(std::path::PathBuf, String)>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-    let actual_input_bytes = core::sync::atomic::AtomicU64::new(0);
-    let actual_output_bytes = core::sync::atomic::AtomicU64::new(0);
+    let failed_paths = std::sync::Mutex::new(Vec::new());
     let pause_controller = Arc::new(PauseController::new());
     let abort_requested = AtomicBool::new(false);
     let abort_reason = std::sync::Mutex::new(None::<String>);
@@ -1847,418 +2257,43 @@ fn auto_convert_directory(
         }
     }
 
-    let next_index = AtomicUsize::new(0);
-    pool.install(|| {
-rayon::scope(|scope| {
-for _ in 0..max_threads {
-let next_index = &next_index;
-                scope.spawn(|_| loop {
-                    if pause_controller.is_paused() || abort_requested.load(Ordering::SeqCst) {
-                        break;
-                    }
-
-                    let index = next_index.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-
-                    let Some(path) = files.get(index) else {
-                        break;
-                    };
-
-                    let file_name =
-                        foundation::media_conversion_gate::path_file_name_for_log(path);
-                    let span = tracing::info_span!("image_processing", file = %path.display());
-                    let _enter = span.enter();
-
-                    progress_bar.set_message(&file_name);
-                    foundation::infra::static_logs::log_task_start_path(Some(path), &path.display().to_string());
-
-                    // Check if already completed (thread-safe)
-                    if let Some(cp) = checkpoint.as_ref() && cp.is_completed(path) {
-                        foundation::progress_mode::image_skipped(
-                            path,
-                            "resume checkpoint: already completed in progress file",
-                        );
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                        let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                        foundation::progress_mode::write_progress_line_to_run_log(
-                            start_time.elapsed().as_secs(),
-                            foundation::numeric_cast::usize_to_u64(current),
-                            foundation::numeric_cast::usize_to_u64(total),
-                            &foundation::media_conversion_gate::path_file_name_for_log(path),
-                        );
-                        progress_bar.set(foundation::numeric_cast::usize_to_u64(current));
-                        continue;
-                    }
-
-                    match auto_convert_single_file(path, config) {
-                        Ok(result) => {
-                            if result.ignored {
-                                ignored.fetch_add(1, Ordering::Relaxed);
-                            } else if result.skipped {
-                                skipped.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                let checkpoint_error = checkpoint
-                                    .as_ref()
-                                    .and_then(|cp| cp.mark_completed(path).err());
-                                if let Some(e) = checkpoint_error {
-                                    foundation::media_conversion_gate::delivery_api_path_fallback_audit(
-                                        "checkpoint_mark_completed",
-                                        path,
-                                        format!("failed to mark completed: {e}"),
-                                    );
-                                    let reason = format!("failed to mark checkpoint complete: {e}");
-                                    failed.fetch_add(1, Ordering::Relaxed);
-                                    foundation::progress_mode::image_processed_failure();
-                                    foundation::media_conversion_gate::mutex_guard_or_recover(
-                                        "failed_paths_acc",
-                                        failed_paths.lock(),
-                                    )
-                                    .push((path.clone(), reason.clone()));
-                                    if !abort_requested.swap(true, Ordering::SeqCst) {
-                                        *foundation::media_conversion_gate::mutex_guard_or_recover(
-                                            "img_batch_abort_reason",
-                                            abort_reason.lock(),
-                                        ) = Some(format!("{}: {reason}", path.display()));
-                                    }
-                                } else {
-                                    foundation::infra::static_logs::log_success_at_with_pipeline(
-                                        &format!(
-                                            "{} Convert Audit",
-                                            foundation::modern_ui::symbols::pick(
-                                                foundation::modern_ui::symbols::SUCCESS,
-                                                foundation::modern_ui::symbols::plain::SUCCESS
-                                            )
-                                        ),
-                                        "img",
-                                        Some(path),
-                                        &result.message,
-                                    );
-                                    success.fetch_add(1, Ordering::Relaxed);
-                                    foundation::progress_mode::image_processed_success();
-                                    actual_input_bytes
-                                        .fetch_add(result.original_size, Ordering::Relaxed);
-                                    if let Some(out_size) = result.output_size {
-                                        actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if let Some(reason) = disk_full_pause_reason(&err_str) {
-                                if pause_controller.request_pause(path, reason.clone()) {
-                                    foundation::log_detail!(
-                                        "⏸ [Batch] Paused at {}: {}",
-                                        path.display(),
-                                        reason
-                                    );
-                                }
-                                continue;
-                            }
-
-                            let unified = e.chain().find_map(|cause| {
-                                cause.downcast_ref::<foundation::unified_error::UnifiedError>()
-                            });
-                            let is_skip = match unified {
-                                // String fallback: only the controlled "Skipped:" sentinel prefix
-                                // counts as a skip. Substring matches (e.g. a hard error merely
-                                // containing "Skipped" or "already optimized") are failures.
-                                None => err_str.starts_with("Skipped:"),
-                                Some(ue) => ue.is_skip(),
-                            };
-
-                            if is_skip {
-                                // Copy original file to output directory to prevent data loss for skips
-                                let copy_error = config.output_dir.as_ref().and_then(|output_dir| {
-                                    foundation::copy_on_skip_or_fail(
-                                        path,
-                                        Some(output_dir),
-                                        config.base_dir.as_deref(),
-                                        config.verbose(),
-                                    )
-                                    .err()
-                                });
-                                if let Some(copy_err) = copy_error {
-                                    log_fatal!(
-                                        "Fatal Integrity Violation",
-                                        &format!(
-                                            "Critical Data Link failure after skip ({}): {}. DATA LOSS RISK!",
-                                            path.display(),
-                                            copy_err
-                                        )
-                                    );
-                                    let reason =
-                                        format!("failed to preserve skipped source: {copy_err}");
-                                    failed.fetch_add(1, Ordering::Relaxed);
-                                    foundation::progress_mode::image_processed_failure();
-                                    foundation::media_conversion_gate::mutex_guard_or_recover(
-                                        "failed_paths_acc",
-                                        failed_paths.lock(),
-                                    )
-                                    .push((path.clone(), reason.clone()));
-                                    if !abort_requested.swap(true, Ordering::SeqCst) {
-                                        *foundation::media_conversion_gate::mutex_guard_or_recover(
-                                            "img_batch_abort_reason",
-                                            abort_reason.lock(),
-                                        ) = Some(format!("{}: {reason}", path.display()));
-                                    }
-                                } else {
-                                    foundation::progress_mode::image_skipped(path, &err_str);
-                                    skipped.fetch_add(1, Ordering::Relaxed);
-                                    foundation::progress_mode::image_processed_success();
-                                }
-                            } else {
-                                // Classify as read/analysis failure only on unambiguous sentinel types
-                                let is_read_error = err_str.contains("Failed to open file")
-                                    || err_str.contains("ImageReadError");
-
-                                if is_read_error {
-                                    foundation::log_auto_error!(
-                                        "Image analysis",
-                                        "Failed to read/analyze {}: {}. Original file will be preserved.",
-                                        path.display(),
-                                        e
-                                    );
-                                } else {
-                                    foundation::log_auto_error!(
-                                        "Image conversion",
-                                        "Failed {}: {}. Output discarded (Hard Error).",
-                                        path.display(),
-                                        e
-                                    );
-                                }
-
-                                foundation::infra::static_logs::log_file_outcome_audit(
-                                    "img",
-                                    "failed",
-                                    path,
-                                    &err_str,
-                                );
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                foundation::progress_mode::image_processed_failure();
-                                // Accumulate for end-of-session enumeration
-                                {
-                                    let mut v = foundation::media_conversion_gate::mutex_guard_or_recover("failed_paths_acc", failed_paths.lock());
-                                    v.push((path.clone(), err_str.clone()));
-                                }
-                                if image_batch_should_abort(config.error_mode, &e)
-                                    && !abort_requested.swap(true, Ordering::SeqCst)
-                                {
-                                    *foundation::media_conversion_gate::mutex_guard_or_recover(
-                                        "img_batch_abort_reason",
-                                        abort_reason.lock(),
-                                    ) = Some(format!("{}: {err_str}", path.display()));
-                                }
-                            }
-                        }
-                    }
-                    let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    foundation::progress_mode::write_progress_line_to_run_log(
-                        start_time.elapsed().as_secs(),
-                        foundation::numeric_cast::usize_to_u64(current),
-                        foundation::numeric_cast::usize_to_u64(total),
-                        &foundation::media_conversion_gate::path_file_name_for_log(path),
-                    );
-                    progress_bar.set(foundation::numeric_cast::usize_to_u64(current));
-                });
-}
-});
-});
+    let worker = ImageBatchWorker {
+        config,
+        checkpoint: checkpoint.as_ref(),
+        counters: &counters,
+        failed_paths: &failed_paths,
+        pause_controller: &pause_controller,
+        abort_requested: &abort_requested,
+        abort_reason: &abort_reason,
+        progress_bar: &progress_bar,
+        start_time,
+        total,
+    };
+    process_image_batch(&pool, &files, max_threads, &worker);
 
     progress_bar.finish();
     foundation::progress_mode::disable_quiet_mode();
     foundation::progress_mode::xmp_merge_finalize();
     foundation::progress_mode::flush_log_file();
 
-    let success_count = success.load(Ordering::Relaxed);
-    let skipped_count = skipped.load(Ordering::Relaxed);
-    let failed_count = failed.load(Ordering::Relaxed);
-    let ignored_count = ignored.load(Ordering::Relaxed);
-    let processed_count = processed.load(Ordering::Relaxed);
-
-    let mut result = Summary::new();
-    let mut post_run_errors = Vec::new();
-    result.succeeded = success_count;
-    result.failed = failed_count;
-    result.skipped = skipped_count;
-    result.ignored = ignored_count;
-    result.total = processed_count;
-    if let Some(pause) = pause_controller.pause_info() {
-        result.pause(
-            pause.path,
-            pause.reason,
-            total.saturating_sub(processed_count),
-        );
-    }
     let abort_reason = foundation::media_conversion_gate::mutex_guard_or_recover(
         "img_batch_abort_reason",
         abort_reason.lock(),
     )
     .clone();
-
-    if !result.paused
-        && abort_reason.is_none()
-        && let Some(ref output_dir) = config.output_dir
-    {
-        log_detail!("");
-        foundation::log_static!(
-            info,
-            foundation::infra::static_logs::messages::COPYING_UNSUPPORTED
-        );
-        let unsupported_base = foundation::media_conversion_gate::base_dir_or_default(
-            config.base_dir.as_deref(),
-            "copy_unsupported_base",
-        );
-        // Identify the unsupported bucket first (one batched sidecar call) so
-        // the copy report can say what these files actually are; the copy
-        // itself proceeds unchanged either way.
-        foundation::siegfried::audit_unsupported_identities(
-            &foundation::collect_unsupported_files(unsupported_base, recursive),
-        );
-        let copy_result =
-            foundation::copy_unsupported_files(unsupported_base, output_dir, recursive);
-        if copy_result.copied > 0 {
-            log_detail!(&format!("Copied {} unsupported files", copy_result.copied));
-        }
-        if copy_result.failed > 0 {
-            log_failure!(
-                "Unsupported Files",
-                &format!("Failed to copy {} files", copy_result.failed),
-            );
-            post_run_errors.push(format!(
-                "Unsupported file copy failed for {} files in {}",
-                copy_result.failed,
-                output_dir.display()
-            ));
-        }
-
-        auto_convert_directory_output_completeness_verification(
-            config,
-            output_dir,
-            recursive,
-            ignored_count,
-            failed_count,
-            &mut result,
-            &mut post_run_errors,
-        );
+    ImageBatchFinalization {
+        config,
+        recursive,
+        saved_dir_timestamps: saved_dir_timestamps.as_ref(),
+        checkpoint,
+        counters: &counters,
+        pause_controller: &pause_controller,
+        abort_reason,
+        failed_paths: &failed_paths,
+        start_time,
+        total,
     }
-
-    if !result.paused
-        && abort_reason.is_none()
-        && let Some(ref output_dir) = config.output_dir
-        && let Some(ref base_dir) = config.base_dir
-    {
-        log_detail!("");
-        foundation::log_static!(
-            info,
-            foundation::infra::static_logs::messages::METADATA_SYNC
-        );
-        if let Err(e) = foundation::preserve_directory(base_dir, output_dir) {
-            foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                "metadata_tree_sync_failed",
-                foundation::infra::static_logs::messages::MSG_METADATA_TREE_FAIL
-                    .replace("{}", &e.to_string()),
-            );
-            post_run_errors.push(format!(
-                "Directory metadata synchronization failed for {} -> {}: {e}",
-                base_dir.display(),
-                output_dir.display()
-            ));
-        }
-    }
-
-    if let Some(ref saved) = saved_dir_timestamps {
-        if !result.paused
-            && abort_reason.is_none()
-            && let Some(ref output_dir) = config.output_dir
-            && let Some(ref base_dir) = config.base_dir
-            && let Err(e) = foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
-        {
-            post_run_errors.push(format!(
-                "Failed to apply saved directory timestamps to {}: {e}",
-                output_dir.display()
-            ));
-        }
-        if let Err(e) = foundation::restore_directory_timestamps(saved) {
-            post_run_errors.push(format!(
-                "Failed to restore source directory timestamps after batch run: {e}"
-            ));
-        }
-        log_detail!(foundation::infra::static_logs::messages::DIR_TIMESTAMPS_RESTORED);
-    }
-
-    let final_input_bytes = actual_input_bytes.load(Ordering::Relaxed);
-    let final_output_bytes = actual_output_bytes.load(Ordering::Relaxed);
-
-    foundation::infra::static_logs::log_batch_complete_audit(
-        "img",
-        success_count,
-        skipped_count,
-        ignored_count,
-        failed_count,
-        processed_count,
-    );
-
-    print_summary(
-        &result,
-        start_time.elapsed(),
-        final_input_bytes,
-        final_output_bytes,
-        "Image Conversion",
-    );
-
-    // Finalize checkpoint only on 100% success
-    if let Some(cp) = checkpoint {
-        if result.paused {
-            if let Err(e) = cp.release_lock() {
-                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                    "checkpoint_lock_release_failed",
-                    format!("release lock failed: {e}"),
-                );
-                post_run_errors.push(format!("Checkpoint lock release failed: {e}"));
-            }
-        } else if failed_count == 0 && abort_reason.is_none() {
-            if let Err(e) = cp.cleanup() {
-                foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                    "checkpoint_cleanup_failed",
-                    format!("cleanup failed: {e}"),
-                );
-                post_run_errors.push(format!("Checkpoint cleanup failed: {e}"));
-            }
-        } else if let Err(e) = cp.release_lock() {
-            foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
-                "checkpoint_lock_release_failed",
-                format!("release lock failed: {e}"),
-            );
-            post_run_errors.push(format!("Checkpoint lock release failed: {e}"));
-        }
-    }
-
-    if !post_run_errors.is_empty() {
-        anyhow::bail!(post_run_errors.join(" | "));
-    }
-
-    if failed_count > 0 {
-        // Enumerate every failed file with its reason so the user doesn't have
-        // to grep log shards.
-        {
-            let paths = foundation::media_conversion_gate::mutex_guard_or_recover(
-                "failed_paths_enum",
-                failed_paths.lock(),
-            );
-            for (p, reason) in paths.iter() {
-                foundation::log_auto_error!("Failed file", "{}: {}", p.display(), reason);
-            }
-        }
-        if let Some(reason) = abort_reason {
-            anyhow::bail!("Batch aborted by error policy after {reason}");
-        }
-        anyhow::bail!("Batch completed with {failed_count} failed file(s)");
-    }
-
-    Ok(())
+    .finish()
 }
 
 /// Fast JPEG-only batch pipeline: adjacent JXL-only delivery, verified source delete, optional Photos gates.
@@ -2528,6 +2563,372 @@ fn scan_fast_img_sources(
     })
 }
 
+struct FastImgMarkerContext<'a> {
+    src_dir: &'a Path,
+    working_copy: &'a Path,
+    source_jpegs: &'a [PathBuf],
+    source_hashes: &'a BTreeMap<String, String>,
+    modern_lossy_candidates: &'a [ModernLossyStaticCandidate],
+    strategy: &'a str,
+}
+
+fn fast_img_reconcile_saved_marker(
+    existing_marker: &mut Option<WorkingCopyMarker>,
+    context: &FastImgMarkerContext<'_>,
+    dry_run: DryRunFlag,
+    retry_requested: bool,
+) -> anyhow::Result<()> {
+    if let Some(marker) = existing_marker.as_ref()
+        && marker.stage != FastImgStageName::CleanupComplete
+        && fast_img_marker_input_state_is_stale(
+            marker,
+            context.src_dir,
+            context.source_jpegs.len(),
+            context.source_hashes,
+            context.strategy,
+        )?
+    {
+        if dry_run.0 {
+            println!(
+                "[DRY-RUN ] existing {} marker has stale inputs; would archive {} and rebuild",
+                marker.stage.as_str(),
+                context.working_copy.display()
+            );
+        } else {
+            if retry_requested {
+                anyhow::bail!(
+                    "MFB_RESUME_INPUT_CHANGED: --retry cannot resume fast-img because the source path, strategy, relative paths, or BLAKE3 identities no longer match the saved task; use --no-resume for an isolated new output directory"
+                );
+            }
+            fast_img_require_interactive_confirmation(
+                "[STATE   ] Saved fast-img state does not match the media currently at this path. Archive the saved output and start a new task from the current media? [y/N] ",
+                "MFB_RESUME_DECISION_REQUIRED: current inputs differ from saved state; no files were archived. Rerun with --no-resume to start an isolated new task",
+            )?;
+        }
+        if !dry_run.0 {
+            if let Some(archived) = fast_img_archive_stale_working_copy(context.working_copy)? {
+                println!(
+                    "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
+                    marker.stage.as_str(),
+                    archived.display()
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    stage = %marker.stage.as_str(),
+                    working_copy = %context.working_copy.display(),
+                    archived = %archived.display(),
+                    marker_count = marker.src_jpeg_count,
+                    source_count = context.source_jpegs.len(),
+                    "fast-img stale marker was archived before rebuilding from current sources"
+                );
+            } else {
+                println!(
+                    "[RESUME  ] existing {} marker has stale inputs, but prior output is already absent; rebuilding",
+                    marker.stage.as_str()
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    stage = %marker.stage.as_str(),
+                    working_copy = %context.working_copy.display(),
+                    marker_count = marker.src_jpeg_count,
+                    source_count = context.source_jpegs.len(),
+                    "fast-img stale marker had no working copy; rebuilding from current sources"
+                );
+            }
+        }
+        *existing_marker = None;
+    }
+
+    let Some(marker) = existing_marker.as_ref() else {
+        return Ok(());
+    };
+    if marker.stage != FastImgStageName::CleanupComplete
+        || (context.strategy == "jxl"
+            && marker.src_jpeg_count == 0
+            && context.source_jpegs.is_empty()
+            && !marker.tier2_imported_assets.is_empty()
+            && (!context.modern_lossy_candidates.is_empty() || marker.tier2_in_progress))
+    {
+        return Ok(());
+    }
+
+    match fast_img_cleanup_complete_source_state(
+        marker,
+        context.source_jpegs.len(),
+        context.source_hashes,
+    ) {
+        Ok(FastImgCleanupCompleteSourceState::RestoredOriginal) => {
+            if !dry_run.0 {
+                if retry_requested {
+                    anyhow::bail!(
+                        "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task after its original sources were restored; use --no-resume for an isolated new task"
+                    );
+                }
+                fast_img_require_interactive_confirmation(
+                    "[STATE   ] This path has a completed fast-img task, but its original source media are present again. Archive the completed output and start a new task? [y/N] ",
+                    "MFB_RESUME_DECISION_REQUIRED: restored original sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
+                )?;
+                if let Some(archived) = fast_img_archive_stale_working_copy(context.working_copy)? {
+                    println!(
+                        "[RESUME  ] archived completed output at {} before rebuilding restored sources",
+                        archived.display()
+                    );
+                } else {
+                    println!(
+                        "[RESUME  ] completed output at {} is already absent; rebuilding restored sources",
+                        context.working_copy.display()
+                    );
+                }
+            }
+            println!(
+                "[RESUME  ] existing cleanup marker belongs to a completed run, but original source files were restored; rebuilding from restored sources"
+            );
+            tracing::warn!(
+                target: "fast_img",
+                working_copy = %context.working_copy.display(),
+                source_count = context.source_jpegs.len(),
+                "fast-img cleanup marker ignored because original source files were restored after cleanup"
+            );
+            *existing_marker = None;
+        }
+        Ok(FastImgCleanupCompleteSourceState::DeletedConverted) => {}
+        Ok(FastImgCleanupCompleteSourceState::StaleCurrent) => {
+            if !dry_run.0 {
+                if retry_requested {
+                    anyhow::bail!(
+                        "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task because current relative paths or BLAKE3 identities differ; use --no-resume for an isolated new task"
+                    );
+                }
+                fast_img_require_interactive_confirmation(
+                    "[STATE   ] This path has a completed fast-img task, but the current media differ from its recorded inputs. Archive the completed output and start a new task? [y/N] ",
+                    "MFB_RESUME_DECISION_REQUIRED: changed sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
+                )?;
+                if let Some(archived) = fast_img_archive_stale_working_copy(context.working_copy)? {
+                    println!(
+                        "[RESUME  ] archived stale completed output at {} before rebuilding",
+                        archived.display()
+                    );
+                } else {
+                    println!(
+                        "[RESUME  ] stale completed output at {} is already absent; rebuilding",
+                        context.working_copy.display()
+                    );
+                }
+            }
+            println!(
+                "[RESUME  ] existing cleanup marker is stale for the current source set; rebuilding from current sources"
+            );
+            tracing::warn!(
+                target: "fast_img",
+                working_copy = %context.working_copy.display(),
+                source_count = context.source_jpegs.len(),
+                "fast-img cleanup marker ignored because current source files no longer match the completed run"
+            );
+            *existing_marker = None;
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn fast_img_confirm_resume_if_needed(
+    existing_marker: Option<&WorkingCopyMarker>,
+    modern_lossy_candidate_count: usize,
+    dry_run: DryRunFlag,
+    shortest_path: ShortestPathFlag,
+    retry_requested: &mut bool,
+) -> anyhow::Result<()> {
+    let Some(marker) = existing_marker else {
+        return Ok(());
+    };
+    if dry_run.0 || *retry_requested {
+        return Ok(());
+    }
+
+    if fast_img_requires_resume_decision(marker, shortest_path) {
+        let prompt = format!(
+            "[STATE   ] Found a saved fast-img task at stage {}. Its source path, relative paths, and recorded BLAKE3 identities match. Reconcile durable state and resume it? [y/N] ",
+            marker.stage.as_str()
+        );
+        fast_img_require_interactive_confirmation(
+            &prompt,
+            "MFB_RESUME_DECISION_REQUIRED: saved task was not resumed; no state was changed. Rerun with --retry to resume or --no-resume to start an isolated new task",
+        )?;
+        *retry_requested = true;
+    } else if fast_img_completed_marker_has_new_tier2_work(marker, modern_lossy_candidate_count) {
+        fast_img_require_interactive_confirmation(
+            "[STATE   ] A completed fast-img task exists, and modern lossy static media are present at the same source path. Reconcile each file with Photos and run a new verified Tier-2 delivery? [y/N] ",
+            "MFB_RESUME_DECISION_REQUIRED: completed state was not reused for new Tier-2 media; no Photos import or source deletion was attempted. Rerun with --retry to proceed or --no-resume to isolate a new task",
+        )?;
+        *retry_requested = true;
+    }
+    Ok(())
+}
+
+fn fast_img_try_finish_tier2_delivery(
+    existing_marker: &mut Option<WorkingCopyMarker>,
+    context: &FastImgMarkerContext<'_>,
+    dry_run: DryRunFlag,
+    retry_requested: bool,
+) -> anyhow::Result<bool> {
+    let tier2_pending = context.strategy == "jxl"
+        && (existing_marker
+            .as_ref()
+            .is_some_and(|marker| marker.tier2_in_progress)
+            || !context.modern_lossy_candidates.is_empty())
+        && existing_marker
+            .as_ref()
+            .is_some_and(|marker| marker.stage == FastImgStageName::CleanupComplete);
+    if !tier2_pending {
+        return Ok(false);
+    }
+    if dry_run.0 {
+        println!(
+            "[DRY-RUN ] would reconcile/import and custody-verify {} modern lossy static source(s)",
+            context.modern_lossy_candidates.len()
+        );
+        return Ok(true);
+    }
+
+    let Some(marker) = existing_marker.as_mut() else {
+        anyhow::bail!("fast-img cleanup-complete marker disappeared before tier-2 delivery");
+    };
+    if marker.tier2_in_progress && !retry_requested {
+        anyhow::bail!(
+            "MFB_RESUME_DECISION_REQUIRED: fast-img tier-2 Photos delivery was interrupted; rerun with --retry to reconcile Photos custody and resume cleanup"
+        );
+    }
+    let (deleted, already_deleted, pruned) = fast_img_deliver_modern_lossy_static_tier(
+        marker,
+        context.src_dir,
+        context.modern_lossy_candidates,
+    )?;
+    println!(
+        "[TIER 2  ] verified Photos delivery complete; source deleted={deleted} already_absent={already_deleted} empty_dirs_pruned={pruned}"
+    );
+    Ok(true)
+}
+
+struct FastImgRetryPlan {
+    failed_from_cleanup: bool,
+    failed_before_cleanup: bool,
+    resume_local_delivery: bool,
+}
+
+fn fast_img_prepare_retry_plan(
+    existing_marker: &mut Option<WorkingCopyMarker>,
+    context: &FastImgMarkerContext<'_>,
+    shortest_path: ShortestPathFlag,
+    retry_requested: bool,
+) -> anyhow::Result<Option<FastImgRetryPlan>> {
+    let failed_from_cleanup = if let Some(marker) = existing_marker.as_mut()
+        && marker.stage == FastImgStageName::CleanupComplete
+        && !marker.failed_sources.is_empty()
+    {
+        validate_cleanup_complete_marker(
+            marker,
+            context.src_dir,
+            context.source_jpegs.len(),
+            context.source_hashes,
+        )?;
+        if !retry_requested {
+            anyhow::bail!(
+                "fast-img previous cleanup completed with {} failed source(s); rerun with --retry to retry retained source files",
+                marker.failed_sources.len()
+            );
+        }
+        println!(
+            "[RESUME  ] existing cleanup marker contains {} failed source(s); retrying retained source files",
+            marker.failed_sources.len()
+        );
+        tracing::warn!(
+            target: "fast_img",
+            working_copy = %context.working_copy.display(),
+            failed_sources = marker.failed_sources.len(),
+            "fast-img cleanup marker retained successes and reopened failed-source retry"
+        );
+        marker.stage = FastImgStageName::OutputPrepared;
+        marker.error = None;
+        marker.gate1_checks = Gate1Checks::default();
+        marker.gate2_checks = Gate2Checks::default();
+        marker.gate3_checks = Gate3Checks::default();
+        true
+    } else {
+        false
+    };
+    let failed_before_cleanup = if let Some(marker) = existing_marker.as_mut()
+        && marker.stage != FastImgStageName::CleanupComplete
+        && retry_requested
+        && !marker.failed_sources.is_empty()
+    {
+        println!(
+            "[RESUME  ] retrying {} retained source failure(s) before cleanup",
+            marker.failed_sources.len()
+        );
+        marker.stage = FastImgStageName::OutputPrepared;
+        marker.error = None;
+        marker.gate1_checks = Gate1Checks::default();
+        marker.gate2_checks = Gate2Checks::default();
+        marker.gate3_checks = Gate3Checks::default();
+        true
+    } else {
+        false
+    };
+
+    let resume_local_delivery = if let Some(marker) = existing_marker.as_ref()
+        && marker.stage == FastImgStageName::CleanupComplete
+    {
+        let should_resume =
+            fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path);
+        validate_cleanup_complete_marker(
+            marker,
+            context.src_dir,
+            context.source_jpegs.len(),
+            context.source_hashes,
+        )?;
+        if !fast_img_marker_outputs_current(marker)? && !context.source_jpegs.is_empty() {
+            let output_format_name = if context.strategy == "avif" {
+                "AVIF"
+            } else {
+                "JXL"
+            };
+            println!(
+                "[RESUME  ] existing cleanup marker has missing/drifted {output_format_name} output; rebuilding from source files"
+            );
+            tracing::warn!(
+                target: "fast_img",
+                working_copy = %context.working_copy.display(),
+                "fast-img cleanup marker output proof is not current; rebuilding because source files still exist"
+            );
+            false
+        } else if should_resume {
+            let output_format_name = if context.strategy == "avif" {
+                "AVIF"
+            } else {
+                "JXL"
+            };
+            println!(
+                "[RESUME  ] existing {output_format_name}-only delivery will continue to shortest-path Photos import"
+            );
+            true
+        } else {
+            println!(
+                "[DONE    ] existing cleanup_complete marker at {}",
+                context.working_copy.display()
+            );
+            return Ok(None);
+        }
+    } else {
+        false
+    };
+
+    Ok(Some(FastImgRetryPlan {
+        failed_from_cleanup,
+        failed_before_cleanup,
+        resume_local_delivery,
+    }))
+}
+
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     validate_fast_img_options(&options)?;
     let FastImgRunOptions {
@@ -2588,210 +2989,34 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         source_hashes: current_source_hashes,
         planned_encode_count,
     } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
-    if let Some(marker) = &existing_marker
-        && marker.stage != FastImgStageName::CleanupComplete
-        && fast_img_marker_input_state_is_stale(
-            marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-            strategy,
-        )?
-    {
-        if dry_run.0 {
-            println!(
-                "[DRY-RUN ] existing {} marker has stale inputs; would archive {} and rebuild",
-                marker.stage.as_str(),
-                working_copy.display()
-            );
-        } else {
-            if retry_requested {
-                anyhow::bail!(
-                    "MFB_RESUME_INPUT_CHANGED: --retry cannot resume fast-img because the source path, strategy, relative paths, or BLAKE3 identities no longer match the saved task; use --no-resume for an isolated new output directory"
-                );
-            }
-            fast_img_require_interactive_confirmation(
-                "[STATE   ] Saved fast-img state does not match the media currently at this path. Archive the saved output and start a new task from the current media? [y/N] ",
-                "MFB_RESUME_DECISION_REQUIRED: current inputs differ from saved state; no files were archived. Rerun with --no-resume to start an isolated new task",
-            )?;
-        }
-        if !dry_run.0 {
-            if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
-                println!(
-                    "[RESUME  ] existing {} marker has stale inputs; archived prior output at {} and rebuilding",
-                    marker.stage.as_str(),
-                    archived.display()
-                );
-                tracing::warn!(
-                    target: "fast_img",
-                    stage = %marker.stage.as_str(),
-                    working_copy = %working_copy.display(),
-                    archived = %archived.display(),
-                    marker_count = marker.src_jpeg_count,
-                    source_count = source_jpegs.len(),
-                    "fast-img stale marker was archived before rebuilding from current sources"
-                );
-            } else {
-                println!(
-                    "[RESUME  ] existing {} marker has stale inputs, but prior output is already absent; rebuilding",
-                    marker.stage.as_str()
-                );
-                tracing::warn!(
-                    target: "fast_img",
-                    stage = %marker.stage.as_str(),
-                    working_copy = %working_copy.display(),
-                    marker_count = marker.src_jpeg_count,
-                    source_count = source_jpegs.len(),
-                    "fast-img stale marker had no working copy; rebuilding from current sources"
-                );
-            }
-        }
-        existing_marker = None;
-    }
+    let marker_context = FastImgMarkerContext {
+        src_dir: &src_dir,
+        working_copy: &working_copy,
+        source_jpegs: &source_jpegs,
+        source_hashes: &current_source_hashes,
+        modern_lossy_candidates: &modern_lossy_candidates,
+        strategy,
+    };
+    fast_img_reconcile_saved_marker(
+        &mut existing_marker,
+        &marker_context,
+        dry_run,
+        retry_requested,
+    )?;
 
-    if let Some(marker) = &existing_marker
-        && marker.stage == FastImgStageName::CleanupComplete
-        && !(strategy == "jxl"
-            && marker.src_jpeg_count == 0
-            && source_jpegs.is_empty()
-            && !marker.tier2_imported_assets.is_empty()
-            && (!modern_lossy_candidates.is_empty() || marker.tier2_in_progress))
-    {
-        match fast_img_cleanup_complete_source_state(
-            marker,
-            source_jpegs.len(),
-            &current_source_hashes,
-        ) {
-            Ok(FastImgCleanupCompleteSourceState::RestoredOriginal) => {
-                if !dry_run.0 {
-                    if retry_requested {
-                        anyhow::bail!(
-                            "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task after its original sources were restored; use --no-resume for an isolated new task"
-                        );
-                    }
-                    fast_img_require_interactive_confirmation(
-                        "[STATE   ] This path has a completed fast-img task, but its original source media are present again. Archive the completed output and start a new task? [y/N] ",
-                        "MFB_RESUME_DECISION_REQUIRED: restored original sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
-                    )?;
-                    if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
-                        println!(
-                            "[RESUME  ] archived completed output at {} before rebuilding restored sources",
-                            archived.display()
-                        );
-                    } else {
-                        println!(
-                            "[RESUME  ] completed output at {} is already absent; rebuilding restored sources",
-                            working_copy.display()
-                        );
-                    }
-                }
-                println!(
-                    "[RESUME  ] existing cleanup marker belongs to a completed run, but original source files were restored; rebuilding from restored sources"
-                );
-                tracing::warn!(
-                    target: "fast_img",
-                    working_copy = %working_copy.display(),
-                    source_count = source_jpegs.len(),
-                    "fast-img cleanup marker ignored because original source files were restored after cleanup"
-                );
-                existing_marker = None;
-            }
-            Ok(FastImgCleanupCompleteSourceState::DeletedConverted) => {}
-            Ok(FastImgCleanupCompleteSourceState::StaleCurrent) => {
-                if !dry_run.0 {
-                    if retry_requested {
-                        anyhow::bail!(
-                            "MFB_RESUME_INPUT_CHANGED: --retry cannot reopen a completed fast-img task because current relative paths or BLAKE3 identities differ; use --no-resume for an isolated new task"
-                        );
-                    }
-                    fast_img_require_interactive_confirmation(
-                        "[STATE   ] This path has a completed fast-img task, but the current media differ from its recorded inputs. Archive the completed output and start a new task? [y/N] ",
-                        "MFB_RESUME_DECISION_REQUIRED: changed sources were not treated as a new task; no files were archived. Rerun with --no-resume to start an isolated new task",
-                    )?;
-                    if let Some(archived) = fast_img_archive_stale_working_copy(&working_copy)? {
-                        println!(
-                            "[RESUME  ] archived stale completed output at {} before rebuilding",
-                            archived.display()
-                        );
-                    } else {
-                        println!(
-                            "[RESUME  ] stale completed output at {} is already absent; rebuilding",
-                            working_copy.display()
-                        );
-                    }
-                }
-                println!(
-                    "[RESUME  ] existing cleanup marker is stale for the current source set; rebuilding from current sources"
-                );
-                tracing::warn!(
-                    target: "fast_img",
-                    working_copy = %working_copy.display(),
-                    source_count = source_jpegs.len(),
-                    "fast-img cleanup marker ignored because current source files no longer match the completed run"
-                );
-                existing_marker = None;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    if let Some(marker) = &existing_marker
-        && !dry_run.0
-        && !retry_requested
-        && fast_img_requires_resume_decision(marker, shortest_path)
-    {
-        let prompt = format!(
-            "[STATE   ] Found a saved fast-img task at stage {}. Its source path, relative paths, and recorded BLAKE3 identities match. Reconcile durable state and resume it? [y/N] ",
-            marker.stage.as_str()
-        );
-        fast_img_require_interactive_confirmation(
-            &prompt,
-            "MFB_RESUME_DECISION_REQUIRED: saved task was not resumed; no state was changed. Rerun with --retry to resume or --no-resume to start an isolated new task",
-        )?;
-        retry_requested = true;
-    }
-
-    if let Some(marker) = &existing_marker
-        && !dry_run.0
-        && !retry_requested
-        && fast_img_completed_marker_has_new_tier2_work(marker, modern_lossy_candidates.len())
-    {
-        fast_img_require_interactive_confirmation(
-            "[STATE   ] A completed fast-img task exists, and modern lossy static media are present at the same source path. Reconcile each file with Photos and run a new verified Tier-2 delivery? [y/N] ",
-            "MFB_RESUME_DECISION_REQUIRED: completed state was not reused for new Tier-2 media; no Photos import or source deletion was attempted. Rerun with --retry to proceed or --no-resume to isolate a new task",
-        )?;
-        retry_requested = true;
-    }
-
-    if strategy == "jxl"
-        && (existing_marker
-            .as_ref()
-            .is_some_and(|marker| marker.tier2_in_progress)
-            || !modern_lossy_candidates.is_empty())
-        && existing_marker
-            .as_ref()
-            .is_some_and(|marker| marker.stage == FastImgStageName::CleanupComplete)
-    {
-        if dry_run.0 {
-            println!(
-                "[DRY-RUN ] would reconcile/import and custody-verify {} modern lossy static source(s)",
-                modern_lossy_candidates.len()
-            );
-            return Ok(());
-        }
-        let Some(marker) = existing_marker.as_mut() else {
-            anyhow::bail!("fast-img cleanup-complete marker disappeared before tier-2 delivery");
-        };
-        if marker.tier2_in_progress && !retry_requested {
-            anyhow::bail!(
-                "MFB_RESUME_DECISION_REQUIRED: fast-img tier-2 Photos delivery was interrupted; rerun with --retry to reconcile Photos custody and resume cleanup"
-            );
-        }
-        let (deleted, already_deleted, pruned) =
-            fast_img_deliver_modern_lossy_static_tier(marker, &src_dir, &modern_lossy_candidates)?;
-        println!(
-            "[TIER 2  ] verified Photos delivery complete; source deleted={deleted} already_absent={already_deleted} empty_dirs_pruned={pruned}"
-        );
+    fast_img_confirm_resume_if_needed(
+        existing_marker.as_ref(),
+        modern_lossy_candidates.len(),
+        dry_run,
+        shortest_path,
+        &mut retry_requested,
+    )?;
+    if fast_img_try_finish_tier2_delivery(
+        &mut existing_marker,
+        &marker_context,
+        dry_run,
+        retry_requested,
+    )? {
         return Ok(());
     }
 
@@ -2805,96 +3030,18 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         );
     }
 
-    let retry_failed_sources_from_cleanup = if let Some(marker) = existing_marker.as_mut()
-        && marker.stage == FastImgStageName::CleanupComplete
-        && !marker.failed_sources.is_empty()
-    {
-        validate_cleanup_complete_marker(
-            marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-        )?;
-        if !retry_requested {
-            anyhow::bail!(
-                "fast-img previous cleanup completed with {} failed source(s); rerun with --retry to retry retained source files",
-                marker.failed_sources.len()
-            );
-        }
-        println!(
-            "[RESUME  ] existing cleanup marker contains {} failed source(s); retrying retained source files",
-            marker.failed_sources.len()
-        );
-        tracing::warn!(
-            target: "fast_img",
-            working_copy = %working_copy.display(),
-            failed_sources = marker.failed_sources.len(),
-            "fast-img cleanup marker retained successes and reopened failed-source retry"
-        );
-        marker.stage = FastImgStageName::OutputPrepared;
-        marker.error = None;
-        marker.gate1_checks = Gate1Checks::default();
-        marker.gate2_checks = Gate2Checks::default();
-        marker.gate3_checks = Gate3Checks::default();
-        true
-    } else {
-        false
+    let Some(retry_plan) = fast_img_prepare_retry_plan(
+        &mut existing_marker,
+        &marker_context,
+        shortest_path,
+        retry_requested,
+    )?
+    else {
+        return Ok(());
     };
-    let retry_failed_sources_before_cleanup = if let Some(marker) = existing_marker.as_mut()
-        && marker.stage != FastImgStageName::CleanupComplete
-        && retry_requested
-        && !marker.failed_sources.is_empty()
-    {
-        println!(
-            "[RESUME  ] retrying {} retained source failure(s) before cleanup",
-            marker.failed_sources.len()
-        );
-        marker.stage = FastImgStageName::OutputPrepared;
-        marker.error = None;
-        marker.gate1_checks = Gate1Checks::default();
-        marker.gate2_checks = Gate2Checks::default();
-        marker.gate3_checks = Gate3Checks::default();
-        true
-    } else {
-        false
-    };
-
-    let resume_local_delivery_for_shortest_path = if let Some(marker) = &existing_marker
-        && marker.stage == FastImgStageName::CleanupComplete
-    {
-        let resume_local_delivery_for_shortest_path =
-            fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path);
-        validate_cleanup_complete_marker(
-            marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-        )?;
-        if !fast_img_marker_outputs_current(marker)? && !source_jpegs.is_empty() {
-            println!(
-                "[RESUME  ] existing cleanup marker has missing/drifted {output_format_name} output; rebuilding from source files"
-            );
-            tracing::warn!(
-                target: "fast_img",
-                working_copy = %working_copy.display(),
-                "fast-img cleanup marker output proof is not current; rebuilding because source files still exist"
-            );
-            false
-        } else if resume_local_delivery_for_shortest_path {
-            println!(
-                "[RESUME  ] existing {output_format_name}-only delivery will continue to shortest-path Photos import"
-            );
-            true
-        } else {
-            println!(
-                "[DONE    ] existing cleanup_complete marker at {}",
-                working_copy.display()
-            );
-            return Ok(());
-        }
-    } else {
-        false
-    };
+    let retry_failed_sources_from_cleanup = retry_plan.failed_from_cleanup;
+    let retry_failed_sources_before_cleanup = retry_plan.failed_before_cleanup;
+    let resume_local_delivery_for_shortest_path = retry_plan.resume_local_delivery;
     if let Some(marker) = &existing_marker
         && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
         && !retry_requested
