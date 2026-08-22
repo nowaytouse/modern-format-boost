@@ -339,7 +339,6 @@ fn validate_conversion_preflight(
 /// # Panics
 /// Panics if an animated image state transition is detected within a static-only processing branch,
 /// indicating a critical breach of upstream validation logic.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 pub fn execute_conversion(
     detection: &DetectionResult,
     strategy: &ConversionStrategy,

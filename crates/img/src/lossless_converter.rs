@@ -9,9 +9,6 @@
 //! Covered paths: `convert_to_jxl`, `convert_jpeg_to_jxl` (including fallback),
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
-#![allow(clippy::trivially_copy_pass_by_ref)]
-#![allow(clippy::unnecessary_wraps)]
-
 use crate::Rational;
 use crate::{ImgQualityError, Result};
 use foundation::ImagePrecisionProfile;
@@ -533,8 +530,6 @@ pub fn convert_ultrahdr_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> R
         ImgQualityError::ConversionError(format!(" UltraHDR Synthesis Finalization Error: {e}"))
     })
 }
-
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 
 enum FallbackResult {
     Finalized(crate::Result<TaskResult>),
@@ -1879,24 +1874,6 @@ enum JpegLosslessTranscodePlanMode {
     StandardFallback,
 }
 
-#[allow(dead_code)]
-fn jpeg_aggressive_lossless_plan(enabled: bool) -> Vec<JxlEffortPlan> {
-    if enabled {
-        vec![JxlEffortPlan::Single(
-            foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
-#[allow(dead_code)]
-fn jpeg_standard_encode_fallback_plan() -> Vec<JxlEffortPlan> {
-    vec![JxlEffortPlan::Single(
-        foundation::constants::JXL_DEFAULT_EFFORT,
-    )]
-}
-
 fn jpeg_lossless_encode_plan(
     mode: JpegLosslessTranscodePlanMode,
     options: &ConvertOptions,
@@ -2372,7 +2349,6 @@ fn commit_jpeg_to_jxl_success(
 ///
 /// # Errors
 /// Returns an error if transcoding fails.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 enum JbrdLadderResult {
     Recovered(crate::Result<TaskResult>),
     Exhausted(JpegJbrdLadderDiagnostics),
@@ -4453,21 +4429,6 @@ pub fn convert_to_jxl_matched(
     }
 }
 
-#[allow(dead_code)]
-fn cjxl_std_failure_summary(stage: &str, output: &Output) -> String {
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let stderr_tail = stderr_text
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("<empty stderr>");
-    format!(
-        "{stage}: {} | stderr: {}",
-        cjxl_exit_summary(output.status),
-        truncate_jpeg_ladder_stderr(stderr_tail)
-    )
-}
-
 fn run_direct_jxl_encode_with_effort(
     input: &Path,
     output: &Path,
@@ -4709,7 +4670,6 @@ fn describe_jxl_finalist_pass(
     format!("{role}: d={distance} from the {origin} pass ({ratio_label} of input at e{effort})")
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 fn try_explore_ultimate_jxl_distance(
     input: &Path,
     actual_input: &Path,
@@ -5115,12 +5075,11 @@ fn try_explore_ultimate_jxl_distance(
     Ok(Some(result))
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 fn log_image_precision_decision(
     input: &Path,
     options: &ConvertOptions,
-    color_assessment: &foundation::ffprobe_json::ColorInfoAssessment,
-    precision: &ImagePrecisionProfile,
+    color_assessment: foundation::ffprobe_json::ColorInfoAssessment,
+    precision: ImagePrecisionProfile,
 ) {
     if precision.used_float_extension_hint() && options.verbose() {
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
@@ -5177,9 +5136,9 @@ fn log_image_precision_decision(
 fn try_high_precision_decode(
     input: &Path,
     color_info: &ColorInfo,
-    color_assessment: &foundation::ffprobe_json::ColorInfoAssessment,
-    precision: &ImagePrecisionProfile,
-) -> Result<Option<(std::path::PathBuf, Option<tempfile::NamedTempFile>)>> {
+    color_assessment: foundation::ffprobe_json::ColorInfoAssessment,
+    precision: ImagePrecisionProfile,
+) -> Option<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     let decode_label = if color_assessment.has_hdr_signaling() {
         format!(
             "Forensic {} Decode Cycle: Initiating FFmpeg high bit-depth preservation",
@@ -5220,7 +5179,7 @@ fn try_high_precision_decode(
                 foundation::infra::static_logs::messages::LABEL_METADATA,
                 success_label
             );
-            Ok(Some((png16_path, Some(temp_file))))
+            Some((png16_path, Some(temp_file)))
         }
         Err(e) => {
             let failure_prefix = if color_assessment.has_hdr_signaling() {
@@ -5241,7 +5200,7 @@ fn try_high_precision_decode(
                 input,
                 format!("{failure_prefix} ({e}); falling back to standard bitstream decode"),
             );
-            Ok(None)
+            None
         }
     }
 }
@@ -5289,7 +5248,7 @@ fn preprocess_webp_for_cjxl(
 fn preprocess_tiff_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
-    precision: &ImagePrecisionProfile,
+    precision: ImagePrecisionProfile,
     intermediate_depth: Option<u8>,
     depth_str: &str,
     intermediate_suffix: &str,
@@ -5333,7 +5292,7 @@ fn preprocess_tiff_for_cjxl(
 fn preprocess_bmp_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
-    precision: &ImagePrecisionProfile,
+    precision: ImagePrecisionProfile,
     intermediate_depth: Option<u8>,
     depth_str: &str,
     intermediate_suffix: &str,
@@ -5376,7 +5335,7 @@ fn preprocess_bmp_for_cjxl(
 
 fn preprocess_heic_for_cjxl(
     input: &Path,
-    precision: &ImagePrecisionProfile,
+    precision: ImagePrecisionProfile,
     intermediate_depth: Option<u8>,
     intermediate_suffix: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
@@ -5525,7 +5484,7 @@ fn preprocess_fallback_extension_align(
 
 fn preprocess_jpeg_for_cjxl(
     input: &Path,
-    precision: &ImagePrecisionProfile,
+    precision: ImagePrecisionProfile,
     intermediate_depth: Option<u8>,
     intermediate_suffix: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
@@ -5617,12 +5576,11 @@ fn prepare_input_for_cjxl(
     };
     let intermediate_suffix = precision.intermediate_suffix();
 
-    log_image_precision_decision(input, options, &color_assessment, &precision);
+    log_image_precision_decision(input, options, color_assessment, precision);
 
     // Check if we need 16-bit decode for HDR or high-precision preservation.
     if precision.should_use_high_precision_png16_decode()
-        && let Some(res) =
-            try_high_precision_decode(input, color_info, &color_assessment, &precision)?
+        && let Some(res) = try_high_precision_decode(input, color_info, color_assessment, precision)
     {
         return Ok(res);
     }
@@ -5656,7 +5614,7 @@ fn prepare_input_for_cjxl(
 
     match ext.as_str() {
         foundation::constants::EXT_JPG | foundation::constants::EXT_JPEG => {
-            preprocess_jpeg_for_cjxl(input, &precision, intermediate_depth, intermediate_suffix)
+            preprocess_jpeg_for_cjxl(input, precision, intermediate_depth, intermediate_suffix)
         }
 
         foundation::constants::EXT_WEBP => preprocess_webp_for_cjxl(input),
@@ -5665,7 +5623,7 @@ fn prepare_input_for_cjxl(
             preprocess_tiff_for_cjxl(
                 input,
                 options,
-                &precision,
+                precision,
                 intermediate_depth,
                 depth_str,
                 intermediate_suffix,
@@ -5675,14 +5633,14 @@ fn prepare_input_for_cjxl(
         foundation::constants::EXT_BMP => preprocess_bmp_for_cjxl(
             input,
             options,
-            &precision,
+            precision,
             intermediate_depth,
             depth_str,
             intermediate_suffix,
         ),
 
         foundation::constants::EXT_HEIC | foundation::constants::EXT_HEIF => {
-            preprocess_heic_for_cjxl(input, &precision, intermediate_depth, intermediate_suffix)
+            preprocess_heic_for_cjxl(input, precision, intermediate_depth, intermediate_suffix)
         }
 
         foundation::constants::EXT_GIF => preprocess_gif_for_cjxl(input),
@@ -6438,32 +6396,6 @@ mod tests {
         assert_eq!(
             resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossy),
             foundation::constants::JXL_ULTIMATE_DISTANCE
-        );
-    }
-
-    #[test]
-    fn extreme_jpeg_lossless_encode_starts_with_e11_aggressive_phase() {
-        assert_eq!(
-            jpeg_aggressive_lossless_plan(true),
-            vec![JxlEffortPlan::Single(
-                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
-            )]
-        );
-        assert!(
-            jpeg_aggressive_lossless_plan(false).is_empty(),
-            "non-extreme JPEG encode must not force the e11-only phase"
-        );
-    }
-
-    #[test]
-    fn jpeg_standard_encode_fallback_is_one_e7_attempt() {
-        assert_eq!(
-            jpeg_standard_encode_fallback_plan(),
-            vec![JxlEffortPlan::Single(7)]
-        );
-        assert_eq!(
-            jpeg_standard_encode_fallback_plan(),
-            vec![JxlEffortPlan::Single(7)]
         );
     }
 

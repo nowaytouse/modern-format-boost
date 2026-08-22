@@ -1,5 +1,4 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
-#![allow(clippy::too_many_lines)]
 #[cfg(not(feature = "high-precision"))]
 pub use foundation::Rational;
 #[cfg(feature = "high-precision")]

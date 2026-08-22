@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_lines)]
-
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use img::Rational;
@@ -111,7 +109,7 @@ enum Commands {
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
+        /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -186,7 +184,7 @@ enum Commands {
     ///
     /// Detects true JPEGs via content identity, strips residual EXIF Orientation
     /// after encode, and deletes sources only after verification. JXL mode also
-    /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC/HEIF originals to
+    /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC originals to
     /// Photos with UUID/hash custody proof; uncertain or lossless originals remain.
     ///
     /// Locked decisions: D1=Photos import required, D2=abort on delete failure,
@@ -235,7 +233,7 @@ enum Commands {
         #[arg(long, default_value_t = false, conflicts_with = "retry")]
         no_resume: bool,
 
-        /// Enable expert/lab-only encoder parameters. Required before JPEG lossless transcode may test cjxl e11.
+        /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
@@ -296,12 +294,94 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     let result = main_inner();
     foundation::progress_mode::flush_log_file();
     result
+}
+
+fn initialize_analysis_cache(command: &Commands) -> Option<Arc<AnalysisCache>> {
+    if !command_requires_database(command) {
+        return None;
+    }
+
+    // Full img flows require PostgreSQL. FastImg and restore-jpeg are deliberately
+    // excluded because they do not use DB/cache state.
+    if let Err(error) = foundation::database::open_pg_client() {
+        foundation::log_fatal!(
+            "Infrastructure",
+            &format!(
+                "PostgreSQL database is mandatory for full feature availability. Connection failed: {error}"
+            )
+        );
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+
+    let cache = match AnalysisCache::default_local() {
+        Ok(cache) => Some(Arc::new(cache)),
+        Err(error) => {
+            foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
+                "analysis_cache_unavailable",
+                format!("failed to initialize persistent cache: {error}"),
+            );
+            None
+        }
+    };
+
+    if let Some(cache) = &cache {
+        match cache.cleanup_old_records(foundation::constants::CACHE_PRUNE_AGE_SECS) {
+            Ok(removed) if removed > 0 => {
+                foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
+                    "analysis_cache_age_prune_completed",
+                    format!("removed={removed}"),
+                );
+            }
+            Err(error) => {
+                foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
+                    "analysis_cache_age_prune_failed",
+                    format!("failed to prune aged cache rows: {error}"),
+                );
+            }
+            Ok(_) => {}
+        }
+    }
+    cache
+}
+
+fn command_lock_input(command: &Commands) -> Option<&Path> {
+    match command {
+        Commands::Run {
+            input,
+            in_place,
+            delete_original,
+            ..
+        } if *in_place || *delete_original => Some(input),
+        Commands::Verify {
+            original: input, ..
+        }
+        | Commands::RestoreTimestamps { source: input, .. }
+        | Commands::PathHash { input }
+        | Commands::IngestSamples { input, .. } => Some(input),
+        _ => None,
+    }
+}
+
+fn acquire_command_lock(command: &Commands) -> Option<foundation::infra::process_lock::DirLock> {
+    let input = command_lock_input(command)?;
+    let input = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
+    if !input.is_dir() {
+        return None;
+    }
+    match foundation::acquire_dir_lock(&input) {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            log_fatal!(
+                foundation::infra::static_logs::messages::LABEL_LOCK,
+                &error.to_string()
+            );
+            std::process::exit(foundation::constants::EXIT_CODE_LOCK_FAILURE);
+        }
+    }
 }
 
 fn main_inner() -> anyhow::Result<()> {
@@ -317,92 +397,8 @@ fn main_inner() -> anyhow::Result<()> {
     // Initialize Ctrl+C guard for long-running batch operations
     foundation::ctrlc_guard::init();
 
-    let cache = if command_requires_database(&cli.command) {
-        // Enforce PostgreSQL dependency as mandatory for the full image toolchain.
-        // Fast JPEG-only mode is intentionally excluded: it only scans true JPEGs,
-        // writes verified JXL outputs, and does not need DB/cache/probe state.
-        if let Err(e) = foundation::database::open_pg_client() {
-            foundation::log_fatal!(
-                "Infrastructure",
-                &format!(
-                    "PostgreSQL database is mandatory for full feature availability. Connection failed: {e}"
-                )
-            );
-            std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-        }
-
-        let cache = match AnalysisCache::default_local() {
-            Ok(cache) => Some(Arc::new(cache)),
-            Err(e) => {
-                foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
-                    "analysis_cache_unavailable",
-                    format!("failed to initialize persistent cache: {e}"),
-                );
-                None
-            }
-        };
-
-        if let Some(ref cache) = cache {
-            match cache.cleanup_old_records(foundation::constants::CACHE_PRUNE_AGE_SECS) {
-                Ok(removed) if removed > 0 => {
-                    foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
-                        "analysis_cache_age_prune_completed",
-                        format!("removed={removed}"),
-                    );
-                }
-                Err(e) => {
-                    foundation::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
-                        "analysis_cache_age_prune_failed",
-                        format!("failed to prune aged cache rows: {e}"),
-                    );
-                }
-                Ok(_) => {}
-            }
-        }
-        cache
-    } else {
-        None
-    };
-
-    // --- Unified Directory Locking (Ghost Mode & Mutex) ---
-    // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
-    let input_to_lock = match &cli.command {
-        Commands::Run {
-            input,
-            in_place,
-            delete_original,
-            ..
-        } if *in_place || *delete_original => Some(input),
-        Commands::Verify {
-            original: input, ..
-        }
-        | Commands::RestoreTimestamps { source: input, .. }
-        | Commands::PathHash { input }
-        | Commands::IngestSamples { input, .. } => Some(input),
-        _ => None,
-    };
-
-    let _lock_guard = match input_to_lock {
-        None => None,
-        Some(input) => {
-            let input_abs = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
-            if input_abs.is_dir() {
-                match foundation::acquire_dir_lock(&input_abs) {
-                    Ok(guard) => Some(guard),
-                    Err(e) => {
-                        log_fatal!(
-                            foundation::infra::static_logs::messages::LABEL_LOCK,
-                            &e.to_string()
-                        );
-                        std::process::exit(foundation::constants::EXIT_CODE_LOCK_FAILURE);
-                    }
-                }
-            } else {
-                None
-            }
-        }
-    };
-    // ------------------------------------------------------
+    let cache = initialize_analysis_cache(&cli.command);
+    let _lock_guard = acquire_command_lock(&cli.command);
 
     match cli.command {
         Commands::Run {
@@ -541,7 +537,7 @@ fn main_inner() -> anyhow::Result<()> {
             if allow_expert_options {
                 log_stat!(
                     foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    "Expert Options Audit: lab-only encoder parameters enabled; JPEG lossless transcode may test cjxl e11"
+                    "Expert Options Audit: gated encoder/decoder fallbacks enabled; final verification remains mandatory"
                 );
             }
             if !allow_size_tolerance {
@@ -558,26 +554,30 @@ fn main_inner() -> anyhow::Result<()> {
 
             foundation::database::report_db_status();
 
-            let config = build_auto_convert_config(
-                output,
+            let mut config_flags = ConfigFlags::USE_GPU;
+            config_flags.set(ConfigFlags::FORCE, force);
+            config_flags.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
+            config_flags.set(ConfigFlags::PRESERVE_TIMESTAMPS, preserve_timestamps);
+            config_flags.set(ConfigFlags::PRESERVE_METADATA, preserve);
+            config_flags.set(ConfigFlags::COMPRESS, compress);
+            config_flags.set(ConfigFlags::APPLE_COMPAT, apple_compat);
+            config_flags.set(ConfigFlags::IN_PLACE, in_place);
+            config_flags.set(ConfigFlags::EXPLORE_SMALLER, explore);
+            config_flags.set(ConfigFlags::MATCH_QUALITY, match_quality);
+            config_flags.set(ConfigFlags::ULTIMATE_MODE, ultimate);
+            config_flags.set(ConfigFlags::ARCHIVE_MODE, archive);
+            config_flags.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
+            config_flags.set(ConfigFlags::ALLOW_EXPERT_OPTIONS, allow_expert_options);
+            config_flags.set(ConfigFlags::VERBOSE, verbose);
+            let config = AutoConvertConfig {
+                output_dir: output,
                 base_dir,
-                force,
-                should_delete,
-                preserve_timestamps,
-                preserve,
-                compress,
-                apple_compat,
-                in_place,
-                explore,
-                match_quality,
-                ultimate,
-                archive,
-                allow_size_tolerance,
-                allow_expert_options,
-                verbose,
-                cache.clone(),
-                img_static_delivery,
-            );
+                flags: config_flags,
+                child_threads: 0,
+                cache: cache.clone(),
+                static_delivery: img_static_delivery,
+                error_mode: foundation::BatchErrorMode::current(),
+            };
 
             let workload = foundation::thread_manager::WorkloadType::Image;
             let thread_config = foundation::thread_manager::get_balanced_thread_config(workload);
@@ -1341,7 +1341,6 @@ mod conversion_result_adapter_tests {
     }
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1658,7 +1657,6 @@ fn dispatch_static_conversion(
     })
 }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,
@@ -2264,7 +2262,6 @@ let next_index = &next_index;
 }
 
 /// Fast JPEG-only batch pipeline: adjacent JXL-only delivery, verified source delete, optional Photos gates.
-#[allow(clippy::too_many_lines)]
 #[derive(Clone, Copy)]
 struct DeleteSourceFlag(bool);
 
@@ -2372,11 +2369,171 @@ fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Resu
         })
 }
 
+fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<()> {
+    if options.extreme_precision {
+        println!(
+            "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its bounded coarse-plus-binary search"
+        );
+    }
+    if let Some(output_dir) = options.output_dir {
+        anyhow::bail!(
+            "--output is not supported by fast-img; the adjacent target-format output is fixed by source path ({} ignored)",
+            output_dir.display()
+        );
+    }
+    if options.delete_source.0 {
+        tracing::warn!(
+            target: "fast_img",
+            "--delete-source is redundant; fast-img always deletes verified source files"
+        );
+    }
+    if options.auto_import.0 && !options.shortest_path.0 {
+        anyhow::bail!("--auto-import requires --shortest-path");
+    }
+    if options.strategy == "jxl" && options.shortest_path.0 {
+        anyhow::bail!(
+            "JXL shortest-path Photos import is disabled because it can leave Photos/iCloud uploads stuck. No files were changed. Use local reversible JXL encoding without --shortest-path, or use --strategy avif --shortest-path for verified Photos import."
+        );
+    }
+    if options.strategy == "avif"
+        && let Err(error) = foundation::tools::require(&["avifenc", "avifdec"])
+    {
+        foundation::log_fatal!(
+            foundation::infra::static_logs::messages::LABEL_TOOLS,
+            &error
+        );
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+    Ok(())
+}
+
+struct FastImgSourceInventory {
+    source_files: Vec<PathBuf>,
+    scan_failures: BTreeMap<String, String>,
+    modern_lossy_candidates: Vec<ModernLossyStaticCandidate>,
+    source_hashes: BTreeMap<String, String>,
+    planned_encode_count: usize,
+}
+
+fn scan_fast_img_sources(
+    candidates: Vec<PathBuf>,
+    src_dir: &Path,
+    strategy: &str,
+) -> anyhow::Result<FastImgSourceInventory> {
+    if strategy == "avif" {
+        println!(
+            "[FASTIMG ] enumerating static image containers in {} (no quality scan)",
+            src_dir.display()
+        );
+    } else {
+        println!(
+            "[FASTIMG ] selecting true JPEG containers in {}",
+            src_dir.display()
+        );
+    }
+
+    let mut source_files = Vec::new();
+    let mut scan_failures = BTreeMap::new();
+    let format_identities =
+        foundation::image::format_identity::resolve_format_identities(&candidates)
+            .context("fast-img batched content identity scan failed")?;
+    let modern_lossy_scan = if strategy == "jxl" {
+        println!("[TIER 2  ] inspecting modern lossy static sources for verified Photos delivery");
+        let modern_paths = candidates
+            .iter()
+            .zip(&format_identities)
+            .filter(|(_, identity)| {
+                foundation::image::modern_lossy_static::is_modern_static_image_format(
+                    identity.family,
+                )
+            })
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        scan_modern_lossy_static_candidates(src_dir, &modern_paths)?
+    } else {
+        foundation::ModernLossyStaticScan::default()
+    };
+    for (path, reason) in &modern_lossy_scan.probe_failures {
+        println!(
+            "[RETAIN  ] modern source could not be classified safely and will remain: {} ({reason})",
+            path.display()
+        );
+    }
+    for (path, identity) in candidates.into_iter().zip(format_identities) {
+        if identity.extension_mismatch {
+            tracing::warn!(
+                target: "format_identity",
+                path = %path.display(),
+                content_family = ?identity.family,
+                extension = ?identity.extension_hint,
+                "file extension disagrees with content; content identity retained"
+            );
+        }
+        if strategy == "avif" {
+            let format = identity.family;
+            if !matches!(
+                format,
+                FormatKind::Mp4
+                    | FormatKind::Mov
+                    | FormatKind::Mkv
+                    | FormatKind::Webm
+                    | FormatKind::Unknown
+            ) {
+                match fast_img_container_is_static(&path, format) {
+                    Ok(true) => source_files.push(path),
+                    Ok(false) => println!(
+                        "[SKIP    ] Meme Mode rejects animated image container {}",
+                        path.display()
+                    ),
+                    Err(error) => {
+                        println!(
+                            "[ERROR   ] Failed to read static-container metadata for {}: {}",
+                            path.display(),
+                            error
+                        );
+                        let rel_key = fast_img_scan_failure_rel_key(&path, src_dir)?;
+                        scan_failures.insert(rel_key, error.to_string());
+                        source_files.push(path);
+                    }
+                }
+            }
+        } else if identity.family == FormatKind::Jpeg {
+            source_files.push(path);
+        }
+    }
+    let source_hashes = fast_img_source_hash_set(src_dir, &source_files)?;
+    let planned_encode_count = source_files.len().saturating_sub(scan_failures.len());
+    if strategy == "avif" {
+        println!(
+            "[FASTIMG ] selected {} static images in {}",
+            planned_encode_count,
+            src_dir.display()
+        );
+        println!(
+            "[MEME    ] AVIF quality search: q=100..0; use pure-media budget with smallest verified pure-media fallback"
+        );
+    } else {
+        println!(
+            "[FASTIMG ] selected {} true JPEGs in {}",
+            source_files.len(),
+            src_dir.display()
+        );
+    }
+    Ok(FastImgSourceInventory {
+        source_files,
+        scan_failures,
+        modern_lossy_candidates: modern_lossy_scan.candidates,
+        source_hashes,
+        planned_encode_count,
+    })
+}
+
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
+    validate_fast_img_options(&options)?;
     let FastImgRunOptions {
         input,
-        output_dir,
-        delete_source,
+        output_dir: _,
+        delete_source: _,
         dry_run,
         recursive,
         auto_import,
@@ -2386,43 +2543,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         archive,
         allow_expert_options,
         strategy,
-        extreme_precision,
+        extreme_precision: _,
     } = options;
     let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     let mut retry_requested = retry.0;
-
-    if extreme_precision {
-        println!(
-            "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its bounded coarse-plus-binary search"
-        );
-    }
-
-    if let Some(output_dir) = output_dir {
-        anyhow::bail!(
-            "--output is not supported by fast-img; the adjacent target-format output is fixed by source path ({} ignored)",
-            output_dir.display()
-        );
-    }
-    if delete_source.0 {
-        tracing::warn!(
-            target: "fast_img",
-            "--delete-source is redundant; fast-img always deletes verified source files"
-        );
-    }
-    if auto_import.0 && !shortest_path.0 {
-        anyhow::bail!("--auto-import requires --shortest-path");
-    }
-    if strategy == "jxl" && shortest_path.0 {
-        anyhow::bail!(
-            "JXL shortest-path Photos import is disabled because it can leave Photos/iCloud uploads stuck. No files were changed. Use local reversible JXL encoding without --shortest-path, or use --strategy avif --shortest-path for verified Photos import."
-        );
-    }
-    if strategy == "avif"
-        && let Err(err) = foundation::tools::require(&["avifenc", "avifdec"])
-    {
-        foundation::log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
-        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-    }
 
     let input_plan = FastImgInputPlan::from_input(input, recursive.0)?;
     let src_dir = input_plan.src_root;
@@ -2457,112 +2581,13 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     };
 
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
-    if strategy == "avif" {
-        println!(
-            "[FASTIMG ] enumerating static image containers in {} (no quality scan)",
-            src_dir.display()
-        );
-    } else {
-        println!(
-            "[FASTIMG ] selecting true JPEG containers in {}",
-            src_dir.display()
-        );
-    }
-    let mut source_jpegs = Vec::new();
-    let mut scan_failures = BTreeMap::new();
-    let format_identities =
-        foundation::image::format_identity::resolve_format_identities(&input_plan.candidates)
-            .context("fast-img batched content identity scan failed")?;
-    let modern_lossy_scan = if strategy == "jxl" {
-        println!("[TIER 2  ] inspecting modern lossy static sources for verified Photos delivery");
-        let modern_paths = input_plan
-            .candidates
-            .iter()
-            .zip(&format_identities)
-            .filter(|(_, identity)| {
-                foundation::image::modern_lossy_static::is_modern_static_image_format(
-                    identity.family,
-                )
-            })
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>();
-        scan_modern_lossy_static_candidates(&src_dir, &modern_paths)?
-    } else {
-        foundation::ModernLossyStaticScan::default()
-    };
-    for (path, reason) in &modern_lossy_scan.probe_failures {
-        println!(
-            "[RETAIN  ] modern source could not be classified safely and will remain: {} ({reason})",
-            path.display()
-        );
-    }
-    let modern_lossy_candidates = modern_lossy_scan.candidates;
-    for (path, identity) in input_plan.candidates.into_iter().zip(format_identities) {
-        if identity.extension_mismatch {
-            tracing::warn!(
-                target: "format_identity",
-                path = %path.display(),
-                content_family = ?identity.family,
-                extension = ?identity.extension_hint,
-                "file extension disagrees with content; content identity retained"
-            );
-        }
-        if strategy == "avif" {
-            // `detect_true_format` only fails on IO-level unreadable sources, and
-            // such sources cannot be BLAKE3-hashed for custody accounting either,
-            // so failing fast here with the offending path is the honest outcome.
-            let format = identity.family;
-            if !matches!(
-                format,
-                foundation::image::format_detect::FormatKind::Mp4
-                    | foundation::image::format_detect::FormatKind::Mov
-                    | foundation::image::format_detect::FormatKind::Mkv
-                    | foundation::image::format_detect::FormatKind::Webm
-                    | foundation::image::format_detect::FormatKind::Unknown
-            ) {
-                match fast_img_container_is_static(&path, format) {
-                    Ok(true) => source_jpegs.push(path),
-                    Ok(false) => println!(
-                        "[SKIP    ] Meme Mode rejects animated image container {}",
-                        path.display()
-                    ),
-                    Err(e) => {
-                        println!(
-                            "[ERROR   ] Failed to read static-container metadata for {}: {}",
-                            path.display(),
-                            e
-                        );
-                        // Keep unreadable supported media in the source accounting.
-                        // Record the scan failure before encode so this source is
-                        // retained explicitly without reaching a decoder fallback.
-                        let rel_key = fast_img_scan_failure_rel_key(&path, &src_dir)?;
-                        scan_failures.insert(rel_key, e.to_string());
-                        source_jpegs.push(path);
-                    }
-                }
-            }
-        } else if identity.family == FormatKind::Jpeg {
-            source_jpegs.push(path);
-        }
-    }
-    let current_source_hashes = fast_img_source_hash_set(&src_dir, &source_jpegs)?;
-    let planned_encode_count = source_jpegs.len().saturating_sub(scan_failures.len());
-    if strategy == "avif" {
-        println!(
-            "[FASTIMG ] selected {} static images in {}",
-            planned_encode_count,
-            src_dir.display()
-        );
-        println!(
-            "[MEME    ] AVIF quality search: q=100..0; use pure-media budget with smallest verified pure-media fallback"
-        );
-    } else {
-        println!(
-            "[FASTIMG ] selected {} true JPEGs in {}",
-            source_jpegs.len(),
-            src_dir.display()
-        );
-    }
+    let FastImgSourceInventory {
+        source_files: source_jpegs,
+        scan_failures,
+        modern_lossy_candidates,
+        source_hashes: current_source_hashes,
+        planned_encode_count,
+    } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
     if let Some(marker) = &existing_marker
         && marker.stage != FastImgStageName::CleanupComplete
         && fast_img_marker_input_state_is_stale(
@@ -3432,10 +3457,8 @@ enum AvifQualityExploreResult {
 
 struct FastImgAvifEncoderInput {
     path: PathBuf,
-    // Keeps the decoded intermediate alive for the lifetime of the input;
-    // read only by tests, hence the dedicated allow.
-    #[allow(dead_code)]
-    temp_guard: Option<tempfile::NamedTempFile>,
+    // Keeps the decoded intermediate alive for the lifetime of the input.
+    _temp_guard: Option<tempfile::NamedTempFile>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3642,7 +3665,7 @@ fn prepare_fast_img_avif_encoder_input(
     if matches!(format, FormatKind::Jpeg | FormatKind::Png) {
         return Ok(FastImgAvifEncoderInput {
             path: source.to_path_buf(),
-            temp_guard: None,
+            _temp_guard: None,
         });
     }
     let Some(decoder) = avif_input_decoder(format) else {
@@ -3697,7 +3720,7 @@ fn prepare_fast_img_avif_encoder_input(
     ));
     Ok(FastImgAvifEncoderInput {
         path: temp_path,
-        temp_guard: Some(temp),
+        _temp_guard: Some(temp),
     })
 }
 
@@ -8209,111 +8232,6 @@ fn auto_convert_directory_disk_space_precheck(
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-fn build_auto_convert_config(
-    output_dir: Option<PathBuf>,
-    base_dir: Option<PathBuf>,
-    force: bool,
-    should_delete: bool,
-    preserve_timestamps: bool,
-    preserve: bool,
-    compress: bool,
-    apple_compat: bool,
-    in_place: bool,
-    explore: bool,
-    match_quality: bool,
-    ultimate: bool,
-    archive: bool,
-    allow_size_tolerance: bool,
-    allow_expert_options: bool,
-    verbose: bool,
-    cache: Option<Arc<AnalysisCache>>,
-    static_delivery: foundation::delivery_codec_strategy::ImgStaticDelivery,
-) -> AutoConvertConfig {
-    AutoConvertConfig {
-        output_dir,
-        base_dir,
-        flags: {
-            ConfigFlags::empty()
-                | if force {
-                    ConfigFlags::FORCE
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if should_delete {
-                    ConfigFlags::DELETE_ORIGINAL
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if preserve_timestamps {
-                    ConfigFlags::PRESERVE_TIMESTAMPS
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if preserve {
-                    ConfigFlags::PRESERVE_METADATA
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if compress {
-                    ConfigFlags::COMPRESS
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if apple_compat {
-                    ConfigFlags::APPLE_COMPAT
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if in_place {
-                    ConfigFlags::IN_PLACE
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if explore {
-                    ConfigFlags::EXPLORE_SMALLER
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if match_quality {
-                    ConfigFlags::MATCH_QUALITY
-                } else {
-                    ConfigFlags::empty()
-                }
-                | ConfigFlags::USE_GPU
-                | if ultimate {
-                    ConfigFlags::ULTIMATE_MODE
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if archive {
-                    ConfigFlags::ARCHIVE_MODE
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if allow_size_tolerance {
-                    ConfigFlags::ALLOW_SIZE_TOLERANCE
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if allow_expert_options {
-                    ConfigFlags::ALLOW_EXPERT_OPTIONS
-                } else {
-                    ConfigFlags::empty()
-                }
-                | if verbose {
-                    ConfigFlags::VERBOSE
-                } else {
-                    ConfigFlags::empty()
-                }
-        },
-        child_threads: 0,
-        cache,
-        static_delivery,
-        error_mode: foundation::BatchErrorMode::current(),
-    }
-}
-
 #[cfg(test)]
 mod fast_img_hardening_tests {
     #![allow(
@@ -11518,7 +11436,6 @@ mod fast_img_hardening_tests {
             false,
         )?;
         assert_eq!(direct.path, Path::new("direct.jpg"));
-        assert!(direct.temp_guard.is_none());
 
         let adapter_error = match super::prepare_fast_img_avif_encoder_input(
             Path::new("static.bmp"),
