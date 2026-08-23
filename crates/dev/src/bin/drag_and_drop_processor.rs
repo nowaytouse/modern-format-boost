@@ -1404,7 +1404,8 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::Auto => "Standard Pipeline",
         LaunchMode::Images => "Images Only",
         LaunchMode::Videos => "Videos/Animated",
-        LaunchMode::FastImg | LaunchMode::RestoreJpeg => "Fast Image",
+        LaunchMode::FastImg => "Fast Image",
+        LaunchMode::RestoreJpeg => "Restore JPEG",
         LaunchMode::FastVid => "Fast Video",
         LaunchMode::Collect => "Collect Optimized",
         LaunchMode::MergeXmp => "Merge XMP",
@@ -1413,6 +1414,17 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::CacheClean => "Cache Cleanup",
         LaunchMode::DatabaseManager => "Database Manager",
     }
+}
+
+const fn mode_supports_ultimate(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto
+            | LaunchMode::Images
+            | LaunchMode::Videos
+            | LaunchMode::FastImg
+            | LaunchMode::FastVid
+    )
 }
 
 const fn target_type_label(args: &Args) -> &'static str {
@@ -1436,7 +1448,7 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
         mode_label: mode_label(&args.mode).to_string(),
         target_type: target_type_label(args).to_string(),
         output_path: args.output.as_ref().map(|p| p.display().to_string()),
-        ultimate: args.ultimate,
+        ultimate: args.ultimate && mode_supports_ultimate(&args.mode),
         watch: args.watch,
         cpu_percent: snapshot.as_ref().map(|s| s.cpu_percent),
         memory_percent: snapshot.as_ref().map(|s| s.memory_percent),
@@ -1589,13 +1601,26 @@ fn run_drag_drop(
                 Err(err) => first_error = Some(err),
             }
             if first_error.is_none() {
-                run_fast_img_restore_post_success(
-                    args,
-                    &root,
-                    session.expect("session"),
-                    &mut summary,
-                    &output,
-                )?;
+                if output.is_dir() {
+                    run_fast_img_restore_post_success(
+                        args,
+                        &root,
+                        session.expect("session"),
+                        &mut summary,
+                        &output,
+                    )?;
+                } else if summary.img.succeeded == 0 && summary.img.failed == 0 {
+                    summary.integrity_state = Some("CLEAN");
+                    println!(
+                        "   {} No exact-reconstruction JPEG output was eligible; all source files were retained",
+                        pick_symbol("ℹ️", "[INFO]")
+                    );
+                } else {
+                    bail!(
+                        "restore-jpeg reported successful outputs but output directory is missing: {}",
+                        output.display()
+                    );
+                }
             }
         } else {
             draw_separator("Processing (fast-img)");
@@ -2648,6 +2673,22 @@ mod tests {
         assert_eq!(commands[0].args.first().map(String::as_str), Some("fast-img"));
         assert!(commands[0].args.iter().any(|arg| arg == "--shortest-path"));
         assert!(!commands[0].args.iter().any(|arg| arg == "run"));
+    }
+
+    #[test]
+    fn restore_jpeg_dashboard_uses_restore_semantics() {
+        let args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "restore-jpeg",
+            "--ultimate",
+        ])
+        .expect("parse restore-jpeg dashboard arguments");
+
+        let dashboard = build_runtime_dashboard(&args);
+
+        assert_eq!(dashboard.mode_label, "Restore JPEG");
+        assert!(!dashboard.ultimate);
     }
 
     #[test]

@@ -5842,7 +5842,16 @@ fn restore_jpeg_output_path_for(
     Ok(output)
 }
 
-fn restore_jpeg_candidate_files(input: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
+#[derive(Debug)]
+struct RestoreJpegFailure {
+    source: PathBuf,
+    reason: String,
+}
+
+fn restore_jpeg_candidate_files(
+    input: &Path,
+    recursive: bool,
+) -> anyhow::Result<(Vec<PathBuf>, Vec<RestoreJpegFailure>)> {
     if input.is_file() {
         let format = foundation::image::format_detect::detect_true_format(input)
             .with_context(|| format!("restore-jpeg failed to probe {}", input.display()))?;
@@ -5853,18 +5862,30 @@ fn restore_jpeg_candidate_files(input: &Path, recursive: bool) -> anyhow::Result
                 format
             );
         }
-        return Ok(vec![input.to_path_buf()]);
+        return Ok((vec![input.to_path_buf()], Vec::new()));
     }
 
     let mut jxl_files = Vec::new();
+    let mut failures = Vec::new();
     for path in fast_img_scan_regular_files(input, recursive)? {
-        let format = foundation::image::format_detect::detect_true_format(&path)
-            .with_context(|| format!("restore-jpeg failed to probe {}", path.display()))?;
-        if format == FormatKind::Jxl {
-            jxl_files.push(path);
+        let claims_jxl = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("jxl"));
+        match foundation::image::format_detect::detect_true_format(&path) {
+            Ok(FormatKind::Jxl) => jxl_files.push(path),
+            Ok(format) if claims_jxl => failures.push(RestoreJpegFailure {
+                source: path,
+                reason: format!("file is named JXL but true content format is {format:?}"),
+            }),
+            Err(error) if claims_jxl => failures.push(RestoreJpegFailure {
+                source: path,
+                reason: format!("failed to identify JXL content: {error}"),
+            }),
+            Ok(_) | Err(_) => {}
         }
     }
-    Ok(jxl_files)
+    Ok((jxl_files, failures))
 }
 
 fn restore_jpeg_input_root(input: &Path) -> anyhow::Result<PathBuf> {
@@ -5902,6 +5923,21 @@ struct RestoreJpegResult {
 struct RestoreJpegManifestRecord {
     proof: RestoreJpegCommitProof,
     source_deleted: bool,
+}
+
+#[derive(Debug)]
+struct RestoreJpegPreflight {
+    restorable: Vec<PathBuf>,
+    ineligible: Vec<RestoreJpegFailure>,
+    failures: Vec<RestoreJpegFailure>,
+}
+
+#[derive(Debug, Default)]
+struct RestoreJpegParallelOutcome {
+    restored: usize,
+    skipped: usize,
+    records: Vec<RestoreJpegManifestRecord>,
+    failures: Vec<RestoreJpegFailure>,
 }
 
 fn restore_jpeg_relative_string(path: &Path, root: &Path) -> anyhow::Result<String> {
@@ -6111,7 +6147,7 @@ fn restore_jpeg_embed_all_metadata(input: &Path, output: &Path) -> anyhow::Resul
     foundation::metadata::verify_output_embedded_metadata(
         input,
         output,
-        foundation::metadata::MetadataOutputPolicy::Preserve,
+        foundation::metadata::MetadataOutputPolicy::PreserveSource,
     )?;
     Ok(())
 }
@@ -6206,7 +6242,7 @@ where
         foundation::metadata::verify_output_embedded_metadata(
             input,
             output,
-            foundation::metadata::MetadataOutputPolicy::Preserve,
+            foundation::metadata::MetadataOutputPolicy::PreserveSource,
         )
         .context("restore-jpeg proof gate: embedded metadata custody failed")?;
 
@@ -6573,17 +6609,11 @@ fn restore_jpeg_validate_disjoint_roots(
     Ok(())
 }
 
-fn restore_jpeg_jxlinfo_has_jpeg_reconstruction(output: &[u8]) -> bool {
-    String::from_utf8_lossy(output)
-        .to_ascii_lowercase()
-        .contains("jpeg bitstream reconstruction data available")
-}
-
 fn restore_jpeg_preflight(
     input_root: &Path,
     output_root: &Path,
     files: &[PathBuf],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RestoreJpegPreflight> {
     restore_jpeg_validate_disjoint_roots(input_root, output_root)?;
     if files.is_empty() {
         anyhow::bail!(
@@ -6605,8 +6635,6 @@ fn restore_jpeg_preflight(
         }
     }
 
-    let jxlinfo = foundation::common_utils::resolve_tool_path("jxlinfo")
-        .context("restore-jpeg requires official jxlinfo")?;
     let available_workers = match std::thread::available_parallelism() {
         Ok(worker_count) => worker_count.get(),
         Err(error) => {
@@ -6619,71 +6647,60 @@ fn restore_jpeg_preflight(
     let worker_count = available_workers.clamp(1, 8);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(worker_count)
-        .thread_name(|index| format!("mfb-jxlinfo-{index}"))
+        .thread_name(|index| format!("mfb-jxl-reconstruction-{index}"))
         .build()
-        .context("restore-jpeg failed to create jxlinfo preflight worker pool")?;
-    let verified = std::sync::atomic::AtomicUsize::new(0);
-    pool.install(|| {
-        files.par_iter().try_for_each(|source| {
-            let mut command = std::process::Command::new(&jxlinfo);
-            command.arg("-v").arg(source);
-            let probe = run_restore_image_command(command, "restore-jpeg jxlinfo preflight")
-                .with_context(|| {
-                    format!(
-                        "restore-jpeg preflight failed to launch jxlinfo for {}",
-                        source.display()
-                    )
-                })?;
-            let mut diagnostic = probe.stdout;
-            diagnostic.extend_from_slice(&probe.stderr);
-            if !probe.status.success() {
-                anyhow::bail!(
-                    "restore-jpeg preflight jxlinfo failed for {}: {}",
-                    source.display(),
-                    String::from_utf8_lossy(&diagnostic).trim()
-                );
+        .context("restore-jpeg failed to create reconstruction preflight worker pool")?;
+    let checked = std::sync::atomic::AtomicUsize::new(0);
+    let results = pool.install(|| {
+        files
+            .par_iter()
+            .map(|source| {
+                let result = foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(source);
+                let completed =
+                    checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if completed.is_multiple_of(250) || completed == files.len() {
+                    println!(
+                        "[PREFLIGHT] checked {completed}/{} JXL reconstruction candidates",
+                        files.len()
+                    );
+                }
+                (source.clone(), result)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let mut restorable = Vec::with_capacity(files.len());
+    let mut ineligible = Vec::new();
+    let mut failures = Vec::new();
+    for (source, result) in results {
+        match result {
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::Exact) => {
+                restorable.push(source);
             }
-            if !restore_jpeg_jxlinfo_has_jpeg_reconstruction(&diagnostic) {
-                anyhow::bail!(
-                    "restore-jpeg preflight refused {}: JPEG bitstream reconstruction data is unavailable",
-                    source.display()
-                );
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::PixelOnly) => {
+                ineligible.push(RestoreJpegFailure {
+                    source,
+                    reason: "valid pixel-decodable JXL has no exact JPEG bitstream reconstruction data; pixel-to-JPEG fallback is forbidden".to_string(),
+                });
             }
-            let mut strict_probe = restore_jpeg_djxl_command(source, Path::new("-"));
-            strict_probe
-                .arg("--output_format=jpg")
-                .arg("--disable_output")
-                .arg("--quiet");
-            let strict = run_restore_image_command(
-                strict_probe,
-                "restore-jpeg strict reconstruction preflight",
-            )
-            .with_context(|| {
-                format!(
-                    "restore-jpeg strict reconstruction preflight failed to launch djxl for {}",
-                    source.display()
-                )
-            })?;
-            if !strict.status.success() {
-                anyhow::bail!(
-                    "restore-jpeg preflight refused {}: jxlinfo advertises JPEG reconstruction, \
-                     but djxl --reconstruct_jpeg rejected it; pixel-to-JPEG fallback is forbidden: {}",
-                    source.display(),
-                    String::from_utf8_lossy(&strict.stderr).trim()
-                );
-            }
-            let completed =
-                verified.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if completed.is_multiple_of(250) || completed == files.len() {
-                println!(
-                    "[PREFLIGHT] verified {completed}/{} reversible JXL source files",
-                    files.len()
-                );
-            }
-            Ok::<(), anyhow::Error>(())
-        })
-    })?;
-    Ok(())
+            Ok(
+                foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
+                    diagnostic,
+                },
+            ) => ineligible.push(RestoreJpegFailure {
+                source,
+                reason: format!(
+                    "jxlinfo advertises JPEG reconstruction but official djxl rejects it; the valid pixel payload is retained without lossy fallback: {diagnostic}"
+                ),
+            }),
+            Err(reason) => failures.push(RestoreJpegFailure { source, reason }),
+        }
+    }
+    Ok(RestoreJpegPreflight {
+        restorable,
+        ineligible,
+        failures,
+    })
 }
 
 fn restore_jpeg_keep_source_parallel(
@@ -6691,7 +6708,7 @@ fn restore_jpeg_keep_source_parallel(
     input_root: &Path,
     output_root: &Path,
     force: bool,
-) -> anyhow::Result<(usize, usize, Vec<RestoreJpegManifestRecord>)> {
+) -> anyhow::Result<RestoreJpegParallelOutcome> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let available_workers = match std::thread::available_parallelism() {
@@ -6720,11 +6737,13 @@ fn restore_jpeg_keep_source_parallel(
         files
             .par_iter()
             .map(|file| {
-                let result = restore_single_jpeg(file, input_root, output_root, force)?;
-                if result.committed {
-                    restored.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    skipped.fetch_add(1, Ordering::Relaxed);
+                let result = restore_single_jpeg(file, input_root, output_root, force);
+                if let Ok(restored_file) = &result {
+                    if restored_file.committed {
+                        restored.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == file_count {
@@ -6734,21 +6753,28 @@ fn restore_jpeg_keep_source_parallel(
                         skipped.load(Ordering::Relaxed)
                     );
                 }
-                Ok(result)
+                (file.clone(), result)
             })
-            .collect::<Vec<anyhow::Result<RestoreJpegResult>>>()
+            .collect::<Vec<_>>()
     });
 
     let mut records = Vec::with_capacity(file_count);
-    for result in pending {
-        let result = result?;
-        record_retained_restored_jpeg_source(&mut records, &result.proof);
+    let mut failures = Vec::new();
+    for (source, result) in pending {
+        match result {
+            Ok(result) => record_retained_restored_jpeg_source(&mut records, &result.proof),
+            Err(error) => failures.push(RestoreJpegFailure {
+                source,
+                reason: format!("{error:#}"),
+            }),
+        }
     }
-    Ok((
-        restored.load(Ordering::Relaxed),
-        skipped.load(Ordering::Relaxed),
+    Ok(RestoreJpegParallelOutcome {
+        restored: restored.load(Ordering::Relaxed),
+        skipped: skipped.load(Ordering::Relaxed),
         records,
-    ))
+        failures,
+    })
 }
 
 fn run_restore_jpeg(
@@ -6768,30 +6794,148 @@ fn run_restore_jpeg(
         Some(path) => path.to_path_buf(),
         None => restore_jpeg_default_output_dir(input)?,
     };
-    let files = restore_jpeg_candidate_files(input, recursive)?;
+    let (candidates, mut failures) = restore_jpeg_candidate_files(input, recursive)?;
+    let candidate_count = candidates.len() + failures.len();
+    if candidates.is_empty() {
+        for failed in &failures {
+            eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+        }
+        println!("Succeeded: 0");
+        println!("Skipped: 0");
+        println!("Ignored: 0");
+        println!("Failed: {}", failures.len());
+        if failures.is_empty() {
+            println!(
+                "[DONE    ] no true JXL files found in {}; no files were changed",
+                input_root.display()
+            );
+            return Ok(());
+        }
+        anyhow::bail!(
+            "restore-jpeg found {} invalid/unreadable JXL-named file(s) and no healthy JXL candidates; all sources were retained",
+            failures.len()
+        );
+    }
+    let preflight = restore_jpeg_preflight(&input_root, &output_root, &candidates)?;
+    for skipped in &preflight.ineligible {
+        eprintln!(
+            "[SKIP    ] {}: {}",
+            skipped.source.display(),
+            skipped.reason
+        );
+    }
+    for failed in &preflight.failures {
+        eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+    }
+    for failed in &failures {
+        eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+    }
+    let ineligible_count = preflight.ineligible.len();
+    failures.extend(preflight.failures);
+    let files = preflight.restorable;
     let file_count = files.len();
-    restore_jpeg_preflight(&input_root, &output_root, &files)?;
     println!(
-        "[SCAN    ] Found {} reversible JXL files in {}",
-        files.len(),
+        "[SCAN    ] Found {file_count} exact-reconstruction JXL files, {ineligible_count} safely retained ineligible files, and {} invalid/probe failures in {}",
+        failures.len(),
         input_root.display()
     );
+    if files.is_empty() {
+        println!("Succeeded: 0");
+        println!("Skipped: {ineligible_count}");
+        println!("Ignored: 0");
+        println!("Failed: {}", failures.len());
+        if failures.is_empty() {
+            println!(
+                "[DONE    ] no JXL in this batch can reproduce original JPEG bytes; all {candidate_count} JXL/XMP sources were retained and no pixel-to-JPEG fallback was used"
+            );
+            return Ok(());
+        }
+        anyhow::bail!(
+            "restore-jpeg found no exact-reconstruction candidate and {} invalid/unreadable JXL file(s); all sources were retained",
+            failures.len()
+        );
+    }
+
+    let output_candidate_dirs = files
+        .iter()
+        .map(|file| {
+            restore_jpeg_output_path_for(file, &input_root, &output_root).map(|output| {
+                output
+                    .parent()
+                    .unwrap_or(output_root.as_path())
+                    .to_path_buf()
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let mut restored = 0usize;
     let mut skipped = 0usize;
     let mut deleted_sources = 0usize;
     let mut deleted_source_dirs = Vec::new();
     let mut restore_records = Vec::new();
-    write_restore_jpeg_manifest(&output_root, &restore_records)?;
 
     if keep_source {
-        (restored, skipped, restore_records) =
+        let outcome =
             restore_jpeg_keep_source_parallel(&files, &input_root, &output_root, force)?;
-        write_restore_jpeg_manifest(&output_root, &restore_records).with_context(|| {
-            format!(
-                "restore-jpeg failed to commit retained-source manifest after {file_count} files"
-            )
-        })?;
+        restored = outcome.restored;
+        skipped = outcome.skipped;
+        restore_records = outcome.records;
+        for failed in &outcome.failures {
+            eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+        }
+        failures.extend(outcome.failures);
+        if !restore_records.is_empty() {
+            write_restore_jpeg_manifest(&output_root, &restore_records).with_context(|| {
+                format!(
+                    "restore-jpeg failed to commit retained-source manifest after {file_count} files"
+                )
+            })?;
+        }
+    } else {
+        for (index, file) in files.iter().enumerate() {
+            match restore_single_jpeg(file, &input_root, &output_root, force) {
+                Ok(result) => {
+                    if result.committed {
+                        restored += 1;
+                    } else {
+                        skipped += 1;
+                    }
+                    if record_and_delete_restored_jpeg_source(
+                        &output_root,
+                        &mut restore_records,
+                        &result.proof,
+                    )? {
+                        deleted_sources += 1;
+                        if let Some(parent) = file.parent() {
+                            deleted_source_dirs.push(parent.to_path_buf());
+                        }
+                    }
+                }
+                Err(error) => {
+                    let failure = RestoreJpegFailure {
+                        source: file.clone(),
+                        reason: format!("{error:#}"),
+                    };
+                    eprintln!(
+                        "[FAIL    ] {}: {}",
+                        failure.source.display(),
+                        failure.reason
+                    );
+                    failures.push(failure);
+                }
+            }
+
+            let processed = index + 1;
+            if processed.is_multiple_of(250) || processed == file_count {
+                println!(
+                    "[RESTORE ] processed {processed}/{file_count} exact-reconstruction candidates (new={restored} existing={skipped} failed={})",
+                    failures.len()
+                );
+            }
+        }
+    }
+
+    if !restore_records.is_empty() {
         foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
             format!(
                 "restore-jpeg failed to preserve directory metadata {} -> {}",
@@ -6799,53 +6943,58 @@ fn run_restore_jpeg(
                 output_root.display()
             )
         })?;
-        println!(
-            "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted=0 retained={file_count}",
-            output_root.display()
-        );
+    }
+    if output_root.exists() {
+        foundation::io_utils::prune_empty_directories_within(
+            &output_root,
+            &output_candidate_dirs,
+        )
+        .with_context(|| {
+            format!(
+                "restore-jpeg refused unsafe empty output cleanup under {}",
+                output_root.display()
+            )
+        })?;
+    }
+    let source_dirs_pruned = if keep_source {
+        0
+    } else {
+        restore_jpeg_prune_empty_source_dirs(
+            &input_root,
+            &deleted_source_dirs,
+            input.is_dir(),
+        )?
+    };
+    let retained_sources = candidate_count.saturating_sub(deleted_sources);
+    let delivered = restored + skipped;
+    println!("Succeeded: {delivered}");
+    println!("Skipped: {ineligible_count}");
+    println!("Ignored: 0");
+    println!("Failed: {}", failures.len());
+    if failures.is_empty() {
+        if ineligible_count == 0 {
+            println!(
+                "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+                output_root.display()
+            );
+        } else {
+            println!(
+                "[DONE    ] restored every exact-reconstruction candidate: {restored} new JPEGs at {} ({skipped} existing outputs reused); {ineligible_count} valid but non-reconstructible JXLs retained; source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+                output_root.display()
+            );
+        }
         return Ok(());
     }
 
-    for file in files {
-        let result = restore_single_jpeg(&file, &input_root, &output_root, force)?;
-        if result.committed {
-            restored += 1;
-        } else {
-            skipped += 1;
-        }
-        if record_and_delete_restored_jpeg_source(
-            &output_root,
-            &mut restore_records,
-            &result.proof,
-        )? {
-            deleted_sources += 1;
-            if let Some(parent) = file.parent() {
-                deleted_source_dirs.push(parent.to_path_buf());
-            }
-        }
-
-        let processed = restored + skipped;
-        if processed.is_multiple_of(250) || processed == file_count {
-            println!(
-                "[RESTORE ] verified {processed}/{file_count} JPEG outputs (new={restored} existing={skipped})"
-            );
-        }
-    }
-    foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
-        format!(
-            "restore-jpeg failed to preserve directory metadata {} -> {}",
-            input_root.display(),
-            output_root.display()
-        )
-    })?;
-    let source_dirs_pruned =
-        restore_jpeg_prune_empty_source_dirs(&input_root, &deleted_source_dirs, input.is_dir())?;
     println!(
-        "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted={deleted_sources} retained={} empty directories removed={source_dirs_pruned}",
+        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} failed={} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
         output_root.display(),
-        0
+        failures.len()
     );
-    Ok(())
+    anyhow::bail!(
+        "restore-jpeg retained {} invalid/unreadable JXL file(s) after processing every healthy exact-reconstruction candidate; see [FAIL] entries",
+        failures.len()
+    )
 }
 
 fn fast_img_source_hash_set(
@@ -8383,8 +8532,8 @@ mod fast_img_hardening_tests {
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
-        restore_jpeg_djxl_command, restore_jpeg_jxlinfo_has_jpeg_reconstruction,
-        restore_jpeg_output_path_for, restore_jpeg_prune_empty_source_dirs,
+        restore_jpeg_djxl_command, restore_jpeg_output_path_for, restore_jpeg_preflight,
+        restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
         validate_fast_img_marker_source_state,
     };
@@ -8655,16 +8804,6 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_jxlinfo_parser_requires_reconstruction_proof() {
-        assert!(restore_jpeg_jxlinfo_has_jpeg_reconstruction(
-            b"JPEG bitstream reconstruction data available\n"
-        ));
-        assert!(!restore_jpeg_jxlinfo_has_jpeg_reconstruction(
-            b"JPEG bitstream reconstruction data not available\n"
-        ));
-    }
-
-    #[test]
     fn restore_jpeg_decoder_forbids_pixel_to_jpeg_fallback() {
         let command =
             restore_jpeg_djxl_command(Path::new("archive.jxl"), Path::new("restored.jpg"));
@@ -8672,6 +8811,52 @@ mod fast_img_hardening_tests {
 
         assert!(args.iter().any(|arg| *arg == "--reconstruct_jpeg"));
         assert!(!args.iter().any(|arg| *arg == "--pixels_to_jpeg"));
+    }
+
+    #[test]
+    fn restore_jpeg_preflight_does_not_reject_healthy_siblings() -> anyhow::Result<()> {
+        if !foundation::CjxlBuilder::new().check_available()
+            || !foundation::DjxlBuilder::new().check_available()
+            || !foundation::tool_builders::JxlinfoBuilder::new().check_available()
+        {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let input_root = root.path().join("Album_optimized");
+        let output_root = root.path().join("Album_restored_jpeg");
+        let reconstructible = input_root.join("healthy.JXL");
+        let non_reconstructible = input_root.join("pixels-only.JXL");
+        assert!(write_real_reconstructible_jxl(&reconstructible)?);
+        let pixels_source = input_root.join("pixels-only.jpg");
+        write_real_jpeg(&pixels_source, [40, 50, 60])?;
+        let encoded = std::process::Command::new(foundation::constants::TOOL_CJXL)
+            .arg(&pixels_source)
+            .arg(&non_reconstructible)
+            .arg("--lossless_jpeg=0")
+            .arg("--distance=0")
+            .output()?;
+        std::fs::remove_file(&pixels_source)?;
+        anyhow::ensure!(
+            encoded.status.success(),
+            "test cjxl failed: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+
+        let preflight = restore_jpeg_preflight(
+            &input_root,
+            &output_root,
+            &[reconstructible, non_reconstructible],
+        )?;
+
+        assert_eq!(preflight.restorable.len(), 1);
+        assert_eq!(preflight.ineligible.len(), 1);
+        assert!(preflight.failures.is_empty());
+        assert_eq!(preflight.restorable[0].file_name().unwrap(), "healthy.JXL");
+        assert_eq!(
+            preflight.ineligible[0].source.file_name().unwrap(),
+            "pixels-only.JXL"
+        );
+        Ok(())
     }
 
     #[test]
@@ -8773,9 +8958,12 @@ mod fast_img_hardening_tests {
         write_jxl(&true_jxl, b"jxl")?;
         write_jpeg(&fake_jxl, b"jpeg")?;
 
-        let files = restore_jpeg_candidate_files(&input_root, true)?;
+        let (files, failures) = restore_jpeg_candidate_files(&input_root, true)?;
 
         assert_eq!(files, vec![true_jxl]);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].source, fake_jxl);
+        assert!(failures[0].reason.contains("true content format is Jpeg"));
         Ok(())
     }
 

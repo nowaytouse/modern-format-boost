@@ -18,6 +18,9 @@ use std::path::Path;
 pub enum MetadataOutputPolicy {
     /// Portable embedded metadata on the output must match the paired source.
     Preserve,
+    /// Every portable source tag must be preserved, while codec-created output
+    /// tags are allowed. This is reserved for cross-container reconstruction.
+    PreserveSource,
     /// Removable embedded metadata and adjacent XMP must be absent on the output.
     Clear,
 }
@@ -84,7 +87,7 @@ pub fn verify_output_embedded_metadata(
     }
 
     let (source_payload_bytes, output_payload_bytes) = match policy {
-        MetadataOutputPolicy::Preserve => (0, 0),
+        MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => (0, 0),
         MetadataOutputPolicy::Clear => {
             (removable_payload_bytes(src)?, removable_payload_bytes(dst)?)
         }
@@ -96,6 +99,14 @@ pub fn verify_output_embedded_metadata(
             merge_source_sidecar_metadata_into(&mut src_tags, src)?;
             let dst_tags = preservable_tag_map(dst)?;
             let mut mismatches = preserve_mismatches(&src_tags, &dst_tags);
+            mismatches.extend(output_sidecar_mismatches(src, dst)?);
+            mismatches
+        }
+        MetadataOutputPolicy::PreserveSource => {
+            let mut src_tags = preservable_tag_map(src)?;
+            merge_source_sidecar_metadata_into(&mut src_tags, src)?;
+            let dst_tags = preservable_tag_map(dst)?;
+            let mut mismatches = preserve_source_mismatches(&src_tags, &dst_tags);
             mismatches.extend(output_sidecar_mismatches(src, dst)?);
             mismatches
         }
@@ -113,6 +124,11 @@ pub fn verify_output_embedded_metadata(
         let detail = match policy {
             MetadataOutputPolicy::Preserve => format!(
                 "Metadata Audit: portable embedded metadata verified {} -> {}",
+                src.display(),
+                dst.display()
+            ),
+            MetadataOutputPolicy::PreserveSource => format!(
+                "Metadata Audit: source metadata preserved with codec output additions allowed {} -> {}",
                 src.display(),
                 dst.display()
             ),
@@ -159,6 +175,21 @@ fn preserve_mismatches(
     src: &BTreeMap<String, String>,
     dst: &BTreeMap<String, String>,
 ) -> Vec<String> {
+    let mut mismatches = preserve_source_mismatches(src, dst);
+    for (key, actual) in dst {
+        if !src.contains_key(key) {
+            mismatches.push(format!(
+                "metadata {key} unexpected on output actual={actual:?} (possible cross-product metadata)"
+            ));
+        }
+    }
+    mismatches
+}
+
+fn preserve_source_mismatches(
+    src: &BTreeMap<String, String>,
+    dst: &BTreeMap<String, String>,
+) -> Vec<String> {
     let mut mismatches = Vec::new();
     for (key, expected) in src {
         match dst.get(key) {
@@ -169,13 +200,6 @@ fn preserve_mismatches(
             None => mismatches.push(format!(
                 "metadata {key} missing from output (expected={expected:?})"
             )),
-        }
-    }
-    for (key, actual) in dst {
-        if !src.contains_key(key) {
-            mismatches.push(format!(
-                "metadata {key} unexpected on output actual={actual:?} (possible cross-product metadata)"
-            ));
         }
     }
     mismatches
@@ -471,6 +495,23 @@ mod tests {
                 .iter()
                 .any(|m| m.contains("unexpected") && m.contains("Description")),
             "cross-product metadata must fail: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn preserve_source_mismatches_allow_codec_tags_but_not_wrong_source_values() {
+        let mut src = BTreeMap::new();
+        src.insert("XMP-dc:Description".into(), "source".into());
+        let mut dst = src.clone();
+        dst.insert("IFD0:XResolution".into(), "1".into());
+        dst.insert("IFD0:YResolution".into(), "1".into());
+        assert!(preserve_source_mismatches(&src, &dst).is_empty());
+
+        dst.insert("XMP-dc:Description".into(), "other".into());
+        assert!(
+            preserve_source_mismatches(&src, &dst)
+                .iter()
+                .any(|mismatch| mismatch.contains("wrong-source"))
         );
     }
 

@@ -1172,11 +1172,37 @@ fn run_fast_img_restore_check(
     }
 
     let mut expected_keys = HashSet::new();
-    for k in source_outputs.keys() {
-        expected_keys.insert(k.clone());
-    }
     for k in manifest_sources.keys() {
         expected_keys.insert(k.clone());
+    }
+
+    let mut retained_ineligible = Vec::new();
+    let mut reconstruction_probe_errors = Vec::new();
+    for (key, path) in &source_outputs {
+        if restored_jpeg.contains_key(key) || manifest_sources.contains_key(key) {
+            expected_keys.insert(key.clone());
+            continue;
+        }
+        match foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(path) {
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::Exact) => {
+                expected_keys.insert(key.clone());
+            }
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::PixelOnly) => {
+                retained_ineligible.push((
+                    path.clone(),
+                    "pixel-decodable JXL has no exact JPEG reconstruction data".to_string(),
+                ));
+            }
+            Ok(
+                foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
+                    diagnostic,
+                },
+            ) => retained_ineligible.push((
+                path.clone(),
+                format!("advertised JPEG reconstruction rejected by djxl: {diagnostic}"),
+            )),
+            Err(reason) => reconstruction_probe_errors.push((path.clone(), reason)),
+        }
     }
 
     let mut missing_keys = Vec::new();
@@ -1216,7 +1242,9 @@ fn run_fast_img_restore_check(
         }
     }
 
-    stats.source_files = expected_keys.len();
+    let source_candidate_count =
+        expected_keys.len() + retained_ineligible.len() + reconstruction_probe_errors.len();
+    stats.source_files = source_candidate_count;
     stats.source_remaining_files = source_outputs.len();
     stats.verified_deleted_sources = manifest_deleted_sources.len();
     stats.optimized_files = restored_jpeg.len();
@@ -1227,8 +1255,12 @@ fn run_fast_img_restore_check(
     stats.missing = missing_keys.len();
     stats.extra = extra_keys.len() + restored_probe_errors.len();
     stats.mismatched_types = non_jpeg_outputs.len();
-    stats.count_delta = (restored_jpeg.len() as isize) - (expected_keys.len() as isize);
-    stats.explained_gaps = missing_keys.len() + extra_keys.len() + non_jpeg_outputs.len();
+    stats.count_delta = (restored_jpeg.len() + retained_ineligible.len()) as isize
+        - source_candidate_count as isize;
+    stats.explained_gaps = missing_keys.len()
+        + extra_keys.len()
+        + non_jpeg_outputs.len()
+        + retained_ineligible.len();
 
     let integrity_failures = restore_manifest_errors.len()
         + missing_keys.len()
@@ -1236,6 +1268,7 @@ fn run_fast_img_restore_check(
         + hash_mismatched_restored_jpegs.len()
         + non_jpeg_outputs.len()
         + source_probe_errors.len()
+        + reconstruction_probe_errors.len()
         + restored_probe_errors.len();
 
     let count_matches = integrity_failures == 0;
@@ -1252,7 +1285,7 @@ fn run_fast_img_restore_check(
 
     report.push_str(&format!(
         "Source JXL files:           {}\n",
-        expected_keys.len()
+        source_candidate_count
     ));
     report.push_str(&format!(
         "Source remaining JXL files: {}\n",
@@ -1286,6 +1319,22 @@ fn run_fast_img_restore_check(
         "Non-JPEG restored outputs:  {}\n\n",
         non_jpeg_outputs.len()
     ));
+
+    if !retained_ineligible.is_empty() {
+        report.push_str(&format!(
+            "--- Safely retained JXLs without exact JPEG reconstruction ({}) ---\n",
+            retained_ineligible.len()
+        ));
+        for (path, reason) in &retained_ineligible {
+            report.push_str(&format!(
+                "  ~ {}: {reason}\n",
+                path.strip_prefix(&source_dir)?.display()
+            ));
+        }
+        report.push_str(
+            "  These files remain valid JXL assets; no pixel-to-JPEG fallback or source deletion occurred.\n\n",
+        );
+    }
 
     if integrity_failures > 0 {
         stats.has_warnings = true;
@@ -1371,6 +1420,19 @@ fn run_fast_img_restore_check(
                     "  ! {}: {}\n",
                     p.strip_prefix(&source_dir)?.display(),
                     e
+                ));
+            }
+            report.push('\n');
+        }
+        if !reconstruction_probe_errors.is_empty() {
+            report.push_str(&format!(
+                "--- Source JXL reconstruction probe errors ({}) ---\n",
+                reconstruction_probe_errors.len()
+            ));
+            for (path, error) in &reconstruction_probe_errors {
+                report.push_str(&format!(
+                    "  ! {}: {error}\n",
+                    path.strip_prefix(&source_dir)?.display()
                 ));
             }
             report.push('\n');
@@ -2357,6 +2419,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foundation::ToolBuilder;
     use serial_test::serial;
 
     #[test]
@@ -2895,6 +2958,61 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
+    fn test_fast_img_restore_check_explains_non_reconstructible_retained_jxl() {
+        if !foundation::CjxlBuilder::new().check_available()
+            || !foundation::DjxlBuilder::new().check_available()
+            || !foundation::tool_builders::JxlinfoBuilder::new().check_available()
+        {
+            return;
+        }
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album_optimized");
+        let restored = tempdir.path().join("Album_restored_jpeg");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&restored).unwrap();
+
+        let pixels = source.join("pixels.ppm");
+        let retained = source.join("pixels-only.JXL");
+        fs::write(&pixels, b"P6\n1 1\n255\n\x28\x32\x3c").unwrap();
+        let encoded = std::process::Command::new(foundation::constants::TOOL_CJXL)
+            .arg(&pixels)
+            .arg(&retained)
+            .arg("--distance=0")
+            .output()
+            .unwrap();
+        fs::remove_file(&pixels).unwrap();
+        assert!(
+            encoded.status.success(),
+            "test cjxl failed: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+
+        let restored_jpeg = restored.join("healthy.jpg");
+        fs::write(&restored_jpeg, b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+        let output_hash = calculate_blake3_hash(&restored_jpeg).unwrap();
+        let manifest_content = format!(
+            "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+             6865616c7468792e4a584c\t6865616c7468792e6a7067\tsource-blake3\t{output_hash}\ttrue\n"
+        );
+        fs::write(
+            restored.join(".mfb_restore_jpeg_manifest.tsv"),
+            manifest_content,
+        )
+        .unwrap();
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+
+        assert_eq!(stats.source_files, 2);
+        assert_eq!(stats.optimized_files, 1);
+        assert_eq!(stats.count_delta, 0);
+        assert_eq!(stats.integrity_failures, 0, "{report}");
+        assert!(!stats.has_warnings);
+        assert!(report.contains("Safely retained JXLs without exact JPEG reconstruction (1)"));
+    }
+
+    #[test]
+    #[serial]
     #[rustfmt::skip]
     fn test_fast_img_restore_check_rejects_manifest_claim_when_source_still_exists() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -3008,7 +3126,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
-    fn test_fast_img_restore_check_rejects_missing_or_non_jpeg_outputs() {
+    fn test_fast_img_restore_check_rejects_unreadable_sources_and_non_jpeg_outputs() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
         let restored = tempdir.path().join("Album_restored_jpeg");
@@ -3024,10 +3142,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 0);
-        assert_eq!(stats.missing, 2);
+        assert_eq!(stats.missing, 0);
         assert_eq!(stats.mismatched_types, 1);
         assert!(stats.integrity_failures >= 3);
         assert!(stats.has_warnings);
+        assert!(report.contains("Source JXL reconstruction probe errors (2)"));
     }
 
     #[test]

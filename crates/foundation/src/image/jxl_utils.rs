@@ -10,6 +10,117 @@ use crate::VmafBuilder;
 use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::Path;
+use std::time::Duration;
+
+/// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JpegReconstructionEligibility {
+    /// `djxl --reconstruct_jpeg` accepts the payload.
+    Exact,
+    /// The JXL is pixel-decodable but contains no JPEG reconstruction data.
+    PixelOnly,
+    /// Reconstruction is advertised, but the strict decoder rejects it.
+    AdvertisedButRejected { diagnostic: String },
+}
+
+fn first_nonempty_tool_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no diagnostic")
+        .to_string()
+}
+
+fn run_jxl_reconstruction_probe(
+    command: &mut std::process::Command,
+    context: &str,
+) -> Result<std::process::Output, String> {
+    crate::process_runner::run_command_with_liveness_timeout(
+        command,
+        Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        context,
+    )
+    .map_err(|error| format!("{context} failed: {error}"))
+}
+
+/// Classify exact JPEG reconstruction without ever enabling pixel-to-JPEG
+/// fallback. A strict reconstruction rejection is only considered a safe
+/// retained skip after an independent pixel decode proves the JXL itself is
+/// healthy.
+///
+/// # Errors
+/// Returns an error when the required official tools are unavailable, the JXL
+/// is unreadable, or even its pixel payload cannot be decoded.
+pub fn probe_jpeg_reconstruction_eligibility(
+    path: &Path,
+) -> Result<JpegReconstructionEligibility, String> {
+    use crate::{DjxlBuilder, tool_builders::JxlinfoBuilder};
+
+    if !JxlinfoBuilder::new().check_available() || !DjxlBuilder::new().check_available() {
+        return Err("jxlinfo and djxl are required for exact JPEG reconstruction probing".into());
+    }
+
+    let mut info_command = JxlinfoBuilder::new().input(path).build();
+    let info = run_jxl_reconstruction_probe(&mut info_command, "JXL structure probe")?;
+    let mut info_diagnostic = info.stdout;
+    info_diagnostic.extend_from_slice(&info.stderr);
+    if !info.status.success() {
+        return Err(format!(
+            "jxlinfo rejected the JXL: {}",
+            first_nonempty_tool_line(&info_diagnostic)
+        ));
+    }
+    let advertises_reconstruction = String::from_utf8_lossy(&info_diagnostic).lines().any(|line| {
+        let line = line.to_ascii_lowercase();
+        line.contains("jpeg bitstream reconstruction")
+            && line.contains("available")
+            && !line.contains("not available")
+    });
+
+    let mut strict_command = DjxlBuilder::new()
+        .input(path)
+        .output(Path::new("-"))
+        .build();
+    strict_command
+        .arg("--reconstruct_jpeg")
+        .arg("--output_format=jpg")
+        .arg("--disable_output")
+        .arg("--quiet");
+    let strict = run_jxl_reconstruction_probe(
+        &mut strict_command,
+        "strict JPEG reconstruction probe",
+    )?;
+    if strict.status.success() {
+        return Ok(JpegReconstructionEligibility::Exact);
+    }
+    let strict_diagnostic = first_nonempty_tool_line(&strict.stderr);
+
+    let mut pixel_command = DjxlBuilder::new()
+        .input(path)
+        .output(Path::new("-"))
+        .build();
+    pixel_command
+        .arg("--output_format=png")
+        .arg("--disable_output")
+        .arg("--quiet");
+    let pixel = run_jxl_reconstruction_probe(&mut pixel_command, "JXL pixel health probe")?;
+    if !pixel.status.success() {
+        return Err(format!(
+            "djxl rejected both exact reconstruction ({strict_diagnostic}) and pixel decode ({})",
+            first_nonempty_tool_line(&pixel.stderr)
+        ));
+    }
+
+    if advertises_reconstruction {
+        Ok(JpegReconstructionEligibility::AdvertisedButRejected {
+            diagnostic: strict_diagnostic,
+        })
+    } else {
+        Ok(JpegReconstructionEligibility::PixelOnly)
+    }
+}
 
 /// Extract ICC Profile from source image and return temp file path
 #[must_use]

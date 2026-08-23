@@ -39,6 +39,15 @@ All notable changes to this project will be documented in this file.
   matching decoded pixels before metadata enrichment. Embedded JXL metadata and
   any matching XMP sidecar are then written into the restored JPEG and audited
   before source cleanup; no external output sidecar is required.
+- **Batch-isolated JPEG restoration**: One legacy JXL with unusable JPEG
+  reconstruction data no longer aborts healthy siblings. Every candidate is
+  independently classified by official `jxlinfo` plus strict and pixel-health
+  `djxl` probes: exact candidates proceed through the existing proof/delete
+  gate, valid non-reconstructible JXL/XMP pairs remain untouched as explained
+  skips, and unreadable payloads remain failures. Restore verification accounts
+  for delivered plus safely retained files without turning expected skips into
+  a GUI crash. The restore dashboard also reports its real mode and macOS free
+  disk space using the filesystem fragment size.
 - **Explicit task identity and resume**: FastImg binds checkpoints to relative
   source paths and BLAKE3 identities. Matching interrupted work requires an
   explicit interactive resume or `--retry`; changed, restored, or newly
