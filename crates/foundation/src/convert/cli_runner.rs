@@ -83,6 +83,7 @@ pub struct Config {
     pub base_dir: Option<PathBuf>,
     pub resume: bool,
     pub protect_destructive_dirs: bool,
+    pub prune_empty_source_dirs: bool,
     pub error_mode: crate::BatchErrorMode,
 }
 
@@ -1060,6 +1061,21 @@ where
         );
     }
 
+    if config.prune_empty_source_dirs {
+        let source_dirs = files
+            .iter()
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect::<Vec<_>>();
+        crate::io_utils::prune_empty_directories_within(input, &source_dirs).with_context(
+            || {
+                format!(
+                    "refused unsafe empty-directory cleanup under {}",
+                    input.display()
+                )
+            },
+        )?;
+    }
+
     Ok(())
 }
 fn process_single_file<F, R>(config: &Config, converter: F) -> Result<()>
@@ -1232,6 +1248,7 @@ mod tests {
             base_dir: None,
             resume: false,
             protect_destructive_dirs: false,
+            prune_empty_source_dirs: false,
             error_mode: crate::BatchErrorMode::LogAndContinue,
         }
     }

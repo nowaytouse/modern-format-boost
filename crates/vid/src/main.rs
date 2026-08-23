@@ -701,6 +701,10 @@ fn run_fast_gif(
             );
         }
     }
+    let source_dirs = deliveries
+        .iter()
+        .filter_map(|delivery| delivery.input.parent().map(Path::to_path_buf))
+        .collect::<Vec<_>>();
     for delivery in deliveries {
         let moved = fast_gif_move_original(&delivery.input, &input_root, &originals_root)?;
         println!(
@@ -717,6 +721,15 @@ fn run_fast_gif(
             originals_root.display()
         )
     })?;
+    if input.is_dir() {
+        foundation::io_utils::prune_empty_directories_within(&input_root, &source_dirs)
+            .with_context(|| {
+                format!(
+                    "fast-gif refused unsafe empty-directory cleanup under {}",
+                    input_root.display()
+                )
+            })?;
+    }
     println!(
         "[DONE    ] fast-gif converted {converted} {delivery_label} output(s) into {} ({skipped} skipped, {failed} failed)",
         output_root.display()
@@ -1006,6 +1019,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                     resume,
                     protect_destructive_dirs: delete_original || in_place,
+                    prune_empty_source_dirs: delete_original,
                     error_mode: foundation::BatchErrorMode::current(),
                 },
                 |file| {

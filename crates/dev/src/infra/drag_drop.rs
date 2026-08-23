@@ -883,8 +883,6 @@ pub fn resolve_output_for_fast_vid(target: &Path) -> PathBuf {
     fast_vid_output_dir_for_target(target)
 }
 
-const FAST_IMG_CLEANUP_IGNORABLE_FILES: &[&str] = &[".DS_Store"];
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FastImgIntegrityCounts {
     pub source_count: usize,
@@ -1147,66 +1145,15 @@ fn fast_img_prune_empty_dirs(
     if !output_root.exists() {
         return Ok(0);
     }
-    let root = output_root.canonicalize().with_context(|| {
-        format!(
-            "canonicalize fast-img output root {}",
-            output_root.display()
-        )
-    })?;
-    let mut dirs = std::collections::HashSet::new();
-    for candidate in candidate_dirs {
-        let mut current = candidate.clone();
-        loop {
-            let normalized = current.canonicalize().unwrap_or_else(|_| current.clone());
-            if normalized.strip_prefix(&root).is_err() {
-                break;
-            }
-            dirs.insert(normalized.clone());
-            if normalized == root {
-                break;
-            }
-            current = normalized
-                .parent()
-                .map_or_else(|| root.clone(), Path::to_path_buf);
-        }
-    }
-    let mut pruned = 0usize;
-    let mut sorted: Vec<_> = dirs.into_iter().collect();
-    sorted.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for directory in sorted {
-        if !directory.is_dir() {
-            continue;
-        }
-        if directory.read_dir()?.next().is_none() {
-            fs::remove_dir(&directory)
-                .with_context(|| format!("prune empty fast-img dir {}", directory.display()))?;
-            pruned += 1;
-        }
-    }
-    Ok(pruned)
-}
-
-fn fast_img_remove_ignorable_cleanup_files(output_root: &Path) -> Result<usize> {
-    if !output_root.exists() {
-        return Ok(0);
-    }
-    let mut removed = 0usize;
-    for entry in WalkDir::new(output_root).into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if FAST_IMG_CLEANUP_IGNORABLE_FILES.contains(&name) {
-            fs::remove_file(path).with_context(|| {
-                format!("remove ignorable fast-img cleanup file {}", path.display())
-            })?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
+    let candidates = candidate_dirs.iter().cloned().collect::<Vec<_>>();
+    foundation::io_utils::prune_empty_directories_within(output_root, &candidates).with_context(
+        || {
+            format!(
+                "fast-img refused unsafe empty-directory cleanup under {}",
+                output_root.display()
+            )
+        },
+    )
 }
 
 /// Remove marker-recorded JXL outputs after shortest-path iCloud import (Python
@@ -1259,7 +1206,6 @@ pub fn delete_fast_img_shortest_path_output_dir(
             prune_candidates.insert(parent.to_path_buf());
         }
     }
-    let ignored_removed = fast_img_remove_ignorable_cleanup_files(output_dir)?;
     prune_candidates.insert(output_dir.to_path_buf());
     for entry in WalkDir::new(output_dir).into_iter().filter_map(Result::ok) {
         if entry.file_type().is_dir() {
@@ -1278,8 +1224,7 @@ pub fn delete_fast_img_shortest_path_output_dir(
     } else {
         println!(
             "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s), already \
-             absent={already_absent}, ignored files removed={ignored_removed}, empty dirs \
-             pruned={pruned}; preserved residual files in {}",
+             absent={already_absent}, empty dirs pruned={pruned}; preserved residual files in {}",
             pick_symbol("✓", "[OK]"),
             output_dir.display()
         );

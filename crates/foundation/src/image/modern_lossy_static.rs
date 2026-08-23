@@ -226,8 +226,8 @@ fn detect_modern_compression_authoritative(
     let tool_available = forensic_tool
         .and_then(crate::common_utils::resolve_tool_path)
         .is_some();
-    let in_process_validator_available = cfg!(feature = "v1_21")
-        && matches!(format, FormatKind::Heic | FormatKind::Heif);
+    let in_process_validator_available =
+        cfg!(feature = "v1_21") && matches!(format, FormatKind::Heic | FormatKind::Heif);
     let forensic_validator_available = tool_available || in_process_validator_available;
 
     // JXL's compression classifier already performs an in-process structural

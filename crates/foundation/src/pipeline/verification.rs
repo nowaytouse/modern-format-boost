@@ -675,27 +675,22 @@ fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail
         );
     }
 
-    check_orientation_policy_with_probes(
-        ctx,
-        files,
-        orientation_tag_present,
-        |source, output| {
-            if crate::image::format_detect::detect_true_format(output)
-                .map_err(|err| std::io::Error::other(err.to_string()))?
-                != crate::image::format_detect::FormatKind::Jxl
-            {
-                return Ok(false);
-            }
-            crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
-                .map(|result| {
-                    matches!(
-                        result,
-                        crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
-                    )
-                })
-                .map_err(|err| std::io::Error::other(err.to_string()))
-        },
-    )
+    check_orientation_policy_with_probes(ctx, files, orientation_tag_present, |source, output| {
+        if crate::image::format_detect::detect_true_format(output)
+            .map_err(|err| std::io::Error::other(err.to_string()))?
+            != crate::image::format_detect::FormatKind::Jxl
+        {
+            return Ok(false);
+        }
+        crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+            .map(|result| {
+                matches!(
+                    result,
+                    crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
+                )
+            })
+            .map_err(|err| std::io::Error::other(err.to_string()))
+    })
 }
 
 fn check_orientation_policy_with_probes<F, R>(
@@ -716,10 +711,7 @@ where
                 || PathBuf::from(rel_path).with_extension("JXL"),
                 PathBuf::from,
             );
-            (
-                ctx.working_copy.join(out_rel),
-                ctx.src_dir.join(rel_path),
-            )
+            (ctx.working_copy.join(out_rel), ctx.src_dir.join(rel_path))
         })
         .collect::<BTreeMap<_, _>>();
     let mut failures = Vec::new();
@@ -742,9 +734,7 @@ where
                         crate::media_conversion_gate::delivery_pipeline_path_audit(
                             "fast_img_gate1_orientation_reconstruction",
                             path,
-                            format!(
-                                "Orientation tag lacks exact JPEG reconstruction proof: {err}"
-                            ),
+                            format!("Orientation tag lacks exact JPEG reconstruction proof: {err}"),
                         );
                         probe_errors.push(format!("{}: {err}", path.display()));
                         failures.push(path.clone());

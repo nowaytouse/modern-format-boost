@@ -1663,13 +1663,98 @@ pub fn commit_temp_to_output_with_metadata_pixel_already_verified(
     commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, false)
 }
 
+/// Commit a reconstructed payload without changing any embedded bytes.
+///
+/// This is the commit path for exact JPEG bitstream reconstruction. It may
+/// copy filesystem metadata from `original`, but it never writes Exif/XMP into
+/// the payload. A BLAKE3 check before and after the commit locks that contract.
+///
+/// # Errors
+/// Returns an `io::Result` if validation, commit, filesystem metadata
+/// preservation, or the exact-payload proof fails.
+pub fn commit_temp_to_output_preserving_exact_payload(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+) -> std::io::Result<bool> {
+    validate_temp_output_commit_paths(temp, output)?;
+    let temp_metadata = std::fs::metadata(temp)?;
+    if !temp_metadata.is_file() || temp_metadata.len() == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Refusing to commit an empty exact payload",
+        ));
+    }
+    let expected_hash = crate::common_utils::calculate_blake3_hash(temp)
+        .map_err(|error| std::io::Error::other(format!("Failed to hash exact payload: {error}")))?;
+    let in_place_commit = temp == output;
+    if !in_place_commit && !force && output.exists() {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "exact payload temp cleanup when output exists",
+            temp,
+        );
+        return Ok(false);
+    }
+    if !in_place_commit {
+        crate::io_utils::robust_move(temp, output)?;
+    }
+
+    if let Some(source) = original {
+        let report = match crate::metadata::preserve_filesystem_for_delivery(source, output) {
+            Ok(report) => report,
+            Err(error) => {
+                crate::media_conversion_gate::delivery_remove_file_or_audit(
+                    "exact payload metadata failure cleanup",
+                    output,
+                );
+                return Err(error);
+            }
+        };
+        if matches!(
+            report.exif,
+            crate::metadata::MetadataLayerOutcome::PartialAudit
+        ) || matches!(
+            report.xattr,
+            crate::metadata::MetadataLayerOutcome::PartialAudit
+        ) || matches!(
+            report.timestamps,
+            crate::metadata::MetadataLayerOutcome::PartialAudit
+        ) {
+            crate::media_conversion_gate::delivery_remove_file_or_audit(
+                "exact payload partial metadata cleanup",
+                output,
+            );
+            return Err(std::io::Error::other(format!(
+                "Exact payload filesystem metadata preservation was partial for {}",
+                output.display()
+            )));
+        }
+    }
+
+    let actual_hash = crate::common_utils::calculate_blake3_hash(output).map_err(|error| {
+        std::io::Error::other(format!("Failed to hash committed exact payload: {error}"))
+    })?;
+    if actual_hash != expected_hash {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "exact payload hash mismatch cleanup",
+            output,
+        );
+        return Err(std::io::Error::other(format!(
+            "Embedded payload changed during commit: expected {expected_hash}, got {actual_hash}"
+        )));
+    }
+    Ok(true)
+}
+
 /// Commit a JPEG-reconstructible JXL without rewriting its codec-carried Exif.
 ///
 /// libjxl 0.12's double-orientation fix applies to JXL input decoded to pixels;
 /// it does not remove JPEG Exif stored for bitstream reconstruction.
 /// `cjxl --lossless_jpeg=1` stores the original JPEG metadata as part of the
-/// reconstruction contract. Filesystem metadata is still preserved, while the
-/// embedded payload remains untouched so `djxl --reconstruct_jpeg` stays exact.
+/// reconstruction contract. Filesystem metadata is still preserved, and an
+/// external XMP sidecar is embedded as a JXL XML box. The final strict
+/// reconstruction proof ensures that metadata enrichment never damages JBRD.
 ///
 /// # Errors
 /// Returns an `io::Result` if commit or filesystem metadata preservation fails.
@@ -1738,7 +1823,7 @@ fn commit_temp_to_output_with_metadata_inner(
         crate::io_utils::robust_move(temp, output)?;
     }
 
-    let mut repaired_jxl_exif_after_commit = false;
+    let mut repaired_jxl_exif_after_commit = preserve_codec_embedded_metadata;
 
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
@@ -1831,9 +1916,11 @@ fn commit_temp_to_output_with_metadata_inner(
         } else {
             audit_orientation_pixel_verification_for_delivery(src, output)?;
         }
-        strip_residual_orientation_tag_for_delivery(output)?;
-        repair_corrupt_jxl_brotli_exif_for_delivery(output, Some(src))?;
-        repaired_jxl_exif_after_commit = true;
+        if !preserve_codec_embedded_metadata {
+            strip_residual_orientation_tag_for_delivery(output)?;
+            repair_corrupt_jxl_brotli_exif_for_delivery(output, Some(src))?;
+            repaired_jxl_exif_after_commit = true;
+        }
 
         // Step 2: Finder comment branding — only on the committed conversion output
         #[cfg(target_os = "macos")]
@@ -3590,6 +3677,90 @@ mod tests {
         assert!(output.exists(), "output file should exist after commit");
         assert_eq!(std::fs::read(&output).unwrap(), b"jxl");
         assert!(!temp.exists(), "temp file should be removed after commit");
+    }
+
+    #[test]
+    fn exact_payload_commit_keeps_reconstructed_bytes_unchanged() {
+        let temp_dir = tempdir_in("/tmp").unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
+        let source = temp_dir.path().join("archive.jxl");
+        let temp = temp_dir.path().join("reconstructed.search.jpg");
+        let output = temp_dir.path().join("restored.jpg");
+        let reconstructed = b"\xff\xd8\xff\xe0exact-jpeg-bitstream\xff\xd9";
+        std::fs::write(&source, b"jxl-container").unwrap();
+        std::fs::write(&temp, reconstructed).unwrap();
+
+        let committed =
+            commit_temp_to_output_preserving_exact_payload(&temp, &output, false, Some(&source))
+                .unwrap_or_else(|error| panic!("exact payload commit failed: {error:?}"));
+
+        assert!(committed);
+        assert_eq!(std::fs::read(&output).unwrap(), reconstructed);
+        assert!(!temp.exists());
+    }
+
+    #[test]
+    fn reconstructible_jxl_embeds_xmp_without_breaking_jpeg_reconstruction() {
+        let contract_label = "JPEG-reconstructible JXL embedded XMP custody";
+        if !generated_jxl_toolchain_available_or_skip(contract_label) {
+            return;
+        }
+
+        let temp_dir = tempdir_in("/tmp").unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
+        let source = temp_dir.path().join("source.jpg");
+        let source_xmp = temp_dir.path().join("source.xmp");
+        let temp = temp_dir.path().join("encoded.search.JXL");
+        let output = temp_dir.path().join("delivered.JXL");
+        let reconstructed = temp_dir.path().join("reconstructed.jpg");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([18, 52, 86]))
+            .save(&source)
+            .expect("write source JPEG");
+        std::fs::write(
+            &source_xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="2025-10-24T12:00:24+08:00"/>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .expect("write source XMP");
+        command_status_success(
+            Command::new(crate::constants::TOOL_CJXL)
+                .arg(&source)
+                .arg(&temp)
+                .arg("--lossless_jpeg=1")
+                .arg("--effort=7"),
+            "encode reconstructible JXL",
+        );
+
+        let committed = commit_reconstructible_jxl_to_output_with_metadata(
+            &temp,
+            &output,
+            false,
+            Some(&source),
+        )
+        .unwrap_or_else(|error| panic!("reconstructible commit failed: {error}"));
+
+        assert!(committed);
+        assert_eq!(
+            exiftool_tag_value(&output, "-XMP-photoshop:DateCreated"),
+            "2025:10:24 12:00:24+08:00",
+            "source sidecar metadata must be embedded in the delivered JXL",
+        );
+        assert!(
+            crate::metadata::find_xmp_sidecar(&output).is_none(),
+            "JXL delivery must not depend on a copied output sidecar"
+        );
+        command_status_success(
+            Command::new(crate::constants::TOOL_DJXL)
+                .arg(&output)
+                .arg(&reconstructed)
+                .arg("--reconstruct_jpeg")
+                .arg("--quiet"),
+            "strictly reconstruct JPEG",
+        );
+        assert_eq!(
+            std::fs::read(&reconstructed).expect("read reconstructed JPEG"),
+            std::fs::read(&source).expect("read source JPEG"),
+        );
     }
 
     #[test]

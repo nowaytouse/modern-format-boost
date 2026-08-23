@@ -11,15 +11,6 @@ if [[ "$bundle" != "$expected_bundle" ]]; then
     echo "Refusing unexpected bundle path: $bundle" >&2
     exit 1
 fi
-if [[ ! -f "$gui_dir/dist/index.html" ]]; then
-    echo "Vue build output is missing: $gui_dir/dist/index.html" >&2
-    exit 1
-fi
-if grep -Eq 'type="module"|crossorigin' "$gui_dir/dist/index.html"; then
-    echo "Vue entry point is not compatible with bundled WKWebView file loading" >&2
-    exit 1
-fi
-
 arch=$(uname -m)
 case "$arch" in
 arm64 | x86_64) ;;
@@ -38,13 +29,16 @@ xcrun swiftc \
     -target "$arch-apple-macos13.0" \
     -framework AppKit \
     -framework CoreServices \
-    -framework WebKit \
     "$script_dir/main.swift" \
     -o "$bundle/Contents/MacOS/Modern Format Boost"
 
 cp "$script_dir/Info.plist" "$bundle/Contents/Info.plist"
 cp "$script_dir/icon.icns" "$bundle/Contents/Resources/icon.icns"
-ditto "$gui_dir/dist" "$bundle/Contents/Resources/dist"
+ditto "$script_dir/Resources" "$bundle/Contents/Resources"
 plutil -lint "$bundle/Contents/Info.plist" >/dev/null
+
+for strings_file in "$bundle"/Contents/Resources/*.lproj/*.strings; do
+    plutil -lint "$strings_file" >/dev/null
+done
 
 echo "$bundle"

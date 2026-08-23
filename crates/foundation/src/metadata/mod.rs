@@ -31,9 +31,8 @@ mod windows;
 
 pub use delivery_policy::{
     MetadataDeliveryReport, MetadataLayerOutcome, apply_file_timestamps_for_delivery,
-    preserve_for_delivery,
+    preserve_filesystem_for_delivery, preserve_for_delivery,
 };
-pub(crate) use delivery_policy::preserve_filesystem_for_delivery;
 pub use exif::preserve_internal;
 pub use output_audit::{
     MetadataOutputPolicy, OutputMetadataAudit, verify_output_embedded_metadata,
@@ -2313,7 +2312,10 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
     }
 }
 
-pub(crate) fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
+/// Find the existing XMP sidecar associated with `src`, accepting common
+/// stem-only, compound-extension, and case variants.
+#[must_use]
+pub fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
     if let Some(ext) = src.extension() {
         let ext_str = ext.to_str()?;
         let xmp_full = src.with_extension(format!("{ext_str}.xmp"));

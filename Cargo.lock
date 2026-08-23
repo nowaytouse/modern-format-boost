@@ -566,8 +566,8 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.0"
-source = "git+https://github.com/srijs/rust-crc32fast#d5c123d00d5a0236b92acc56f984a5a8a5c7baf5"
+version = "1.5.1"
+source = "git+https://github.com/srijs/rust-crc32fast#a150f65ce810793293d5c9dd815f4510eb6d8e4c"
 dependencies = [
  "cfg-if",
 ]
@@ -1652,8 +1652,8 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
-source = "git+https://github.com/rust-lang/log#3b939b6714616dc32193c12019861c7c518c5edb"
+version = "0.4.34"
+source = "git+https://github.com/rust-lang/log#8034743dd9d7f7583bd9a670271483d176130911"
 
 [[package]]
 name = "loop9"
@@ -2259,8 +2259,8 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.41.0"
-source = "git+https://github.com/tafia/quick-xml#9f4c66aa6db6abf7447f4c37fc3de2bccb510fb5"
+version = "0.42.0"
+source = "git+https://github.com/tafia/quick-xml#7cc62f4989dd8359c1433b03bb68b12ab1662dc4"
 dependencies = [
  "memchr",
 ]
@@ -3156,9 +3156,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.1"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
+checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

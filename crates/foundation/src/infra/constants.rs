@@ -3400,7 +3400,6 @@ pub const BRAND_REMINI: &str = "remini";
 pub const BRAND_ENLIGHT: &str = "enlight";
 pub const BRAND_FACETUNE: &str = "facetune";
 pub const BRAND_AFTERLIGHT: &str = "afterlight";
-pub const BRAND_VUE: &str = "vue";
 pub const BRAND_NOMO: &str = "nomo";
 pub const BRAND_HUJI: &str = "huji";
 pub const BRAND_FILMIC: &str = "filmic pro";

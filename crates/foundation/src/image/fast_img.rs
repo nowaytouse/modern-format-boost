@@ -130,6 +130,7 @@ pub fn verify_jxl_roundtrip_integrity(
         .input(jxl_output)
         .output(temp_path)
         .build();
+    decode_command.arg("--reconstruct_jpeg");
     let decode_output = run_fast_img_command_with_timeout(
         &mut decode_command,
         FAST_IMG_MEDIA_PROBE_TIMEOUT,
@@ -656,18 +657,14 @@ pub fn safe_delete_jpeg_source(
     Ok(())
 }
 
-/// Delete the XMP sidecar that matches a source JPEG after the caller has
-/// already verified the source JPEG is gone and the JXL output proof is still
-/// current.
+/// Delete the XMP sidecar that matches a source after the caller has already
+/// verified the primary source is gone and the delivery proof is still current.
 ///
 /// # Errors
 /// Returns an error if a matching sidecar exists but cannot be removed.
 pub fn safe_delete_matching_xmp_sidecar(source: &Path, output: &Path) -> Result<bool> {
-    delete_matching_xmp_sidecar_path(
-        source,
-        output,
-        crate::metadata::find_xmp_sidecar(source).as_deref(),
-    )
+    let matching_xmp_sidecar = crate::metadata::find_xmp_sidecar(source);
+    delete_matching_xmp_sidecar_path(source, output, matching_xmp_sidecar.as_deref())
 }
 
 fn delete_matching_xmp_sidecar_path(
@@ -698,7 +695,7 @@ fn delete_matching_xmp_sidecar_path(
         source = %source.display(),
         output = %output.display(),
         xmp_sidecar = %xmp_sidecar.display(),
-        "delete-gate PASS: removing merged XMP sidecar"
+        "delete-gate PASS: removing source XMP after verified delivery"
     );
     safe_remove_file(xmp_sidecar).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
@@ -1026,6 +1023,7 @@ pub fn library_handle_from_marker_tier2_proof(
 pub fn prune_empty_source_dirs_for_tier2_assets(
     src_dir: &Path,
     imported_assets: &[crate::pipeline::verification::LibraryAssetRecord],
+    remove_selected_root: bool,
 ) -> Result<usize> {
     if !src_dir.is_dir() {
         return Ok(0);
@@ -1033,53 +1031,21 @@ pub fn prune_empty_source_dirs_for_tier2_assets(
     let mut dirs = Vec::new();
     for asset in imported_assets {
         let source = src_dir.join(&asset.rel_path);
-        let mut current = source.parent();
-        while let Some(dir) = current {
-            if dir == src_dir {
-                break;
-            }
+        if let Some(dir) = source.parent() {
             dirs.push(dir.to_path_buf());
-            current = dir.parent();
         }
     }
-    dirs.sort();
-    dirs.dedup();
-    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    let mut pruned = 0usize;
-    for dir in dirs {
-        let mut entries = std::fs::read_dir(&dir).map_err(|err| {
-            ImgQualityError::AnalysisError(format!(
-                "read tier-2 source dir {}: {err}",
-                dir.display()
-            ))
-        })?;
-        if entries
-            .next()
-            .transpose()
-            .map_err(|err| {
-                ImgQualityError::AnalysisError(format!(
-                    "read tier-2 source dir entry {}: {err}",
-                    dir.display()
-                ))
-            })?
-            .is_some()
-        {
-            continue;
-        }
-        std::fs::remove_dir(&dir).map_err(|err| {
-            ImgQualityError::AnalysisError(format!(
-                "delete empty tier-2 source directory {}: {err}",
-                dir.display()
-            ))
-        })?;
-        pruned += 1;
-        tracing::info!(
-            target: "fast_img_delete",
-            path = %dir.display(),
-            "delete-gate PASS: removing empty tier-2 source directory"
-        );
-    }
-    Ok(pruned)
+    let result = if remove_selected_root {
+        crate::io_utils::prune_empty_directories_within(src_dir, &dirs)
+    } else {
+        crate::io_utils::prune_empty_descendants_within(src_dir, &dirs)
+    };
+    result.map_err(|err| {
+        ImgQualityError::AnalysisError(format!(
+            "prune empty tier-2 source directories under {}: {err}",
+            src_dir.display()
+        ))
+    })
 }
 
 #[derive(Debug, Clone)]

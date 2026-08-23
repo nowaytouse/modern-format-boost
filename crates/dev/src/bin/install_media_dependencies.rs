@@ -14,12 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 const APT_PACKAGES: &[&str] = &[
-    "libwebkit2gtk-4.1-dev",
-    "libxdo-dev",
     "libssl-dev",
-    "libayatana-appindicator3-dev",
-    "librsvg2-dev",
-    "libglib2.0-dev",
     "pkg-config",
     "clang",
     "cmake",

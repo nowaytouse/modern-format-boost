@@ -6292,11 +6292,8 @@ mod tests {
             "failed to generate unrelated JPEG fixture"
         );
         assert!(
-            foundation::fast_img::verify_final_jxl_delivery_integrity(
-                &input,
-                Path::new(&output)
-            )
-            .is_err(),
+            foundation::fast_img::verify_final_jxl_delivery_integrity(&input, Path::new(&output))
+                .is_err(),
             "an unrelated source must not inherit the byte-reconstruction proof"
         );
     }

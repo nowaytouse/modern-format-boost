@@ -1,0 +1,2 @@
+"NSAppDataUsageDescription" = "Modern Format Boost 仅在处理或导入媒体时读取您选择的媒体文件夹和“照片”元数据。";
+"NSAppleEventsUsageDescription" = "Modern Format Boost 仅在您主动请求媒体导入时向“照片”发送 Apple 事件；不会在未经操作的情况下读取或修改文件。";

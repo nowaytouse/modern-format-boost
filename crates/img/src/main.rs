@@ -1879,6 +1879,8 @@ fn process_image_batch(
 }
 
 struct ImageBatchFinalization<'a> {
+    input_root: &'a Path,
+    source_dirs: &'a [PathBuf],
     config: &'a AutoConvertConfig,
     recursive: bool,
     saved_dir_timestamps: Option<&'a foundation::metadata::DirectoryTimestampsMap>,
@@ -2041,6 +2043,20 @@ impl ImageBatchFinalization<'_> {
                     post_run_errors.push(format!("Checkpoint lock release failed: {e}"));
                 }
             }
+        }
+
+        if self.config.delete_original()
+            && !result.paused
+            && self.abort_reason.is_none()
+            && let Err(error) = foundation::io_utils::prune_empty_directories_within(
+                self.input_root,
+                self.source_dirs,
+            )
+        {
+            post_run_errors.push(format!(
+                "Failed to prune empty source directories under {}: {error}",
+                self.input_root.display()
+            ));
         }
 
         if !post_run_errors.is_empty() {
@@ -2267,12 +2283,19 @@ fn auto_convert_directory(
     foundation::progress_mode::xmp_merge_finalize();
     foundation::progress_mode::flush_log_file();
 
+    let source_dirs = files
+        .iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect::<Vec<_>>();
+
     let abort_reason = foundation::media_conversion_gate::mutex_guard_or_recover(
         "img_batch_abort_reason",
         abort_reason.lock(),
     )
     .clone();
     ImageBatchFinalization {
+        input_root: input,
+        source_dirs: &source_dirs,
         config,
         recursive,
         saved_dir_timestamps: saved_dir_timestamps.as_ref(),
@@ -2548,6 +2571,7 @@ struct FastImgMarkerContext<'a> {
     source_jpegs: &'a [PathBuf],
     source_hashes: &'a BTreeMap<String, String>,
     modern_lossy_candidates: &'a [ModernLossyStaticCandidate],
+    remove_selected_root: bool,
     strategy: &'a str,
 }
 
@@ -2781,6 +2805,7 @@ fn fast_img_try_finish_tier2_delivery(
         marker,
         context.src_dir,
         context.modern_lossy_candidates,
+        context.remove_selected_root,
     )?;
     println!(
         "[TIER 2  ] verified Photos delivery complete; source deleted={deleted} already_absent={already_deleted} empty_dirs_pruned={pruned}"
@@ -2928,6 +2953,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let mut retry_requested = retry.0;
 
     let input_plan = FastImgInputPlan::from_input(input, recursive.0)?;
+    let remove_selected_root = input.is_dir();
     let src_dir = input_plan.src_root;
     let _source_lock = foundation::acquire_dir_lock(&src_dir).with_context(|| {
         format!(
@@ -2973,6 +2999,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         source_jpegs: &source_jpegs,
         source_hashes: &current_source_hashes,
         modern_lossy_candidates: &modern_lossy_candidates,
+        remove_selected_root,
         strategy,
     };
     fast_img_reconcile_saved_marker(
@@ -3188,6 +3215,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         shortest_path,
         reuse_marker_import_proof,
         &modern_lossy_candidates,
+        remove_selected_root,
         strategy,
     )?;
 
@@ -4677,7 +4705,6 @@ fn fast_img_remove_failed_encode_output(
             });
         }
     }
-
     tracing::warn!(
         target: "fast_img",
         source_rel = %err.rel_key,
@@ -4688,7 +4715,7 @@ fn fast_img_remove_failed_encode_output(
 }
 
 fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow::Result<String> {
-    let committed = foundation::conversion::commit_temp_to_output_with_metadata(
+    let committed = foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
         output,
         output,
         true,
@@ -5438,6 +5465,7 @@ fn fast_img_preflight_verified_source_deletion(
 fn fast_img_prune_empty_source_dirs(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
+    remove_selected_root: bool,
 ) -> anyhow::Result<usize> {
     if !src_dir.is_dir() {
         return Ok(0);
@@ -5445,35 +5473,21 @@ fn fast_img_prune_empty_source_dirs(
     let mut dirs = Vec::new();
     for rel in marker.blake3_log.keys() {
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
-        let mut current = source.parent();
-        while let Some(dir) = current {
-            if dir == src_dir {
-                break;
-            }
+        if let Some(dir) = source.parent() {
             dirs.push(dir.to_path_buf());
-            current = dir.parent();
         }
     }
-    dirs.sort();
-    dirs.dedup();
-    dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    let mut pruned = 0usize;
-    for dir in dirs {
-        let mut entries = std::fs::read_dir(&dir)
-            .with_context(|| format!("read fast-img source dir {}", dir.display()))?;
-        if entries.next().transpose()?.is_some() {
-            continue;
-        }
-        std::fs::remove_dir(&dir)
-            .with_context(|| format!("delete empty fast-img source directory {}", dir.display()))?;
-        pruned += 1;
-        tracing::info!(
-            target: "fast_img_delete",
-            path = %dir.display(),
-            "delete-gate PASS: removing empty source directory"
-        );
-    }
-    Ok(pruned)
+    let result = if remove_selected_root {
+        foundation::io_utils::prune_empty_directories_within(src_dir, &dirs)
+    } else {
+        foundation::io_utils::prune_empty_descendants_within(src_dir, &dirs)
+    };
+    result.with_context(|| {
+        format!(
+            "prune empty fast-img source directories under {}",
+            src_dir.display()
+        )
+    })
 }
 
 fn fast_img_marker_entry_output_path(
@@ -6019,11 +6033,17 @@ fn run_restore_image_command(
     .with_context(|| format!("{context} failed to run"))
 }
 
-fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
-    let command = foundation::DjxlBuilder::new()
+fn restore_jpeg_djxl_command(input: &Path, output: &Path) -> std::process::Command {
+    let mut command = foundation::DjxlBuilder::new()
         .input(input)
-        .output(temp_output)
+        .output(output)
         .build();
+    command.arg("--reconstruct_jpeg");
+    command
+}
+
+fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
+    let command = restore_jpeg_djxl_command(input, temp_output);
     let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
     if !decode.status.success() {
@@ -6044,23 +6064,56 @@ fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Resu
     Ok(())
 }
 
-fn restore_jpeg_decoded_pixels_match(left: &Path, right: &Path) -> anyhow::Result<bool> {
-    let left_img = load_image_safe(left).with_context(|| {
+fn restore_jpeg_embed_all_metadata(input: &Path, output: &Path) -> anyhow::Result<()> {
+    let report = foundation::metadata::preserve_for_delivery(input, output).with_context(|| {
         format!(
-            "restore-jpeg proof gate failed to decode {}",
-            left.display()
+            "restore-jpeg failed to preserve embedded metadata {} -> {}",
+            input.display(),
+            output.display()
         )
     })?;
-    let right_img = load_image_safe(right).with_context(|| {
-        format!(
-            "restore-jpeg proof gate failed to decode restored output {}",
-            right.display()
-        )
-    })?;
-    if left_img.width() != right_img.width() || left_img.height() != right_img.height() {
-        return Ok(false);
+    if matches!(
+        report.exif,
+        foundation::metadata::MetadataLayerOutcome::PartialAudit
+    ) || matches!(
+        report.xattr,
+        foundation::metadata::MetadataLayerOutcome::PartialAudit
+    ) || matches!(
+        report.timestamps,
+        foundation::metadata::MetadataLayerOutcome::PartialAudit
+    ) {
+        anyhow::bail!(
+            "restore-jpeg metadata preservation was partial for {} -> {}",
+            input.display(),
+            output.display()
+        );
     }
-    Ok(left_img.to_rgba8().as_raw() == right_img.to_rgba8().as_raw())
+    foundation::metadata::merge_xmp_sidecar_into_dest(input, output).with_context(|| {
+        format!(
+            "restore-jpeg failed to embed source XMP sidecar {} -> {}",
+            input.display(),
+            output.display()
+        )
+    })?;
+    let mut timestamp_report = foundation::metadata::MetadataDeliveryReport::default();
+    foundation::metadata::apply_file_timestamps_for_delivery(input, output, &mut timestamp_report)?;
+    if matches!(
+        timestamp_report.timestamps,
+        foundation::metadata::MetadataLayerOutcome::PartialAudit
+    ) {
+        anyhow::bail!(
+            "restore-jpeg timestamp preservation was partial for {} -> {}",
+            input.display(),
+            output.display()
+        );
+    }
+    foundation::metadata::verify_exact_metadata_copy(input, output)?;
+    foundation::metadata::verify_output_embedded_metadata(
+        input,
+        output,
+        foundation::metadata::MetadataOutputPolicy::Preserve,
+    )?;
+    Ok(())
 }
 
 fn restore_jpeg_build_current_proof_with_decoder<F>(
@@ -6150,15 +6203,28 @@ where
             );
         }
 
+        foundation::metadata::verify_output_embedded_metadata(
+            input,
+            output,
+            foundation::metadata::MetadataOutputPolicy::Preserve,
+        )
+        .context("restore-jpeg proof gate: embedded metadata custody failed")?;
+
         let output_hash = calculate_blake3_hash(output).with_context(|| {
             format!(
                 "restore-jpeg proof gate failed to hash restored output {}",
                 output.display()
             )
         })?;
-        if !restore_jpeg_decoded_pixels_match(&temp_output, output)? {
+        let reconstructed_hash = calculate_blake3_hash(&temp_output).with_context(|| {
+            format!(
+                "restore-jpeg proof gate failed to hash strict djxl reconstruction {}",
+                temp_output.display()
+            )
+        })?;
+        if reconstructed_hash != output_hash {
             anyhow::bail!(
-                "restore-jpeg proof gate: restored JPEG pixels do not match fresh djxl decode for {} -> {}",
+                "restore-jpeg proof gate: restored JPEG bytes do not match strict djxl reconstruction for {} -> {}",
                 input.display(),
                 output.display()
             );
@@ -6200,7 +6266,10 @@ fn restore_jpeg_build_current_proof(
         input_root,
         output,
         output_root,
-        restore_jpeg_decode_to_temp,
+        |source, temp_output| {
+            restore_jpeg_decode_to_temp(source, temp_output)?;
+            restore_jpeg_embed_all_metadata(source, temp_output)
+        },
     )
 }
 
@@ -6233,10 +6302,8 @@ fn restore_single_jpeg(
 
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
-    let command = foundation::DjxlBuilder::new()
-        .input(input)
-        .output(&temp_output)
-        .build();
+    let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
+    let command = restore_jpeg_djxl_command(input, &temp_output);
     let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
     if !decode.status.success() {
@@ -6255,8 +6322,11 @@ fn restore_single_jpeg(
         );
     }
 
-    // Keep the exact official djxl reconstruction for the post-metadata pixel
-    // proof. This avoids launching djxl a second time for every committed file.
+    restore_jpeg_embed_all_metadata(input, &temp_output)?;
+
+    // Keep the metadata-enriched official djxl reconstruction for the
+    // post-commit byte proof. This avoids launching djxl a second time for
+    // every committed file.
     let proof_snapshot = temp_output.with_extension("mfb-restore-proof.jpg");
     std::fs::copy(&temp_output, &proof_snapshot).with_context(|| {
         format!(
@@ -6265,27 +6335,25 @@ fn restore_single_jpeg(
         )
     })?;
 
-    let commit_result =
-        foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
-            &temp_output,
-            &output,
-            force,
-            Some(input),
+    let commit_result = foundation::conversion::commit_temp_to_output_preserving_exact_payload(
+        &temp_output,
+        &output,
+        force,
+        Some(input),
+    )
+    .with_context(|| {
+        format!(
+            "restore-jpeg failed to commit byte-identical output {}",
+            output.display()
         )
-        .with_context(|| {
-            format!(
-                "restore-jpeg failed to commit metadata-preserving output {}",
-                output.display()
-            )
-        });
+    });
     let committed = match commit_result {
         Ok(committed) => committed,
         Err(err) => {
-            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed metadata commit");
+            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed exact payload commit");
             return Err(err);
         }
     };
-
     let proof_result = restore_jpeg_build_current_proof_with_decoder(
         input,
         input_root,
@@ -6427,113 +6495,22 @@ fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow
     Ok(true)
 }
 
-fn restore_jpeg_dir_entry_partition(dir: &Path) -> std::io::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
-    let mut substantive_entries = Vec::new();
-    let mut ds_store_files = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_name() == ".DS_Store" && entry.file_type()?.is_file() {
-            ds_store_files.push(path);
-        } else {
-            substantive_entries.push(path);
-        }
-    }
-    Ok((substantive_entries, ds_store_files))
-}
-
-fn restore_jpeg_remove_empty_dir_once(dir: &Path) -> bool {
-    const DS_STORE_REMOVAL_ATTEMPTS: usize = 2;
-    if !dir.exists() {
-        return false;
-    }
-    for _ in 0..DS_STORE_REMOVAL_ATTEMPTS {
-        let (substantive_entries, ds_store_files) = match restore_jpeg_dir_entry_partition(dir) {
-            Ok(entries) => entries,
-            Err(err) => {
-                println!(
-                    "[WARN] Could not remove {}: failed to inspect directory: {err}",
-                    dir.display()
-                );
-                return false;
-            }
-        };
-        if !substantive_entries.is_empty() {
-            return false;
-        }
-        if ds_store_files.is_empty() {
-            match std::fs::remove_dir(dir) {
-                Ok(()) => {
-                    println!("[CLEANUP] Removed empty dir: {}", dir.display());
-                    return true;
-                }
-                Err(err) => {
-                    println!("[WARN] Could not remove {}: {err}", dir.display());
-                    return false;
-                }
-            }
-        }
-        for ds_store in ds_store_files {
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "restore-jpeg cleanup .DS_Store removal",
-                &ds_store,
-            );
-        }
-    }
-
-    let (substantive_entries, ds_store_files) = match restore_jpeg_dir_entry_partition(dir) {
-        Ok(entries) => entries,
-        Err(err) => {
-            println!(
-                "[WARN] Could not remove {}: failed to inspect directory: {err}",
-                dir.display()
-            );
-            return false;
-        }
+fn restore_jpeg_prune_empty_source_dirs(
+    input_root: &Path,
+    candidate_dirs: &[PathBuf],
+    remove_selected_root: bool,
+) -> anyhow::Result<usize> {
+    let result = if remove_selected_root {
+        foundation::io_utils::prune_empty_directories_within(input_root, candidate_dirs)
+    } else {
+        foundation::io_utils::prune_empty_descendants_within(input_root, candidate_dirs)
     };
-    if !substantive_entries.is_empty() || !ds_store_files.is_empty() {
-        return false;
-    }
-    match std::fs::remove_dir(dir) {
-        Ok(()) => {
-            println!("[CLEANUP] Removed empty dir: {}", dir.display());
-            true
-        }
-        Err(err) => {
-            println!("[WARN] Could not remove {}: {err}", dir.display());
-            false
-        }
-    }
-}
-
-fn restore_jpeg_prune_empty_source_dirs(input_root: &Path, candidate_dirs: &[PathBuf]) -> usize {
-    let mut candidates = BTreeSet::new();
-    for dir in candidate_dirs {
-        if dir != input_root && dir.starts_with(input_root) {
-            candidates.insert(dir.clone());
-        }
-    }
-    let mut candidates: Vec<PathBuf> = candidates.into_iter().collect();
-    candidates.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
-
-    let mut removed = 0usize;
-    for start_dir in candidates {
-        let mut current = start_dir;
-        loop {
-            if current == input_root || !current.starts_with(input_root) {
-                break;
-            }
-            let Some(parent) = current.parent().map(Path::to_path_buf) else {
-                break;
-            };
-            if !restore_jpeg_remove_empty_dir_once(&current) {
-                break;
-            }
-            removed += 1;
-            current = parent;
-        }
-    }
-    removed
+    result.with_context(|| {
+        format!(
+            "restore-jpeg refused unsafe empty-directory cleanup under {}",
+            input_root.display()
+        )
+    })
 }
 
 fn restore_jpeg_canonical_output_root(output_root: &Path) -> anyhow::Result<PathBuf> {
@@ -6670,6 +6647,29 @@ fn restore_jpeg_preflight(
                 anyhow::bail!(
                     "restore-jpeg preflight refused {}: JPEG bitstream reconstruction data is unavailable",
                     source.display()
+                );
+            }
+            let mut strict_probe = restore_jpeg_djxl_command(source, Path::new("-"));
+            strict_probe
+                .arg("--output_format=jpg")
+                .arg("--disable_output")
+                .arg("--quiet");
+            let strict = run_restore_image_command(
+                strict_probe,
+                "restore-jpeg strict reconstruction preflight",
+            )
+            .with_context(|| {
+                format!(
+                    "restore-jpeg strict reconstruction preflight failed to launch djxl for {}",
+                    source.display()
+                )
+            })?;
+            if !strict.status.success() {
+                anyhow::bail!(
+                    "restore-jpeg preflight refused {}: jxlinfo advertises JPEG reconstruction, \
+                     but djxl --reconstruct_jpeg rejected it; pixel-to-JPEG fallback is forbidden: {}",
+                    source.display(),
+                    String::from_utf8_lossy(&strict.stderr).trim()
                 );
             }
             let completed =
@@ -6831,7 +6831,6 @@ fn run_restore_jpeg(
             );
         }
     }
-    restore_jpeg_prune_empty_source_dirs(&input_root, &deleted_source_dirs);
     foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
         format!(
             "restore-jpeg failed to preserve directory metadata {} -> {}",
@@ -6839,8 +6838,10 @@ fn run_restore_jpeg(
             output_root.display()
         )
     })?;
+    let source_dirs_pruned =
+        restore_jpeg_prune_empty_source_dirs(&input_root, &deleted_source_dirs, input.is_dir())?;
     println!(
-        "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted={deleted_sources} retained={}",
+        "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs skipped) source JXLs deleted={deleted_sources} retained={} empty directories removed={source_dirs_pruned}",
         output_root.display(),
         0
     );
@@ -7773,6 +7774,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     marker: &mut WorkingCopyMarker,
     src_dir: &Path,
     candidates: &[ModernLossyStaticCandidate],
+    remove_selected_root: bool,
 ) -> anyhow::Result<(usize, usize, usize)> {
     if candidates.is_empty() && !marker.tier2_in_progress {
         return Ok((0, 0, 0));
@@ -7816,11 +7818,14 @@ fn fast_img_deliver_modern_lossy_static_tier(
         delete_verified_modern_lossy_static_sources(src_dir, &complete_library_handle).map_err(
             |err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"),
         )?;
-    let pruned =
-        prune_empty_source_dirs_for_tier2_assets(src_dir, &complete_library_handle.imported_assets)
-            .map_err(|err| {
-                anyhow::anyhow!("fast-img modern lossy empty-directory cleanup failed: {err}")
-            })?;
+    let pruned = prune_empty_source_dirs_for_tier2_assets(
+        src_dir,
+        &complete_library_handle.imported_assets,
+        remove_selected_root,
+    )
+    .map_err(|err| {
+        anyhow::anyhow!("fast-img modern lossy empty-directory cleanup failed: {err}")
+    })?;
     marker.tier2_in_progress = false;
     write_marker_atomic(marker)?;
     Ok((deleted, already_deleted, pruned))
@@ -7839,6 +7844,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     shortest_path: ShortestPathFlag,
     reuse_marker_import_proof: bool,
     modern_lossy_candidates: &[ModernLossyStaticCandidate],
+    remove_selected_root: bool,
     strategy: &str,
 ) -> anyhow::Result<()> {
     let mode_name = if strategy == "avif" {
@@ -7921,14 +7927,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 strategy,
             )?;
         }
-        let (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned) = if strategy == "jxl" {
-            fast_img_deliver_modern_lossy_static_tier(marker, src_dir, modern_lossy_candidates)?
-        } else {
-            (0, 0, 0)
-        };
-        let (source_deleted, source_already_deleted) =
-            fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
-        let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
         fast_img_strip_non_target_files(working_copy, strategy)?;
         foundation::restore_delivery_directory_metadata(
             saved_dir_timestamps,
@@ -7942,6 +7940,20 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 working_copy.display()
             )
         })?;
+        let (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned) = if strategy == "jxl" {
+            fast_img_deliver_modern_lossy_static_tier(
+                marker,
+                src_dir,
+                modern_lossy_candidates,
+                remove_selected_root,
+            )?
+        } else {
+            (0, 0, 0)
+        };
+        let (source_deleted, source_already_deleted) =
+            fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
+        let source_dirs_pruned =
+            fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
         marker.stage = FastImgStageName::CleanupComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
@@ -8070,9 +8082,6 @@ fn fast_img_run_verification_and_delivery_pipeline(
         }
     }
 
-    let (source_deleted, source_already_deleted) =
-        fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
-    let source_dirs_pruned = fast_img_prune_empty_source_dirs(marker, src_dir)?;
     fast_img_strip_non_target_files(working_copy, strategy)?;
     foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
         .with_context(|| {
@@ -8082,6 +8091,10 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 working_copy.display()
             )
         })?;
+    let (source_deleted, source_already_deleted) =
+        fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
+    let source_dirs_pruned =
+        fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
     tracing::info!(
         target: "fast_img",
         deleted = source_deleted,
@@ -8347,11 +8360,11 @@ mod fast_img_hardening_tests {
         clippy::assertions_on_constants
     )]
     use super::{
-        ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag,
-        ExpertOptionsFlag, FastImgCleanupCompleteSourceState, FastImgInputPlan,
-        FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, FreshFlag, RecursiveFlag,
-        RetryFlag, ShortestPathFlag, command_requires_database,
-        fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
+        ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag, ExpertOptionsFlag,
+        FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
+        FastImgRunOptions, FastImgTranscodeError, FreshFlag, RecursiveFlag, RetryFlag,
+        ShortestPathFlag, command_requires_database, fast_img_archive_stale_working_copy,
+        fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
         fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
@@ -8370,9 +8383,10 @@ mod fast_img_hardening_tests {
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, restore_jpeg_build_current_proof_with_decoder,
         restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
-        restore_jpeg_jxlinfo_has_jpeg_reconstruction, restore_jpeg_output_path_for,
-        restore_jpeg_prune_empty_source_dirs, restore_jpeg_validate_disjoint_roots, run_fast_img,
-        validate_cleanup_complete_marker, validate_fast_img_marker_source_state,
+        restore_jpeg_djxl_command, restore_jpeg_jxlinfo_has_jpeg_reconstruction,
+        restore_jpeg_output_path_for, restore_jpeg_prune_empty_source_dirs,
+        restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
+        validate_fast_img_marker_source_state,
     };
     use anyhow::Context;
     use clap::Parser;
@@ -8532,6 +8546,27 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    fn write_real_reconstructible_jxl(path: &Path) -> anyhow::Result<bool> {
+        if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL) {
+            return Ok(false);
+        }
+        let source_jpeg = path.with_extension("mfb-test-source.jpg");
+        write_real_jpeg(&source_jpeg, [10, 20, 30])?;
+        let output = std::process::Command::new(foundation::constants::TOOL_CJXL)
+            .arg(&source_jpeg)
+            .arg(path)
+            .arg("--lossless_jpeg=1")
+            .arg("--effort=7")
+            .output()?;
+        std::fs::remove_file(&source_jpeg)?;
+        anyhow::ensure!(
+            output.status.success(),
+            "test cjxl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(true)
+    }
+
     fn write_jxl(path: &std::path::Path, payload: &[u8]) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -8560,6 +8595,17 @@ mod fast_img_hardening_tests {
                 Ok(())
             },
         )
+    }
+
+    fn write_date_created_xmp(path: &Path) -> anyhow::Result<()> {
+        std::fs::write(
+            path,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="2025-10-24T12:00:24+08:00"/>
+</rdf:RDF></x:xmpmeta>"#,
+        )?;
+        Ok(())
     }
 
     #[test]
@@ -8616,6 +8662,59 @@ mod fast_img_hardening_tests {
         assert!(!restore_jpeg_jxlinfo_has_jpeg_reconstruction(
             b"JPEG bitstream reconstruction data not available\n"
         ));
+    }
+
+    #[test]
+    fn restore_jpeg_decoder_forbids_pixel_to_jpeg_fallback() {
+        let command =
+            restore_jpeg_djxl_command(Path::new("archive.jxl"), Path::new("restored.jpg"));
+        let args: Vec<_> = command.get_args().collect();
+
+        assert!(args.iter().any(|arg| *arg == "--reconstruct_jpeg"));
+        assert!(!args.iter().any(|arg| *arg == "--pixels_to_jpeg"));
+    }
+
+    #[test]
+    fn restore_jpeg_embeds_adjacent_xmp_into_final_jpeg() -> anyhow::Result<()> {
+        if !foundation::ExiftoolBuilder::check_available()
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
+        {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let input_root = root.path().join("Album_optimized");
+        let output_root = root.path().join("Album_restored_jpeg");
+        let source = input_root.join("camera.JXL");
+        let source_xmp = input_root.join("camera.xmp");
+        assert!(write_real_reconstructible_jxl(&source)?);
+        write_date_created_xmp(&source_xmp)?;
+
+        let restored = super::restore_single_jpeg(&source, &input_root, &output_root, false)?;
+        let output = output_root.join("camera.jpg");
+
+        assert!(restored.committed);
+        assert!(output.exists());
+        assert!(foundation::metadata::find_xmp_sidecar(&output).is_none());
+        let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
+            .arg("-s3")
+            .arg("-XMP-photoshop:DateCreated")
+            .arg(&output)
+            .output()?;
+        assert!(date_created.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&date_created.stdout).trim(),
+            "2025:10:24 12:00:24+08:00"
+        );
+
+        let source_without_xmp = input_root.join("plain.JXL");
+        assert!(write_real_reconstructible_jxl(&source_without_xmp)?);
+        let restored_without_xmp =
+            super::restore_single_jpeg(&source_without_xmp, &input_root, &output_root, false)?;
+        assert!(restored_without_xmp.committed);
+        assert!(output_root.join("plain.jpg").exists());
+        Ok(())
     }
 
     #[test]
@@ -8691,11 +8790,14 @@ mod fast_img_hardening_tests {
         let unrelated_png = input_root.join("nested/keep.png");
         let unrelated_xmp = input_root.join("nested/keep.png.xmp");
         let output = output_root.join("nested/camera.jpg");
-        write_jxl(&source, b"jxl-source")?;
-        std::fs::write(&source_xmp, b"<x:xmpmeta/>")?;
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
+        write_date_created_xmp(&source_xmp)?;
         std::fs::write(&unrelated_png, b"\x89PNG\r\n\x1a\nnot-jxl")?;
         std::fs::write(&unrelated_xmp, b"<x:xmpmeta/>")?;
         write_real_jpeg(&output, [10, 20, 30])?;
+        foundation::metadata::merge_xmp_sidecar_into_dest(&source, &output)?;
         let proof = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)?;
 
         let deleted = restore_jpeg_delete_verified_source(&proof)?;
@@ -8703,6 +8805,7 @@ mod fast_img_hardening_tests {
         assert!(deleted);
         assert!(!source.exists());
         assert!(!source_xmp.exists());
+        assert!(foundation::metadata::find_xmp_sidecar(&output).is_none());
         assert!(unrelated_png.exists());
         assert!(unrelated_xmp.exists());
         assert!(output.exists());
@@ -8710,7 +8813,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_cleanup_prunes_empty_source_dirs_but_keeps_root() -> anyhow::Result<()> {
+    fn restore_jpeg_cleanup_prunes_empty_source_tree_including_root() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("redone");
@@ -8718,21 +8821,48 @@ mod fast_img_hardening_tests {
         let source_dir = input_root.join("🌟来源/✨闲鱼");
         let source = source_dir.join("camera.jxl");
         let source_xmp = source_dir.join("camera.xmp");
-        let ds_store = source_dir.join(".DS_Store");
         let output = output_root.join("🌟来源/✨闲鱼/camera.jpg");
-        write_jxl(&source, b"jxl-source")?;
-        std::fs::write(&source_xmp, b"<x:xmpmeta/>")?;
-        std::fs::write(&ds_store, b"finder")?;
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
+        write_date_created_xmp(&source_xmp)?;
         write_real_jpeg(&output, [10, 20, 30])?;
+        foundation::metadata::merge_xmp_sidecar_into_dest(&source, &output)?;
         let proof = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)?;
 
         assert!(restore_jpeg_delete_verified_source(&proof)?);
-        let pruned = restore_jpeg_prune_empty_source_dirs(&input_root, &[source_dir]);
+        let pruned = restore_jpeg_prune_empty_source_dirs(&input_root, &[source_dir], true)?;
 
-        assert_eq!(pruned, 2);
-        assert!(input_root.exists());
-        assert!(!input_root.join("🌟来源/✨闲鱼").exists());
-        assert!(!input_root.join("🌟来源").exists());
+        assert_eq!(pruned, 3);
+        assert!(!input_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_proof_refuses_unembedded_xmp_sidecar() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let input_root = root.path().join("Album_optimized");
+        let output_root = root.path().join("Album_restored_jpeg");
+        let source = input_root.join("camera.JXL");
+        let source_xmp = input_root.join("camera.xmp");
+        let output = output_root.join("camera.jpg");
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
+        write_date_created_xmp(&source_xmp)?;
+        write_real_jpeg(&output, [10, 20, 30])?;
+        let Err(error) = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)
+        else {
+            anyhow::bail!("unembedded XMP sidecar did not block restore proof");
+        };
+
+        assert!(
+            format!("{error:?}").contains("DateCreated"),
+            "unexpected restore proof error: {error:?}"
+        );
+        assert!(source.exists());
+        assert!(source_xmp.exists());
         Ok(())
     }
 
@@ -8744,7 +8874,9 @@ mod fast_img_hardening_tests {
         let output_root = root.path().join("Album_restored_jpeg");
         let source = input_root.join("camera.JXL");
         let source_xmp = input_root.join("camera.JXL.xmp");
-        write_jxl(&source, b"jxl-source")?;
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
         std::fs::write(&source_xmp, b"<x:xmpmeta/>")?;
         let output = output_root.join("camera.jpg");
         write_real_jpeg(&output, [10, 20, 30])?;
@@ -8774,30 +8906,40 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_proof_accepts_metadata_rewritten_same_pixels() -> anyhow::Result<()> {
+    fn restore_jpeg_proof_refuses_same_pixels_with_different_bytes() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
         let output_root = root.path().join("Album_restored_jpeg");
         let source = input_root.join("camera.JXL");
         let output = output_root.join("camera.jpg");
-        write_jxl(&source, b"jxl-source")?;
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
         write_real_jpeg(&output, [10, 20, 30])?;
 
-        let proof = restore_jpeg_build_current_proof_with_decoder(
+        let Err(error) = restore_jpeg_build_current_proof_with_decoder(
             &source,
             &input_root,
             &output,
             &output_root,
             |_input, temp_output| {
-                write_real_jpeg(temp_output, [10, 20, 30])?;
+                std::fs::copy(&output, temp_output)?;
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(temp_output)?
+                    .write_all(b"metadata-rewrite")?;
                 Ok(())
             },
-        )?;
+        ) else {
+            anyhow::bail!("byte-different JPEG was accepted as an original reconstruction");
+        };
 
-        assert_eq!(
-            proof.output_hash,
-            foundation::common_utils::calculate_blake3_hash(&output)?
+        assert!(
+            error
+                .to_string()
+                .contains("restored JPEG bytes do not match strict djxl reconstruction")
         );
         assert!(source.exists());
         assert!(output.exists());
@@ -8812,7 +8954,9 @@ mod fast_img_hardening_tests {
         let output_root = root.path().join("Album_restored_jpeg");
         let source = input_root.join("camera.JXL");
         let output = output_root.join("camera.jpg");
-        write_jxl(&source, b"jxl-source")?;
+        if !write_real_reconstructible_jxl(&source)? {
+            return Ok(());
+        }
         write_real_jpeg(&output, [10, 20, 30])?;
 
         let Err(err) = restore_jpeg_build_current_proof_with_decoder(
@@ -8830,8 +8974,8 @@ mod fast_img_hardening_tests {
 
         assert!(
             err.to_string()
-                .contains("restored JPEG pixels do not match fresh djxl decode"),
-            "Expected 'restored JPEG pixels do not match fresh djxl decode', but got: {err:?}"
+                .contains("restored JPEG bytes do not match strict djxl reconstruction"),
+            "unexpected restore proof error: {err:?}"
         );
         assert!(source.exists());
         assert!(output.exists());
@@ -9014,7 +9158,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn failed_fast_img_job_removes_partial_jxl_output() -> anyhow::Result<()> {
+    fn failed_fast_img_job_removes_only_partial_jxl_output() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let wc = root.path().join("Photos_optimized");
         std::fs::create_dir_all(&wc)?;
@@ -9144,7 +9288,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn reused_fast_img_jxl_refresh_replays_metadata_and_returns_new_hash() -> anyhow::Result<()> {
+    fn reused_fast_img_jxl_refresh_embeds_xmp_and_preserves_reconstruction() -> anyhow::Result<()> {
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -9155,7 +9299,9 @@ mod fast_img_hardening_tests {
 
         let root = TempDir::new()?;
         let src = root.path().join("a.jpg");
+        let source_xmp = root.path().join("a.xmp");
         let out = root.path().join("a.JXL");
+        let reconstructed = root.path().join("reconstructed.jpg");
         let magick = std::process::Command::new(
             foundation::media_conversion_gate::delivery_imagemagick_cli_path_or_default(),
         )
@@ -9171,18 +9317,13 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&magick.stdout),
             String::from_utf8_lossy(&magick.stderr)
         );
-        let orient = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
-            .arg("-overwrite_original")
-            .arg("-Orientation#=6")
-            .arg(&src)
-            .output()
-            .context("write source orientation")?;
-        assert!(
-            orient.status.success(),
-            "write source orientation failed: stdout={} stderr={}",
-            String::from_utf8_lossy(&orient.stdout),
-            String::from_utf8_lossy(&orient.stderr)
-        );
+        std::fs::write(
+            &source_xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="2025-10-24T12:00:24+08:00"/>
+</rdf:RDF></x:xmpmeta>"#,
+        )?;
         let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
             .arg(&src)
             .arg(&out)
@@ -9196,47 +9337,47 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&cjxl.stdout),
             String::from_utf8_lossy(&cjxl.stderr)
         );
-        let stale_orientation = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
-            .arg("-overwrite_original")
-            .arg("-IFD1:Orientation#=1")
-            .arg(&out)
-            .output()
-            .context("write stale JXL thumbnail orientation")?;
-        assert!(
-            stale_orientation.status.success(),
-            "write stale JXL orientation failed: stdout={} stderr={}",
-            String::from_utf8_lossy(&stale_orientation.stdout),
-            String::from_utf8_lossy(&stale_orientation.stderr)
-        );
         let stale_hash = foundation::common_utils::calculate_blake3_hash(&out)?;
 
         let refreshed_hash = fast_img_refresh_reused_jxl_delivery(&src, &out)?;
 
         assert_ne!(
             stale_hash, refreshed_hash,
-            "metadata refresh must update reused JXL hash proof after Orientation cleanup"
+            "metadata refresh must update reused JXL hash proof after XMP embedding"
         );
-        let has_orientation = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
+        let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
             .arg("-s3")
-            .arg("-Orientation")
+            .arg("-XMP-photoshop:DateCreated")
             .arg(&out)
             .output()
-            .context("probe refreshed JXL orientation")?;
+            .context("probe refreshed JXL XMP")?;
         assert!(
-            has_orientation.status.success(),
-            "orientation probe failed: {}",
-            String::from_utf8_lossy(&has_orientation.stderr)
+            date_created.status.success(),
+            "XMP probe failed: {}",
+            String::from_utf8_lossy(&date_created.stderr)
         );
+        assert_eq!(
+            String::from_utf8_lossy(&date_created.stdout).trim(),
+            "2025:10:24 12:00:24+08:00"
+        );
+        let decode = std::process::Command::new(foundation::constants::TOOL_DJXL)
+            .arg(&out)
+            .arg(&reconstructed)
+            .arg("--reconstruct_jpeg")
+            .arg("--quiet")
+            .output()
+            .context("strictly reconstruct refreshed JXL")?;
         assert!(
-            has_orientation.stdout.is_empty(),
-            "reused JXL refresh must strip residual Orientation: {}",
-            String::from_utf8_lossy(&has_orientation.stdout)
+            decode.status.success(),
+            "strict JXL reconstruction failed: {}",
+            String::from_utf8_lossy(&decode.stderr)
         );
+        assert_eq!(std::fs::read(&reconstructed)?, std::fs::read(&src)?);
         Ok(())
     }
 
     #[test]
-    fn marker_refresh_updates_output_hash_and_clears_import_proof() -> anyhow::Result<()> {
+    fn marker_refresh_reencodes_when_source_changed_after_jxl_encode() -> anyhow::Result<()> {
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -9320,15 +9461,16 @@ mod fast_img_hardening_tests {
             .get("a.jpg")
             .ok_or_else(|| anyhow::anyhow!("missing refreshed marker entry"))?;
 
-        assert_eq!(summary.refreshed, 1);
-        assert_eq!(summary.invalidated, 0);
+        assert_eq!(summary.refreshed, 0);
+        assert_eq!(summary.invalidated, 1);
         assert!(summary.marker_changed);
-        assert_ne!(entry.out, old_hash);
+        assert!(entry.out.is_empty());
         assert_eq!(entry.library_asset, None);
-        assert_eq!(persisted.stage, FastImgStageName::TranscodeComplete);
+        assert_eq!(persisted.stage, FastImgStageName::OutputPrepared);
         assert_eq!(persisted.gate1_checks, Gate1Checks::default());
         assert_eq!(persisted.gate2_checks, Gate2Checks::default());
         assert_eq!(persisted.gate3_checks, Gate3Checks::default());
+        assert!(!out.exists());
         Ok(())
     }
 
@@ -9927,7 +10069,7 @@ mod fast_img_hardening_tests {
             },
         );
 
-        let pruned = fast_img_prune_empty_source_dirs(&marker, &src_root)?;
+        let pruned = fast_img_prune_empty_source_dirs(&marker, &src_root, true)?;
 
         assert_eq!(pruned, 2);
         assert!(!empty_leaf.exists());
@@ -9935,6 +10077,30 @@ mod fast_img_hardening_tests {
         assert!(unrelated_empty.exists());
         assert!(keep_leaf.exists());
         assert!(src_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn single_file_fast_img_cleanup_preserves_implicit_parent() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let src_root = root.path().join("user-selected-file-parent");
+        std::fs::create_dir_all(&src_root)?;
+        let mut marker = WorkingCopyMarker::new(src_root.clone(), root.path().join("out"), 1);
+        marker.blake3_log.insert(
+            "only.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("only.JXL".to_string()),
+                src: "source-hash".to_string(),
+                out: "output-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        assert_eq!(
+            fast_img_prune_empty_source_dirs(&marker, &src_root, false)?,
+            0
+        );
+        assert!(src_root.is_dir());
         Ok(())
     }
 

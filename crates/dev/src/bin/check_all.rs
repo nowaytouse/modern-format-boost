@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
-const VUE_QUALITY_SCRIPTS: [&str; 4] = ["lint", "format:check", "deps:check", "build"];
 
 #[derive(Parser, Debug)]
 #[command(name = "check_all", about = "MFB Multi-Language Auditor")]
@@ -627,38 +626,6 @@ const fn ci_feature_args() -> [&'static str; 3] {
     ["--all-features", "--features", "foundation/ci-static-build"]
 }
 
-fn vue_quality_script_names() -> &'static [&'static str] {
-    &VUE_QUALITY_SCRIPTS
-}
-
-fn vue_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join("crates").join("gui")
-}
-
-fn run_vue_quality_checks(repo_root: &Path) -> Result<()> {
-    let vue_dir = vue_dir(repo_root);
-    if !vue_dir.join("package.json").is_file() {
-        println!("  Skipped: Vue quality checks (package.json missing)");
-        return Ok(());
-    }
-
-    let prefix = vue_dir.to_string_lossy().into_owned();
-    for script in vue_quality_script_names() {
-        run_required_vec(
-            repo_root,
-            &format!("Vue npm run {script}"),
-            "npm",
-            &[
-                "--prefix".to_string(),
-                prefix.clone(),
-                "run".to_string(),
-                (*script).to_string(),
-            ],
-        )?;
-    }
-    Ok(())
-}
-
 fn cargo_check_args(ci: bool) -> Vec<String> {
     let mut args = vec![
         "check".to_string(),
@@ -948,18 +915,7 @@ fn main() -> Result<()> {
             shfmt_args.extend(shell_files.iter().cloned());
             run_required_vec(&repo_root, "shfmt", "shfmt", &shfmt_args)?;
         }
-        // Vue / Node
-        let vue_path = vue_dir(&repo_root);
-        if vue_path.join("package.json").is_file() {
-            let vue_prefix = vue_path.to_string_lossy().into_owned();
-            run_required(
-                &repo_root,
-                "Vue npm run format",
-                "npm",
-                &["--prefix", &vue_prefix, "run", "format"],
-            )?;
-        }
-        // Web / Prettier (MD, JSON, YAML, Vue, TS, JS, CSS, HTML)
+        // Prettier (Markdown, JSON, YAML, and any tracked web-format documents)
         let mut prettier_targets = md_files.clone();
         prettier_targets.extend(json_files.iter().cloned());
         prettier_targets.extend(yaml_files.iter().cloned());
@@ -1003,7 +959,7 @@ fn main() -> Result<()> {
     if !fmt_status.success() {
         eprintln!(
             "FAIL: cargo fmt check failed.\n\
-             Hint: To format all workspace languages (Rust, Python, Shell, Vue, JS/TS, SQL, TOML, JSON, YAML, Markdown, Plist), run:\n\
+             Hint: To format all workspace languages (Rust, Python, Shell, JS/TS, SQL, TOML, JSON, YAML, Markdown, Plist), run:\n\
              cargo run --locked -p dev --bin check_all -- --fix"
         );
         std::process::exit(1);
@@ -1086,8 +1042,6 @@ fn main() -> Result<()> {
     }
 
     run_python_syntax_check(&repo_root, &py_files)?;
-    run_vue_quality_checks(&repo_root)?;
-
     run_required(
         &repo_root,
         "Running ultra-strict clippy",
@@ -1719,14 +1673,6 @@ mod tests {
         assert!(components.rust_src);
         assert!(components.llvm_tools);
         assert_eq!(components.missing_components(), vec!["miri"]);
-    }
-
-    #[test]
-    fn vue_quality_scripts_cover_lint_format_dependencies_and_build() {
-        assert_eq!(
-            vue_quality_script_names(),
-            &["lint", "format:check", "deps:check", "build"]
-        );
     }
 
     #[test]

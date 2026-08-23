@@ -803,11 +803,10 @@ mod tests {
         assert_eq!(check.format, FormatKind::Heic);
         assert_eq!(check.tool, "libheif-rs (project security limits)");
 
-        let candidate = crate::image::modern_lossy_static::probe_modern_lossy_static(Path::new(
-            &fixture,
-        ))
-        .expect("tier-2 probe must not quarantine a valid complex HEIC")
-        .expect("lossy static HEIC must remain eligible for tier-2 delivery");
+        let candidate =
+            crate::image::modern_lossy_static::probe_modern_lossy_static(Path::new(&fixture))
+                .expect("tier-2 probe must not quarantine a valid complex HEIC")
+                .expect("lossy static HEIC must remain eligible for tier-2 delivery");
         assert_eq!(candidate.format, FormatKind::Heic);
     }
 

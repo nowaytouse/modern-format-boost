@@ -107,9 +107,6 @@ struct Args {
     #[arg(long)]
     plain: bool,
 
-    #[arg(long)]
-    vue: bool,
-
     #[arg(long, conflicts_with = "no_resume")]
     resume: bool,
 
@@ -1294,12 +1291,6 @@ fn plan_cli_invocations(
     project_root: &Path,
     session: Option<&DragDropSession>,
 ) -> Result<Vec<LaunchCommand>> {
-    if args.vue {
-        bail!(
-            "Vue prototype is scaffolding only; invoke it separately from crates/gui \
-             without processing files"
-        );
-    }
     if args.inputs.is_empty() {
         // Handled by main menu
         return Ok(Vec::new());
@@ -2197,7 +2188,6 @@ fn build_run_args(
         force: false,
         dry_run: false,
         plain: false,
-        vue: false,
         base_dir: None,
         in_place,
         resume: false,
@@ -2499,14 +2489,6 @@ fn main() -> Result<()> {
     let mut session = DragDropSession::start()?;
     let mut dir_lock = None;
 
-    // Vue launcher check
-    if args.vue {
-        bail!(
-            "Vue launcher is not implemented; run crates/gui scripts directly during UI \
-             prototyping"
-        );
-    }
-
     // ALWAYS show interactive menu when terminal (matches Python's unconditional
     // select_mode())
     if io::stdin().is_terminal() {
@@ -2662,7 +2644,6 @@ mod tests {
             verbose: false,
             base_dir: None,
             plain: true,
-            vue: false,
             watch: false,
             images_only: false,
             videos_only: false,
@@ -2685,35 +2666,6 @@ mod tests {
         assert!(commands[1].args.contains(&"--archive".to_string()));
         assert!(commands[0].args.contains(&"--plain".to_string()));
         assert!(commands[1].args.contains(&"--plain".to_string()));
-    }
-
-    #[test]
-    fn test_vue_flag_is_scaffold_only() {
-        let args = Args {
-            inputs: Vec::new(),
-            mode: LaunchMode::Auto,
-            output: None,
-            archive: false,
-            shortest_path: false,
-            retry: false,
-            force: false,
-            dry_run: true,
-            resume: false,
-            no_resume: false,
-            ultimate: false,
-            in_place: false,
-            verbose: false,
-            base_dir: None,
-            plain: true,
-            vue: true,
-            watch: false,
-            images_only: false,
-            videos_only: false,
-            strategy: None,
-        };
-
-        let err = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap_err();
-        assert!(err.to_string().contains("Vue prototype"));
     }
 
     #[test]
@@ -2758,7 +2710,6 @@ mod tests {
                 verbose: false,
                 base_dir: None,
                 plain: true,
-                vue: false,
                 watch: false,
                 images_only: false,
                 videos_only: false,
@@ -2809,7 +2760,6 @@ mod tests {
                 verbose: false,
                 base_dir: None,
                 plain: true,
-                vue: false,
                 watch: false,
                 images_only: false,
                 videos_only: false,

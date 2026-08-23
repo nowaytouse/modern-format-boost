@@ -1,10 +1,16 @@
 # SOURCE: UI_LAYER_CONTRACT.md
 
-# Terminal UI layer contract (phase 2)
+# Native macOS and terminal UI layer contract
 
-Modern Format Boost has **no graphical GUI**. User-facing appearance is the **terminal UX layer**:
-`modern_ui`, `ui_stderr`, `progress_mode`, `progress` / `unified_progress`, `logging`, `static_logs`, `report`,
-and the Python drag-and-drop launcher (`crates/dev/scripts/drag_and_drop_processor.py`).
+Modern Format Boost has two real user-facing surfaces: the Rust terminal UX and
+the native macOS AppKit application. The macOS application contains no
+WKWebView, browser renderer, Vue/Node runtime, or network-loaded UI; it maps
+native controls directly onto `drag_and_drop_processor`. Linux and Windows use
+the CLI until separate native adapters exist.
+
+The terminal layer remains `modern_ui`, `ui_stderr`, `progress_mode`,
+`progress` / `unified_progress`, `logging`, `static_logs`, `report`, and the
+Rust drag-and-drop launcher.
 
 Algorithm inference contracts live in [`ALGORITHM_LAYER_CONTRACT.md`](ALGORITHM_LAYER_CONTRACT.md); this document
 covers **how results are shown**, not how they are computed.
@@ -29,6 +35,8 @@ covers **how results are shown**, not how they are computed.
 | U14 | Quality-intel `log_summary_header!` uses gate title helpers                                                                                                                                                                                                                                                               | `ui_visual_artifact_audit_title`; `quality_report_headers_use_gate_u14`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | U15 | Path security `Display` errors use `ui_user_facing_error`                                                                                                                                                                                                                                                                 | `path_validator_security_errors_use_gate_u15`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
+| U16 | The macOS GUI is AppKit-only, follows system/light/dark appearance, ships English/Simplified Chinese/Japanese resources, preserves stable bundle identity/signing/TCC entitlements, and maps to the same CLI/resume contract | Native-host `--self-test`; `build.sh`; `plutil`; bundle dependency inspection must show AppKit/CoreServices and no WebKit |
+
 ## Allowlisted UX exceptions
 
 | Case                                         | Behavior                                                                     |
@@ -52,6 +60,7 @@ covers **how results are shown**, not how they are computed.
 | U10          | `mfb_ui_tokens_defines_brand_blue_and_no_color`                                                                                                                                                                                                                                                                                                                                                                                     |
 | U11          | `ui_tracing_path_and_result_box_use_gate_u11`                                                                                                                                                                                                                                                                                                                                                                                       |
 | U12–U15      | `database_loop_stderr_and_duration_use_gate_u12`, `probe_detection_stderr_use_gate_u13`, `quality_report_headers_use_gate_u14`, `path_validator_security_errors_use_gate_u15`                                                                                                                                                                                                                                                       |
+| U16          | Native-host argument/TCC/log/localization self-test plus bundle dependency and resource inspection                                                                                                                                                                                                                                                                                                                                                     |
 | Contract doc | `ui_contract_doc_exists`                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Verification commands
@@ -59,13 +68,16 @@ covers **how results are shown**, not how they are computed.
 ```bash
 cargo test -p foundation configure_terminal_ux symbols_pick report --lib
 cargo test -p dev --test test_real_silent_fallbacks ui_ -- --test-threads=1
+bash crates/gui/src-macos/build.sh
+'target/release/bundle/macos/Modern Format Boost.app/Contents/MacOS/Modern Format Boost' --self-test
+otool -L 'target/release/bundle/macos/Modern Format Boost.app/Contents/MacOS/Modern Format Boost'
 ```
 
 **Contract 100% (UI layer)** = all commands pass and every row in the compliance matrix has a passing test.
 
 ## Out of scope (phase 2)
 
-- Native macOS / web GUI shells
+- Native Linux and Windows GUI shells
 - `jxl_utils` attempt preamble literals (`🔄` / `⚠️` in `emit_stderr` format strings; status icons use `styled_ok_fail_label`)
 - `static_logs::messages::*` string constants may still contain emoji literals; runtime output uses `plain_aware_detail` in plain mode
 - `TerminalColor` wrappers when not in plain mode (by design)
@@ -85,4 +97,3 @@ cargo test -p dev --test test_real_silent_fallbacks ui_ -- --test-threads=1
 | `TelemetryOnly` column verdict            | Never show raw column as "final" in summaries                   |
 
 ---
-

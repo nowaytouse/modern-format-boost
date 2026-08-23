@@ -132,7 +132,10 @@ Every file goes through a multi-stage decision pipeline:
   quality-matched lossy routes are kept separate from lossless claims.
 - **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are
   pre-processed into temporary 16-bit PNGs or **32-bit OpenEXR** to ensure
-  `cjxl` compatibility without quality loss (8/16/32-bit matched pipeline).
+  `cjxl` compatibility without silently reducing the detected precision. A
+  recoverable native-decoder failure can use FFmpeg/ImageMagick adapters only
+  on an explicitly permitted path; every resulting candidate still runs the
+  normal structure, pixel/orientation, metadata and size gates.
 - **Stage 4 — HDR Gainmap Synthesis**: Intercepts HEIC gainmap assets
   (Apple/Google) and UltraHDR JPEGs, synthesizes true HDR JXL output, and
   preserves non-embeddable auxiliary assets such as raw gainmaps/depth maps as
@@ -183,8 +186,15 @@ Runtime
 | **`img`** | Static stills only      | JXL / AVIF / skip  | `img run`→JXL; `img fast-img --strategy jxl\|avif` |
 | **`vid`** | Video + animated raster | MP4/MOV/GIF / skip | `vid run --codec hevc\|av1` (default `hevc`)       |
 
-Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop
-batch processing.
+Plus a **double-click native macOS app** (`Modern Format Boost.app`) for
+drag-and-drop batch processing. It is implemented directly with AppKit: there
+is no embedded browser, WKWebView, Vue/Node runtime or network-loaded UI. The
+app invokes the same Rust launcher and preserves the existing bundle identity,
+code-signing and Photos Automation (TCC) preflight. Native English, Simplified
+Chinese and Japanese resources can be switched at runtime; appearance follows
+the system by default with explicit light/dark choices. Linux and Windows
+retain the CLI for now; future GUI ports should use their own native platform
+adapter.
 
 ## Delivery strategies
 
@@ -253,8 +263,58 @@ not require that database path.
 Tier 2 is deliberately positive-evidence-only. Lossless media, JXL carrying
 JPEG reconstruction data, animated media, generic HEIF, unreadable media and
 unknown compression semantics are retained. JXL outputs themselves stay local:
-`--strategy jxl --shortest-path` is rejected because that Photos route has not
-met the same reliability gate.
+without `--shortest-path` they are delivered only to the adjacent working tree;
+with `--strategy jxl --shortest-path`, the same checkpointed Photos import and
+live-library verification gates run before source cleanup.
+
+`img run` and FastImg share the same low-level integrity, metadata, path-safety
+and final-commit primitives, but they are not the same processing strategy:
+
+| Concern | `img run` | `img fast-img` |
+| ------- | --------- | -------------- |
+| Product goal | Broad static-image optimization and safe skip/copy routing | Bounded, resumable production delivery |
+| Analysis | Persistent analysis cache/database, HDR/precision/color and format detours | Content identity plus the evidence required by the selected JXL/AVIF path |
+| JPEG → JXL | Prefers reversible reconstruction; standard mode may retain or explicitly recover a non-reconstructible source | Requires exact JPEG reconstruction for the JXL primary tier; otherwise retains the source |
+| Modern lossy stills | Usually retained to avoid generational loss | JXL Tier 2 imports a positively proven lossy original without re-encoding it |
+| AVIF | Not selected through the normal `img run` codec surface | Meme Mode performs its bounded size/quality search in the final AVIF encoder domain |
+| Photos | Apple compatibility is an output policy, not an import claim | `--shortest-path` uses checkpointed import plus live Photos UUID/content proof |
+| Cleanup | Only when explicitly requested and after final verification | Mandatory for each proven delivery; incomplete/ambiguous sources remain with resumable state |
+
+### Abnormal or decoder-hostile stills
+
+An encoder error is not treated as proof that the source is unusable. A true
+JPEG—including a grayscale JPEG—is first submitted directly to libjxl's JPEG
+bitstream-reconstruction path; grayscale alone does not trigger a detour. If a
+damaged structure or incompatible profile prevents reconstruction, the guarded
+JPEG ladder may retry a metadata-safe structural rebuild. FastImg still
+requires exact JPEG reconstruction and retains the source when that proof
+cannot be produced.
+
+Standard `img run` can, when the expert recovery policy is explicitly enabled,
+normalize a decoder-hostile still through a lossless FFmpeg/ImageMagick raster
+adapter and then repeat structure, decoded-pixel/orientation, metadata and size
+verification. That result is recorded as pixel re-encoding, never mislabeled as
+reversible JPEG reconstruction. If every applicable decoder/fallback is
+unavailable, disabled, ambiguous or fails a gate, the candidate is discarded
+and the source plus sidecars are retained.
+
+### Actual static-image scope
+
+“Static image support” means formats the project can identify and route with
+positive evidence—not every historical image or private camera format:
+
+| Scope | Formats / behavior |
+| ----- | ------------------ |
+| Content-signature identity | JPEG/JFIF, PNG/APNG, WebP, GIF, TIFF/BigTIFF, BMP, HEIC/HEIF/HIF, AVIF, JXL, JP2/J2K, ICO/CUR, QOI, EXR, FLIF, PSD, PNM and DDS; recognition is not a conversion promise |
+| Normal `img` discovery | PNG, JPEG/JPE/JFIF, WebP, GIF, TIFF, HEIC/HEIF/HIF, AVIF, BMP, ICO/CUR, SVG, JP2/J2K, JXL, WBMP and enumerated camera-RAW extensions |
+| Proven conversion core | Confirmed-static JPEG, PNG, WebP, TIFF, BMP and supported HEIC/HEIF inputs; lossless modern stills and HDR gainmaps take evidence-specific routes |
+| FastImg JXL | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF and codec-constrained HEIC |
+| FastImg AVIF | Confirmed-static inputs accepted by an authoritative decoder; expert-only external adapters remain opt-in and still require final evidence |
+| Decoder-dependent / best effort | SVG and camera RAW extensions may enter discovery, but success depends on an installed authoritative decoder; QOI/FLIF and other recognized containers are not blanket-admitted |
+| Explicitly outside normal raster conversion | PSD/PSB, AI/EPS/PDF, TGA, DDS, HDR/EXR and PNM-family design/scientific assets; unknown/private formats are copied, skipped or ignored rather than guessed |
+
+Animated or multi-page content is not silently flattened by `img`; verified
+animation belongs to `vid`, while inconclusive input is retained.
 
 ### `vid run` + `--codec hevc` (default)
 
@@ -586,7 +646,8 @@ specific revision, not a claim that maintenance debt can never exist:
 - `crates/vid/`: Video and animated-media optimizer (`HEVC` / `AV1` / `GIF`)
 - `crates/foundation/`: Core brain (GPU/CPU hybrid engine, HDR mapping,
   metadata)
-- `Modern Format Boost.app/`: macOS drag-and-drop UI
+- `crates/gui/src-macos/`: native AppKit drag/drop UI and TCC adapter
+- `Modern Format Boost.app/`: signed macOS application bundle
 
 ## 📐 Layer contracts & training
 
@@ -598,7 +659,7 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Media conversion delivery (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](docs/hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](docs/hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
 | Algorithm / inference gates        | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
-| Terminal UI                        | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
+| Terminal + native macOS UI         | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
 | Logging / session                  | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
 | Database                           | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
 
@@ -617,11 +678,14 @@ See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) **0.11.3** for the full hardening n
 **1. What is the difference between `img run` and `img fast-img`?**
 
 `img run` is the broad static-image optimizer: it uses analysis/database state,
-supports the lossless/HDR detour paths, preserves metadata and currently
-delivers JXL. `img fast-img` is a narrower checkpointed delivery workflow with
-mandatory verified cleanup: default JXL handles true JPEG plus Tier 2; AVIF
-Meme Mode handles confirmed-static image containers. Use `--dry-run` before a
-FastImg production batch when source removal is not yet intended.
+supports lossless/HDR detours, recovery adapters and broad skip/copy behavior,
+preserves metadata, and currently delivers JXL. `img fast-img` deliberately
+does less analysis: it is a bounded, durable delivery workflow with mandatory
+checkpoint and cleanup proof. Its JXL strategy owns reversible true JPEG plus
+Tier 2; AVIF Meme Mode owns confirmed-static containers. Their safety gates are
+shared, but candidate selection, search budget, database use and Photos policy
+are not identical. Use `--dry-run` before a FastImg production batch when
+source removal is not yet intended.
 
 **2. Does FastImg Tier 2 precisely distinguish lossy from lossless modern images?**
 
@@ -643,8 +707,9 @@ the unproven sources and records resumable state.
 
 No. `img run --apple-compat` changes output/metadata compatibility policy and
 is enabled by default. FastImg Photos delivery is a separate gate: AVIF uses
-`--shortest-path`; JXL outputs remain local, while JXL strategy Tier 2 imports
-only positively proven lossy modern originals.
+`--shortest-path`; JXL shortest-path uses the same verified Photos delivery
+state machine, while local JXL mode does not import. JXL strategy Tier 2 also
+imports positively proven lossy modern originals without re-encoding them.
 
 **5. What is the difference between `--ultimate` and `--archive` for images?**
 
@@ -686,6 +751,16 @@ fleet before replacing irreplaceable originals.
 The video path uses `hdr10plus_tool` to extract SMPTE 2094-40 metadata and
 passes it to `libx265` through `--dhdr10-info` when the required tools and stream
 evidence are available.
+
+**11. What happens to a source folder after verified cleanup?**
+
+After directory metadata has been transferred, delete/move workflows prune
+empty descendants and a user-selected directory root if it becomes truly
+empty. Selecting one file never authorizes removal of its implicit parent
+folder. Cleanup refuses Photos Library packages, dangerous roots and
+out-of-root/symlink candidates, and uses non-recursive empty-directory removal;
+any remaining media, sidecar, `.DS_Store` or concurrently created file keeps
+the directory.
 
 ---
 

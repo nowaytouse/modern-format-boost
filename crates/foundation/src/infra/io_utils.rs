@@ -5,7 +5,7 @@
 //! expected "not found" cases are handled silently.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Read file metadata with a retry mechanism to handle transient OS locks or
 /// network glitches.
@@ -123,6 +123,136 @@ pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Remove only empty directories at and below a user-selected root.
+///
+/// Candidates are canonicalized, must remain inside `root`, and may not cross
+/// symlinks. Removal uses `remove_dir`, never recursive deletion, so a directory
+/// that gains content concurrently is preserved by the operating system.
+///
+/// # Errors
+/// Returns an error when the root/candidate escapes the controlled scope or an
+/// empty directory cannot be removed for a reason other than absence/content.
+pub fn prune_empty_directories_within(
+    root: &Path,
+    candidates: &[PathBuf],
+) -> std::io::Result<usize> {
+    prune_empty_directory_candidates_within(root, candidates, true)
+}
+
+/// Remove empty descendants below a controlled root while preserving the root.
+///
+/// This is used when the user selected a single file: its containing directory
+/// is a safety boundary, not itself a user-selected cleanup target.
+///
+/// # Errors
+/// Returns an error under the same fail-closed rules as
+/// [`prune_empty_directories_within`].
+pub fn prune_empty_descendants_within(
+    root: &Path,
+    candidates: &[PathBuf],
+) -> std::io::Result<usize> {
+    prune_empty_directory_candidates_within(root, candidates, false)
+}
+
+fn prune_empty_directory_candidates_within(
+    root: &Path,
+    candidates: &[PathBuf],
+    remove_root: bool,
+) -> std::io::Result<usize> {
+    let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
+    crate::safety::check_safe_for_destructive(root, "remove empty directories")
+        .map_err(&invalid)?;
+    crate::safety::check_apple_photos_library(root).map_err(&invalid)?;
+
+    let root_metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return Err(invalid(format!(
+            "empty-directory cleanup root must be a real directory: {}",
+            root.display()
+        )));
+    }
+    let canonical_root = root.canonicalize()?;
+    let mut directories = std::collections::BTreeSet::new();
+    if remove_root {
+        directories.insert(canonical_root.clone());
+    }
+
+    for candidate in candidates {
+        let relative = candidate.strip_prefix(root).map_err(|_| {
+            invalid(format!(
+                "empty-directory cleanup candidate is not lexically inside selected root: {}",
+                candidate.display()
+            ))
+        })?;
+        let mut lexical_component = root.to_path_buf();
+        for component in relative.components() {
+            lexical_component.push(component.as_os_str());
+            let metadata = match fs::symlink_metadata(&lexical_component) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error),
+            };
+            if metadata.file_type().is_symlink() {
+                return Err(invalid(format!(
+                    "empty-directory cleanup refuses symlink components: {}",
+                    lexical_component.display()
+                )));
+            }
+        }
+        let metadata = match fs::symlink_metadata(candidate) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(invalid(format!(
+                "empty-directory cleanup candidate must be a real directory: {}",
+                candidate.display()
+            )));
+        }
+        let canonical = candidate.canonicalize()?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err(invalid(format!(
+                "empty-directory cleanup candidate escaped selected root: {}",
+                candidate.display()
+            )));
+        }
+        let mut current = canonical.as_path();
+        loop {
+            if remove_root || current != canonical_root {
+                directories.insert(current.to_path_buf());
+            }
+            if current == canonical_root {
+                break;
+            }
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = parent;
+        }
+    }
+
+    let mut directories: Vec<_> = directories.into_iter().collect();
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let mut removed = 0;
+    for directory in directories {
+        match fs::remove_dir(&directory) {
+            Ok(()) => removed += 1,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(removed)
 }
 
 /// Robust move that handles cross-filesystem boundaries (EXDEV).
@@ -355,6 +485,86 @@ mod tests {
         assert_eq!(fs::read(&legacy_fixed_staging)?, b"user payload");
         assert!(!src.exists());
 
+        Ok(())
+    }
+
+    #[test]
+    fn empty_directory_pruning_is_scoped_and_non_recursive() -> std::io::Result<()> {
+        let parent = tempfile::tempdir()?;
+        let root = parent.path().join("selected");
+        let empty_leaf = root.join("a/b");
+        let occupied = root.join("kept");
+        fs::create_dir_all(&empty_leaf)?;
+        fs::create_dir_all(&occupied)?;
+        fs::write(occupied.join("media.jpg"), b"payload")?;
+
+        assert_eq!(
+            prune_empty_directories_within(&root, std::slice::from_ref(&empty_leaf))?,
+            2
+        );
+        assert!(!empty_leaf.exists());
+        assert!(root.exists());
+
+        fs::remove_file(occupied.join("media.jpg"))?;
+        assert_eq!(
+            prune_empty_directories_within(&root, std::slice::from_ref(&occupied))?,
+            2
+        );
+        assert!(!root.exists());
+
+        let outside = parent.path().join("outside");
+        let selected = parent.path().join("selected-again");
+        fs::create_dir_all(&outside)?;
+        fs::create_dir_all(&selected)?;
+        assert!(prune_empty_directories_within(&selected, &[outside]).is_err());
+        assert!(selected.exists());
+
+        let single_file_parent = parent.path().join("single-file-parent");
+        let now_empty_child = single_file_parent.join("nested");
+        fs::create_dir_all(&now_empty_child)?;
+        assert_eq!(
+            prune_empty_descendants_within(
+                &single_file_parent,
+                std::slice::from_ref(&now_empty_child),
+            )?,
+            1
+        );
+        assert!(single_file_parent.is_dir());
+
+        let hidden_file_root = parent.path().join("hidden-file-root");
+        fs::create_dir_all(&hidden_file_root)?;
+        fs::write(
+            hidden_file_root.join(".DS_Store"),
+            b"user-visible filesystem entry",
+        )?;
+        assert_eq!(
+            prune_empty_directories_within(
+                &hidden_file_root,
+                std::slice::from_ref(&hidden_file_root),
+            )?,
+            0
+        );
+        assert!(hidden_file_root.is_dir());
+
+        let photos_library = parent.path().join("Debug.photoslibrary");
+        fs::create_dir_all(&photos_library)?;
+        assert!(
+            prune_empty_directories_within(&photos_library, std::slice::from_ref(&photos_library),)
+                .is_err()
+        );
+        assert!(photos_library.is_dir());
+        assert!(prune_empty_directories_within(Path::new("/tmp"), &[]).is_err());
+
+        #[cfg(unix)]
+        {
+            let real_leaf = selected.join("real/leaf");
+            fs::create_dir_all(&real_leaf)?;
+            std::os::unix::fs::symlink(selected.join("real"), selected.join("link"))?;
+            assert!(
+                prune_empty_directories_within(&selected, &[selected.join("link/leaf")]).is_err()
+            );
+            assert!(real_leaf.exists());
+        }
         Ok(())
     }
 

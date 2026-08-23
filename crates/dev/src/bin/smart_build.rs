@@ -40,12 +40,8 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
     "icloud_import",
     "drag_and_drop_processor",
 ];
-const VUE_UPDATE_SCRIPTS: &[&str] = &["deps:update", "deps:check"];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
-const GUI_SOURCE_EXTENSIONS: &[&str] = &[
-    "css", "html", "icns", "ico", "js", "json", "lock", "plist", "png", "sh", "svg", "swift",
-    "toml", "ts", "tsx", "vue",
-];
+const GUI_SOURCE_EXTENSIONS: &[&str] = &["icns", "plist", "sh", "strings", "swift"];
 const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -141,11 +137,11 @@ struct Args {
     #[arg(long, short = 'u')]
     update: bool,
 
-    /// Build the native Vue GUI and sync the .app bundle
+    /// Build the native macOS GUI and sync the .app bundle
     #[arg(long)]
     gui: bool,
 
-    /// Build Rust binaries only — skip the native Vue GUI step
+    /// Build Rust binaries only — skip the native macOS GUI step
     #[arg(long, short = 'r')]
     rust_only: bool,
 
@@ -177,14 +173,6 @@ fn command_exists(cmd: &str) -> bool {
     false
 }
 
-fn vue_update_script_names() -> &'static [&'static str] {
-    VUE_UPDATE_SCRIPTS
-}
-
-fn vue_dir(project_root: &Path) -> PathBuf {
-    project_root.join("crates").join("gui")
-}
-
 fn native_gui_dir(project_root: &Path) -> PathBuf {
     project_root.join("crates").join("gui").join("src-macos")
 }
@@ -196,43 +184,6 @@ fn native_app_bundle_path(project_root: &Path) -> PathBuf {
         .join("bundle")
         .join("macos")
         .join("Modern Format Boost.app")
-}
-
-fn run_vue_npm_script(
-    project_root: &Path,
-    script: &str,
-    style: &Style,
-    required: bool,
-) -> Result<bool> {
-    let vue_dir = vue_dir(project_root);
-    if !vue_dir.join("package.json").is_file() {
-        println!(
-            "{}   · Vue package.json missing; skipping npm {script}.{}",
-            style.dim, style.reset
-        );
-        return Ok(true);
-    }
-    if !command_exists("npm") {
-        if required {
-            anyhow::bail!("npm not found; cannot run Vue npm script {script}");
-        }
-        return Ok(false);
-    }
-
-    let mut command = Command::new("npm");
-    command.arg("run").arg(script).current_dir(&vue_dir);
-    let ok = run_update_step(&format!("npm run {script}"), &mut command, style, required);
-    if required && !ok {
-        anyhow::bail!("Vue npm script failed: {script}");
-    }
-    Ok(ok)
-}
-
-fn run_vue_dependency_update_validation(project_root: &Path, style: &Style) -> Result<()> {
-    for script in vue_update_script_names() {
-        run_vue_npm_script(project_root, script, style, true)?;
-    }
-    Ok(())
 }
 
 fn get_project_root() -> Result<PathBuf> {
@@ -553,8 +504,8 @@ fn get_newest_binary_source_mtime(
 }
 
 fn gui_needs_rebuild(project_root: &Path) -> bool {
-    let vue_root = vue_dir(project_root);
-    let newest_input = newest_source_mtime_in_dir(&vue_root, GUI_SOURCE_EXTENSIONS);
+    let newest_input =
+        newest_source_mtime_in_dir(&native_gui_dir(project_root), GUI_SOURCE_EXTENSIONS);
     let bundle_binary = native_app_bundle_path(project_root)
         .join("Contents")
         .join("MacOS")
@@ -1161,8 +1112,6 @@ fn perform_updates(project_root: &Path, style: &Style, force: bool) -> Result<()
         );
     }
 
-    run_vue_dependency_update_validation(project_root, style)?;
-
     println!(
         "\n{}{} Dependency updates finished.{}\n",
         style.bold, style.green, style.reset
@@ -1437,11 +1386,9 @@ fn app_bundle_codesign_identity() -> Result<String> {
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
-/// This replaces the former `crates/gui/src-macos/build.sh` shell script
-/// and is invoked by `build_and_sync_gui()` after the Vue build.
+/// This replaces the former `crates/gui/src-macos/build.sh` shell script.
 fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     let native_dir = native_gui_dir(project_root);
-    let gui_dir = vue_dir(project_root);
     let bundle = native_app_bundle_path(project_root);
     let macos_dir = bundle.join("Contents").join("MacOS");
     let resources_dir = bundle.join("Contents").join("Resources");
@@ -1455,20 +1402,6 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     match arch.as_str() {
         "arm64" | "x86_64" => {}
         other => anyhow::bail!("Unsupported macOS architecture: {other}"),
-    }
-
-    // Verify the Vue build output exists
-    let index_html = gui_dir.join("dist").join("index.html");
-    if !index_html.is_file() {
-        anyhow::bail!("Vue build output missing: {}", index_html.display());
-    }
-    // Guard against WKWebView-incompatible module attributes
-    let index_content = fs::read_to_string(&index_html).context("read dist/index.html")?;
-    if index_content.contains("type=\"module\"") || index_content.contains("crossorigin") {
-        anyhow::bail!(
-            "Vue entry point contains type=\"module\" or crossorigin attributes, \
-             which are incompatible with bundled WKWebView file loading"
-        );
     }
 
     // (Re-)create the bundle skeleton
@@ -1498,8 +1431,6 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
             "AppKit",
             "-framework",
             "CoreServices",
-            "-framework",
-            "WebKit",
         ])
         .arg(&swift_src)
         .arg("-o")
@@ -1521,15 +1452,22 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     fs::copy(&icon_src, &icon_dst)
         .with_context(|| format!("copy icon.icns to {}", icon_dst.display()))?;
 
-    let dist_src = gui_dir.join("dist");
-    let dist_dst = resources_dir.join("dist");
+    let localized_resources = native_dir.join("Resources");
     let status = Command::new("ditto")
-        .arg(&dist_src)
-        .arg(&dist_dst)
+        .arg(&localized_resources)
+        .arg(&resources_dir)
         .status()
-        .context("ditto dist -> Resources/dist")?;
+        .with_context(|| {
+            format!(
+                "copy localized resources from {}",
+                localized_resources.display()
+            )
+        })?;
     if !status.success() {
-        anyhow::bail!("ditto failed copying Vue dist");
+        anyhow::bail!(
+            "ditto failed copying localized resources from {}",
+            localized_resources.display()
+        );
     }
 
     // Validate plists
@@ -1542,6 +1480,19 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
                 .with_context(|| format!("plutil -lint {}", plist.display()))?;
             if !s.success() {
                 anyhow::bail!("plutil -lint failed for {}", plist.display());
+            }
+        }
+    }
+    for locale in ["en", "zh-Hans", "ja"] {
+        for resource in ["Localizable.strings", "InfoPlist.strings"] {
+            let strings = resources_dir.join(format!("{locale}.lproj/{resource}"));
+            let status = Command::new("plutil")
+                .arg("-lint")
+                .arg(&strings)
+                .status()
+                .with_context(|| format!("plutil -lint {}", strings.display()))?;
+            if !status.success() {
+                anyhow::bail!("plutil -lint failed for {}", strings.display());
             }
         }
     }
@@ -1571,19 +1522,6 @@ fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
         "\n{}{} Building native macOS GUI...{}",
         style.bold, style.cyan, style.reset
     );
-    let vue_dir = vue_dir(project_root);
-
-    // Step 1: Vue frontend build (dist/ only — Swift compilation handled below)
-    let status = Command::new("npm")
-        .arg("run")
-        .arg("build")
-        .current_dir(&vue_dir)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("Vue frontend build failed");
-    }
-
-    // Step 2: Compile Swift native host and assemble .app bundle skeleton
     compile_swift_native_host(project_root, style)?;
 
     println!("{}Syncing App bundle...{}", style.dim, style.reset);
@@ -1690,9 +1628,8 @@ fn process_name_matches_project_tool(name: &str, cmd_joined: &str) -> bool {
         "icloud_import",
         "drag_and_drop_processor",
     ];
-    let name_lower = name.to_lowercase();
-    let is_project_vite_node = name == "node" && cmd_joined.contains("vite");
-    target_names.contains(&name) || name_lower.contains("vite") || is_project_vite_node
+    let _ = cmd_joined;
+    target_names.contains(&name)
 }
 
 fn should_terminate_process_identity(
@@ -1986,7 +1923,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Build the GUI only when its own Vue/native-host inputs changed. Running it after
+    // Build the GUI only when its own native inputs changed. Running it after
     // native compilation ensures the generated app receives the current bundled
     // binaries during the following sync step.
     if (args.gui || args.all) && !args.rust_only {
@@ -2206,17 +2143,12 @@ mod tests {
     }
 
     #[test]
-    fn test_vue_update_scripts_validate_dependency_updates() {
-        assert_eq!(vue_update_script_names(), &["deps:update", "deps:check"]);
-    }
-
-    #[test]
     fn gui_rebuild_ignores_unrelated_dev_binary_sources() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let root = tempdir.path();
-        let vue_source = root.join("crates/gui/src/App.vue");
-        fs::create_dir_all(vue_source.parent().unwrap())?;
-        fs::write(&vue_source, "<template><main /></template>")?;
+        let native_source = root.join("crates/gui/src-macos/main.swift");
+        fs::create_dir_all(native_source.parent().unwrap())?;
+        fs::write(&native_source, "import AppKit")?;
 
         std::thread::sleep(std::time::Duration::from_millis(20));
         let bundle_binary = native_app_bundle_path(root)
@@ -2234,7 +2166,7 @@ mod tests {
         assert!(!gui_needs_rebuild(root));
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        fs::write(&vue_source, "<template><main>updated</main></template>")?;
+        fs::write(&native_source, "import AppKit\n// updated")?;
         assert!(gui_needs_rebuild(root));
         Ok(())
     }
@@ -2243,18 +2175,13 @@ mod tests {
     fn test_project_process_detection_requires_project_scope_for_generic_tools() {
         let project_root = Path::new("/work/modern_format_boost");
 
-        assert!(should_terminate_process_identity(
-            "node",
-            "/work/modern_format_boost/crates/gui/node_modules/.bin/vite",
-            command_mentions_project(
-                "/work/modern_format_boost/crates/gui/node_modules/.bin/vite",
-                project_root
-            ),
-        ));
         assert!(!should_terminate_process_identity(
             "node",
-            "/other/project/node_modules/.bin/vite",
-            command_mentions_project("/other/project/node_modules/.bin/vite", project_root),
+            "/work/modern_format_boost/scripts/unrelated.js",
+            command_mentions_project(
+                "/work/modern_format_boost/scripts/unrelated.js",
+                project_root
+            ),
         ));
         assert!(!should_terminate_process_identity("img", "", false));
     }

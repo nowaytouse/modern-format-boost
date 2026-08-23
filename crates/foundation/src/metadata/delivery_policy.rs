@@ -116,7 +116,7 @@ pub fn preserve_for_delivery(src: &Path, dst: &Path) -> io::Result<MetadataDeliv
 /// JPEG-reconstructible JXL already contains the source JPEG metadata. Rewriting
 /// its Exif box invalidates the `jbrd` proof, so that delivery path copies only
 /// attributes, permissions, and timestamps.
-pub(crate) fn preserve_filesystem_for_delivery(
+pub fn preserve_filesystem_for_delivery(
     src: &Path,
     dst: &Path,
 ) -> io::Result<MetadataDeliveryReport> {

@@ -221,13 +221,13 @@ class TestFastModePaths(unittest.TestCase):
         self.assertIn("args.shortest_path", rust_source)
         self.assertIn("args.archive", rust_source)
 
-    def test_drag_processor_defaults_to_cli_shell_not_vue(self):
+    def test_drag_processor_defaults_to_cli_shell(self):
         source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("default_value_t = LaunchMode::Auto", source)
-        self.assertIn("Vue prototype is scaffolding only", source)
+        self.assertNotIn("vue: bool", source)
         self.assertIn("plan_cli_invocations", source)
 
     def test_drag_processor_rust_ui_choice_defaults_to_shortest_path(self):

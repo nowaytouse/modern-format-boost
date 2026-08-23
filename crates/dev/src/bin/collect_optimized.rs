@@ -360,35 +360,14 @@ fn set_times(path: &Path, atime: SystemTime, mtime: SystemTime) -> Result<()> {
 // ── prune empty source dirs
 // ───────────────────────────────────────────────────
 
-fn prune_empty_source_directories(dir_meta: &DirTimestamps) -> usize {
-    let mut removed = 0;
-    let mut dirs: Vec<&PathBuf> = dir_meta.keys().collect();
-    dirs.sort_by_key(|p| std::cmp::Reverse(p.as_os_str().len()));
-    for dir in dirs {
-        if !dir.is_dir() {
-            continue;
-        }
-        match fs::read_dir(dir) {
-            Ok(entries) => {
-                let mut entries = entries;
-                if entries.next().is_none() {
-                    if fs::remove_dir(dir).is_ok() {
-                        removed += 1;
-                    } else {
-                        collect_audit(
-                            "PRUNE_EMPTY_SOURCE_DIR_FAILED",
-                            &[("path", &dir.display().to_string())],
-                        );
-                    }
-                }
-            }
-            Err(err) => eprintln!(
-                "[COLLECT] read_dir failed for prune ({}): {err}",
-                dir.display()
-            ),
-        }
-    }
-    removed
+fn prune_empty_source_directories(src_root: &Path, dir_meta: &DirTimestamps) -> Result<usize> {
+    let candidates = dir_meta.keys().cloned().collect::<Vec<_>>();
+    foundation::io_utils::prune_empty_directories_within(src_root, &candidates).with_context(|| {
+        format!(
+            "collect refused unsafe empty-directory cleanup under {}",
+            src_root.display()
+        )
+    })
 }
 
 // ── validate
@@ -398,6 +377,16 @@ fn validate_paths(src_root: &Path, dest_root: &Path) -> bool {
     if !src_root.is_dir() {
         eprintln!("Error: Source {} is not a directory.", src_root.display());
         return false;
+    }
+    for path in [src_root, dest_root] {
+        if let Err(error) = foundation::check_dangerous_directory(path) {
+            eprintln!("Error: {error}");
+            return false;
+        }
+        if let Err(error) = foundation::check_apple_photos_library(path) {
+            eprintln!("Error: {error}");
+            return false;
+        }
     }
     if dest_root.exists() && !dest_root.is_dir() {
         eprintln!(
@@ -517,7 +506,7 @@ fn run_collection(src_root: &Path, dest_root: &Path, dry_run: bool, yes: bool) -
 
     if scan.candidates.is_empty() {
         if !dry_run {
-            removed_empty = prune_empty_source_directories(&dir_meta);
+            removed_empty = prune_empty_source_directories(src_root, &dir_meta)?;
             if removed_empty > 0 {
                 println!(">>> Removed {removed_empty} empty source directory/directories.");
             }
@@ -647,7 +636,7 @@ fn run_collection(src_root: &Path, dest_root: &Path, dry_run: bool, yes: bool) -
     }
 
     if !dry_run {
-        removed_empty = prune_empty_source_directories(&dir_meta);
+        removed_empty = prune_empty_source_directories(src_root, &dir_meta)?;
         if removed_empty > 0 {
             println!(">>> Removed {removed_empty} empty source directory/directories.");
         }
@@ -818,7 +807,7 @@ mod tests {
             (SystemTime::UNIX_EPOCH, SystemTime::UNIX_EPOCH),
         );
 
-        let removed = prune_empty_source_directories(&snap);
+        let removed = prune_empty_source_directories(root.path(), &snap)?;
         assert_eq!(removed, 1, "only empty_dir should be removed");
         assert!(!empty.exists());
         assert!(filled.exists());

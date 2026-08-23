@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-22
+## [Unreleased] - 2026-08-23
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
@@ -27,9 +27,18 @@ All notable changes to this project will be documented in this file.
   otherwise healthy media.
 - **Reconstructible-JXL metadata custody**: JPEG-reconstruction outputs preserve
   codec-carried Exif instead of rewriting it, then re-prove byte-identical JPEG
-  reconstruction after the filesystem metadata commit. Gate 1 permits an
-  Orientation tag only for that exact reconstruction path; pixel-encoded JXL
-  continues to require orientation-normalized pixels with no residual tag.
+  reconstruction after external XMP has been embedded into the JXL XML metadata
+  box. Sources without an XMP sidecar remain valid; when a sidecar exists the
+  embedded metadata audit is mandatory before delivery or source cleanup. Gate 1
+  permits an Orientation tag only for that exact reconstruction path;
+  pixel-encoded JXL continues to require orientation-normalized pixels with no
+  residual tag.
+- **Strict original-JPEG restoration**: `restore-jpeg` now invokes
+  `djxl --reconstruct_jpeg`, rejects JBRD records that fall back to lossy
+  pixel-to-JPEG encoding, and requires byte-identical output rather than merely
+  matching decoded pixels before metadata enrichment. Embedded JXL metadata and
+  any matching XMP sidecar are then written into the restored JPEG and audited
+  before source cleanup; no external output sidecar is required.
 - **Explicit task identity and resume**: FastImg binds checkpoints to relative
   source paths and BLAKE3 identities. Matching interrupted work requires an
   explicit interactive resume or `--retry`; changed, restored, or newly
@@ -45,10 +54,9 @@ All notable changes to this project will be documented in this file.
   encoder failures are not retried or hidden. Older official builds that reject
   `--compress_boxes=0` receive one additional bounded retry without that optional
   box-control flag, preserving the encoded media semantics.
-- **Dependency security refresh**: The GUI lock now contains patched
-  `brace-expansion`, `nanoid`, and `postcss`; the obsolete Tauri/GTK dependency
-  tree and unused `libavif` binding were removed, eliminating the stale `glib`
-  and duplicate native AV1 dependency chains.
+- **Dependency security refresh**: The obsolete Tauri/GTK and Vue/Node GUI
+  dependency trees and unused `libavif` binding were removed, eliminating stale
+  browser-runtime, `glib`, and duplicate native AV1 dependency chains.
 
 - **FFmpeg 9.0.1 compatibility**: Animated WebP conversion now verifies the
   dedicated `webp_anim` demuxer before relying on FFmpeg canvas coalescing, so a
@@ -67,9 +75,22 @@ All notable changes to this project will be documented in this file.
   named final-delivery proof, marker-writing tests isolate their state roots,
   and Gate 3 logs report Photos-local versus uploaded custody counts instead of
   the misleading zero-failure-only summary.
-- **CLI-only GUI surface**: Removed the non-CLI mock-processing and decorative
-  drop-zone path; the bundled UI now exposes only the real CLI command,
-  terminal execution, logs, and explicit resume/fresh decisions.
+- **Native macOS GUI**: Replaced the WKWebView/Vue renderer and JavaScript bridge
+  with direct AppKit controls and native drag/drop. Command mapping, internal or
+  Terminal execution, bounded logs, explicit resume/fresh decisions, Photos TCC
+  preflight, bundle identifier, entitlements, and stable signing identity remain
+  on the existing Rust/Swift delivery path; no browser or Node runtime is
+  packaged or required. The AppKit surface follows system/light/dark appearance,
+  includes runtime-switchable English, Simplified Chinese and Japanese resources,
+  and preflights Photos Automation for Fast Video shortest-path imports as well
+  as FastImg/iCloud import modes.
+- **Scoped empty-directory cleanup**: Successful source-delete/move workflows
+  now prune empty descendants and the selected root after metadata transfer.
+  The shared cleanup refuses Photos Library packages, symlink/out-of-root
+  candidates and dangerous roots, and uses non-recursive `remove_dir` so any
+  remaining or concurrently created content prevents deletion. A single-file
+  selection never authorizes deleting its parent, and hidden files such as
+  `.DS_Store` are retained rather than removed to manufacture an empty folder.
 - **Fail-closed workspace fixer**: `check_all --fix` now stops on the first
   formatter or fixer failure instead of discarding child exit statuses. A real
   Ruff failure therefore remains visible and cannot be reported as a clean fix.
