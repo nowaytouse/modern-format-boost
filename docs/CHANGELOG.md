@@ -86,6 +86,17 @@ All notable changes to this project will be documented in this file.
   that no longer agrees with filesystem and central-marker state. Missing
   numbered directories with retained markers can no longer send conversion to
   one output while post-verification inspects a stale sibling.
+- **Post-cleanup restore proof**: JPEG restore verification now accepts a source
+  directory removed by the controlled empty-directory cleanup only when the
+  restore manifest accounts for every deleted JXL and the restored JPEG hashes
+  still match. A missing, malformed, duplicate, or stale manifest remains an
+  integrity failure instead of being inferred from filenames or output counts.
+- **Packaged runtime isolation**: The native App launcher resolves its bundled
+  tools before considering the shell working directory, so launching it from a
+  source checkout cannot mix packaged encoders with `target/release` tools.
+  Automatic tool preparation now treats the verifier as mandatory alongside
+  `img`/`vid`, preventing a successful encode from failing only at the final
+  integrity step.
 - **Machine-verifiable completion**: Automatic verification consumes a strict
   JSON result instead of inferring counts and success from human-readable log
   text. Missing or contradictory results fail closed, integrity warnings return

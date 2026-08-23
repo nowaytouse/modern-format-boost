@@ -129,6 +129,10 @@ struct Args {
     #[arg(long)]
     vid: bool,
 
+    /// Build the integrity verification tool
+    #[arg(long)]
+    verify: bool,
+
     /// No output when all binaries are already up-to-date
     #[arg(long, short = 'q')]
     quiet: bool,
@@ -152,7 +156,11 @@ struct Args {
 
     /// Build a single named binary only (e.g. img, vid, drag_and_drop_processor).
     /// Resolves to the owning crate automatically.
-    #[arg(long, value_name = "BINARY", conflicts_with_all = ["all", "img", "vid"])]
+    #[arg(
+        long,
+        value_name = "BINARY",
+        conflicts_with_all = ["all", "img", "vid", "verify"]
+    )]
     bin: Option<String>,
 
     /// Skip compilation — just sync existing target/release binaries to the .app bundle.
@@ -1779,6 +1787,9 @@ fn main() -> Result<()> {
         }
         if args.vid {
             targets_to_build.push(("crates/vid", "vid".to_string(), false));
+        }
+        if args.verify {
+            targets_to_build.push(("crates/dev", "verify".to_string(), false));
         }
     }
 

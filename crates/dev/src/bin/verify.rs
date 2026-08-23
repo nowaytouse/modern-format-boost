@@ -543,6 +543,41 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+fn resolve_source_directory_for_post_cleanup(source_dir: &Path) -> Result<(PathBuf, bool)> {
+    match fs::metadata(source_dir) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                anyhow::bail!(
+                    "source_dir is not a directory: {}",
+                    source_dir.display()
+                );
+            }
+            Ok((
+                source_dir
+                    .canonicalize()
+                    .context("canonicalize source_dir")?,
+                true,
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(source_dir) {
+                Ok(_) => anyhow::bail!(
+                    "source_dir is a dangling symlink or unavailable filesystem object: {}",
+                    source_dir.display()
+                ),
+                Err(link_error) if link_error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok((source_dir.to_path_buf(), false))
+                }
+                Err(link_error) => Err(link_error).with_context(|| {
+                    format!("inspect missing source_dir {}", source_dir.display())
+                }),
+            }
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("inspect source_dir {}", source_dir.display())),
+    }
+}
+
 fn run_fast_img_delivery_check(
     source_dir: &Path,
     optimized_dir: &Path,
@@ -550,13 +585,8 @@ fn run_fast_img_delivery_check(
     processing_mode: &str,
     strategy: &str,
 ) -> Result<IntegrityStats> {
-    let source_dir = if source_dir.exists() {
-        source_dir
-            .canonicalize()
-            .context("canonicalize source_dir")?
-    } else {
-        source_dir.to_path_buf()
-    };
+    let (source_dir, source_dir_exists) =
+        resolve_source_directory_for_post_cleanup(source_dir)?;
     let optimized_dir = if optimized_dir.exists() {
         optimized_dir
             .canonicalize()
@@ -589,7 +619,7 @@ fn run_fast_img_delivery_check(
 
     let mut source_true_jpegs = Vec::new();
     let mut source_probe_errors = Vec::new();
-    let source_files = if source_dir.exists() {
+    let source_files = if source_dir_exists {
         collect_regular_files(&source_dir)?
     } else {
         Vec::new()
@@ -1043,9 +1073,8 @@ fn run_fast_img_restore_check(
     report: &mut String,
     strategy: &str,
 ) -> Result<IntegrityStats> {
-    let source_dir = source_dir
-        .canonicalize()
-        .context("canonicalize source_dir")?;
+    let (source_dir, source_dir_exists) =
+        resolve_source_directory_for_post_cleanup(source_dir)?;
     let restored_dir = restored_dir
         .canonicalize()
         .context("canonicalize restored_dir")?;
@@ -1067,7 +1096,12 @@ fn run_fast_img_restore_check(
 
     let mut source_outputs = BTreeMap::new();
     let mut source_probe_errors = Vec::new();
-    for path in collect_regular_files(&source_dir)? {
+    let source_files = if source_dir_exists {
+        collect_regular_files(&source_dir)?
+    } else {
+        Vec::new()
+    };
+    for path in source_files {
         if let Some(name) = path.file_name().and_then(|f| f.to_str()) {
             if name.starts_with('.') || name == "fastmode_img_marker.json" || name == ".mfb_wc" {
                 continue;
@@ -1118,6 +1152,15 @@ fn run_fast_img_restore_check(
     }
 
     let (manifest_records, mut restore_manifest_errors) = load_restore_jpeg_manifest(&restored_dir);
+    if !source_dir_exists
+        && manifest_records.is_empty()
+        && restore_manifest_errors.is_empty()
+    {
+        restore_manifest_errors.push(
+            "source directory was removed but the restore manifest contains no proof records"
+                .to_string(),
+        );
+    }
     let mut manifest_sources = HashMap::new();
     let mut manifest_deleted_sources = HashSet::new();
     let mut seen_manifest_keys = HashSet::new();
@@ -2548,8 +2591,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
-        fs::create_dir_all(source.join("day1")).unwrap();
         fs::create_dir_all(optimized.join("day1")).unwrap();
+        assert!(!source.exists());
 
         fs::write(optimized.join("day1").join("photo.JXL"), b"\xff\x0aencoded").unwrap();
 
@@ -2923,8 +2966,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
         let restored = tempdir.path().join("Album_restored_jpeg");
-        fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(restored.join("nested")).unwrap();
+        assert!(!source.exists());
 
         let camera_path = restored.join("nested").join("camera.jpg");
         fs::write(&camera_path, b"\xff\xd8\xff\xe0true-jpeg").unwrap();
@@ -2951,6 +2994,26 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.matched, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_restore_check_rejects_removed_source_without_manifest() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album_optimized");
+        let restored = tempdir.path().join("Album_restored_jpeg");
+        fs::create_dir_all(&restored).unwrap();
+        fs::write(restored.join("camera.jpg"), b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+        assert!(!source.exists());
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+
+        assert!(stats.has_warnings);
+        assert_eq!(stats.restore_manifest_errors, 1);
+        assert!(report.contains(
+            "source directory was removed but the restore manifest contains no proof records"
+        ));
     }
 
     #[test]

@@ -558,16 +558,10 @@ impl LaunchCommand {
 }
 
 fn resolve_runtime_root() -> Result<PathBuf> {
-    match project_root() {
-        Ok(root) => Ok(root),
-        Err(root_err) => {
-            if let Some(bundle) = app_bundle_root() {
-                Ok(bundle)
-            } else {
-                Err(root_err)
-            }
-        }
+    if let Some(bundle) = app_bundle_root() {
+        return Ok(bundle);
     }
+    project_root()
 }
 
 fn app_bundle_root() -> Option<PathBuf> {
@@ -854,8 +848,7 @@ fn verify_database_mandatory(project_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Trigger `smart_build` if the required `img`/`vid` release binaries are
-/// absent.  Mirrors `ensure_tools_ready()` in the Python implementation.
+/// Trigger `smart_build` if a required release binary is absent.
 fn smart_build_command(project_root: &Path, needs_img: bool, needs_vid: bool) -> Command {
     let smart_build_bin = cli_binary(project_root, "smart_build");
     let mut command = if smart_build_bin.is_file() {
@@ -876,7 +869,7 @@ fn smart_build_command(project_root: &Path, needs_img: bool, needs_vid: bool) ->
     };
 
     // Tool launch should stay incremental and must never refresh dependencies.
-    command.arg("--rust-only");
+    command.args(["--rust-only", "--verify"]);
     if needs_img && !needs_vid {
         command.arg("--img");
     } else if needs_vid && !needs_img {
@@ -888,6 +881,7 @@ fn smart_build_command(project_root: &Path, needs_img: bool, needs_vid: bool) ->
 fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
+    let verify_bin = cli_binary(project_root, "verify");
     let needs_img = !matches!(mode, LaunchMode::Videos | LaunchMode::FastVid);
     let needs_vid = !matches!(
         mode,
@@ -902,10 +896,19 @@ fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
         if needs_vid && !vid_bin.is_file() {
             bail!("App bundle is missing vid binary: {}", vid_bin.display());
         }
+        if !verify_bin.is_file() {
+            bail!(
+                "App bundle is missing verify binary: {}",
+                verify_bin.display()
+            );
+        }
         return Ok(());
     }
 
-    if (!needs_img || img_bin.is_file()) && (!needs_vid || vid_bin.is_file()) {
+    if (!needs_img || img_bin.is_file())
+        && (!needs_vid || vid_bin.is_file())
+        && verify_bin.is_file()
+    {
         return Ok(());
     }
 
@@ -932,6 +935,12 @@ fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
         bail!(
             "smart_build completed but vid binary is still missing: {}",
             vid_bin.display()
+        );
+    }
+    if !verify_bin.is_file() {
+        bail!(
+            "smart_build completed but verify binary is still missing: {}",
+            verify_bin.display()
         );
     }
 
@@ -2654,6 +2663,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.contains(&"--rust-only".to_string()));
         assert!(args.contains(&"--img".to_string()));
+        assert!(args.contains(&"--verify".to_string()));
         assert!(!args.contains(&"--update".to_string()));
     }
 
@@ -2669,6 +2679,7 @@ mod tests {
         assert!(args.contains(&"--locked".to_string()));
         assert!(args.contains(&"--rust-only".to_string()));
         assert!(args.contains(&"--vid".to_string()));
+        assert!(args.contains(&"--verify".to_string()));
         assert!(!args.contains(&"--update".to_string()));
     }
 
