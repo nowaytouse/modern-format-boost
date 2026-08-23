@@ -1,9 +1,6 @@
 //! Drag-and-drop session helpers — parity with `drag_and_drop_processor.py`.
 
-use crate::infra::fastmode_paths::{
-    fast_img_output_dir_for_target, fast_img_restore_output_dir_for_target,
-    fast_vid_output_dir_for_target,
-};
+use crate::infra::fastmode_paths::fast_vid_output_dir_for_target;
 use crate::infra::hardening::delegated_exit_code;
 use crate::infra::log_paths::append_jsonl_audit_record;
 use crate::infra::rich_panel::draw_separator;
@@ -15,6 +12,7 @@ use crate::media::scope::{
 };
 use anyhow::{Context, Result, bail};
 use foundation::process_lock::{DirLock, acquire_dir_lock};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -81,10 +79,23 @@ pub struct ContentScan {
 
 #[derive(Debug, Clone, Default)]
 pub struct VerifyOutcome {
-    pub stdout: String,
     pub warnings: Option<bool>,
     pub issue_count: usize,
-    pub exit_code: i32,
+    pub integrity_summary: Option<IntegritySummaryMachine>,
+}
+
+pub const INTEGRITY_SUMMARY_JSON_PREFIX: &str = "MFB_INTEGRITY_SUMMARY_JSON ";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IntegritySummaryMachine {
+    pub has_warnings: bool,
+    pub issue_count: usize,
+    pub source_count: usize,
+    pub optimized_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub source_remaining_count: usize,
+    pub verified_deleted_count: usize,
 }
 
 /// Block system/user root paths (mirrors Python `safety_check`).
@@ -494,20 +505,6 @@ pub fn acquire_global_lock(dir_path: &Path) -> Result<DirLock> {
     })
 }
 
-#[must_use]
-pub fn marker_exists(verify_bin: &Path, optimized_dir: &Path) -> bool {
-    match load_fast_img_marker_json(verify_bin, optimized_dir) {
-        Ok((marker, _, err)) => marker.is_some() && err.is_none(),
-        Err(err) => {
-            eprintln!(
-                "[DRAG] fast-img marker probe failed ({}): {err}",
-                optimized_dir.display()
-            );
-            false
-        }
-    }
-}
-
 pub fn load_fast_img_marker_json(
     verify_bin: &Path,
     optimized_dir: &Path,
@@ -543,23 +540,25 @@ pub fn load_fast_img_marker_json(
 
 pub fn fast_img_marker_requires_retry(verify_bin: &Path, output_dir: &Path) -> Result<bool> {
     let (marker, _, marker_error) = load_fast_img_marker_json(verify_bin, output_dir)?;
-    if marker_error.is_some() || marker.is_none() {
-        return Ok(false);
+    if let Some(error) = marker_error {
+        bail!("fast-img marker is invalid for {}: {error}", output_dir.display());
     }
+    let Some(marker) = marker else {
+        return Ok(false);
+    };
     let stage = marker
-        .as_ref()
-        .and_then(|m| m.get("stage"))
+        .get("stage")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .context("fast-img marker is missing a string stage")?
         .trim()
         .to_ascii_lowercase();
-    let failed_sources = marker
-        .as_ref()
-        .and_then(|m| m.get("failed_sources"))
+    let has_failed_sources = !marker
+        .get("failed_sources")
         .and_then(Value::as_object)
-        .is_some_and(|failed| !failed.is_empty());
+        .context("fast-img marker is missing failed_sources")?
+        .is_empty();
     Ok(FAST_IMG_RETRY_STAGES.contains(&stage.as_str())
-        || (stage == "cleanup_complete" && failed_sources))
+        || (stage == "cleanup_complete" && has_failed_sources))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -621,6 +620,7 @@ pub fn run_unified_verification(
     }
     if flags.auto_mode {
         cmd.arg("--print-integrity-summary");
+        cmd.arg("--print-integrity-json");
     }
     if let Some(strategy) = flags.strategy {
         cmd.arg("--strategy").arg(strategy);
@@ -628,52 +628,69 @@ pub fn run_unified_verification(
     let output = cmd
         .output()
         .with_context(|| format!("run {}", verify_bin.display()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let raw_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {
         eprint!("{stderr}");
     }
+    let (stdout, integrity_summary) = if flags.auto_mode {
+        let (display, summary) = parse_machine_integrity_summary(&raw_stdout)?;
+        (display, Some(summary))
+    } else {
+        (raw_stdout, None)
+    };
     if flags.auto_mode && !stdout.is_empty() {
         print!("{stdout}");
         if !stdout.ends_with('\n') {
             println!();
         }
     }
-    let warnings = regex_integrity_status(&stdout);
-    let issue_count = regex_integrity_issues(&stdout).unwrap_or_default();
+    let warnings = integrity_summary
+        .as_ref()
+        .map(|summary| summary.has_warnings);
+    let issue_count = integrity_summary
+        .as_ref()
+        .map_or(0, |summary| summary.issue_count);
+    let exit_code = delegated_exit_code(output.status, "verify", "run_unified_verification");
+    if let Some(summary) = &integrity_summary {
+        let expected_success = !summary.has_warnings;
+        if output.status.success() != expected_success {
+            bail!(
+                "verify exit status disagrees with its machine integrity result: exit_code={exit_code} warnings={}",
+                summary.has_warnings
+            );
+        }
+    }
     Ok(VerifyOutcome {
-        stdout,
         warnings,
         issue_count,
-        exit_code: delegated_exit_code(output.status, "verify", "run_unified_verification"),
+        integrity_summary,
     })
 }
 
-fn regex_integrity_status(stdout: &str) -> Option<bool> {
+fn parse_machine_integrity_summary(
+    stdout: &str,
+) -> Result<(String, IntegritySummaryMachine)> {
+    let mut display_lines = Vec::new();
+    let mut summary = None;
     for line in stdout.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Integrity:") {
-            let state = rest.trim();
-            return Some(state == "WARNINGS");
+        if let Some(json) = line.strip_prefix(INTEGRITY_SUMMARY_JSON_PREFIX) {
+            if summary.is_some() {
+                bail!("verify emitted more than one machine integrity summary");
+            }
+            summary = Some(
+                serde_json::from_str(json).context("parse verify machine integrity summary")?,
+            );
+        } else {
+            display_lines.push(line);
         }
     }
-    None
-}
-
-fn regex_integrity_issues(stdout: &str) -> Option<usize> {
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Integrity Issues:") {
-            return match rest.trim().parse::<usize>() {
-                Ok(n) => Some(n),
-                Err(err) => {
-                    eprintln!("[DRAG] integrity issue count parse failed: {err}");
-                    None
-                }
-            };
-        }
+    let summary = summary.context("verify omitted its machine integrity summary")?;
+    let mut display = display_lines.join("\n");
+    if stdout.ends_with('\n') && !display.is_empty() {
+        display.push('\n');
     }
-    None
+    Ok((display, summary))
 }
 
 pub fn sync_non_media_files(
@@ -864,72 +881,8 @@ pub fn adjacent_output_for_target(target: &Path) -> PathBuf {
 }
 
 #[must_use]
-pub fn resolve_output_for_fast_img(
-    target: &Path,
-    action: FastImgAction,
-    verify_bin: &Path,
-) -> PathBuf {
-    match action {
-        FastImgAction::RestoreJpeg => fast_img_restore_output_dir_for_target(target),
-        FastImgAction::ShortestPath | FastImgAction::Normal => fast_img_output_dir_for_target(
-            target,
-            Some(&|dir: &Path| marker_exists(verify_bin, dir)),
-        ),
-    }
-}
-
-#[must_use]
 pub fn resolve_output_for_fast_vid(target: &Path) -> PathBuf {
     fast_vid_output_dir_for_target(target)
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FastImgIntegrityCounts {
-    pub source_count: usize,
-    pub optimized_count: usize,
-    pub skipped_count: usize,
-    pub failed_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FastImgRestoreIntegrityCounts {
-    pub source_jxl_count: usize,
-    pub restored_jpeg_count: usize,
-    pub source_remaining_jxls: usize,
-    pub verified_deleted_jxls: usize,
-}
-
-fn integrity_summary_int(summary: &str, label: &str) -> Option<usize> {
-    let needle = format!("{label}:");
-    for line in summary.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(&needle) {
-            return match rest.trim().parse::<usize>() {
-                Ok(n) => Some(n),
-                Err(err) => {
-                    eprintln!("[DRAG] summary int parse failed for {label}: {err}");
-                    None
-                }
-            };
-        }
-    }
-    None
-}
-
-/// Parse fast-img delivery integrity summary lines (mirrors Python
-/// `fast_img_integrity_counts`).
-#[must_use]
-pub fn fast_img_integrity_counts(summary: &str) -> Option<FastImgIntegrityCounts> {
-    let source_count = integrity_summary_int(summary, "Recorded source JPEGs")?;
-    let optimized_count = integrity_summary_int(summary, "Optimized JXL files")?;
-    let skipped_count = integrity_summary_int(summary, "Recorded skipped JPEGs")?;
-    let failed_count = integrity_summary_int(summary, "Recorded failed JPEGs").unwrap_or_default();
-    Some(FastImgIntegrityCounts {
-        source_count,
-        optimized_count,
-        skipped_count,
-        failed_count,
-    })
 }
 
 /// Parsed fast-img session size metrics from `[SIZE]` stdout lines.
@@ -1015,26 +968,6 @@ pub fn fast_img_retained_file_names(log_text: &str) -> Vec<(String, String)> {
             None
         })
         .collect()
-}
-
-/// Parse fast-img restore integrity summary lines (mirrors Python
-/// `fast_img_restore_integrity_counts`).
-#[must_use]
-pub fn fast_img_restore_integrity_counts(summary: &str) -> Option<FastImgRestoreIntegrityCounts> {
-    let source_jxl_count = integrity_summary_int(summary, "Source JXL files")?;
-    let restored_jpeg_count = integrity_summary_int(summary, "Restored JPEG files")?;
-    let source_remaining_jxls = match integrity_summary_int(summary, "Source remaining JXL files") {
-        Some(v) => v,
-        None => source_jxl_count,
-    };
-    let verified_deleted_jxls =
-        integrity_summary_int(summary, "Manifest verified deleted source JXLs").unwrap_or_default();
-    Some(FastImgRestoreIntegrityCounts {
-        source_jxl_count,
-        restored_jpeg_count,
-        source_remaining_jxls,
-        verified_deleted_jxls,
-    })
 }
 
 /// Count true JXL outputs under fast-img directory (mirrors Python
@@ -1262,14 +1195,21 @@ mod tests {
     }
 
     #[test]
-    fn fast_img_integrity_counts_parse_delivery_summary() {
-        let summary = "Recorded source JPEGs: 10\nOptimized JXL files: 8\nRecorded skipped JPEGs: \
-                       1\nRecorded failed JPEGs: 1\n";
-        let counts = fast_img_integrity_counts(summary).expect("counts");
-        assert_eq!(counts.source_count, 10);
-        assert_eq!(counts.optimized_count, 8);
-        assert_eq!(counts.skipped_count, 1);
-        assert_eq!(counts.failed_count, 1);
+    fn machine_integrity_summary_is_required_and_removed_from_display_output() {
+        let stdout = concat!(
+            "[CHECK] Integrity summary\n",
+            "Integrity:      CLEAN\n",
+            "MFB_INTEGRITY_SUMMARY_JSON {\"has_warnings\":false,\"issue_count\":0,",
+            "\"source_count\":56,\"optimized_count\":56,\"skipped_count\":0,",
+            "\"failed_count\":0,\"source_remaining_count\":0,",
+            "\"verified_deleted_count\":56}\n",
+        );
+        let (display, summary) = parse_machine_integrity_summary(stdout).unwrap();
+        assert!(!display.contains("MFB_INTEGRITY_SUMMARY_JSON"));
+        assert_eq!(summary.source_count, 56);
+        assert_eq!(summary.optimized_count, 56);
+        assert_eq!(summary.verified_deleted_count, 56);
+        assert!(parse_machine_integrity_summary("Integrity: CLEAN\n").is_err());
     }
 
     #[test]
@@ -1287,11 +1227,4 @@ mod tests {
         assert_eq!(metrics.output_bytes_actual, Some(8_804_321_456));
     }
 
-    #[test]
-    fn fast_img_restore_integrity_counts_parse_restore_summary() {
-        let summary = "Source JXL files: 5\nRestored JPEG files: 5\n";
-        let counts = fast_img_restore_integrity_counts(summary).expect("counts");
-        assert_eq!(counts.source_jxl_count, 5);
-        assert_eq!(counts.restored_jpeg_count, 5);
-    }
 }

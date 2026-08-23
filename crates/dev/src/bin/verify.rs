@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use dev::infra::drag_drop::{INTEGRITY_SUMMARY_JSON_PREFIX, IntegritySummaryMachine};
 use dev::infra::ui_tokens::pick_symbol;
 use dev::media::scope::{
     SKIP_EXTS, classify_missing_entry, detect_true_format, integrity_stem_key,
@@ -34,6 +35,13 @@ struct Args {
         help = "Print integrity summary to stdout."
     )]
     print_integrity_summary: bool,
+
+    #[arg(
+        long = "print-integrity-json",
+        hide = true,
+        help = "Print the machine-readable integrity result contract."
+    )]
+    print_integrity_json: bool,
 
     #[arg(
         long = "fast-img-delivery",
@@ -2407,12 +2415,41 @@ fn main() -> Result<()> {
         }
     }
 
+    if args.print_integrity_json {
+        let stats = integrity_stats
+            .as_ref()
+            .context("machine integrity summary requested without a completed integrity check")?;
+        let summary = IntegritySummaryMachine {
+            has_warnings: stats.has_warnings,
+            issue_count: stats.integrity_failures,
+            source_count: stats.source_files,
+            optimized_count: stats.optimized_files,
+            skipped_count: stats.skipped_sources,
+            failed_count: stats.failed_sources,
+            source_remaining_count: stats.source_remaining_files,
+            verified_deleted_count: stats.verified_deleted_sources,
+        };
+        println!(
+            "{INTEGRITY_SUMMARY_JSON_PREFIX}{}",
+            serde_json::to_string(&summary).context("serialize machine integrity summary")?
+        );
+    }
+
     println!(
         "{} Full report generated: {}",
         pick_symbol("📊", "[STATS]"),
         output_report.display()
     );
     fs::write(&output_report, &report)?;
+    if let Some(stats) = integrity_stats
+        && stats.has_warnings
+    {
+        anyhow::bail!(
+            "integrity verification found {} issue(s); see {}",
+            stats.integrity_failures.max(1),
+            output_report.display()
+        );
+    }
     Ok(())
 }
 

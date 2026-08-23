@@ -194,7 +194,8 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Deprecated for Rev2 fast mode; working-copy output is derived from input.
+        /// Exact adjacent working copy selected by the launcher. It must match the
+        /// current source/marker state; direct CLI use may omit it.
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -2420,12 +2421,6 @@ fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<
             "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its bounded coarse-plus-binary search"
         );
     }
-    if let Some(output_dir) = options.output_dir {
-        anyhow::bail!(
-            "--output is not supported by fast-img; the adjacent target-format output is fixed by source path ({} ignored)",
-            output_dir.display()
-        );
-    }
     if options.delete_source.0 {
         tracing::warn!(
             target: "fast_img",
@@ -2937,7 +2932,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     validate_fast_img_options(&options)?;
     let FastImgRunOptions {
         input,
-        output_dir: _,
+        output_dir,
         delete_source: _,
         dry_run,
         recursive,
@@ -2961,11 +2956,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             src_dir.display()
         )
     })?;
-    let working_copy = if fresh.0 {
-        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src_dir)
-    } else {
-        fast_img_resolve_working_copy_for_run(&src_dir, dry_run)?
-    };
+    let working_copy =
+        fast_img_resolve_requested_working_copy(&src_dir, output_dir, dry_run, fresh)?;
     let _working_copy_lock = if dry_run.0 {
         None
     } else {
@@ -5676,6 +5668,31 @@ fn fast_img_resolve_working_copy_for_run(
     let working_copy = resolve_working_copy_dir(src_dir);
     fast_img_recover_non_directory_working_copy(&working_copy, dry_run)?;
     Ok(working_copy)
+}
+
+fn fast_img_resolve_requested_working_copy(
+    src_dir: &Path,
+    requested: Option<&Path>,
+    dry_run: DryRunFlag,
+    fresh: FreshFlag,
+) -> anyhow::Result<PathBuf> {
+    let live = if fresh.0 {
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(src_dir)
+    } else if requested.is_some() {
+        foundation::pipeline::verification::resolve_working_copy_dir(src_dir)
+    } else {
+        return fast_img_resolve_working_copy_for_run(src_dir, dry_run);
+    };
+    if let Some(requested) = requested
+        && requested != live
+    {
+        anyhow::bail!(
+            "fast-img output no longer matches live working-copy state: requested={} live={}; resolve the current marker state and retry",
+            requested.display(),
+            live.display()
+        );
+    }
+    Ok(live)
 }
 
 fn fast_img_strip_non_target_files(working_copy: &Path, strategy: &str) -> anyhow::Result<()> {
@@ -8545,9 +8562,10 @@ mod fast_img_hardening_tests {
         fast_img_prune_empty_source_dirs, fast_img_reconcile_unrecorded_source_disposition,
         fast_img_recover_non_directory_working_copy, fast_img_refresh_reused_jxl_delivery,
         fast_img_remove_failed_encode_output, fast_img_requires_resume_decision,
-        fast_img_resolve_working_copy_for_run, fast_img_reuses_marker_import_proof_on_resume,
-        fast_img_run_encode_phase, fast_img_skip_hashes_match, fast_img_source_hash_set,
-        fast_img_strip_non_target_files, fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
+        fast_img_resolve_requested_working_copy, fast_img_resolve_working_copy_for_run,
+        fast_img_reuses_marker_import_proof_on_resume, fast_img_run_encode_phase,
+        fast_img_skip_hashes_match, fast_img_source_hash_set, fast_img_strip_non_target_files,
+        fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, restore_jpeg_build_current_proof_with_decoder,
@@ -10052,6 +10070,36 @@ mod fast_img_hardening_tests {
             })
             .context("resolver did not archive the stale preferred output")?;
         assert_eq!(std::fs::read(archived)?, b"interrupted output placeholder");
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_fast_img_output_must_match_live_marker_state() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(&root.path().join("state"));
+        let source_dir = root.path().join("Photos");
+        std::fs::create_dir(&source_dir)?;
+        let live = root.path().join("Photos_optimized");
+
+        assert_eq!(
+            fast_img_resolve_requested_working_copy(
+                &source_dir,
+                Some(&live),
+                DryRunFlag(false),
+                FreshFlag(false),
+            )?,
+            live
+        );
+        let stale = root.path().join("Photos_optimized_2");
+        let error = fast_img_resolve_requested_working_copy(
+            &source_dir,
+            Some(&stale),
+            DryRunFlag(false),
+            FreshFlag(false),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requested="));
+        assert!(error.to_string().contains("live="));
         Ok(())
     }
 

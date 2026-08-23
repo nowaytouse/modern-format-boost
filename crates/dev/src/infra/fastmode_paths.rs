@@ -13,26 +13,6 @@ pub fn default_mfb_state_root() -> Result<PathBuf> {
     foundation::process_lock::get_mfb_root()
 }
 
-/// Resolve fastmode's adjacent JXL-only output directory.
-pub fn fast_img_output_dir_for_target(
-    target_dir: &Path,
-    has_resume_marker: Option<&dyn Fn(&Path) -> bool>,
-) -> PathBuf {
-    let target = target_dir.to_path_buf();
-    let file_name = target.file_name().and_then(|f| f.to_str()).unwrap_or("");
-    let base = target.with_file_name(format!("{file_name}_optimized"));
-    let mut candidate = base.clone();
-    let mut suffix = 2;
-    while candidate.exists()
-        && !(candidate.join(".mfb_wc").exists())
-        && !has_resume_marker.is_some_and(|f| f(&candidate))
-    {
-        candidate = base.with_file_name(format!("{file_name}_optimized_{suffix}"));
-        suffix += 1;
-    }
-    candidate
-}
-
 fn unique_adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
     let target = target_dir.to_path_buf();
     let file_name = target.file_name().and_then(|f| f.to_str()).unwrap_or("");
@@ -63,6 +43,7 @@ pub fn fast_vid_output_dir_for_target(target_dir: &Path) -> PathBuf {
 pub fn build_fast_img_command(
     img_binary: &Path,
     target_dir: &Path,
+    output_dir: &Path,
     shortest_path: bool,
     archive: bool,
     retry: bool,
@@ -74,6 +55,8 @@ pub fn build_fast_img_command(
         img_binary.to_string_lossy().to_string(),
         "fast-img".to_string(),
         target_dir.to_string_lossy().to_string(),
+        "--output".to_string(),
+        output_dir.to_string_lossy().to_string(),
         "--recursive".to_string(),
     ];
     if retry {
@@ -151,42 +134,6 @@ pub fn build_fast_vid_command(
 mod tests {
     use super::*;
     use serial_test::serial;
-    use std::fs;
-
-    #[test]
-    fn test_fastmode_output_dir_uses_adjacent_optimized_suffix() {
-        let src = Path::new("/Users/example/Pictures/Album");
-        assert_eq!(
-            fast_img_output_dir_for_target(src, None),
-            PathBuf::from("/Users/example/Pictures/Album_optimized")
-        );
-    }
-
-    #[test]
-    fn test_fastmode_output_collision_uses_numbered_optimized_suffix() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("Album");
-        fs::create_dir(&src).unwrap();
-        let opt = tmp.path().join("Album_optimized");
-        fs::create_dir(&opt).unwrap();
-
-        assert_eq!(
-            fast_img_output_dir_for_target(&src, None),
-            tmp.path().join("Album_optimized_2")
-        );
-    }
-
-    #[test]
-    fn test_fastmode_output_dir_allows_legacy_mfb_wc_resume_for_cleanup() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("Album");
-        fs::create_dir(&src).unwrap();
-        let optimized = tmp.path().join("Album_optimized");
-        fs::create_dir(&optimized).unwrap();
-        fs::write(optimized.join(".mfb_wc"), "legacy marker").unwrap();
-
-        assert_eq!(fast_img_output_dir_for_target(&src, None), optimized);
-    }
 
     #[test]
     #[serial]
@@ -217,6 +164,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             false,
             false,
             false,
@@ -230,6 +178,8 @@ mod tests {
                 "/opt/mfb/img".to_string(),
                 "fast-img".to_string(),
                 "/Users/example/Pictures/Album".to_string(),
+                "--output".to_string(),
+                "/Users/example/Pictures/Album_optimized".to_string(),
                 "--recursive".to_string(),
             ]
         );
@@ -240,6 +190,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             false,
             true,
             false,
@@ -253,6 +204,8 @@ mod tests {
                 "/opt/mfb/img".to_string(),
                 "fast-img".to_string(),
                 "/Users/example/Pictures/Album".to_string(),
+                "--output".to_string(),
+                "/Users/example/Pictures/Album_optimized".to_string(),
                 "--recursive".to_string(),
                 "--archive".to_string(),
             ]
@@ -264,6 +217,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             true,
             true,
             false,
@@ -277,6 +231,8 @@ mod tests {
                 "/opt/mfb/img".to_string(),
                 "fast-img".to_string(),
                 "/Users/example/Pictures/Album".to_string(),
+                "--output".to_string(),
+                "/Users/example/Pictures/Album_optimized".to_string(),
                 "--recursive".to_string(),
                 "--archive".to_string(),
                 "--shortest-path".to_string(),
@@ -291,6 +247,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             true,
             true,
             false,
@@ -304,6 +261,8 @@ mod tests {
                 "/opt/mfb/img".to_string(),
                 "fast-img".to_string(),
                 "/Users/example/Pictures/Album".to_string(),
+                "--output".to_string(),
+                "/Users/example/Pictures/Album_optimized".to_string(),
                 "--recursive".to_string(),
                 "--archive".to_string(),
                 "--shortest-path".to_string(),
@@ -318,6 +277,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             false,
             false,
             true,
@@ -333,6 +293,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             false,
             false,
             false,
@@ -349,6 +310,7 @@ mod tests {
         let command = build_fast_img_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album"),
+            Path::new("/Users/example/Pictures/Album_optimized"),
             false,
             false,
             false,

@@ -10,9 +10,9 @@ use dev::infra::drag_drop::{
     ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
     build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
     create_directory_structure, delete_fast_img_shortest_path_output_dir,
-    effective_success_failure_counts, fast_img_integrity_counts, fast_img_restore_integrity_counts,
-    fast_img_retained_file_names, fast_img_session_size_metrics, get_unique_output_path,
-    run_unified_verification, safety_check, scan_content, sync_non_media_files,
+    effective_success_failure_counts, fast_img_retained_file_names, fast_img_session_size_metrics,
+    get_unique_output_path, run_unified_verification, safety_check, scan_content,
+    sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -1055,15 +1055,10 @@ fn run_post_adjacent_steps(
             strategy: args.strategy.clone(),
         },
     )?;
-    if verify.exit_code != 0 {
-        summary.integrity_state = Some("WARNINGS");
-        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
-    } else {
-        summary.integrity_state = verify
-            .warnings
-            .map(|w| if w { "WARNINGS" } else { "CLEAN" });
-        summary.integrity_issue_count = verify.issue_count;
-    }
+    summary.integrity_state = verify
+        .warnings
+        .map(|w| if w { "WARNINGS" } else { "CLEAN" });
+    summary.integrity_issue_count = verify.issue_count;
     Ok(())
 }
 
@@ -1110,11 +1105,13 @@ fn run_fast_img_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
-    if let Some(counts) = fast_img_integrity_counts(&verify.stdout) {
-        summary.img.succeeded = counts.optimized_count;
-        summary.img.skipped = counts.skipped_count;
-        summary.img.failed = counts.failed_count;
-    }
+    let counts = verify
+        .integrity_summary
+        .as_ref()
+        .context("fast-img verifier omitted its machine integrity summary")?;
+    summary.img.succeeded = counts.optimized_count;
+    summary.img.skipped = counts.skipped_count;
+    summary.img.failed = counts.failed_count;
     if args.shortest_path && verify.warnings == Some(false) {
         match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
             Ok(true) => {
@@ -1177,18 +1174,50 @@ fn run_fast_img_restore_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
-    if let Some(counts) = fast_img_restore_integrity_counts(&verify.stdout) {
-        if summary.img.succeeded == 0
-            && summary.img.skipped == 0
-            && summary.img.ignored == 0
-            && summary.img.failed == 0
-        {
-            summary.img.succeeded = counts.restored_jpeg_count;
-        }
-        let _ = counts.source_jxl_count;
-    }
+    let counts = verify
+        .integrity_summary
+        .as_ref()
+        .context("restore-jpeg verifier omitted its machine integrity summary")?;
+    summary.img.succeeded = counts.optimized_count;
+    summary.img.skipped = counts.skipped_count;
+    summary.img.failed = counts.failed_count;
     summary.vid = ProcessorStats::default();
     Ok(())
+}
+
+fn fast_img_source_root_for_run(target: &Path) -> Result<PathBuf> {
+    let canonical = foundation::media_conversion_gate::canonicalize_for_tool_input(target);
+    if canonical.is_file() {
+        return canonical
+            .parent()
+            .map(Path::to_path_buf)
+            .with_context(|| {
+                format!(
+                    "fast-img single-file input has no parent: {}",
+                    canonical.display()
+                )
+            });
+    }
+    Ok(canonical)
+}
+
+fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf> {
+    let source_root = fast_img_source_root_for_run(target)?;
+    let live_output = if args.no_resume {
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&source_root)
+    } else {
+        foundation::pipeline::verification::resolve_working_copy_dir(&source_root)
+    };
+    if let Some(configured) = &args.output
+        && configured != &live_output
+    {
+        bail!(
+            "fast-img output no longer matches live working-copy state: requested={} live={}; retry so the launcher can resolve current markers",
+            configured.display(),
+            live_output.display()
+        );
+    }
+    Ok(live_output)
 }
 
 fn run_fast_img_task(
@@ -1197,17 +1226,13 @@ fn run_fast_img_task(
     session: &DragDropSession,
 ) -> Result<(ProcessorStats, PathBuf)> {
     let target = args.inputs.first().context("input required")?;
-    let verify_bin = cli_binary(project_root, "verify");
-    let marker_probe = |dir: &Path| dev::infra::drag_drop::marker_exists(&verify_bin, dir);
-    let resume_probe = (!args.no_resume).then_some(&marker_probe as &dyn Fn(&Path) -> bool);
-    let output = args.output.clone().unwrap_or_else(|| {
-        dev::infra::fastmode_paths::fast_img_output_dir_for_target(target, resume_probe)
-    });
+    let output = resolve_fast_img_output_for_run(args, target)?;
     let img_bin = cli_binary(project_root, "img");
     let retry = args.retry || args.resume;
     let command = LaunchCommand::from_argv(build_fast_img_command(
         &img_bin,
         target,
+        &output,
         args.shortest_path,
         true,
         retry,
@@ -1310,9 +1335,11 @@ fn plan_cli_invocations(
             LaunchMode::Images => commands.push(rust_run_command(project_root, "img", args, input)),
             LaunchMode::Videos => commands.push(rust_run_command(project_root, "vid", args, input)),
             LaunchMode::FastImg => {
+                let output = resolve_fast_img_output_for_run(args, input)?;
                 commands.push(LaunchCommand::from_argv(build_fast_img_command(
                     &img_bin,
                     input,
+                    &output,
                     args.shortest_path,
                     args.archive,
                     args.retry || args.resume,
@@ -1478,6 +1505,12 @@ impl Drop for CursorGuard {
     fn drop(&mut self) {
         dev::infra::elapsed_spinner::show_cursor();
     }
+}
+
+fn pipeline_summary_has_reportable_outcome(summary: &PipelineSummary) -> bool {
+    summary.has_image_stats()
+        || summary.has_video_stats()
+        || summary.integrity_state == Some("WARNINGS")
 }
 
 fn run_drag_drop(
@@ -1763,7 +1796,7 @@ fn run_drag_drop(
     }
 
     let mut size_summary_block: Option<String> = None;
-    if !args.dry_run && (summary.has_image_stats() || summary.has_video_stats()) {
+    if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
         let (effective_s, effective_f, penalty) = effective_success_failure_counts(
             summary.total_succeeded(),
             summary.total_failed(),
@@ -1862,7 +1895,7 @@ fn run_drag_drop(
         }
     }
 
-    if !args.dry_run && (summary.has_image_stats() || summary.has_video_stats()) {
+    if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
         let (_, effective_f, _) = effective_success_failure_counts(
             summary.total_succeeded(),
             summary.total_failed(),
@@ -2097,18 +2130,17 @@ fn execute_menu_selection(
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
                 let action = dev::infra::drag_drop::choose_fast_img_action(strategy)?;
-                let verify_bin = cli_binary(&root, "verify");
-                let output =
-                    dev::infra::drag_drop::resolve_output_for_fast_img(target, action, &verify_bin);
                 let (mode, shortest) = match action {
                     FastImgAction::RestoreJpeg => (LaunchMode::RestoreJpeg, false),
                     FastImgAction::Normal => (LaunchMode::FastImg, false),
                     FastImgAction::ShortestPath => (LaunchMode::FastImg, true),
                 };
+                let output = matches!(action, FastImgAction::RestoreJpeg)
+                    .then(|| fast_img_restore_output_dir_for_target(target));
                 let args = build_run_args(
                     target,
                     mode,
-                    Some(output),
+                    output,
                     false,
                     true,
                     shortest,
@@ -2576,6 +2608,7 @@ fn report_drag_drop_failure(result: &Result<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -2673,6 +2706,56 @@ mod tests {
         assert_eq!(commands[0].args.first().map(String::as_str), Some("fast-img"));
         assert!(commands[0].args.iter().any(|arg| arg == "--shortest-path"));
         assert!(!commands[0].args.iter().any(|arg| arg == "run"));
+    }
+
+    #[test]
+    #[serial]
+    fn fresh_fast_img_output_uses_live_marker_state_instead_of_guessing() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        let _state_guard = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state_root.to_str().unwrap(),
+        );
+        let source = temp.path().join("Album");
+        std::fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        let parent = source.parent().unwrap();
+        std::fs::create_dir(parent.join("Album_optimized")).unwrap();
+        for suffix in [2, 3] {
+            let working_copy = parent.join(format!("Album_optimized_{suffix}"));
+            let marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+                source.clone(),
+                working_copy,
+                1,
+            );
+            foundation::pipeline::verification::write_marker_atomic(&marker).unwrap();
+        }
+        let args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--no-resume",
+            source.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            resolve_fast_img_output_for_run(&args, &source).unwrap(),
+            parent.join("Album_optimized_4")
+        );
+    }
+
+    #[test]
+    fn integrity_only_warning_is_a_reportable_failure() {
+        let mut summary = PipelineSummary {
+            integrity_state: Some("WARNINGS"),
+            integrity_issue_count: 56,
+            ..PipelineSummary::default()
+        };
+        assert!(pipeline_summary_has_reportable_outcome(&summary));
+        summary.integrity_state = Some("CLEAN");
+        assert!(!pipeline_summary_has_reportable_outcome(&summary));
     }
 
     #[test]

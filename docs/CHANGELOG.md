@@ -81,6 +81,16 @@ All notable changes to this project will be documented in this file.
   model-script, environment, XMP, and output-size probes no longer discard
   errors through boolean/optional shortcuts or forged numeric defaults. Test
   media now uses the project-owned scratch gateway.
+- **Live FastImg output contract**: The launcher and `img fast-img` now resolve
+  the same current working-copy path, pass it explicitly, and reject any path
+  that no longer agrees with filesystem and central-marker state. Missing
+  numbered directories with retained markers can no longer send conversion to
+  one output while post-verification inspects a stale sibling.
+- **Machine-verifiable completion**: Automatic verification consumes a strict
+  JSON result instead of inferring counts and success from human-readable log
+  text. Missing or contradictory results fail closed, integrity warnings return
+  a non-zero status, and warning-only sessions can no longer end with a false
+  `处理成功完成` message.
 - **FastImg production verification**: JXL and AVIF local delivery were verified
   with release-binary smoke runs on synthetic and healthy public media, plus a
   controlled AVIF import into the dedicated debug Photos library. Content-based
