@@ -1823,6 +1823,10 @@ fn commit_temp_to_output_with_metadata_inner(
         crate::io_utils::robust_move(temp, output)?;
     }
 
+    if preserve_codec_embedded_metadata && let Some(src) = original {
+        crate::metadata::merge_xmp_sidecar_into_reconstructible_jxl(src, output)?;
+    }
+
     let mut repaired_jxl_exif_after_commit = preserve_codec_embedded_metadata;
 
     // Preserve complete metadata from original file if provided
@@ -1905,7 +1909,9 @@ fn commit_temp_to_output_with_metadata_inner(
                 )));
             }
         }
-        crate::metadata::merge_xmp_sidecar_into_dest(src, output)?;
+        if !preserve_codec_embedded_metadata {
+            crate::metadata::merge_xmp_sidecar_into_dest(src, output)?;
+        }
         if pixel_audit_already_done {
             tracing::debug!(
                 target: "orientation_pixel_diff",
@@ -3714,11 +3720,22 @@ mod tests {
         image::RgbImage::from_pixel(2, 2, image::Rgb([18, 52, 86]))
             .save(&source)
             .expect("write source JPEG");
+        command_status_success(
+            Command::new(crate::constants::TOOL_EXIFTOOL)
+                .arg("-overwrite_original")
+                .arg("-IFD0:Orientation=Horizontal (normal)")
+                .arg("-IFD0:ModifyDate=2025:10:24 12:00:24")
+                .arg("-ExifIFD:LightSource=Unknown")
+                .arg(&source),
+            "add embedded Exif to reconstructible JPEG fixture",
+        );
         std::fs::write(
             &source_xmp,
-            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 6.0.0">
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="2025-10-24T12:00:24+08:00"/>
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+<photoshop:DateCreated>2025-10-24T12:00:24+08:00</photoshop:DateCreated>
+</rdf:Description>
 </rdf:RDF></x:xmpmeta>"#,
         )
         .expect("write source XMP");
@@ -3730,6 +3747,7 @@ mod tests {
                 .arg("--effort=7"),
             "encode reconstructible JXL",
         );
+        let encoded_jxl = std::fs::read(&temp).expect("read encoded JXL before metadata commit");
 
         let committed = commit_reconstructible_jxl_to_output_with_metadata(
             &temp,
@@ -3740,6 +3758,12 @@ mod tests {
         .unwrap_or_else(|error| panic!("reconstructible commit failed: {error}"));
 
         assert!(committed);
+        assert!(
+            std::fs::read(&output)
+                .expect("read delivered JXL")
+                .starts_with(&encoded_jxl),
+            "sidecar delivery must append a JXL xml box without rewriting JBRD, Exif, or codestream bytes",
+        );
         assert_eq!(
             exiftool_tag_value(&output, "-XMP-photoshop:DateCreated"),
             "2025:10:24 12:00:24+08:00",

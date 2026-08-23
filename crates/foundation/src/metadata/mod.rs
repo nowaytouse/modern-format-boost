@@ -14,7 +14,7 @@
 //! `delivery_policy.rs`).
 
 use crate::builder_base::ToolBuilder;
-use std::io;
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 mod delivery_policy;
@@ -1211,6 +1211,200 @@ pub(super) fn preserve_pro_for_delivery(
 /// Returns an error if a discovered XMP sidecar cannot be merged into `dst`.
 pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) -> io::Result<bool> {
     merge_xmp_sidecar(src, dst)
+}
+
+fn validate_appendable_jxl_container(path: &Path) -> io::Result<u64> {
+    let total_size = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0_u8; 12];
+    file.read_exact(&mut magic)?;
+    if magic != *crate::constants::JXL_CONTAINER_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to append XMP to non-container JXL {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let mut offset = 0_u64;
+    while offset < total_size {
+        if total_size - offset < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("truncated JXL box header in {}", path.display()),
+            ));
+        }
+        file.seek(SeekFrom::Start(offset))?;
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        let (box_size, header_size) = match size32 {
+            0 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "JXL {} ends with a size-zero box that cannot be safely extended",
+                        path.display()
+                    ),
+                ));
+            }
+            1 => {
+                let mut extended = [0_u8; 8];
+                file.read_exact(&mut extended)?;
+                (u64::from_be_bytes(extended), 16_u64)
+            }
+            size => (u64::from(size), 8_u64),
+        };
+        if box_size < header_size || box_size > total_size - offset {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid JXL box boundary in {}", path.display()),
+            ));
+        }
+        offset = offset
+            .checked_add(box_size)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "JXL box offset overflow"))?;
+    }
+    Ok(total_size)
+}
+
+fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u64> {
+    let payload_size = file.metadata()?.len();
+    if payload_size == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("refusing empty XMP sidecar {}", path.display()),
+        ));
+    }
+
+    let mut reader = quick_xml::Reader::from_reader(BufReader::new(&mut *file));
+    let mut buffer = Vec::new();
+    let mut depth = 0_usize;
+    let mut roots = 0_usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(quick_xml::events::Event::Start(_)) => {
+                if depth == 0 {
+                    roots += 1;
+                }
+                depth += 1;
+            }
+            Ok(quick_xml::events::Event::Empty(_)) if depth == 0 => roots += 1,
+            Ok(quick_xml::events::Event::End(_)) => {
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unbalanced XMP document {}", path.display()),
+                    )
+                })?;
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid XMP sidecar {}: {error}", path.display()),
+                ));
+            }
+        }
+        buffer.clear();
+    }
+    drop(reader);
+    if roots != 1 || depth != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "XMP sidecar {} is not one complete XML document",
+                path.display()
+            ),
+        ));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(payload_size)
+}
+
+/// Append an external XMP sidecar as a JXL `xml ` box without rewriting the
+/// existing JBRD, Exif, ICC, or codestream bytes.
+pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
+    src: &Path,
+    dst: &Path,
+) -> io::Result<bool> {
+    let Some(xmp_path) = find_xmp_sidecar(src) else {
+        return Ok(false);
+    };
+    let xmp_path = require_regular_sidecar(xmp_path, "XMP")?;
+    let original_size = validate_appendable_jxl_container(dst)?;
+    let mut xmp = std::fs::File::open(&xmp_path)?;
+    let payload_size = validate_xmp_document(&mut xmp, &xmp_path)?;
+    let standard_size = payload_size.checked_add(8);
+    let header_size = if standard_size.is_some_and(|size| size <= u64::from(u32::MAX)) {
+        8_u64
+    } else {
+        16_u64
+    };
+    let box_size = payload_size
+        .checked_add(header_size)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "JXL XMP box size overflow"))?;
+
+    let parent = crate::media_conversion_gate::output_parent_or_dot(dst);
+    let mut staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "jbrd_xmp_box",
+        parent,
+        "mfb-jbrd-xmp-",
+        ".jxl",
+    )?;
+    let copied = io::copy(&mut std::fs::File::open(dst)?, staged.as_file_mut())?;
+    if copied != original_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "JXL copy length mismatch while appending XMP to {}: expected={original_size} actual={copied}",
+                dst.display()
+            ),
+        ));
+    }
+    if header_size == 8 {
+        staged.as_file_mut().write_all(
+            &u32::try_from(box_size)
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "JXL XMP box exceeds 32-bit size",
+                    )
+                })?
+                .to_be_bytes(),
+        )?;
+        staged.as_file_mut().write_all(b"xml ")?;
+    } else {
+        staged.as_file_mut().write_all(&1_u32.to_be_bytes())?;
+        staged.as_file_mut().write_all(b"xml ")?;
+        staged.as_file_mut().write_all(&box_size.to_be_bytes())?;
+    }
+    let xmp_copied = io::copy(&mut xmp.take(payload_size), staged.as_file_mut())?;
+    if xmp_copied != payload_size {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!(
+                "XMP sidecar changed while appending {}: expected={payload_size} actual={xmp_copied}",
+                xmp_path.display()
+            ),
+        ));
+    }
+    staged.as_file_mut().flush()?;
+    staged.as_file().sync_all()?;
+    let expected_size = original_size
+        .checked_add(box_size)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "JXL output size overflow"))?;
+    if staged.as_file().metadata()?.len() != expected_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("JXL XMP append size mismatch for {}", dst.display()),
+        ));
+    }
+    staged.persist(dst).map_err(|error| error.error)?;
+    Ok(true)
 }
 
 fn require_regular_sidecar(path: PathBuf, label: &str) -> io::Result<PathBuf> {

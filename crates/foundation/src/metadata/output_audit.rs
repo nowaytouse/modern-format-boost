@@ -275,6 +275,7 @@ fn preserve_audit_excludes_tag(key: &str) -> bool {
     let tag = key.rsplit(':').next().unwrap_or(key);
     tag.eq_ignore_ascii_case("Orientation")
         || tag.eq_ignore_ascii_case("XMPToolkit")
+        || key.eq_ignore_ascii_case("IFD1:ThumbnailOffset")
         || [
             "Keys:CompatibleBrands",
             "Keys:MajorBrand",
@@ -516,8 +517,11 @@ mod tests {
     }
 
     #[test]
-    fn preserve_audit_excludes_only_container_generated_video_tags() {
+    fn preserve_audit_excludes_rewritten_technical_tags_but_not_creative_tags() {
         for generated in [
+            "IFD0:Orientation",
+            "XMP-x:XMPToolkit",
+            "IFD1:ThumbnailOffset",
             "Keys:CompatibleBrands",
             "Keys:MajorBrand",
             "Keys:MinorVersion",
@@ -528,6 +532,7 @@ mod tests {
         for creative in [
             "Keys:Title",
             "UserData:Description",
+            "MakerNotes:ThumbnailOffset",
             "XMP-photoshop:DateCreated",
             "XMP-xmp:CreateDate",
         ] {

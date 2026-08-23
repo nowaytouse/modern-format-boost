@@ -5848,6 +5848,14 @@ struct RestoreJpegFailure {
     reason: String,
 }
 
+fn restore_jpeg_failure_summary(probe_failures: usize, processing_failures: usize) -> String {
+    format!(
+        "restore-jpeg retained {probe_failures} invalid/probe JXL file(s) and \
+         {processing_failures} exact-reconstruction candidate(s) with restore/delivery failures; \
+         all failed sources were retained; see [FAIL] entries"
+    )
+}
+
 fn restore_jpeg_candidate_files(
     input: &Path,
     recursive: bool,
@@ -6131,14 +6139,23 @@ fn restore_jpeg_embed_all_metadata(input: &Path, output: &Path) -> anyhow::Resul
             output.display()
         )
     })?;
-    let mut timestamp_report = foundation::metadata::MetadataDeliveryReport::default();
-    foundation::metadata::apply_file_timestamps_for_delivery(input, output, &mut timestamp_report)?;
+    let filesystem_report = foundation::metadata::preserve_filesystem_for_delivery(input, output)
+        .with_context(|| {
+            format!(
+                "restore-jpeg failed to reapply filesystem metadata after XMP merge {} -> {}",
+                input.display(),
+                output.display()
+            )
+        })?;
     if matches!(
-        timestamp_report.timestamps,
+        filesystem_report.xattr,
+        foundation::metadata::MetadataLayerOutcome::PartialAudit
+    ) || matches!(
+        filesystem_report.timestamps,
         foundation::metadata::MetadataLayerOutcome::PartialAudit
     ) {
         anyhow::bail!(
-            "restore-jpeg timestamp preservation was partial for {} -> {}",
+            "restore-jpeg filesystem metadata reapply was partial for {} -> {}",
             input.display(),
             output.display()
         );
@@ -6794,17 +6811,17 @@ fn run_restore_jpeg(
         Some(path) => path.to_path_buf(),
         None => restore_jpeg_default_output_dir(input)?,
     };
-    let (candidates, mut failures) = restore_jpeg_candidate_files(input, recursive)?;
-    let candidate_count = candidates.len() + failures.len();
+    let (candidates, mut probe_failures) = restore_jpeg_candidate_files(input, recursive)?;
+    let candidate_count = candidates.len() + probe_failures.len();
     if candidates.is_empty() {
-        for failed in &failures {
+        for failed in &probe_failures {
             eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
         }
         println!("Succeeded: 0");
         println!("Skipped: 0");
         println!("Ignored: 0");
-        println!("Failed: {}", failures.len());
-        if failures.is_empty() {
+        println!("Failed: {}", probe_failures.len());
+        if probe_failures.is_empty() {
             println!(
                 "[DONE    ] no true JXL files found in {}; no files were changed",
                 input_root.display()
@@ -6813,7 +6830,7 @@ fn run_restore_jpeg(
         }
         anyhow::bail!(
             "restore-jpeg found {} invalid/unreadable JXL-named file(s) and no healthy JXL candidates; all sources were retained",
-            failures.len()
+            probe_failures.len()
         );
     }
     let preflight = restore_jpeg_preflight(&input_root, &output_root, &candidates)?;
@@ -6827,24 +6844,24 @@ fn run_restore_jpeg(
     for failed in &preflight.failures {
         eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
     }
-    for failed in &failures {
+    for failed in &probe_failures {
         eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
     }
     let ineligible_count = preflight.ineligible.len();
-    failures.extend(preflight.failures);
+    probe_failures.extend(preflight.failures);
     let files = preflight.restorable;
     let file_count = files.len();
     println!(
         "[SCAN    ] Found {file_count} exact-reconstruction JXL files, {ineligible_count} safely retained ineligible files, and {} invalid/probe failures in {}",
-        failures.len(),
+        probe_failures.len(),
         input_root.display()
     );
     if files.is_empty() {
         println!("Succeeded: 0");
         println!("Skipped: {ineligible_count}");
         println!("Ignored: 0");
-        println!("Failed: {}", failures.len());
-        if failures.is_empty() {
+        println!("Failed: {}", probe_failures.len());
+        if probe_failures.is_empty() {
             println!(
                 "[DONE    ] no JXL in this batch can reproduce original JPEG bytes; all {candidate_count} JXL/XMP sources were retained and no pixel-to-JPEG fallback was used"
             );
@@ -6852,7 +6869,7 @@ fn run_restore_jpeg(
         }
         anyhow::bail!(
             "restore-jpeg found no exact-reconstruction candidate and {} invalid/unreadable JXL file(s); all sources were retained",
-            failures.len()
+            probe_failures.len()
         );
     }
 
@@ -6873,6 +6890,7 @@ fn run_restore_jpeg(
     let mut deleted_sources = 0usize;
     let mut deleted_source_dirs = Vec::new();
     let mut restore_records = Vec::new();
+    let mut processing_failures = Vec::new();
 
     if keep_source {
         let outcome =
@@ -6883,7 +6901,7 @@ fn run_restore_jpeg(
         for failed in &outcome.failures {
             eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
         }
-        failures.extend(outcome.failures);
+        processing_failures.extend(outcome.failures);
         if !restore_records.is_empty() {
             write_restore_jpeg_manifest(&output_root, &restore_records).with_context(|| {
                 format!(
@@ -6921,7 +6939,7 @@ fn run_restore_jpeg(
                         failure.source.display(),
                         failure.reason
                     );
-                    failures.push(failure);
+                    processing_failures.push(failure);
                 }
             }
 
@@ -6929,7 +6947,7 @@ fn run_restore_jpeg(
             if processed.is_multiple_of(250) || processed == file_count {
                 println!(
                     "[RESTORE ] processed {processed}/{file_count} exact-reconstruction candidates (new={restored} existing={skipped} failed={})",
-                    failures.len()
+                    processing_failures.len()
                 );
             }
         }
@@ -6967,11 +6985,14 @@ fn run_restore_jpeg(
     };
     let retained_sources = candidate_count.saturating_sub(deleted_sources);
     let delivered = restored + skipped;
+    let probe_failure_count = probe_failures.len();
+    let processing_failure_count = processing_failures.len();
+    let failure_count = probe_failure_count.saturating_add(processing_failure_count);
     println!("Succeeded: {delivered}");
     println!("Skipped: {ineligible_count}");
     println!("Ignored: 0");
-    println!("Failed: {}", failures.len());
-    if failures.is_empty() {
+    println!("Failed: {failure_count}");
+    if failure_count == 0 {
         if ineligible_count == 0 {
             println!(
                 "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
@@ -6987,14 +7008,13 @@ fn run_restore_jpeg(
     }
 
     println!(
-        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} failed={} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} probe_failed={probe_failure_count} processing_failed={processing_failure_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
         output_root.display(),
-        failures.len()
     );
-    anyhow::bail!(
-        "restore-jpeg retained {} invalid/unreadable JXL file(s) after processing every healthy exact-reconstruction candidate; see [FAIL] entries",
-        failures.len()
-    )
+    anyhow::bail!(restore_jpeg_failure_summary(
+        probe_failure_count,
+        processing_failure_count
+    ))
 }
 
 fn fast_img_source_hash_set(
@@ -8814,6 +8834,16 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn restore_jpeg_summary_separates_probe_and_delivery_failures() {
+        let summary = super::restore_jpeg_failure_summary(2, 3);
+
+        assert!(summary.contains("2 invalid/probe JXL file(s)"));
+        assert!(summary.contains("3 exact-reconstruction candidate(s)"));
+        assert!(summary.contains("restore/delivery failures"));
+        assert!(!summary.contains("invalid/unreadable"));
+    }
+
+    #[test]
     fn restore_jpeg_preflight_does_not_reject_healthy_siblings() -> anyhow::Result<()> {
         if !foundation::CjxlBuilder::new().check_available()
             || !foundation::DjxlBuilder::new().check_available()
@@ -8875,6 +8905,14 @@ mod fast_img_hardening_tests {
         let source_xmp = input_root.join("camera.xmp");
         assert!(write_real_reconstructible_jxl(&source)?);
         write_date_created_xmp(&source_xmp)?;
+        #[cfg(target_os = "macos")]
+        {
+            let status = std::process::Command::new("/usr/bin/xattr")
+                .args(["-w", "com.apple.cpl.original", "restore-jpeg-custody-test"])
+                .arg(&source)
+                .status()?;
+            anyhow::ensure!(status.success(), "failed to prepare source xattr");
+        }
 
         let restored = super::restore_single_jpeg(&source, &input_root, &output_root, false)?;
         let output = output_root.join("camera.jpg");
@@ -8892,6 +8930,21 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&date_created.stdout).trim(),
             "2025:10:24 12:00:24+08:00"
         );
+        #[cfg(target_os = "macos")]
+        {
+            let copied_xattr = std::process::Command::new("/usr/bin/xattr")
+                .args(["-p", "com.apple.cpl.original"])
+                .arg(&output)
+                .output()?;
+            anyhow::ensure!(
+                copied_xattr.status.success(),
+                "restored JPEG lost source xattr"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&copied_xattr.stdout).trim(),
+                "restore-jpeg-custody-test"
+            );
+        }
 
         let source_without_xmp = input_root.join("plain.JXL");
         assert!(write_real_reconstructible_jxl(&source_without_xmp)?);

@@ -27,8 +27,10 @@ All notable changes to this project will be documented in this file.
   otherwise healthy media.
 - **Reconstructible-JXL metadata custody**: JPEG-reconstruction outputs preserve
   codec-carried Exif instead of rewriting it, then re-prove byte-identical JPEG
-  reconstruction after external XMP has been embedded into the JXL XML metadata
-  box. Sources without an XMP sidecar remain valid; when a sidecar exists the
+  reconstruction after external XMP has been appended as a standard JXL XML
+  box. The append path atomically preserves the existing JBRD, Exif, ICC, and
+  codestream bytes instead of asking ExifTool to rewrite the container. Sources
+  without an XMP sidecar remain valid; when a sidecar exists the
   embedded metadata audit is mandatory before delivery or source cleanup. Gate 1
   permits an Orientation tag only for that exact reconstruction path;
   pixel-encoded JXL continues to require orientation-normalized pixels with no
@@ -38,7 +40,9 @@ All notable changes to this project will be documented in this file.
   pixel-to-JPEG encoding, and requires byte-identical output rather than merely
   matching decoded pixels before metadata enrichment. Embedded JXL metadata and
   any matching XMP sidecar are then written into the restored JPEG and audited
-  before source cleanup; no external output sidecar is required.
+  before source cleanup; filesystem metadata is reapplied after that write so
+  ExifTool replacement cannot discard xattrs or timestamps. No external output
+  sidecar is required.
 - **Batch-isolated JPEG restoration**: One legacy JXL with unusable JPEG
   reconstruction data no longer aborts healthy siblings. Every candidate is
   independently classified by official `jxlinfo` plus strict and pixel-health
@@ -92,7 +96,9 @@ All notable changes to this project will be documented in this file.
   packaged or required. The AppKit surface follows system/light/dark appearance,
   includes runtime-switchable English, Simplified Chinese and Japanese resources,
   and preflights Photos Automation for Fast Video shortest-path imports as well
-  as FastImg/iCloud import modes.
+  as FastImg/iCloud import modes. Its 980×720 content area is now fixed-size:
+  native resize/zoom controls are disabled so controls cannot reflow outside the
+  tested layout.
 - **Native GUI FastImg routing**: Media filter flags no longer overwrite an
   explicitly selected specialized operation. In particular, the GUI's
   FastImg-JXL + Images Only request remains a directory-level `img fast-img`

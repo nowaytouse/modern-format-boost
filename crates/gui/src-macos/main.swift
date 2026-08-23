@@ -9,6 +9,10 @@ private let maxProcessLogBatchBytes = 256 * 1024
 private let maxProcessLogBatchEntries = 256
 private let languagePreferenceKey = "MFBGuiLanguage"
 private let appearancePreferenceKey = "MFBGuiAppearance"
+private let mainWindowContentSize = NSSize(width: 980, height: 720)
+private let mainWindowStyleMask: NSWindow.StyleMask = [
+    .titled, .closable, .miniaturizable, .fullSizeContentView,
+]
 
 private enum AppLanguage: String, CaseIterable {
     case system
@@ -704,8 +708,13 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: mainWindowContentSize.width,
+                height: mainWindowContentSize.height,
+            ),
+            styleMask: mainWindowStyleMask,
             backing: .buffered,
             defer: false,
         )
@@ -731,7 +740,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.title = "Modern Format Boost"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
-        window.minSize = NSSize(width: 760, height: 580)
+        window.setContentSize(mainWindowContentSize)
+        window.contentMinSize = mainWindowContentSize
+        window.contentMaxSize = mainWindowContentSize
+        window.standardWindowButton(.zoomButton)?.isEnabled = false
         window.tabbingMode = .disallowed
         window.delegate = self
 
@@ -1140,7 +1152,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: localized("menu.window"))
         windowMenu.addItem(withTitle: localized("menu.minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: localized("menu.zoom"), action: #selector(NSWindow.zoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: localized("menu.front"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         windowItem.submenu = windowMenu
@@ -1152,6 +1163,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        guard !mainWindowStyleMask.contains(.resizable),
+              mainWindowContentSize == NSSize(width: 980, height: 720)
+        else {
+            fputs("native-host self-test fixed window sizing failed\n", stderr)
+            return 1
+        }
         let request = ProcessorRequest(
             targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
             ultimate: true, verbose: true, shortestPath: true, resume: true,
