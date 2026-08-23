@@ -2420,10 +2420,12 @@ fn optimization_menu_labels(
 }
 
 const fn apply_mode_overrides(mut args: Args) -> Args {
-    if args.images_only {
-        args.mode = LaunchMode::Images;
-    } else if args.videos_only {
-        args.mode = LaunchMode::Videos;
+    if mode_uses_standard_pipeline(&args.mode) {
+        if args.images_only {
+            args.mode = LaunchMode::Images;
+        } else if args.videos_only {
+            args.mode = LaunchMode::Videos;
+        }
     }
     args
 }
@@ -2621,6 +2623,31 @@ mod tests {
             cli_binary(resources, "img"),
             PathBuf::from("/Applications/Modern Format Boost.app/Contents/Resources/img")
         );
+    }
+
+    #[test]
+    fn gui_fast_img_mode_survives_images_only_filter() {
+        let parsed = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--images-only",
+            "--mode",
+            "fast-img",
+            "--strategy",
+            "jxl",
+            "--shortest-path",
+            "/input/Album",
+        ])
+        .expect("parse GUI FastImg command");
+        let args = apply_mode_overrides(parsed);
+        let commands = plan_cli_invocations(&args, Path::new("/repo"), None)
+            .expect("plan GUI FastImg command");
+
+        assert_eq!(args.mode, LaunchMode::FastImg);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].program, PathBuf::from("/repo/target/release/img"));
+        assert_eq!(commands[0].args.first().map(String::as_str), Some("fast-img"));
+        assert!(commands[0].args.iter().any(|arg| arg == "--shortest-path"));
+        assert!(!commands[0].args.iter().any(|arg| arg == "run"));
     }
 
     #[test]

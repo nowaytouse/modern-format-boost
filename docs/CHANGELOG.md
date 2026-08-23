@@ -84,6 +84,11 @@ All notable changes to this project will be documented in this file.
   includes runtime-switchable English, Simplified Chinese and Japanese resources,
   and preflights Photos Automation for Fast Video shortest-path imports as well
   as FastImg/iCloud import modes.
+- **Native GUI FastImg routing**: Media filter flags no longer overwrite an
+  explicitly selected specialized operation. In particular, the GUI's
+  FastImg-JXL + Images Only request remains a directory-level `img fast-img`
+  invocation with its requested shortest-path strategy instead of silently
+  degrading into per-file `img run --apple-compat` work.
 - **Scoped empty-directory cleanup**: Successful source-delete/move workflows
   now prune empty descendants and the selected root after metadata transfer.
   The shared cleanup refuses Photos Library packages, symlink/out-of-root
