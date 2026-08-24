@@ -158,7 +158,34 @@ pub fn is_extension_allowed(path: &Path, allowed_extensions: &[&str]) -> bool {
 /// # Errors
 /// Returns an error if the path is an Apple Photos library.
 pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
-    let canonical = crate::media_conversion_gate::canonicalize_for_tool_input(path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("resolve relative Photos guard path: {error}"))?
+            .join(path)
+    };
+    let existing = absolute
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .ok_or_else(|| {
+            format!(
+                "Photos guard found no existing ancestor for {}",
+                path.display()
+            )
+        })?;
+    let suffix = absolute.strip_prefix(existing).map_err(|error| {
+        format!(
+            "Photos guard could not resolve {} below {}: {error}",
+            path.display(),
+            existing.display()
+        )
+    })?;
+    let canonical = existing
+        .canonicalize()
+        .map_err(|error| format!("canonicalize Photos guard ancestor: {error}"))?
+        .join(suffix);
+    let canonical = normalize_path_lexically(&canonical);
 
     // Check each component of the path
     for ancestor in canonical.ancestors() {
@@ -228,5 +255,18 @@ mod tests {
             check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
                 .is_ok()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_photos_guard_resolves_existing_symlink_ancestor_for_new_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Debug.photoslibrary");
+        let alias = temp.path().join("Alias");
+        std::fs::create_dir_all(&library).unwrap();
+        std::os::unix::fs::symlink(&library, &alias).unwrap();
+
+        assert!(check_apple_photos_library(&alias.join("new/output")).is_err());
+        assert!(check_apple_photos_library(&temp.path().join("safe/new/output")).is_ok());
     }
 }

@@ -1732,14 +1732,9 @@ impl JpegJbrdLadderDiagnostics {
             .join("; ")
     }
 
-    fn fail_closed_message(&self, pixel_fallback_allowed: bool) -> String {
-        let fallback_note = if pixel_fallback_allowed {
-            "explicit pixel re-encode fallback was enabled, but structural JBRD recovery still failed before fallback handoff"
-        } else {
-            "refusing implicit ImageMagick pixel re-encode fallback. Explicitly opt in with ALLOW_JPEG_PIXEL_REENCODE_FALLBACK if decoded-pixel delivery is intended"
-        };
+    fn fail_closed_message(&self) -> String {
         format!(
-            "cjxl JPEG lossless transcode failed after JBRD structural recovery ladder; source: {}; {fallback_note}; layers: {}",
+            "cjxl JPEG lossless transcode failed after JBRD structural recovery ladder; source: {}; pixel re-encoding is forbidden because the original JPEG must remain byte-reconstructible; layers: {}",
             self.source,
             self.layer_report()
         )
@@ -2062,10 +2057,6 @@ fn jpeg_transcode_finalization_options(
     final_options
 }
 
-const fn jpeg_pixel_reencode_fallback_allowed(options: &ConvertOptions) -> bool {
-    options.allow_jpeg_pixel_reencode_fallback()
-}
-
 fn jpeg_encode_threads(options: &ConvertOptions) -> usize {
     if options.child_threads > 0 {
         options.child_threads
@@ -2238,45 +2229,23 @@ fn handle_irreversible_jpeg_encode_failure(
     input: &Path,
     input_size: u64,
     options: &ConvertOptions,
-    color_context: Option<&ConversionColorContext>,
     failure: &str,
 ) -> Result<TaskResult> {
-    if options.require_output_delivery() {
-        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-            "jpeg_lossless_fast_img_failed",
-            input,
-            failure,
-        );
-        return Ok(TaskResult::failed(
-            input,
-            input_size,
-            "Failed: JPEG cannot be reversibly transcoded; source remains unmodified",
-            JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
-        ));
-    }
-
     foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-        "jpeg_lossless_direct_encode_fallback",
+        if options.require_output_delivery() {
+            "jpeg_lossless_fast_img_failed"
+        } else {
+            "jpeg_lossless_img_failed"
+        },
         input,
         failure,
     );
-    let mut direct_options = options.clone();
-    direct_options.flags.remove(
-        ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
-            | ConvertFlags::REQUIRE_OUTPUT_DELIVERY
-            | ConvertFlags::ALLOW_JPEG_PIXEL_REENCODE_FALLBACK,
-    );
-    convert_to_jxl(
+    Ok(TaskResult::failed(
         input,
-        &direct_options,
-        foundation::constants::JXL_ULTIMATE_DISTANCE,
-        color_context,
-    )
-    .map_err(|err| {
-        ImgQualityError::ConversionError(format!(
-            "{failure}; irreversible direct JXL encode fallback failed: {err}"
-        ))
-    })
+        input_size,
+        "Failed: JPEG cannot be byte-identically reconstructed; source remains unmodified",
+        JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
+    ))
 }
 
 fn commit_jpeg_to_jxl_success(
@@ -2292,6 +2261,20 @@ fn commit_jpeg_to_jxl_success(
         cleanup_temp_output(temp_output, input);
         return Err(e);
     }
+    if proof != JpegTranscodeProof::BitstreamReconstruction {
+        cleanup_temp_output(temp_output, input);
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "jpeg_non_reconstructible_output_rejected",
+            input,
+            "JPEG candidate passed only pixel equivalence; exact byte reconstruction is required",
+        );
+        return Ok(TaskResult::failed(
+            input,
+            input_size,
+            "Failed: JPEG candidate was not byte-reconstructible; source remains unmodified",
+            JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
+        ));
+    }
     match proof {
         JpegTranscodeProof::BitstreamReconstruction => {
             if let Err(e) = foundation::fast_img::verify_jxl_roundtrip_integrity(input, temp_output)
@@ -2302,16 +2285,7 @@ fn commit_jpeg_to_jxl_success(
                 )));
             }
         }
-        JpegTranscodeProof::PixelEquivalence => {
-            if let Err(e) =
-                foundation::fast_img::verify_jxl_pixel_equivalence_integrity(input, temp_output)
-            {
-                cleanup_temp_output(temp_output, input);
-                return Err(ImgQualityError::ConversionError(format!(
-                    "JPEG pixel-equivalence proof failed before metadata commit: {e}"
-                )));
-            }
-        }
+        JpegTranscodeProof::PixelEquivalence => unreachable!("rejected above"),
     }
     let output_size = fs::metadata(temp_output)
         .map_err(|e| {
@@ -2347,18 +2321,18 @@ fn commit_jpeg_to_jxl_success(
 ///
 /// # Behavior
 /// - Uses `cjxl --lossless_jpeg=1` for bitstream reconstruction when possible
-/// - On reconstruction failure: strips JPEG tail and retries with pixel-equivalence proof
-/// - On non-Type-B failures: fails closed unless pixel re-encode fallback is explicitly enabled
+/// - Reconstruction failures never authorize a pixel-only JPEG replacement
+/// - Tail-normalized/no-JBRD recovery candidates are diagnostic only and are rejected at commit
 /// - Verifies JXL health and checks size tolerance
 ///
 /// # Fallback Chain
 /// 1. Primary: cjxl with lossless JPEG mode
 /// 2. Strip JPEG tail → retry
 /// 3. Use --`allow_jpeg_reconstruction=0`
-/// 4. Explicit opt-in only: `ImageMagick` pixel re-encode fallback
+/// 4. Fail closed and retain the source; pixel re-encoding is forbidden
 ///
 /// Transcode JPEG to JXL losslessly. Standard cases are byte-reconstructible;
-/// Type-B reconstruction failures fall back to decoded pixel equivalence.
+/// Pixel-equivalent candidates never replace a JPEG that cannot be reconstructed byte-for-byte.
 ///
 /// # Errors
 /// Returns an error if transcoding fails.
@@ -2510,7 +2484,7 @@ fn try_jbrd_reconstruction_ladder(
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
-    color_context: Option<&ConversionColorContext>,
+    _color_context: Option<&ConversionColorContext>,
 ) -> Result<TaskResult> {
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
@@ -2531,7 +2505,6 @@ pub fn convert_jpeg_to_jxl(
             input,
             input_size,
             options,
-            color_context,
             "JPEG lossless transcode preflight rejected source before cjxl: JPEG is truncated or missing EOI",
         );
     }
@@ -2620,7 +2593,6 @@ pub fn convert_jpeg_to_jxl(
                 input,
                 input_size,
                 options,
-                color_context,
                 &failure,
             );
         }
@@ -2743,7 +2715,6 @@ pub fn convert_jpeg_to_jxl(
             input,
             input_size,
             options,
-            color_context,
             &failure,
         );
     }
@@ -2775,86 +2746,12 @@ pub fn convert_jpeg_to_jxl(
         return fallback;
     }
 
-    if !jpeg_pixel_reencode_fallback_allowed(options) {
-        return handle_irreversible_jpeg_encode_failure(
-            input,
-            input_size,
-            options,
-            color_context,
-            &ladder.fail_closed_message(false),
-        );
-    }
-
-    if stderr.contains("Error while decoding")
-        || stderr.contains("Corrupt JPEG")
-        || stderr.contains("Premature end")
-    {
-        // For truncated JPEGs, the ImageMagick fallback often "repairs" them but results in
-        // large JXL files that we eventually discard. We skip fallback if it's incomplete.
-        if !is_jpeg_complete(&std::fs::read(input)?) {
-            log_detail!(foundation::infra::static_logs::messages::MSG_CORRUPTION_SKIP);
-            return Err(ImgQualityError::ConversionError(format!(
-                "JPEG is truncated or missing EOI, and cjxl bitstream reconstruction failed: {stderr}"
-            )));
-        }
-
-        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-            "jpeg_pixel_reencode_fallback_triggered",
-            input,
-            "JBRD reconstruction ladder exhausted; falling back to ImageMagick pixel re-encode after corruption decode failure",
-        );
-        match foundation::jxl_utils::try_imagemagick_fallback(
-            input,
-            &temp_output,
-            0.0,
-            max_threads,
-            options.apple_compat(),
-            options.ultimate(),
-        ) {
-            Ok(()) => commit_jpeg_to_jxl_success(
-                input,
-                &temp_output,
-                &output,
-                input_size,
-                options,
-                "JPEG (Sanitized) -> JXL",
-                JpegTranscodeProof::PixelEquivalence,
-            ),
-            Err(e) => Err(ImgQualityError::ConversionError(format!(
-                "{}; ImageMagick pixel re-encode fallback failed after JPEG corruption: {e}",
-                ladder.fail_closed_message(true)
-            ))),
-        }
-    } else {
-        log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-            "jpeg_pixel_reencode_fallback_triggered",
-            input,
-            "JBRD reconstruction ladder exhausted; falling back to ImageMagick pixel re-encode",
-        );
-        match foundation::jxl_utils::try_imagemagick_fallback(
-            input,
-            &temp_output,
-            0.0,
-            max_threads,
-            options.apple_compat(),
-            options.ultimate(),
-        ) {
-            Ok(()) => commit_jpeg_to_jxl_success(
-                input,
-                &temp_output,
-                &output,
-                input_size,
-                options,
-                "JPEG -> JXL (ImageMagick fallback)",
-                JpegTranscodeProof::PixelEquivalence,
-            ),
-            Err(e) => Err(ImgQualityError::ConversionError(format!(
-                "{}; ImageMagick pixel re-encode fallback failed: {e}",
-                ladder.fail_closed_message(true)
-            ))),
-        }
-    }
+    handle_irreversible_jpeg_encode_failure(
+        input,
+        input_size,
+        options,
+        &ladder.fail_closed_message(),
+    )
 }
 
 fn avifenc_rejects_malformed_exif(stderr: &[u8]) -> bool {
@@ -6337,18 +6234,6 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_type_a_pixel_reencode_fallback_requires_explicit_opt_in() {
-        let default_options = ConvertOptions::default();
-        let mut opted_in_options = ConvertOptions::default();
-        opted_in_options
-            .flags
-            .set(ConvertFlags::ALLOW_JPEG_PIXEL_REENCODE_FALLBACK, true);
-
-        assert!(!jpeg_pixel_reencode_fallback_allowed(&default_options));
-        assert!(jpeg_pixel_reencode_fallback_allowed(&opted_in_options));
-    }
-
-    #[test]
     fn truncated_jpeg_in_fast_delivery_is_failed_and_source_is_retained() {
         let tmp = tempdir().unwrap_or_else(|e| panic!("tempdir: {e:?}"));
         let input = tmp.path().join("truncated.jpeg");
@@ -6526,7 +6411,7 @@ mod tests {
         );
         assert!(
             branch.contains("handle_irreversible_jpeg_encode_failure("),
-            "aggressive e11 process errors must reach the fast-img skip/direct-encode branch"
+            "aggressive e11 process errors must reach the fail-closed JPEG branch"
         );
     }
 
@@ -6555,7 +6440,7 @@ mod tests {
         diagnostics.record_skipped("jpegtran optimize retry", "jpegtran unavailable");
         diagnostics.record_skipped("metadata-safe structural rebuild", "exiftool unavailable");
 
-        let message = diagnostics.fail_closed_message(false);
+        let message = diagnostics.fail_closed_message();
 
         assert!(message.contains("/tmp/source.jpg"));
         assert!(message.contains("primary JPEG lossless: exit code 1"));
@@ -6564,7 +6449,7 @@ mod tests {
         assert!(message.contains("jpegtran unavailable"));
         assert!(message.contains("metadata-safe structural rebuild: skipped"));
         assert!(message.contains("exiftool unavailable"));
-        assert!(message.contains("ALLOW_JPEG_PIXEL_REENCODE_FALLBACK"));
+        assert!(message.contains("pixel re-encoding is forbidden"));
     }
 
     #[test]

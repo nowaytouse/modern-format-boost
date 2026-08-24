@@ -5,26 +5,39 @@
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge)
 
-**下一代媒体优化引擎 —— 零质量损失，最大化压缩。**
+**以证据驱动媒体焕新：保留源语义、核验最终交付、无法证明时失败关闭。**
 
 [English](../README.md) · [简体中文](README_ZH.md) · [繁體中文](README_ZH_TW.md) · [日本語](README_JA.md) · [한국어](README_KO.md) · [Español](README_ES.md) · [Français](README_FR.md) · [Português](README_PT.md) · [Русский](README_RU.md) · [العربية](README_AR.md)
 
 ## 什么是 Modern Format Boost？
 
-**Modern Format Boost** 是一个高性能、基于 Rust 的媒体优化引擎。它按媒体领域划分工作：
+**Modern Format Boost** 是一个基于 Rust 的媒体格式焕新工具，按媒体领域明确分工：
 
-- **`img`**：**仅静图** → **JXL**（`--codec hevc`）/ **AVIF**（`--codec av1`）；**已验证动图** → **忽略**（请**另行** `vid run`，img **不转发**）
-- **格式识别**：靠文件头/内容（`detect_format_from_bytes` 等），扩展名仅用于纠错/告警，**不单凭 `.gif`/`.webp` 判动图**
-- **动图判定**：`detect_animation` + 静图证明（真单帧 GIF/WebP/APNG 等仍可走 img，不是「见扩展名就 ignore」）
-- **`vid`**：**视频 + 动图** → **HEVC/AV1**（默认 **HEVC**）
-- **`--codec`**：`img` 与 `vid` **都有**（默认 `hevc`），**含义不同**：`img` 的 `hevc`→**JXL**、`av1`→**AVIF 静图**；`vid` 的 `hevc`/`av1`→**视频交付**。**禁止** img 转发/代跑 vid。
+- **`img run`**：只处理静态图片，普通路径只交付 **JXL**。默认使用本地精确检测；只有显式开启可选质量启发功能时才查询 PostgreSQL。
+- **`img fast-img --strategy jxl`**：真实 JPEG → 可逐字节重建的 JXL；确认有损的现代静态格式可进入独立的 Apple Photos 托管路径。
+- **`img fast-img --strategy avif`**：面向已整理表情包的 Meme Mode，使用 AVIF 搜索并清理元数据；这是明确的破坏性策略。
+- **`vid run`**：拥有视频与动图的 HEVC/AV1 交付。`img` 不会静默转发或代跑 `vid`。
+- **格式识别**：文件头、容器结构与动画证据优先于扩展名；扩展名不决定真实媒体类型。
 
 典型路线：
 
 - 📸 **`img run`**：静图 → JXL；有损现代静图/**跳过**；**动图忽略**
+- ⚡ **`img fast-img --strategy jxl`**：真实 JPEG → 永久可逆 JXL；只有最终重建闸门通过后才允许删除源 JPEG
+- 🧩 **`img fast-img --strategy avif`**：确认静态的图片容器 → AVIF Meme Mode 搜索
 - 🎬 **`vid run`**：H.264、动图 WebP/GIF 等 → HEVC/AV1；由 `--codec` 与 `--apple-compat` 决定
 
-详细路由表：[`DELIVERY_STRATEGY_ROUTING.md`](DELIVERY_STRATEGY_ROUTING.md)。
+路由实现来源：[`delivery_codec_strategy.rs`](../crates/foundation/src/convert/delivery_codec_strategy.rs)。
+
+### 项目保证什么，又不保证什么？
+
+- 只有通过对应路径的解码、质量、元数据与完整性闸门，候选文件才会交付。受大小约束的路径比较的是编码媒体载荷；找不到符合策略的候选时，保留源文件并明确跳过或失败。
+- JPEG→JXL 在所有元数据处理完成后仍必须通过 `djxl --reconstruct_jpeg` 逐字节重建。`restore-jpeg` 不再改写重建出的 JPEG；JXL 中额外的 XMP 会作为单独哈希核验的同名 `.xmp` 侧车交付。
+- 项目不是“魔法缩容器”。完整文件可能因容器与元数据而更大，高质量候选也可能没有任何空间收益。
+- 探索以时间换取更精确的候选：目标是在有效质量/大小策略内寻找最高质量点，而不是无条件得到最小文件。输入越多、越复杂、差异越大，耗时越高；`--ultimate` 会主动扩大搜索成本。
+
+### 谁适合使用？
+
+实机覆盖最充分的是 macOS、Apple 生态媒体库与显式 Photos 交付。Linux/Windows 仍可使用相邻输出和本地转换，但 Photos、TCC 与 iCloud 托管核验仅限 macOS，非 Apple 平台的生产实测覆盖目前较少。任何平台处理不可替代的档案前都应保留独立备份。
 
 可以将其视为一个保守的优化器，宁愿选择诚实的跳过/忽略结果，也不愿造成隐性的质量损坏：
 
@@ -40,23 +53,23 @@
 1. **数据安全第一**：为避免任何潜在的数据丢失，强烈建议将处理后的文件输出到单独的目录（例如，使用 `-o /path/to/output`），而不是使用原地转换 (`--in-place`)，特别是对于不可替代的媒体。
 2. **测试版软件**：虽然该程序已经过广泛的测试、调试和优化以防止质量或数据丢失（详见更新日志），但不能保证 100% 无错误。请在 GitHub 上报告您遇到的任何问题。
 3. **计算洞察**：虽然针对效率进行了优化（尤其是在苹果 M 系列芯片上），但在 `--ultimate` 模式下处理大规模批处理仍可能耗时较长。它将长时间占用系统资源；请相应地规划您的任务。
-4. **工具成熟度**：统一工具（`img`、`vid`）默认使用 HEVC，它比 AV1 策略更成熟、更稳定。对于高可靠性的生产任务，建议使用 HEVC（默认）。
+4. **命令语义不同**：普通 `img run` 只接受 `hevc`→JXL；FastImg AVIF 用 `--strategy avif`；只有 `vid run` 的 `hevc|av1` 表示视频编码器。不要跨命令推断参数语义。
 
 ## 🔒 隐私与数据完整性
 
 **Modern Format Boost** 构建在“本地优先”架构之上，确保您的创意资产完全在您的控制之下。
 
-- **离线操作**：100% 离线处理。无遥测、无使用跟踪或云端请求。核心二进制文件不含任何网络相关代码。
-- **Rust 加固运行时**：使用 Rust 构建，原生消除内存损坏错误（缓冲区溢出等）。
+- **本地媒体处理**：转换与核验不上传媒体、没有遥测；安装依赖、下载工具和 CI 本身仍可能访问网络。
+- **Rust 加固运行时**：Rust 消除了大量内存不安全代码类别；路径边界、解析上限与交付闸门继续处理逻辑和外部工具风险。
 - **安全集成**：所有外部工具（FFmpeg、cjxl）都通过安全的、转义的原语调用——绝不通过原始 shell 执行——从而防止任意命令注入。
 - **路径隔离**：先进的规范化处理可防止目录遍历，并保护无关的系统文件。
 - **系统路径黑名单**：内置敏感系统目录屏蔽，防止意外修改操作系统文件。
 - **动态资源平衡**：根据内存/CPU 负载自动调整处理线程，防止极端任务期间系统崩溃。
-- **全方位元数据管家**：严格逐位保留 EXIF、XMP、ICC 和文件系统时间戳 (btime/mtime)。
+- **元数据托管**：按目标格式能力保留或显式规范化 EXIF、XMP、ICC、时间戳与 macOS 扩展属性；项目不宣称所有容器的元数据都能逐位复制。
 - **安全处理与会话隔离**：
-  - **零工作区污染**：集中式跟踪 (`~/.mfb_progress/`) 保持您的媒体文件夹 100% 清洁。您的照片/视频中不会留下隐藏的元数据文件。
+  - **受控状态目录**：集中式进度状态位于 `~/.mfb_progress/`；相邻工作副本和用户明确选择的输出仍会出现在媒体目录旁。
   - **无冲突临时文件**：每个中间分析文件（YUV 流、分析分段）都使用随机 UUID 进行唯一标识。这可以防止多实例碰撞，并确保清理时的“手术级精度”。
-  - **启动即清理**：无论任务成功完成还是在中断后恢复，系统都会自动清除所有瞬态数据。这种“自清理”架构确保您的磁盘不会留下被遗弃的处理残余。
+  - **有界清理**：可丢弃的中间文件会清理；用于显式恢复与身份核验的持久状态会保留，不会把“发现状态”当作静默恢复或删除源文件的许可。
   - **智能检查点重置**：自动检测用户何时手动删除输出目录以“重新开始”，即使在恢复模式下也会触发完整的状态重置。
 
 ## 🛠️ 技术深入：工作流程 —— 流水线
@@ -65,9 +78,9 @@
 
 每个文件都会经过多阶段决策流水线：
 
-- **阶段 1 — 智能检测**：在二进制级别分析 JPEG DQT 表（UltraHDR 增益图检测）、WebP VP8L 块和 AVIF `av1C` 框。现在具备 **零技术债架构**，100% 符合 Clippy 标准，并具有稳健的 `OpenEXR`/`JPEG 2000` 标题解析。
-- **阶段 2 — 路由与编码**：JPEG 使用 JXL VarDCT（位精确）；无损源（PNG、无损 WebP/AVIF/HEIC/EXR/JP2）使用 Modular 模式。
-- **阶段 3 — 迂回路径**：TIFF/WebP/BMP/HEIC 等格式被预处理为临时 16 位 PNG 或 **32 位 OpenEXR**，以确保在不损失质量的情况下兼容 `cjxl`（8/16/32 位匹配流水线）。
+- **阶段 1 — 精确检测**：通过文件头、容器结构与权威工具证据识别 JPEG、WebP、AVIF、HEIC、JP2 等格式；无法证明有损/无损或静态/动画语义时失败关闭。
+- **阶段 2 — 路由与编码**：JPEG 只接受能逐字节重建的 JXL 转码；已证明无损的源可走无损 JXL；已是有损现代静态格式的源通常原样保留。
+- **阶段 3 — 异常媒体路径**：普通 IMG 可对非 JPEG 的解码器敌对格式使用受控预处理；JPEG 不以像素相等或重新编码冒充可逆转码，FastImg JXL 也不使用破坏性兜底。
 - **阶段 4 — HDR 增益图合成**：拦截带有增益图（苹果/谷歌）的 HEIC 资产和 UltraHDR JPEG，合成真实 HDR JXL 输出，并将无法内嵌的原始增益图/深度图作为 sidecar 保留。
 - **阶段 5 — img 仅静图**：`img run` 对**已验证动图** **ignore**（`IMG_ANIMATED_HANDOFF`）；**真单帧** GIF/WebP 等可走 JXL；其余动图与所有视频请用 **`vid run`**。
 - **阶段 6 — 循环意图 v3**：共享的循环意图逻辑决定动画媒体是保持类似 GIF 的状态还是进入视频流水线。苹果兼容的现代动画交付策略在此集中管理。
@@ -95,33 +108,32 @@
 
 ### 两个二进制程序
 
-| 二进制    | 输入        | 主要输出           | `--codec hevc\|av1`                     |
-| --------- | ----------- | ------------------ | --------------------------------------- |
-| **`img`** | 仅静图      | JXL / AVIF / 跳过  | `hevc`→JXL，`av1`→AVIF；动图 **ignore** |
-| **`vid`** | 视频 + 动图 | MP4/MOV/GIF / 跳过 | **有**（默认 `hevc`）                   |
+| 二进制    | 输入        | 主要输出                      | `--codec hevc\|av1`                      |
+| --------- | ----------- | ----------------------------- | ---------------------------------------- |
+| **`img`** | 仅静图      | JXL / 跳过；FastImg Meme→AVIF | `img run` 仅 `hevc`→JXL；动图 **ignore** |
+| **`vid`** | 视频 + 动图 | MP4/MOV/GIF / 跳过            | **有**（默认 `hevc`）                    |
 
 此外还有一个 **macOS 双击应用** (`Modern Format Boost.app`)，用于拖放式批量处理。
 
 ## 交付策略（HEVC / AV1）
 
-Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/delivery_codec_strategy.rs)。
-工程师详表：[`DELIVERY_STRATEGY_ROUTING.md`](DELIVERY_STRATEGY_ROUTING.md)。
+Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/convert/delivery_codec_strategy.rs)。
 
-**`img run` 与 `vid run` 都接受 `--codec hevc|av1`**（默认 **hevc**），但**不是同一套语义**：
+普通 `img run` 与 `vid run` 的 `--codec` **不是同一套语义**：
 
-| 二进制    | `hevc`           | `av1`                          |
-| --------- | ---------------- | ------------------------------ |
-| **`img`** | 静图批量 **JXL** | 静图 **AVIF** 策略（有损分支） |
-| **`vid`** | 视频 **HEVC**    | 视频 **AV1**                   |
+| 二进制    | `hevc`           | `av1`                              |
+| --------- | ---------------- | ---------------------------------- |
+| **`img`** | 静图批量 **JXL** | **拒绝**；请使用 FastImg Meme Mode |
+| **`vid`** | 视频 **HEVC**    | 视频 **AV1**                       |
 
-**`img` 只编码静图**，**不会**把文件交给 `vid` 处理。动图/无法确认仅静图 → **ignore**（审计类 `img_animated_handoff` 仅表示跳过，**不是转发**）。**真单帧** GIF/WebP/APNG 等经多方验证后可走 JXL/AVIF。**`vid`** 单独处理视频与动图（含 GIF、动图 WebP、**APNG**、动图 AVIF/HEIC 等）。
+**`img` 只编码静图**，**不会**把文件交给 `vid` 处理。动图/无法确认仅静图 → **ignore**（审计类 `img_animated_handoff` 仅表示跳过，**不是转发**）。普通 IMG 中经多方验证的真单帧 GIF/WebP/APNG 只走 JXL；AVIF 输出仅属于 FastImg Meme Mode。**`vid`** 单独处理视频与动图（含 GIF、动图 WebP、**APNG**、动图 AVIF/HEIC 等）。
 
 ### 两层策略
 
-| 层                                  | `img` | `vid` |
-| ----------------------------------- | ----- | ----- |
-| **静图格式**（JXL / API 可走 AVIF） | ✅    | —     |
-| **视频交付编码**（HEVC/AV1）        | ❌    | ✅    |
+| 层                                                 | `img` | `vid` |
+| -------------------------------------------------- | ----- | ----- |
+| **静图格式**（普通 IMG 为 JXL；Meme Mode 为 AVIF） | ✅    | —     |
+| **视频交付编码**（HEVC/AV1）                       | ❌    | ✅    |
 
 ### `img run`（无 `--codec`）
 
@@ -154,7 +166,7 @@ Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/delivery_cod
 | `--ultimate`     | 快搜 → 慢成片 x265   | SVT 单预设    |
 | `--apple-compat` | MOV `hvc1`、GIF 策略 | **CLI 拒绝**  |
 
-完整逐步表见 [`DELIVERY_STRATEGY_ROUTING.md`](DELIVERY_STRATEGY_ROUTING.md)。
+完整逐步表见本节及下方处理矩阵；运行时路由以 Rust SSOT 为准。
 
 ## 📉 真实世界压缩示例
 
@@ -169,23 +181,25 @@ Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/delivery_cod
 
 ### 图像格式决策矩阵
 
-| 输入格式                                   | 静态？ | `img run` 中的动作 | 输出       | 备注                              |
-| :----------------------------------------- | :----: | :----------------- | :--------- | :-------------------------------- |
-| JPEG                                       |   ✅   | **无损重建**       | `.jxl`     | 位精确 `cjxl --lossless_jpeg=1`   |
-| PNG / TIFF / BMP / 其他无损静态图          |   ✅   | **无损转换**       | `.jxl`     | 可能先走迂回路径                  |
-| WebP / AVIF / HEIC / HEIF (无损静态)       |   ✅   | **转换**           | `.jxl`     | 允许转换无损现代静态图            |
-| 带有增益图的 HEIC / HEIF                   |   ✅   | **HDR 合成**       | `.jxl`     | 增益图路径合成线性 HDR            |
-| 静态验证后的遗留有损静态图                 |   ✅   | **近无损转换**     | `.jxl`     | 当前 `img run` 批量路径专注于 JXL |
-| 有损 WebP / AVIF / HEIC / HEIF 静态图      |   ✅   | **跳过**           | 保留原文件 | 避免代际损失                      |
-| JXL 静态图                                 |   ✅   | **跳过**           | 保留原文件 | 已经是最佳格式                    |
-| 动画 GIF / WebP / APNG / HEIC / HEIF / JXL |   ❌   | **img 忽略**       | —          | 请用 **`vid run`**                |
+| 输入格式                                    | 静态？ | `img run` 中的动作 | 输出       | 备注                              |
+| :------------------------------------------ | :----: | :----------------- | :--------- | :-------------------------------- |
+| JPEG                                        |   ✅   | **无损重建**       | `.jxl`     | 位精确 `cjxl --lossless_jpeg=1`   |
+| PNG / TIFF / BMP / 其他无损静态图           |   ✅   | **无损转换**       | `.jxl`     | 可能先走迂回路径                  |
+| WebP / AVIF / HEIC / HEIF / JP2 (无损静态)  |   ✅   | **转换**           | `.jxl`     | 允许转换无损现代静态图            |
+| 带有增益图的 HEIC / HEIF                    |   ✅   | **HDR 合成**       | `.jxl`     | 增益图路径合成线性 HDR            |
+| 静态验证后的遗留有损静态图                  |   ✅   | **近无损转换**     | `.jxl`     | 当前 `img run` 批量路径专注于 JXL |
+| 有损 WebP / AVIF / HEIC / HEIF / JP2 静态图 |   ✅   | **跳过**           | 保留原文件 | 避免代际损失                      |
+| JXL 静态图                                  |   ✅   | **跳过**           | 保留原文件 | 已经是最佳格式                    |
+| 动画 GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌   | **img 忽略**       | —          | 请用 **`vid run`**                |
 
 ### `img` 入口
 
-| 入口                  | 静图输出                               | 动图        | AVIF                      |
-| --------------------- | -------------------------------------- | ----------- | ------------------------- |
-| **`img run`**         | JXL（`hevc`）或 AVIF 有损分支（`av1`） | **忽略**    | 仅 `av1` 有损分支         |
-| **`smart_convert()`** | JXL 或 AVIF（`determine_strategy`）    | 域外 ignore | 部分有损非 JPEG 仍走 AVIF |
+| 入口                               | 静图输出                                           | 动图        | AVIF                             |
+| ---------------------------------- | -------------------------------------------------- | ----------- | -------------------------------- |
+| **`img run`**                      | JXL（`hevc`）；现代有损源原样保留                  | **忽略**    | 不可用，`av1` 会被拒绝           |
+| **`img fast-img --strategy jxl`**  | 真实 JPEG 可逆 JXL；已确认现代有损源进入验证交付层 | 保留/忽略   | 可作为原样交付的现代有损源       |
+| **`img fast-img --strategy avif`** | AVIF Meme Mode                                     | 拒绝/保留   | 唯一 AVIF 编码入口               |
+| **`smart_convert()`**              | JXL 或按 `determine_strategy` 原样保留             | 域外 ignore | 不可用，请使用 FastImg Meme Mode |
 
 ### 动画媒体决策矩阵（仅 `vid`）
 
@@ -237,18 +251,18 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### 前提条件
 
-| 工具                 | 必需？ | 用途                 | 安装命令                                                                                    |
-| :------------------- | :----: | :------------------- | :------------------------------------------------------------------------------------------ |
-| **Rust** (nightly)   |   ✅   | 构建与安装           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
-| **FFmpeg** (5.0+)    |   ✅   | 视频处理与指标计算   | `brew install ffmpeg` / `apt install ffmpeg`                                                |
-| **libjxl**           |   ✅   | JXL 编码核心         | `brew install jpeg-xl`                                                                      |
-| **ExifTool**         |   ✅   | 元数据保留           | `brew install exiftool`                                                                     |
-| **ImageMagick**      |   ✅   | 图像迂回路径         | `brew install imagemagick`                                                                  |
-| **libwebp**          |   ✅   | WebP 原生解码        | `brew install webp`                                                                         |
-| **libheif**          |   ✅   | HEIC/HEIF 解码       | `brew install libheif`                                                                      |
-| **PostgreSQL** (12+) |   ✅   | 缓存与质量特征数据库 | `brew install postgresql pgvector` / `apt install postgresql`                               |
-| **dovi_tool**        |  可选  | 杜比视界 RPU 提取    | `cargo install dovi_tool`                                                                   |
-| **hdr10plus_tool**   |  可选  | HDR10+ 元数据提取    | `cargo install hdr10plus_tool`                                                              |
+| 工具                 | 必需？ | 用途                            | 安装命令                                                                                    |
+| :------------------- | :----: | :------------------------------ | :------------------------------------------------------------------------------------------ |
+| **Rust** (nightly)   |   ✅   | 构建与安装                      | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
+| **FFmpeg** (5.0+)    |   ✅   | 视频处理与指标计算              | `brew install ffmpeg` / `apt install ffmpeg`                                                |
+| **libjxl**           |   ✅   | JXL 编码核心                    | `brew install jpeg-xl`                                                                      |
+| **ExifTool**         |   ✅   | 元数据保留                      | `brew install exiftool`                                                                     |
+| **ImageMagick**      |   ✅   | 图像迂回路径                    | `brew install imagemagick`                                                                  |
+| **libwebp**          |   ✅   | WebP 原生解码                   | `brew install webp`                                                                         |
+| **libheif**          |   ✅   | HEIC/HEIF 解码                  | `brew install libheif`                                                                      |
+| **PostgreSQL** (12+) |  按需  | Vid、训练、缓存及可选质量启发式 | `brew install postgresql pgvector` / `apt install postgresql`                               |
+| **dovi_tool**        |  可选  | 杜比视界 RPU 提取               | `cargo install dovi_tool`                                                                   |
+| **hdr10plus_tool**   |  可选  | HDR10+ 元数据提取               | `cargo install hdr10plus_tool`                                                              |
 
 #### macOS (Homebrew)
 
@@ -287,7 +301,7 @@ winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool \
 
 ### 🗄️ 数据库设置
 
-Modern Format Boost 使用 PostgreSQL (并启用 `pgvector` 扩展) 作为强制的本地缓存与质量特征推理引擎。`img` 和 `vid` 二进制程序在启动时均会尝试连接数据库，如果数据库服务无法连接，程序将直接报错并退出。
+Modern Format Boost 使用 PostgreSQL（并启用 `pgvector` 扩展）支撑 Vid、训练、缓存管理命令及用户显式开启的质量启发式。普通 `img run`、FastImg 和 JPEG 恢复默认采用精确本地检测，不连接 PostgreSQL；只有选择数据库功能时，连接失败才会保持 fail-closed 并阻止启动。
 
 #### 1. 启动 PostgreSQL 服务
 
@@ -391,11 +405,11 @@ vid strategy --codec hevc /path/to/video.mp4
 
 ### CI/CD 与测试门控体系
 
-Modern Format Boost 使用严苛的质量门控系统保证核心架构的零技术债：
+Modern Format Boost 使用分层质量门控降低回归与静默损坏风险；这些门控不等于“零技术债”或绝对无缺陷：
 
 - **Rust 优先开发工具链**：工程入口是 `crates/dev/src/bin` 下的 Rust 二进制；Python 原件仅作为兼容参考保留，直到确认可安全删除。
-- **本地 CI 校验**：开发前务必使用 `just fix-gate` 或 `cargo run --locked -p dev --bin check_all -- --allow-non-nightly` 进行检查，这是代码格式、静态检查、以及自动化测试的“单一事实来源”(SSOT)。
-- **测试强化与稳定性**：禁用 "Fail Fast" 以便在多平台上收集全量诊断信息；同时增加了对图像（如 JPEG 恢复断言）错误状态的深度上下文捕获。
+- **CI 校验**：GitHub CI 运行仓库级检查；本地开发应优先执行与改动范围相符的构建和运行回归，再按发布流程运行完整门禁。
+- **失败语义**：解码、重建、元数据或交付证明失败时显式报告；不会用空成功或默认值伪装完成。
 
 ### 核心架构
 
@@ -408,26 +422,23 @@ Modern Format Boost 使用严苛的质量门控系统保证核心架构的零技
 
 交付、推理、终端 UI 与训练栈的行为以**可审计的契约文档**为准（CI 密封测试约束）。扩展 `img` / `vid`、探索管线或 PostgreSQL 训练时请优先查阅：
 
-| 层                    | 文档                                                                                                                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **系统 SSOT 与审计**  | [`../.agents/harding/SSOT.md`](../.agents/harding/SSOT.md) (核心基准单一事实来源，替代了以往碎片化的审计文档)                                         |
-| 媒体转换交付 (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](MEDIA_CONVERSION_DELIVERY_SEAL.md) |
-| 算法 / 推理门控       | [`ALGORITHM_LAYER_CONTRACT.md`](ALGORITHM_LAYER_CONTRACT.md)                                                                                          |
-| 终端 UI               | [`UI_LAYER_CONTRACT.md`](UI_LAYER_CONTRACT.md)                                                                                                        |
-| 日志 / 会话           | [`LOGGING_LAYER_CONTRACT.md`](LOGGING_LAYER_CONTRACT.md)                                                                                              |
-| 数据库 / 多场景       | [`DATABASE_LAYER_CONTRACT.md`](DATABASE_LAYER_CONTRACT.md) · [`MULTI_SCENARIO_IMPLEMENTATION_GUIDE.md`](MULTI_SCENARIO_IMPLEMENTATION_GUIDE.md)       |
+| 层                    | 文档                                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 媒体转换交付 (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
+| 算法 / 推理门控       | [`ALGORITHM_LAYER_CONTRACT.md`](hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                    |
+| 原生 macOS UI         | [`UI_LAYER_CONTRACT.md`](hardening/UI_LAYER_CONTRACT.md)                                                                                                                  |
+| 日志 / 会话           | [`LOGGING_LAYER_CONTRACT.md`](hardening/LOGGING_LAYER_CONTRACT.md) · [`LOGGING_LAYOUT.md`](hardening/LOGGING_LAYOUT.md)                                                   |
+| 数据库                | [`DATABASE_LAYER_CONTRACT.md`](hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                      |
 
 **静图质量训练**（high/low 分层、入库审计）：
 
 - **唯一推荐入口**：源码树使用 `cargo run --locked -p dev --bin run_training --`，已编译/打包环境使用 `target/release/run_training`。
 - **规则**：提交版 [`training_rules.json`](../crates/dev/src/config/training_rules.json)；本机目录与 ingest 上限写在 gitignore 的 `training_rules.local.json`。
-- **Tier 引擎**：Rust [`training_tier_audit.rs`](../crates/foundation/src/training_tier_audit.rs) 与 JSON 阈值同步（熵死区、几何护栏）。
-- **后台**：`cargo run --locked -p dev --bin run_training -- --background` → 日志在统一日志目录（见 `docs/LOGGING_LAYOUT.md`）。
+- **Tier 引擎**：Rust [`training_tier_audit.rs`](../crates/foundation/src/train/training_tier_audit.rs) 与 JSON 阈值同步（熵死区、几何护栏）。
+- **后台**：`cargo run --locked -p dev --bin run_training -- --background` → 日志在统一日志目录（见 [`LOGGING_LAYOUT.md`](hardening/LOGGING_LAYOUT.md)）。
 - **迁移策略**：仅保留 ML 生态、测试/夹具、模糊测试和兼容桥所需的 Python；详见 [`PYTHON_RUST_MIGRATION.md`](PYTHON_RUST_MIGRATION.md)。
 
 完整硬化说明见 [`CHANGELOG.md`](CHANGELOG.md) **0.11.3**。
-
-文档总索引：[`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)。
 
 ## ❓ 常见问题
 
@@ -448,6 +459,15 @@ macOS 14+ / iOS 17+、Chrome 91+ 和 Firefox 128+ 已提供原生支持。然而
 - HEIC/HEIF 增益图资产可以合成为 HDR JXL
 - UltraHDR JPEG 会合成为 HDR JXL，并把内嵌增益图保留为原始 `.gainmap.jpg` sidecar，便于审计与回滚恢复
 - 动画现代格式不由 `img` 处理；它们通过 `vid` 和 `loop_intent` 进行路由
+
+**4. `img run` 与 FastImg 有什么不同？**
+`img run` 是覆盖面更广的静图优化器：默认使用本地精确检测，也可显式启用数据库质量启发式，并拥有 HDR、精度、颜色与异常格式迂回路径。FastImg 是边界更窄的持久交付工作流：JXL 主层只接受可逐字节重建的真实 JPEG，Tier 2 只托管已被正向证明为有损的现代静图；AVIF Meme Mode 则对已整理的表情包执行有界质量/大小搜索。两者复用底层安全闸门，但候选选择、搜索预算、状态恢复和 Photos 策略并不相同。
+
+**5. FastImg Tier 2 能否精确判断现代静图的有损/无损？**
+只有存在格式级正向证据时才会判为有损并准入。WebP、JP2、AVIF、HEIC/HEIF 与 JXL 各自使用结构化解析和权威工具证据；`Unknown`、无损、动画、损坏容器和带 JPEG 重建数据的 JXL 都会失败关闭并保留原件。这里的“精确”指不会靠扩展名或猜测把不确定媒体当成有损，并不声称每一种编码都能从容器头证明其量化语义。
+
+**6. `restore-jpeg` 会改变原始 JPEG 吗？**
+不会。它只接受 `djxl --reconstruct_jpeg` 能逐字节恢复的 JXL，重建 JPEG 后不会再用元数据工具改写该文件。JXL XML/XMP 作为同名 `.xmp` 侧车单独校验、哈希和提交；删除源 JXL 前，JPEG 与 XMP（如有）的最终哈希都会再次核对。
 
 ---
 

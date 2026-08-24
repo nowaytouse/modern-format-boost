@@ -1325,6 +1325,23 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
     Ok(payload_size)
 }
 
+/// Validate that a sidecar is one non-empty, balanced XML document.
+///
+/// # Errors
+/// Returns an error for non-files, empty payloads, malformed XML, or I/O
+/// failures.
+pub fn validate_xmp_sidecar(path: &Path) -> io::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("XMP sidecar is not a regular file: {}", path.display()),
+        ));
+    }
+    let mut file = std::fs::File::open(path)?;
+    validate_xmp_document(&mut file, path).map(|_| ())
+}
+
 /// Append an external XMP sidecar as a JXL `xml ` box without rewriting the
 /// existing JBRD, Exif, ICC, or codestream bytes.
 pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(

@@ -7,14 +7,12 @@ use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, Ima
 use crate::{ImgQualityError, Result};
 use bitflags::bitflags;
 use foundation::ToolBuilder;
-use foundation::log_detail;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetFormat {
     JXL,
-    AVIF,
     NoConversion,
 }
 
@@ -168,11 +166,14 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         });
     }
 
-    if detection.format.is_modern_format() {
+    if detection.format == DetectedFormat::JXL
+        || (detection.format.is_modern_format()
+            && detection.compression != CompressionType::Lossless)
+    {
         return Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
             reason: format!(
-                "Skipping modern format ({}) - already optimized, no conversion needed",
+                "Retaining modern format ({}) to avoid generational loss",
                 detection.format.as_str()
             ),
             command: String::new(),
@@ -225,23 +226,18 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("AVIF");
-
-            let (quality_arg, reason) =
-                foundation::media_conversion_gate::img_static_lossless_quality_arg_or_default(
-                    detection.estimated_quality,
-                );
+            let output_path = Path::new(input_path).with_extension("JXL");
 
             Ok(ConversionStrategy {
-                target: TargetFormat::AVIF,
-                reason,
+                target: TargetFormat::JXL,
+                reason: "Static legacy lossy image, encode as near-lossless JXL".to_string(),
                 command: format!(
-                    "avifenc '{}' '{}'{}",
+                    "cjxl '{}' '{}' -d {}",
                     input_path,
                     output_path.display(),
-                    quality_arg
+                    foundation::constants::JXL_ULTIMATE_DISTANCE
                 ),
-                expected_reduction: foundation::constants::EXPECTED_REDUCTION_AVIF_LOSSY_STATIC,
+                expected_reduction: foundation::constants::EXPECTED_REDUCTION_JXL_LOSSY_STATIC,
             })
         }
 
@@ -354,7 +350,6 @@ pub fn execute_conversion(
 
     let extension = match strategy.target {
         TargetFormat::JXL => "JXL",
-        TargetFormat::AVIF => "AVIF",
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "No conversion".to_string(),
@@ -383,10 +378,13 @@ pub fn execute_conversion(
     let temp_path = foundation::path_safety::isolated_temp_path_for_search(&output_path)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let result = match strategy.target {
-        TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
-        TargetFormat::AVIF => {
-            convert_to_avif(input_path, &temp_path, detection.estimated_quality, config)
-        }
+        TargetFormat::JXL => convert_to_jxl(
+            input_path,
+            &temp_path,
+            &detection.format,
+            &detection.compression,
+            config,
+        ),
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "NoConversion should have been handled earlier".to_string(),
@@ -409,14 +407,23 @@ fn finalize_conversion_output(
     output_path: &Path,
     temp_path: &Path,
 ) -> Result<ConversionOutput> {
-    if !foundation::conversion::commit_temp_to_output_with_metadata(
-        temp_path,
-        output_path,
-        config.force(),
-        Some(input_path),
-    )
-    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
-    {
+    let committed = if detection.format == DetectedFormat::JPEG {
+        foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
+            temp_path,
+            output_path,
+            config.force(),
+            Some(input_path),
+        )
+    } else {
+        foundation::conversion::commit_temp_to_output_with_metadata(
+            temp_path,
+            output_path,
+            config.force(),
+            Some(input_path),
+        )
+    }
+    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    if !committed {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
             output_path: output_path.display().to_string(),
@@ -481,29 +488,32 @@ fn finalize_conversion_output(
         }
     }
 
-    if config.preserve_metadata() {
-        preserve_metadata(input_path, output_path)
-            .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    } else if config.preserve_timestamps() {
-        // Only run standalone timestamp sync when preserve_metadata is disabled;
-        // foundation::metadata::copy (called by preserve_metadata) already
-        // applies apply_file_timestamps as its final step, so running it again
-        // here would duplicate the sync and produce redundant log entries.
-        preserve_timestamps(input_path, output_path)
-            .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    }
+    let jpeg_integrity = if detection.format == DetectedFormat::JPEG {
+        match foundation::fast_img::verify_final_jxl_delivery_integrity(input_path, output_path) {
+            Ok(integrity) => Some(integrity),
+            Err(error) => {
+                cleanup_output_file(output_path, "failed final JPEG reconstruction proof");
+                return Err(ImgQualityError::ConversionError(format!(
+                    "Final JPEG reconstruction proof failed for {}: {error}",
+                    output_path.display()
+                )));
+            }
+        }
+    } else {
+        None
+    };
 
-    if config.delete_original()
-        && let Err(e) = foundation::conversion::safe_delete_original(
-            input_path,
-            output_path,
-            foundation::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        )
-    {
-        log_detail!(&format!(
-            "   {} Safe delete failed: {e}",
-            foundation::modern_ui::symbols::styled_warning_icon()
-        ));
+    if config.delete_original() {
+        if let Some(integrity) = jpeg_integrity.as_ref() {
+            foundation::fast_img::safe_delete_jpeg_source(input_path, output_path, integrity)?;
+        } else {
+            foundation::conversion::safe_delete_original(
+                input_path,
+                output_path,
+                foundation::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            )
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        }
     }
 
     let action = if detection.format == DetectedFormat::JPEG {
@@ -581,6 +591,7 @@ fn convert_to_jxl(
     input: &Path,
     output: &Path,
     format: &DetectedFormat,
+    compression: &CompressionType,
     config: &ConversionConfig,
 ) -> Result<()> {
     let input_abs = canonicalize_input(input);
@@ -603,7 +614,20 @@ fn convert_to_jxl(
     if *format == DetectedFormat::JPEG {
         builder.lossless_jpeg(true);
     } else {
-        builder.distance(0.0);
+        match compression {
+            CompressionType::Lossless => {
+                builder.distance(0.0);
+            }
+            CompressionType::Lossy => {
+                builder.distance(foundation::constants::JXL_ULTIMATE_DISTANCE);
+            }
+            CompressionType::Unknown | CompressionType::JpegReconstruction => {
+                return Err(ImgQualityError::ConversionError(format!(
+                    "JXL conversion requires proven source compression semantics: {}",
+                    input.display()
+                )));
+            }
+        }
     }
 
     if config.apple_compat() {
@@ -642,6 +666,14 @@ fn convert_to_jxl(
             "JXL health check failed: {e}"
         )));
     }
+    if *format == DetectedFormat::JPEG
+        && let Err(error) = foundation::fast_img::verify_jxl_roundtrip_integrity(input, output)
+    {
+        cleanup_output_file(output, "non-reconstructible JPEG JXL output");
+        return Err(ImgQualityError::ConversionError(format!(
+            "JPEG reconstruction proof failed before output commit: {error}"
+        )));
+    }
 
     // Compress mode: compare encoded image payload only.
     if config.compress() {
@@ -667,80 +699,6 @@ fn resolve_output_absolute(output: &Path) -> PathBuf {
         output,
         "img resolve_output_absolute",
     )
-}
-
-fn convert_to_avif(
-    input: &Path,
-    output: &Path,
-    quality: Option<u8>,
-    config: &ConversionConfig,
-) -> Result<()> {
-    let q = quality.ok_or_else(|| {
-        ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
-    })?;
-    let input_abs = canonicalize_input(input);
-    let output_abs = resolve_output_absolute(output);
-
-    let mut builder = foundation::AvifencBuilder::new();
-    builder.input(&input_abs).output(&output_abs);
-
-    builder.quality(q);
-
-    let mut command = builder.build();
-    let status = foundation::process_runner::run_command_with_liveness_timeout(
-        &mut command,
-        std::time::Duration::from_secs(120),
-        foundation::process_runner::image_process_hard_timeout(),
-        "AVIF image conversion",
-    )?;
-
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
-    }
-
-    // Verify output file
-    let output_size = std::fs::metadata(output)?.len();
-    if output_size == 0 {
-        cleanup_output_file(output, "empty AVIF output");
-        return Err(ImgQualityError::ConversionError(
-            "AVIF output file is empty (encoding may have failed)".to_string(),
-        ));
-    }
-
-    // Verify AVIF file integrity
-    if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_health(output) {
-        cleanup_output_file(output, "unhealthy AVIF output");
-        return Err(ImgQualityError::ConversionError(format!(
-            "AVIF health check failed: {e}"
-        )));
-    }
-
-    // Check compress mode using encoded payload, never complete-file size.
-    if config.compress() {
-        let input_payload = foundation::image::static_payload::measure(input)
-            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        let output_payload = foundation::image::static_payload::isobmff_mdat(output)
-            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        if !config.size_policy().fits(output_payload, input_payload) {
-            cleanup_output_file(output, "non-compressing AVIF output");
-            return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: AVIF payload ({output_payload} bytes) is outside the active \
-                 size policy for source payload ({input_payload} bytes)"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn preserve_timestamps(source: &Path, dest: &Path) -> std::io::Result<()> {
-    foundation::metadata::apply_file_timestamps(source, dest)
-}
-
-fn preserve_metadata(source: &Path, dest: &Path) -> std::io::Result<()> {
-    foundation::metadata::copy(source, dest)
 }
 
 /// Deep-analysis based conversion with intelligent parameter matching.
@@ -865,7 +823,40 @@ mod tests {
 
         let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::NoConversion);
-        assert!(strategy.reason.contains("already optimized"));
+        assert!(strategy.reason.contains("generational loss"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_modern_lossy_sources_are_retained() -> Result<()> {
+        for format in [
+            DetectedFormat::WebP,
+            DetectedFormat::AVIF,
+            DetectedFormat::HEIC,
+            DetectedFormat::HEIF,
+            DetectedFormat::JP2,
+        ] {
+            let detection = DetectionResult {
+                file_path: format!("/test/image.{}", format.as_str().to_ascii_lowercase()),
+                format,
+                image_type: ImageType::Static,
+                compression: CompressionType::Lossy,
+                width: 100,
+                height: 100,
+                bit_depth: Some(8),
+                has_alpha: false,
+                file_size: 1000,
+                frame_count: Some(1),
+                fps: None,
+                duration: None,
+                estimated_quality: Some(90),
+                entropy: None,
+                precision: foundation::image_detection::PrecisionMetadata::default(),
+            };
+
+            let strategy = determine_strategy(&detection)?;
+            assert_eq!(strategy.target, TargetFormat::NoConversion);
+        }
         Ok(())
     }
 
@@ -896,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lossy_tiff_to_avif_strategy() -> Result<()> {
+    fn test_lossy_legacy_strategy_stays_jxl() -> Result<()> {
         let detection = DetectionResult {
             file_path: "/test/image.tiff".to_string(),
             format: DetectedFormat::TIFF,
@@ -916,19 +907,35 @@ mod tests {
         };
 
         let strategy = determine_strategy(&detection)?;
-        assert_eq!(strategy.target, TargetFormat::AVIF);
-        assert!(strategy.command.contains("-q 90"));
+        assert_eq!(strategy.target, TargetFormat::JXL);
+        assert!(strategy.command.contains("cjxl"));
+        assert!(strategy.command.contains("-d"));
         Ok(())
     }
 
     #[test]
-    fn avif_quality_uses_typed_value_without_parse_gate() {
-        let source = include_str!("conversion_api.rs");
-        let needle = ["if let ", "Ok(q) = q.", "parse::<u8>()"].concat();
+    fn test_lossless_modern_source_upgrades_to_jxl() -> Result<()> {
+        let detection = DetectionResult {
+            file_path: "/test/image.avif".to_string(),
+            format: DetectedFormat::AVIF,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossless,
+            width: 100,
+            height: 100,
+            bit_depth: Some(10),
+            has_alpha: false,
+            file_size: 1000,
+            frame_count: Some(1),
+            fps: None,
+            duration: None,
+            estimated_quality: None,
+            entropy: None,
+            precision: foundation::image_detection::PrecisionMetadata::default(),
+        };
 
-        assert!(
-            !source.contains(&needle),
-            "typed AVIF quality must not be guarded by a parse-discard branch"
-        );
+        let strategy = determine_strategy(&detection)?;
+        assert_eq!(strategy.target, TargetFormat::JXL);
+        assert!(strategy.command.contains("-d 0.0"));
+        Ok(())
     }
 }

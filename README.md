@@ -14,9 +14,11 @@
 **Modern Format Boost** is a Rust media optimizer with separate owners for
 static and time-based media:
 
-- **`img run`** is the database-backed, general static-image pipeline. The
-  current CLI delivers **JXL only** (`--codec hevc`); `--codec av1` is rejected
-  with an instruction to use FastImg Meme Mode.
+- **`img run`** is the general static-image pipeline. Exact local detection is
+  the default; PostgreSQL is consulted only when an optional quality heuristic
+  is explicitly enabled. The current CLI delivers **JXL only** (`--codec
+hevc`); `--codec av1` is rejected with an instruction to use FastImg Meme
+  Mode.
 - **`img fast-img`** is the bounded, checkpointed production path. Its default
   `jxl` strategy converts true JPEG bitstreams to reversible JXL and runs a
   second, destructive-gated Photos-delivery tier for positively proven lossy
@@ -40,6 +42,31 @@ Typical routes:
 - 🎬 **`vid run`**: H.264, animated WebP/GIF, etc. → HEVC/AV1 quality search; container from `--codec` and `--apple-compat`
 
 Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/convert/delivery_codec_strategy.rs).
+
+### What it guarantees—and what it does not
+
+- A conversion candidate is delivered only after its route-specific decode,
+  quality, metadata and integrity gates pass. Size-constrained routes compare
+  encoded media payloads and require the candidate to fit the active policy;
+  if no candidate fits, the source is retained and the result is skip/failure.
+- JPEG→JXL delivery requires a byte-identical `djxl --reconstruct_jpeg` proof
+  after metadata commit. `restore-jpeg` keeps those JPEG bytes unchanged and
+  delivers additional JXL XMP as a separately hashed `.xmp` sidecar.
+- This is not a magic size reducer. Container metadata can make the complete
+  file larger even when the media payload passes, and a high-quality candidate
+  may provide no storage saving at all.
+- Exploration spends time to find the highest-quality candidate that satisfies
+  the active size/quality policy. Runtime rises with the number, complexity and
+  diversity of inputs; `--ultimate` deliberately trades more time for a finer
+  search.
+
+### Who should use it
+
+The most exercised path is macOS with Apple-oriented media libraries and
+explicit Photos delivery. Users on Linux and Windows can use adjacent-output
+and local conversion paths, but Apple Photos custody, TCC and iCloud checks are
+macOS-only and non-Apple production coverage is currently less mature. Keep an
+independent backup for irreplaceable archives on every platform.
 
 Think of it as a conservative optimizer that prefers honest skip/ignore
 outcomes over silent quality damage:
@@ -89,8 +116,9 @@ creative assets remain entirely within your control.
 - **Local Media Processing**: Conversion and verification operate on local
   media without telemetry or cloud upload. Package installation, dependency
   download and CI tooling may still use the network.
-- **Rust-Hardened Runtime**: Built with Rust to natively eliminate memory
-  corruption bugs (buffer overflows, etc.).
+- **Rust-Hardened Runtime**: Rust removes broad classes of memory-unsafe code,
+  while explicit bounds, parser limits and delivery gates address the remaining
+  logic and integration risks.
 - **Secure Integration**: All external tools (FFmpeg, cjxl) are invoked via
   safe, escaped primitives—never through raw shell execution—preventing
   arbitrary command injection.
@@ -249,8 +277,9 @@ flowchart TD
 
 `img run` enables content exploration, quality matching, compression, metadata
 preservation, timestamp preservation, recursion and Apple compatibility by
-default. It uses PostgreSQL plus the persistent analysis cache; FastImg does
-not require that database path.
+default. PostgreSQL is used only when the optional static-quality heuristic is
+explicitly enabled; the default exact-detection path and FastImg do not require
+or probe the database.
 
 ### `img fast-img`
 
@@ -270,15 +299,15 @@ live-library verification gates run before source cleanup.
 `img run` and FastImg share the same low-level integrity, metadata, path-safety
 and final-commit primitives, but they are not the same processing strategy:
 
-| Concern | `img run` | `img fast-img` |
-| ------- | --------- | -------------- |
-| Product goal | Broad static-image optimization and safe skip/copy routing | Bounded, resumable production delivery |
-| Analysis | Persistent analysis cache/database, HDR/precision/color and format detours | Content identity plus the evidence required by the selected JXL/AVIF path |
-| JPEG → JXL | Prefers reversible reconstruction; standard mode may retain or explicitly recover a non-reconstructible source | Requires exact JPEG reconstruction for the JXL primary tier; otherwise retains the source |
-| Modern lossy stills | Usually retained to avoid generational loss | JXL Tier 2 imports a positively proven lossy original without re-encoding it |
-| AVIF | Not selected through the normal `img run` codec surface | Meme Mode performs its bounded size/quality search in the final AVIF encoder domain |
-| Photos | Apple compatibility is an output policy, not an import claim | `--shortest-path` uses checkpointed import plus live Photos UUID/content proof |
-| Cleanup | Only when explicitly requested and after final verification | Mandatory for each proven delivery; incomplete/ambiguous sources remain with resumable state |
+| Concern             | `img run`                                                                                             | `img fast-img`                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Product goal        | Broad static-image optimization and safe skip/copy routing                                            | Bounded, resumable production delivery                                                       |
+| Analysis            | Exact local detection by default; optional cache/database heuristics plus HDR/precision/color detours | Content identity plus the evidence required by the selected JXL/AVIF path                    |
+| JPEG → JXL          | Requires exact reconstruction for replacement; otherwise retains the source                           | Requires exact JPEG reconstruction for the JXL primary tier; otherwise retains the source    |
+| Modern lossy stills | Usually retained to avoid generational loss                                                           | JXL Tier 2 imports a positively proven lossy original without re-encoding it                 |
+| AVIF                | Not selected through the normal `img run` codec surface                                               | Meme Mode performs its bounded size/quality search in the final AVIF encoder domain          |
+| Photos              | Apple compatibility is an output policy, not an import claim                                          | `--shortest-path` uses checkpointed import plus live Photos UUID/content proof               |
+| Cleanup             | Only when explicitly requested and after final verification                                           | Mandatory for each proven delivery; incomplete/ambiguous sources remain with resumable state |
 
 ### Abnormal or decoder-hostile stills
 
@@ -303,15 +332,15 @@ and the source plus sidecars are retained.
 “Static image support” means formats the project can identify and route with
 positive evidence—not every historical image or private camera format:
 
-| Scope | Formats / behavior |
-| ----- | ------------------ |
-| Content-signature identity | JPEG/JFIF, PNG/APNG, WebP, GIF, TIFF/BigTIFF, BMP, HEIC/HEIF/HIF, AVIF, JXL, JP2/J2K, ICO/CUR, QOI, EXR, FLIF, PSD, PNM and DDS; recognition is not a conversion promise |
-| Normal `img` discovery | PNG, JPEG/JPE/JFIF, WebP, GIF, TIFF, HEIC/HEIF/HIF, AVIF, BMP, ICO/CUR, SVG, JP2/J2K, JXL, WBMP and enumerated camera-RAW extensions |
-| Proven conversion core | Confirmed-static JPEG, PNG, WebP, TIFF, BMP and supported HEIC/HEIF inputs; lossless modern stills and HDR gainmaps take evidence-specific routes |
-| FastImg JXL | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF and codec-constrained HEIC |
-| FastImg AVIF | Confirmed-static inputs accepted by an authoritative decoder; expert-only external adapters remain opt-in and still require final evidence |
-| Decoder-dependent / best effort | SVG and camera RAW extensions may enter discovery, but success depends on an installed authoritative decoder; QOI/FLIF and other recognized containers are not blanket-admitted |
-| Explicitly outside normal raster conversion | PSD/PSB, AI/EPS/PDF, TGA, DDS, HDR/EXR and PNM-family design/scientific assets; unknown/private formats are copied, skipped or ignored rather than guessed |
+| Scope                                       | Formats / behavior                                                                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content-signature identity                  | JPEG/JFIF, PNG/APNG, WebP, GIF, TIFF/BigTIFF, BMP, HEIC/HEIF/HIF, AVIF, JXL, JP2/J2K, ICO/CUR, QOI, EXR, FLIF, PSD, PNM and DDS; recognition is not a conversion promise        |
+| Normal `img` discovery                      | PNG, JPEG/JPE/JFIF, WebP, GIF, TIFF, HEIC/HEIF/HIF, AVIF, BMP, ICO/CUR, SVG, JP2/J2K, JXL, WBMP and enumerated camera-RAW extensions                                            |
+| Proven conversion core                      | Confirmed-static JPEG, PNG, WebP, TIFF, BMP and supported HEIC/HEIF inputs; lossless modern stills and HDR gainmaps take evidence-specific routes                               |
+| FastImg JXL                                 | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF and codec-constrained HEIC                                         |
+| FastImg AVIF                                | Confirmed-static inputs accepted by an authoritative decoder; expert-only external adapters remain opt-in and still require final evidence                                      |
+| Decoder-dependent / best effort             | SVG and camera RAW extensions may enter discovery, but success depends on an installed authoritative decoder; QOI/FLIF and other recognized containers are not blanket-admitted |
+| Explicitly outside normal raster conversion | PSD/PSB, AI/EPS/PDF, TGA, DDS, HDR/EXR and PNM-family design/scientific assets; unknown/private formats are copied, skipped or ignored rather than guessed                      |
 
 Animated or multi-page content is not silently flattened by `img`; verified
 animation belongs to `vid`, while inconclusive input is retained.
@@ -367,16 +396,16 @@ successful optimization.
 
 ### Image Format Decision Matrix
 
-| Input Format                                   | Static? | Action in `img run`           | Output        | Notes                                                 |
-| :--------------------------------------------- | :-----: | :---------------------------- | :------------ | :---------------------------------------------------- |
-| JPEG                                           |   ✅    | **Reversible reconstruction** | `.jxl`        | Original JPEG recovery is verified when JBRD succeeds |
-| PNG / TIFF / BMP / other lossless stills       |   ✅    | **Lossless convert**          | `.jxl`        | May use detour pathway first                          |
-| WebP / AVIF / HEIC / HEIF (lossless still)     |   ✅    | **Convert**                   | `.jxl`        | Lossless modern stills are allowed                    |
-| HEIC / HEIF with Gainmap                       |   ✅    | **HDR synthesis**             | `.jxl`        | Gainmap path synthesizes linear HDR                   |
-| Legacy lossy stills after static validation    |   ✅    | **Near-lossless convert**     | `.jxl`        | Current `img run` batch path stays JXL-focused        |
-| Lossy WebP / AVIF / HEIC / HEIF still          |   ✅    | **Skip**                      | keep original | Avoid generational loss                               |
-| JXL still                                      |   ✅    | **Skip**                      | keep original | Already optimal                                       |
-| Animated GIF / WebP / APNG / HEIC / HEIF / JXL |   ❌    | **Ignore on img**             | —             | Use **`vid run`** → `.mp4` / `.mov`                   |
+| Input Format                                     | Static? | Action in `img run`           | Output        | Notes                                                 |
+| :----------------------------------------------- | :-----: | :---------------------------- | :------------ | :---------------------------------------------------- |
+| JPEG                                             |   ✅    | **Reversible reconstruction** | `.jxl`        | Original JPEG recovery is verified when JBRD succeeds |
+| PNG / TIFF / BMP / other lossless stills         |   ✅    | **Lossless convert**          | `.jxl`        | May use detour pathway first                          |
+| WebP / AVIF / HEIC / HEIF / JP2 (lossless still) |   ✅    | **Convert**                   | `.jxl`        | Lossless modern stills are allowed                    |
+| HEIC / HEIF with Gainmap                         |   ✅    | **HDR synthesis**             | `.jxl`        | Gainmap path synthesizes linear HDR                   |
+| Legacy lossy stills after static validation      |   ✅    | **Near-lossless convert**     | `.jxl`        | Current `img run` batch path stays JXL-focused        |
+| Lossy WebP / AVIF / HEIC / HEIF / JP2 still      |   ✅    | **Skip**                      | keep original | Avoid generational loss                               |
+| JXL still                                        |   ✅    | **Skip**                      | keep original | Already optimal                                       |
+| Animated GIF / WebP / APNG / HEIC / HEIF / JXL   |   ❌    | **Ignore on img**             | —             | Use **`vid run`** → `.mp4` / `.mov`                   |
 
 ### `img` entrypoints
 
@@ -385,7 +414,7 @@ successful optimization.
 | **`img run`**                      | JXL (`--codec hevc`)                                                           | Ignored           | Not exposed; `--codec av1` is rejected       |
 | **`img fast-img --strategy jxl`**  | Reversible JXL for true JPEG; Tier-2 custody for proven lossy modern originals | Retained/ignored  | Existing lossy AVIF may be a Tier-2 original |
 | **`img fast-img --strategy avif`** | AVIF Meme Mode                                                                 | Rejected/retained | Primary output                               |
-| **`smart_convert()`**              | Library API: JXL or AVIF per `determine_strategy`                              | Domain ignore     | Some lossy non-JPEG stills                   |
+| **`smart_convert()`**              | Library API: JXL or retain per `determine_strategy`                            | Domain ignore     | Not available; use FastImg Meme Mode         |
 
 ### Animated Media Decision Matrix (`vid` only)
 
@@ -441,18 +470,18 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### Prerequisites
 
-| Tool                 | Required? | Purpose                     | Install Command                                                                             |
-| :------------------- | :-------: | :-------------------------- | :------------------------------------------------------------------------------------------ |
-| **Rust** (nightly)   |    ✅     | Build & Install             | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
-| **FFmpeg** (5.0+)    |    ✅     | Video processing & Metrics  | `brew install ffmpeg` / `apt install ffmpeg`                                                |
-| **libjxl**           |    ✅     | JXL encoding core           | `brew install jpeg-xl`                                                                      |
-| **ExifTool**         |    ✅     | Metadata preservation       | `brew install exiftool`                                                                     |
-| **ImageMagick**      |    ✅     | Image detour pathway        | `brew install imagemagick`                                                                  |
-| **libwebp**          |    ✅     | WebP native decoding        | `brew install webp`                                                                         |
-| **libheif**          |    ✅     | HEIC/HEIF decode            | `brew install libheif`                                                                      |
-| **PostgreSQL** (12+) |    ✅     | Cache & quality database    | `brew install postgresql pgvector` / `apt install postgresql`                               |
-| **dovi_tool**        | Optional  | Dolby Vision RPU extraction | `cargo install dovi_tool`                                                                   |
-| **hdr10plus_tool**   | Optional  | HDR10+ metadata extraction  | `cargo install hdr10plus_tool`                                                              |
+| Tool                 |  Required?  | Purpose                                              | Install Command                                                                             |
+| :------------------- | :---------: | :--------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **Rust** (nightly)   |     ✅      | Build & Install                                      | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
+| **FFmpeg** (5.0+)    |     ✅      | Video processing & Metrics                           | `brew install ffmpeg` / `apt install ffmpeg`                                                |
+| **libjxl**           |     ✅      | JXL encoding core                                    | `brew install jpeg-xl`                                                                      |
+| **ExifTool**         |     ✅      | Metadata preservation                                | `brew install exiftool`                                                                     |
+| **ImageMagick**      |     ✅      | Image detour pathway                                 | `brew install imagemagick`                                                                  |
+| **libwebp**          |     ✅      | WebP native decoding                                 | `brew install webp`                                                                         |
+| **libheif**          |     ✅      | HEIC/HEIF decode                                     | `brew install libheif`                                                                      |
+| **PostgreSQL** (12+) | Conditional | Vid, training, cache and optional quality heuristics | `brew install postgresql pgvector` / `apt install postgresql`                               |
+| **dovi_tool**        |  Optional   | Dolby Vision RPU extraction                          | `cargo install dovi_tool`                                                                   |
+| **hdr10plus_tool**   |  Optional   | HDR10+ metadata extraction                           | `cargo install hdr10plus_tool`                                                              |
 
 #### macOS (Homebrew)
 
@@ -494,7 +523,11 @@ winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool \
 
 ### 🗄️ Database Setup
 
-Modern Format Boost utilizes PostgreSQL (with the `pgvector` extension) as a mandatory, local cache and quality-inference engine. Both `img` and `vid` binaries connect to the database on startup and will fail if the database service is unreachable.
+Modern Format Boost uses PostgreSQL (with the `pgvector` extension) for Vid,
+training, cache-management commands and explicitly enabled quality heuristics.
+Normal `img run`, FastImg and JPEG restoration use exact local detection by
+default and do not connect to PostgreSQL. When a database-backed feature is
+selected, an unreachable database remains a fail-closed startup error.
 
 #### 1. Start PostgreSQL Service
 
@@ -677,15 +710,16 @@ See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) **0.11.3** for the full hardening n
 
 **1. What is the difference between `img run` and `img fast-img`?**
 
-`img run` is the broad static-image optimizer: it uses analysis/database state,
-supports lossless/HDR detours, recovery adapters and broad skip/copy behavior,
-preserves metadata, and currently delivers JXL. `img fast-img` deliberately
-does less analysis: it is a bounded, durable delivery workflow with mandatory
-checkpoint and cleanup proof. Its JXL strategy owns reversible true JPEG plus
-Tier 2; AVIF Meme Mode owns confirmed-static containers. Their safety gates are
-shared, but candidate selection, search budget, database use and Photos policy
-are not identical. Use `--dry-run` before a FastImg production batch when
-source removal is not yet intended.
+`img run` is the broad static-image optimizer: it uses exact local detection by
+default, supports optional analysis/database state, lossless/HDR detours,
+recovery adapters and broad skip/copy behavior, preserves metadata, and
+currently delivers JXL. `img fast-img` deliberately does less analysis: it is a
+bounded, durable delivery workflow with mandatory checkpoint and cleanup proof.
+Its JXL strategy owns reversible true JPEG plus Tier 2; AVIF Meme Mode owns
+confirmed-static containers. Their safety gates are shared, but candidate
+selection, search budget, database use and Photos policy are not identical. Use
+`--dry-run` before a FastImg production batch when source removal is not yet
+intended.
 
 **2. Does FastImg Tier 2 precisely distinguish lossy from lossless modern images?**
 

@@ -886,8 +886,8 @@ pub const QUALITY_SCORE_HIGH_THRESHOLD: u8 = 90;
 pub const EXPECTED_REDUCTION_JXL_LOSSLESS_JPEG: f32 = 15.0;
 /// Expected size reduction (%) for general lossless image to JXL conversion.
 pub const EXPECTED_REDUCTION_JXL_LOSSLESS_STATIC: f32 = 45.0;
-/// Expected size reduction (%) for lossy image to AVIF conversion.
-pub const EXPECTED_REDUCTION_AVIF_LOSSY_STATIC: f32 = 25.0;
+/// Expected size reduction (%) for legacy lossy image to JXL conversion.
+pub const EXPECTED_REDUCTION_JXL_LOSSY_STATIC: f32 = 25.0;
 /// CRF threshold for "Visually Lossless" classification.
 pub const CRF_THRESHOLD_VISUALLY_LOSSLESS: f32 = 15.0;
 /// CRF threshold for "High Quality" classification.

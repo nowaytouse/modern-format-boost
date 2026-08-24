@@ -710,11 +710,20 @@ const fn mode_needs_img_vid_binaries(mode: &LaunchMode) -> bool {
     )
 }
 
-const fn mode_needs_db_health(mode: &LaunchMode) -> bool {
-    matches!(
-        mode,
-        LaunchMode::Auto | LaunchMode::Images | LaunchMode::Videos
-    )
+fn mode_needs_db_health(mode: &LaunchMode) -> bool {
+    match mode {
+        LaunchMode::Images => foundation::static_quality_db_lookup_enabled(),
+        LaunchMode::Auto | LaunchMode::Videos => true,
+        LaunchMode::FastImg
+        | LaunchMode::RestoreJpeg
+        | LaunchMode::FastVid
+        | LaunchMode::Collect
+        | LaunchMode::MergeXmp
+        | LaunchMode::IcloudImport
+        | LaunchMode::Diagnostic
+        | LaunchMode::CacheClean
+        | LaunchMode::DatabaseManager => false,
+    }
 }
 
 // ── safety checks (ported from drag_and_drop_processor.py) ──────────────────
@@ -1197,15 +1206,12 @@ fn run_fast_img_restore_post_success(
 fn fast_img_source_root_for_run(target: &Path) -> Result<PathBuf> {
     let canonical = foundation::media_conversion_gate::canonicalize_for_tool_input(target);
     if canonical.is_file() {
-        return canonical
-            .parent()
-            .map(Path::to_path_buf)
-            .with_context(|| {
-                format!(
-                    "fast-img single-file input has no parent: {}",
-                    canonical.display()
-                )
-            });
+        return canonical.parent().map(Path::to_path_buf).with_context(|| {
+            format!(
+                "fast-img single-file input has no parent: {}",
+                canonical.display()
+            )
+        });
     }
     Ok(canonical)
 }
@@ -2641,6 +2647,18 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn image_mode_database_preflight_requires_explicit_heuristic_opt_in() {
+        let _heuristic = foundation::common_utils::EnvGuard::set(
+            foundation::constants::HEURISTIC_QUALITY_ENV_KEY,
+            "0",
+        );
+
+        assert!(!mode_needs_db_health(&LaunchMode::Images));
+        assert!(mode_needs_db_health(&LaunchMode::Videos));
+    }
+
+    #[test]
     fn cli_binary_uses_release_path_for_workspace_like_roots() {
         assert_eq!(
             cli_binary(Path::new("/repo"), "img"),
@@ -2713,8 +2731,14 @@ mod tests {
 
         assert_eq!(args.mode, LaunchMode::FastImg);
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].program, PathBuf::from("/repo/target/release/img"));
-        assert_eq!(commands[0].args.first().map(String::as_str), Some("fast-img"));
+        assert_eq!(
+            commands[0].program,
+            PathBuf::from("/repo/target/release/img")
+        );
+        assert_eq!(
+            commands[0].args.first().map(String::as_str),
+            Some("fast-img")
+        );
         assert!(commands[0].args.iter().any(|arg| arg == "--shortest-path"));
         assert!(!commands[0].args.iter().any(|arg| arg == "run"));
     }

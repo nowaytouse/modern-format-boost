@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-23
+## [Unreleased] - 2026-08-24
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
@@ -38,11 +38,21 @@ All notable changes to this project will be documented in this file.
 - **Strict original-JPEG restoration**: `restore-jpeg` now invokes
   `djxl --reconstruct_jpeg`, rejects JBRD records that fall back to lossy
   pixel-to-JPEG encoding, and requires byte-identical output rather than merely
-  matching decoded pixels before metadata enrichment. Embedded JXL metadata and
-  any matching XMP sidecar are then written into the restored JPEG and audited
-  before source cleanup; filesystem metadata is reapplied after that write so
-  ExifTool replacement cannot discard xattrs or timestamps. No external output
-  sidecar is required.
+  matching decoded pixels. JXL XML metadata is restored as a validated adjacent
+  `.xmp` sidecar so the reconstructed JPEG bytes are never rewritten; manifest
+  V2 records and rechecks both JPEG and XMP hashes immediately before source
+  cleanup. Filesystem metadata is copied without changing either payload.
+- **Archive-grade JPEG commit gate**: FastImg, normal IMG and the public library
+  API share the same exact JBRD rule. Pixel-equivalent or decode-only JXL is an
+  intermediate diagnostic result only: it cannot be committed as a replacement
+  for a JPEG and can never authorize source deletion. A final byte-for-byte
+  reconstruction proof is mandatory after metadata/container work. The obsolete
+  pixel-reencode opt-in and its ImageMagick handoff were removed instead of
+  performing work that the archive gate must reject. JPEG restoration now
+  requires only `jxlinfo` and `djxl`; ExifTool is no longer a false startup
+  dependency for a path that deliberately never rewrites the JPEG. Failed final
+  proofs clean newly committed JPEG candidates, and the temporary exact-proof
+  snapshot is guarded against error-path leakage.
 - **Batch-isolated JPEG restoration**: One legacy JXL with unusable JPEG
   reconstruction data no longer aborts healthy siblings. Every candidate is
   independently classified by official `jxlinfo` plus strict and pixel-health
@@ -97,6 +107,23 @@ All notable changes to this project will be documented in this file.
   Automatic tool preparation now treats the verifier as mandatory alongside
   `img`/`vid`, preventing a successful encode from failing only at the final
   integrity step.
+- **IMG product-boundary convergence**: Normal `img run` and the public
+  `smart_convert()` API are now JXL-or-retain only. The dormant normal-IMG AVIF
+  target and encoder branch were removed; AVIF encoding remains exclusively in
+  FastImg Meme Mode. Proven-lossy WebP, AVIF, HEIC/HEIF, JP2, and JXL inputs are
+  retained byte-for-byte, while proven-lossless modern sources remain eligible
+  for lossless JXL conversion.
+- **Database-optional normal IMG**: With static quality heuristics disabled
+  (the default), ordinary image processing no longer requires or probes
+  PostgreSQL and bypasses the database-backed path-tree cache. Explicit quality
+  heuristic, cache-statistics, ingestion, and database-health operations keep
+  their mandatory database checks.
+- **Canonical output-root safety**: IMG now resolves the input and base roots to
+  the same filesystem identity before deriving relative output paths, preventing
+  macOS `/tmp` versus `/private/tmp` aliases or symlinks from redirecting an
+  output back into the source tree. Prospective output paths retain the Apple
+  Photos-library guard without logging an expected missing directory as an
+  error.
 - **Machine-verifiable completion**: Automatic verification consumes a strict
   JSON result instead of inferring counts and success from human-readable log
   text. Missing or contradictory results fail closed, integrity warnings return
@@ -982,7 +1009,7 @@ evidence should be stronger than the linear sum.
 
 #### CI / tooling
 
-- GitHub Actions health check: `foundation/ci-static-build` on `cargo check` / `cargo test` / `clippy` (embedded libheif; avoids `libheif-sys` build.rs permission failures). Documented in [`.github/WORKFLOW_FIXES.md`](../.github/WORKFLOW_FIXES.md); `crates/dev/scripts/ci/clippy_strict.sh` passes the same feature flag when `GITHUB_ACTIONS` is set.
+- GitHub Actions health check: `foundation/ci-static-build` on `cargo check` / `cargo test` / `clippy` (embedded libheif; avoids `libheif-sys` build.rs permission failures). The retired `.github/WORKFLOW_FIXES.md` note documented this migration; `crates/dev/scripts/ci/clippy_strict.sh` passes the same feature flag when `GITHUB_ACTIONS` is set.
 - `media_conversion_delivery_heatmap.py --deep`: **0** unallowlisted M39 numeric-forgery hits; ALLOWLIST **0** (M43).
 - `test_real_silent_fallbacks`: **129** contract tests including M70–M83 sealing, audit-policy, and snapshot `media_conversion_hardening_audit_snapshot`.
 - **[CRITICAL] Production Panic Elimination:** Systematically refactored ISOBMFF parsing in `conversion.rs`, replacing recursive `expect()` calls with safe `.get()?` access and early-return patterns.
@@ -1924,17 +1951,17 @@ error: Missing pixel format`.
 - **Local SQLite + rusqlite 0.40 (M214)**: `mfb_store.sqlite` (`blob_store`, CRC32, WAL) for offline path-tree replica and checkpoint resume blobs; schema mismatch is hard error; dev `MediaIndex` `open_default()` on unified store.
 - **Processed list + legacy DB cleanup (M215)**: in-memory anti-duplicate set persists via `blob_store.processed` (`session_key`); retired `image_analysis_v2*.db` deleted by `cache_cleaner` (no migration).
 - **Media conversion delivery (M1–M83)**:
-  - New [`media_conversion_gate.rs`](../crates/foundation/src/media_conversion_gate.rs) — static/animated routing, explore `pipeline_acceptable`, audited fallbacks (`delivery_fallback_audit`), default strict delivery (`MODERN_FORMAT_DISABLE_STRICT_MEDIA_CONVERSION=1` to relax).
+  - New [`media_conversion_gate.rs`](../crates/foundation/src/convert/media_conversion_gate.rs) — static/animated routing, explore `pipeline_acceptable`, audited fallbacks (`delivery_fallback_audit`), default strict delivery (`MODERN_FORMAT_DISABLE_STRICT_MEDIA_CONVERSION=1` to relax).
   - `img` / `vid` delivery paths route fallbacks through the gate (no raw `log_anomaly!` in product crates).
-  - Docs: [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](MEDIA_CONVERSION_LAYER_CONTRACT.md), [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](MEDIA_CONVERSION_DELIVERY_SEAL.md), [`MEDIA_CONVERSION_HARDENING_AUDIT.md`](MEDIA_CONVERSION_HARDENING_AUDIT.md).
+  - Docs: [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md), [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md), [`MEDIA_CONVERSION_HARDENING_AUDIT.md`](hardening/MEDIA_CONVERSION_HARDENING_AUDIT.md).
   - Tooling: `media_conversion_delivery_heatmap.py` + baseline fixture.
 - **Algorithm layer (I1–I10)**:
-  - [`algorithm_runtime.rs`](../crates/foundation/src/algorithm_runtime.rs), [`algorithm_audit.rs`](../crates/foundation/src/algorithm_audit.rs), [`algorithm_seal.rs`](../crates/foundation/src/algorithm_seal.rs) — `MODERN_FORMAT_DISABLE_*` gates, finite unit probabilities, HDBSCAN catalog fail-closed.
+  - [`algorithm_runtime.rs`](../crates/foundation/src/algo/algorithm_runtime.rs), [`algorithm_audit.rs`](../crates/foundation/src/algo/algorithm_audit.rs), [`algorithm_seal.rs`](../crates/foundation/src/algo/algorithm_seal.rs) — `MODERN_FORMAT_DISABLE_*` gates, finite unit probabilities, HDBSCAN catalog fail-closed.
   - Loop `inference_log` audit-only column semantics; SQL views `003_inference_runtime_verdict_views.sql`, `004_loop_inference_posterior_views.sql`.
-  - Doc: [`ALGORITHM_LAYER_CONTRACT.md`](ALGORITHM_LAYER_CONTRACT.md).
-- **Terminal UI (U2–U11)** — plain stderr, unified progress glyphs, brand tokens (`mfb_ui_tokens.py`, `ui_stderr.rs`). Doc: [`UI_LAYER_CONTRACT.md`](UI_LAYER_CONTRACT.md).
-- **Logging / session (M44–M46)** — mutex, path safety, scratch temp audits. Doc: [`LOGGING_LAYER_CONTRACT.md`](LOGGING_LAYER_CONTRACT.md).
-- **Database layer** — multi-scenario ingest hardening; doc: [`DATABASE_LAYER_CONTRACT.md`](DATABASE_LAYER_CONTRACT.md).
+  - Doc: [`ALGORITHM_LAYER_CONTRACT.md`](hardening/ALGORITHM_LAYER_CONTRACT.md).
+- **Terminal UI (U2–U11)** — plain stderr, unified progress glyphs, brand tokens (`mfb_ui_tokens.py`, `ui_stderr.rs`). Doc: [`UI_LAYER_CONTRACT.md`](hardening/UI_LAYER_CONTRACT.md).
+- **Logging / session (M44–M46)** — mutex, path safety, scratch temp audits. Doc: [`LOGGING_LAYER_CONTRACT.md`](hardening/LOGGING_LAYER_CONTRACT.md).
+- **Database layer** — multi-scenario ingest hardening; doc: [`DATABASE_LAYER_CONTRACT.md`](hardening/DATABASE_LAYER_CONTRACT.md).
 - **`training_tier_audit.rs`** — Rust tier rules aligned with [`training_rules.json`](../crates/dev/src/config/training_rules.json) (`ALL` combiner, committed ambiguous policy **exclude**):
   - High: entropy ≥ **7.7** and short side ≥ **2160** (dimension entropy floor **6.4**).
   - Low: entropy ≤ **2.8** and max side ≤ **180** (dimension entropy ceil **4.1**).
@@ -1942,7 +1969,7 @@ error: Missing pixel format`.
 - **Collect + ingest parity** — `run_training.py` uses C-API `mfb_probe_static_still_image`; `train_quality` ingest calls `verify_training_tier_for_ingest` (animation re-check, `analysis_error` reject, label/tier mismatch reject).
 - **Entry guards** — `mfb_entry_guard.py` + `entry_guard.rs` / `training_entry_guard.rs`: no shell wrappers; `run_training.py` is the canonical training entry; delegated `MFB_INVOKER` / `MFB_TRAINING_INVOKER` stamps.
 - **Config consumers** — `mfb_config_load.py` enforces JSON `_consumer`; machine paths only in gitignored `training_rules.local.json`.
-- Registry: [`ENTRY_GUARD_REGISTRY.md`](dev/config/ENTRY_GUARD_REGISTRY.md), [`CONFIG_CONSUMERS.md`](dev/config/CONFIG_CONSUMERS.md).
+- The historical `ENTRY_GUARD_REGISTRY.md` and `CONFIG_CONSUMERS.md` notes were retired after their checks moved into code and CI.
 - **Merged `manage_db.py` into `database_manager.py`**
   - Consolidated two separate database management scripts into one unified
     interactive tool
@@ -2015,9 +2042,7 @@ error: Missing pixel format`.
 - **Clippy**: `performance_schedule` / `thread_manager` / `cli_runner` / `media_conversion_gate` — merged match arms, `const fn` tier scalars, `write!` governor log, collapsible cache `if`.
 - **Misc**: `safety.rs`, `progress` / `unified_progress`, `training_tier_audit`, `video_detection`, `loop_intent`, `explore_strategy`, `gpu_accel` — aligned with gate/strategy audits and fmt.
 - [`README.md`](../README.md) / [`README_ZH.md`](README_ZH.md) — layer contracts & training entry sections.
-- [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) — topic → doc map.
-- [`MULTI_SCENARIO_IMPLEMENTATION_GUIDE.md`](MULTI_SCENARIO_IMPLEMENTATION_GUIDE.md) — tier table, modern `run_training.py` CLI (default ingest; `--dry-run` plan-only).
-- [`MULTI_SCENARIO_IMPLEMENTATION_SUMMARY.md`](MULTI_SCENARIO_IMPLEMENTATION_SUMMARY.md), [`MULTI_SCENARIO_EMBEDDING_ARCHITECTURE.md`](MULTI_SCENARIO_EMBEDDING_ARCHITECTURE.md), [`docs/dev/BACKFILL_RETRAIN.md`](dev/BACKFILL_RETRAIN.md) — cross-links to contracts and tier rules.
+- Retired `DOCUMENTATION_INDEX.md` and multi-scenario implementation notes were consolidated into the README and hardening contracts.
 - **`training_rules.json`** — committed template with empty `local_dirs`; machine paths via gitignored `training_rules.local.json` merged at runtime by `run_training.py`.
 - **`.gitignore`** — `crates/dev/src/fuzz/slow-unit-*`, `training_rules.local.json` (fuzz artifacts no longer tracked).
 - **`ultrahdr_real_file_probe.rs`** — sample path from `MFB_ULTRAHDR_PROBE_IMAGE` or `debug/IMG_0413.JPG` (no hardcoded user paths).
@@ -4171,10 +4196,10 @@ sanitizer=address` on nightly. Catches heap/stack/global buffer overflows
   framework.
 - **Algorithmic Regression Snapshots**: Established a "Golden Standard" for
   media classification results using
-  [classification_snapshots.rs](file:///crates/foundation/tests/classification_snapshots.rs)
+  [`classification_snapshots.rs`](../crates/dev/tests/matrix/classification_snapshots.rs)
   and `insta`. Any heuristic drift is now detectable and reviewable.
 - **Centralized Constant Provenance**: Migrated all magic numbers and heuristic
-  thresholds to [constants.rs](file:///crates/foundation/src/constants.rs)
+  thresholds to [`constants.rs`](../crates/foundation/src/infra/constants.rs)
   with documented **Rationales** explaining their empirical origins.
 - **Numeric Safety Hardening**:
   - Systematically eliminated silent saturating casts in critical quality paths.
@@ -4197,17 +4222,17 @@ sanitizer=address` on nightly. Catches heap/stack/global buffer overflows
 ### ⚙️ Phase 3: Configuration & Observability Hardening (Updated 2026-04-07)
 
 - **Configuration Globalization**:
-  - **[.envrc](file:///.envrc)**: Standardized to English; added `watch_file
+  - **[.envrc](../.envrc)**: Standardized to English; added `watch_file
 scripts/requirements.txt` and cross-platform CPU detection for
     `CARGO_BUILD_JOBS`.
-  - **[.cargo/config.toml](file:///.cargo/config.toml)**: Standardized to
+  - **[.cargo/config.toml](../.cargo/config.toml)**: Standardized to
     English and optimized for production (`panic = "abort"`, `lto = "thin"`,
     `strip = "symbols"`).
 - **Diagnostic Expansion (Observability)**:
-  - **[hdr_synthesis.rs](file:///crates/foundation/src/hdr_synthesis.rs)**:
-    Injected structured `tracing::debug!` logs for GainMap metadata and P3
-    conversion status.
-  - **[image_jpeg_analysis.rs](file:///crates/foundation/src/image_jpeg_analysis.rs)**:
+  - The former `foundation/src/hdr_synthesis.rs` implementation added structured
+    `tracing::debug!` logs for GainMap metadata and P3 conversion status; that
+    module was later retired during consolidation.
+  - **[`image_jpeg_analysis.rs`](../crates/foundation/src/image/image_jpeg_analysis.rs)**:
     Added structured logs for MPF segment scanning and UltraHDR discovery.
 - **Documentation Maintenance**:
   - **CHANGELOG.md**: Repaired sorting inconsistencies where recent entries were

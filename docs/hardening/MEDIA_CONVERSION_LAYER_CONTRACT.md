@@ -3,7 +3,7 @@
 # Media conversion processing layer contract
 
 Runtime **conversion delivery** for `img` / `vid` (distinct from training tier rules in
-[`training_tier_audit.rs`](../crates/foundation/src/training_tier_audit.rs) and algorithm
+[`training_tier_audit.rs`](../../crates/foundation/src/train/training_tier_audit.rs) and algorithm
 inference in [`ALGORITHM_LAYER_CONTRACT.md`](ALGORITHM_LAYER_CONTRACT.md)).
 
 ## Core invariants

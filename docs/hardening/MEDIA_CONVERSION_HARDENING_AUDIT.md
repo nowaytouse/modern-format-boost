@@ -3,7 +3,7 @@
 # Media conversion hardening — problem surface & structure
 
 Deep audit snapshot (regenerate: `python3 crates/dev/scripts/media_conversion_delivery_heatmap.py --deep`).
-Machine-readable: [`crates/dev/src/fixtures/media_conversion_deep_audit.json`](../crates/dev/src/fixtures/media_conversion_deep_audit.json).
+Machine-readable: [`crates/dev/src/fixtures/media_conversion_deep_audit.json`](../../crates/dev/src/fixtures/media_conversion_deep_audit.json).
 
 ## 1. Enforcement topology (three scanners, one gate)
 
@@ -251,4 +251,3 @@ See [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](MEDIA_CONVERSION_DELIVERY_SEAL.md) “
 | Algorithm / training tier                        | **Out of scope** for M1–M156 delivery rows (separate I1–I10 contract)                          |
 
 ---
-

@@ -310,7 +310,10 @@ impl DetectedFormat {
 
     #[must_use]
     pub const fn is_modern_format(&self) -> bool {
-        matches!(self, Self::HEIC | Self::HEIF | Self::AVIF | Self::JXL)
+        matches!(
+            self,
+            Self::WebP | Self::HEIC | Self::HEIF | Self::AVIF | Self::JXL | Self::JP2
+        )
     }
 }
 

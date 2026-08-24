@@ -421,6 +421,8 @@ struct RestoreJpegManifestRecord {
     output_rel: String,
     source_blake3: String,
     output_blake3: String,
+    xmp_rel: Option<String>,
+    xmp_blake3: Option<String>,
     source_deleted: bool,
 }
 
@@ -461,9 +463,9 @@ fn load_restore_jpeg_manifest(
             continue;
         }
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 5 {
+        if parts.len() != 5 && parts.len() != 7 {
             errors.push(format!(
-                "line {line_idx}: expected 5 TSV fields, got {}",
+                "line {line_idx}: expected 5 or 7 TSV fields, got {}",
                 parts.len()
             ));
             continue;
@@ -472,7 +474,11 @@ fn load_restore_jpeg_manifest(
         let output_rel_hex = parts[1];
         let source_hash = parts[2];
         let output_hash = parts[3];
-        let source_deleted = parts[4];
+        let (xmp_rel_hex, xmp_hash, source_deleted) = if parts.len() == 7 {
+            (parts[4], parts[5], parts[6])
+        } else {
+            ("", "", parts[4])
+        };
 
         let source_rel = match hex_decode(source_rel_hex)
             .map_err(|_e| ())
@@ -498,6 +504,26 @@ fn load_restore_jpeg_manifest(
                 continue;
             }
         };
+        let (xmp_rel, xmp_blake3) = if xmp_rel_hex.is_empty() && xmp_hash.is_empty() {
+            (None, None)
+        } else if xmp_rel_hex.is_empty() || xmp_hash.trim().is_empty() {
+            errors.push(format!(
+                "line {line_idx}: XMP path and hash fields must both be present"
+            ));
+            continue;
+        } else {
+            let xmp_rel = match hex_decode(xmp_rel_hex)
+                .map_err(|_e| ())
+                .and_then(|b| String::from_utf8(b).map_err(|_e| ()))
+            {
+                Ok(value) => value,
+                Err(_err) => {
+                    errors.push(format!("line {line_idx}: invalid xmp_rel hex/UTF-8 field"));
+                    continue;
+                }
+            };
+            (Some(xmp_rel), Some(xmp_hash.to_string()))
+        };
         let source_deleted = match source_deleted {
             "true" => true,
             "false" => false,
@@ -510,6 +536,9 @@ fn load_restore_jpeg_manifest(
         };
         if !is_safe_manifest_relative_path(&source_rel)
             || !is_safe_manifest_relative_path(&output_rel)
+            || xmp_rel
+                .as_deref()
+                .is_some_and(|path| !is_safe_manifest_relative_path(path))
         {
             errors.push(format!(
                 "line {line_idx}: manifest paths must be safe relative paths"
@@ -525,6 +554,8 @@ fn load_restore_jpeg_manifest(
             output_rel,
             source_blake3: source_hash.to_string(),
             output_blake3: output_hash.to_string(),
+            xmp_rel,
+            xmp_blake3,
             source_deleted,
         });
     }
@@ -547,10 +578,7 @@ fn resolve_source_directory_for_post_cleanup(source_dir: &Path) -> Result<(PathB
     match fs::metadata(source_dir) {
         Ok(metadata) => {
             if !metadata.is_dir() {
-                anyhow::bail!(
-                    "source_dir is not a directory: {}",
-                    source_dir.display()
-                );
+                anyhow::bail!("source_dir is not a directory: {}", source_dir.display());
             }
             Ok((
                 source_dir
@@ -573,8 +601,9 @@ fn resolve_source_directory_for_post_cleanup(source_dir: &Path) -> Result<(PathB
                 }),
             }
         }
-        Err(error) => Err(error)
-            .with_context(|| format!("inspect source_dir {}", source_dir.display())),
+        Err(error) => {
+            Err(error).with_context(|| format!("inspect source_dir {}", source_dir.display()))
+        }
     }
 }
 
@@ -585,8 +614,7 @@ fn run_fast_img_delivery_check(
     processing_mode: &str,
     strategy: &str,
 ) -> Result<IntegrityStats> {
-    let (source_dir, source_dir_exists) =
-        resolve_source_directory_for_post_cleanup(source_dir)?;
+    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)?;
     let optimized_dir = if optimized_dir.exists() {
         optimized_dir
             .canonicalize()
@@ -1073,8 +1101,7 @@ fn run_fast_img_restore_check(
     report: &mut String,
     strategy: &str,
 ) -> Result<IntegrityStats> {
-    let (source_dir, source_dir_exists) =
-        resolve_source_directory_for_post_cleanup(source_dir)?;
+    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)?;
     let restored_dir = restored_dir
         .canonicalize()
         .context("canonicalize restored_dir")?;
@@ -1123,6 +1150,7 @@ fn run_fast_img_restore_check(
     }
 
     let mut restored_jpeg = BTreeMap::new();
+    let mut restored_xmp_candidates = Vec::new();
     let mut non_jpeg_outputs = Vec::new();
     let mut restored_probe_errors = Vec::new();
     for path in collect_regular_files(&restored_dir)? {
@@ -1134,6 +1162,14 @@ fn run_fast_img_restore_check(
             continue;
         }
         if path.file_name().and_then(|f| f.to_str()) == Some(".mfb_restore_jpeg_manifest.tsv") {
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
+        {
+            restored_xmp_candidates.push(path);
             continue;
         }
         match detect_true_format(&path) {
@@ -1150,12 +1186,23 @@ fn run_fast_img_restore_check(
             }
         }
     }
+    let mut restored_xmp_sidecars = BTreeMap::new();
+    for path in restored_xmp_candidates {
+        let rel = path.strip_prefix(&restored_dir)?;
+        let key = integrity_stem_key(rel);
+        if !restored_jpeg.contains_key(&key) {
+            non_jpeg_outputs.push((path, "orphan_xmp".to_string()));
+            continue;
+        }
+        if let Err(error) = foundation::metadata::validate_xmp_sidecar(&path) {
+            non_jpeg_outputs.push((path, format!("invalid_xmp: {error}")));
+            continue;
+        }
+        restored_xmp_sidecars.insert(key, path);
+    }
 
     let (manifest_records, mut restore_manifest_errors) = load_restore_jpeg_manifest(&restored_dir);
-    if !source_dir_exists
-        && manifest_records.is_empty()
-        && restore_manifest_errors.is_empty()
-    {
+    if !source_dir_exists && manifest_records.is_empty() && restore_manifest_errors.is_empty() {
         restore_manifest_errors.push(
             "source directory was removed but the restore manifest contains no proof records"
                 .to_string(),
@@ -1180,6 +1227,33 @@ fn run_fast_img_restore_check(
             continue;
         }
         let source_path = source_dir.join(source_rel);
+        if let Some(xmp_rel) = record.xmp_rel.as_deref() {
+            if integrity_stem_key(Path::new(xmp_rel)) != output_key {
+                restore_manifest_errors.push(format!(
+                    "manifest XMP key mismatch: output={output_rel} xmp={xmp_rel}"
+                ));
+            } else {
+                let xmp_path = restored_dir.join(xmp_rel);
+                if !xmp_path.is_file() {
+                    restore_manifest_errors
+                        .push(format!("manifest XMP sidecar is missing: {xmp_rel}"));
+                } else if let Err(error) = foundation::metadata::validate_xmp_sidecar(&xmp_path) {
+                    restore_manifest_errors.push(format!(
+                        "manifest XMP sidecar is invalid: {xmp_rel}: {error}"
+                    ));
+                } else {
+                    match calculate_blake3_hash(&xmp_path) {
+                        Ok(actual_hash)
+                            if record.xmp_blake3.as_deref() == Some(actual_hash.as_str()) => {}
+                        Ok(_) => restore_manifest_errors
+                            .push(format!("manifest XMP BLAKE3 mismatch: {xmp_rel}")),
+                        Err(error) => restore_manifest_errors.push(format!(
+                            "failed to hash manifest XMP sidecar {xmp_rel}: {error}"
+                        )),
+                    }
+                }
+            }
+        }
         if record.source_deleted {
             if source_path.exists() {
                 restore_manifest_errors.push(format!(
@@ -1244,11 +1318,9 @@ fn run_fast_img_restore_check(
                     "pixel-decodable JXL has no exact JPEG reconstruction data".to_string(),
                 ));
             }
-            Ok(
-                foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
-                    diagnostic,
-                },
-            ) => retained_ineligible.push((
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
+                diagnostic,
+            }) => retained_ineligible.push((
                 path.clone(),
                 format!("advertised JPEG reconstruction rejected by djxl: {diagnostic}"),
             )),
@@ -1308,10 +1380,8 @@ fn run_fast_img_restore_check(
     stats.mismatched_types = non_jpeg_outputs.len();
     stats.count_delta = (restored_jpeg.len() + retained_ineligible.len()) as isize
         - source_candidate_count as isize;
-    stats.explained_gaps = missing_keys.len()
-        + extra_keys.len()
-        + non_jpeg_outputs.len()
-        + retained_ineligible.len();
+    stats.explained_gaps =
+        missing_keys.len() + extra_keys.len() + non_jpeg_outputs.len() + retained_ineligible.len();
 
     let integrity_failures = restore_manifest_errors.len()
         + missing_keys.len()
@@ -1353,6 +1423,10 @@ fn run_fast_img_restore_check(
     report.push_str(&format!(
         "Restored JPEG files:        {}\n",
         restored_jpeg.len()
+    ));
+    report.push_str(&format!(
+        "Restored XMP sidecars:      {}\n",
+        restored_xmp_sidecars.len()
     ));
     report.push_str(&format!(
         "Source probe errors:        {}\n",
@@ -2564,6 +2638,25 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(records[0].output_rel, "out/file1.jpg");
         assert_eq!(records[0].source_blake3, "hash1");
         assert_eq!(records[0].output_blake3, "hash2");
+        assert!(records[0].source_deleted);
+    }
+
+    #[test]
+    fn test_load_restore_jpeg_manifest_with_xmp_proof() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manifest_path = tempdir.path().join(".mfb_restore_jpeg_manifest.tsv");
+        let tsv_content = "\
+# MFB_RESTORE_JPEG_MANIFEST_V2
+source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_blake3\tsource_deleted
+7372632f66696c65312e4a584c\t6f75742f66696c65312e6a7067\thash1\thash2\t6f75742f66696c65312e786d70\txmp-hash\ttrue
+";
+        fs::write(&manifest_path, tsv_content).unwrap();
+
+        let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
+        assert!(errors.is_empty(), "Expected no errors, got: {errors:?}");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].xmp_rel.as_deref(), Some("out/file1.xmp"));
+        assert_eq!(records[0].xmp_blake3.as_deref(), Some("xmp-hash"));
         assert!(records[0].source_deleted);
     }
 

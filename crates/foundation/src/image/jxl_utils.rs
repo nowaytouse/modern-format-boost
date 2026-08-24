@@ -72,12 +72,14 @@ pub fn probe_jpeg_reconstruction_eligibility(
             first_nonempty_tool_line(&info_diagnostic)
         ));
     }
-    let advertises_reconstruction = String::from_utf8_lossy(&info_diagnostic).lines().any(|line| {
-        let line = line.to_ascii_lowercase();
-        line.contains("jpeg bitstream reconstruction")
-            && line.contains("available")
-            && !line.contains("not available")
-    });
+    let advertises_reconstruction = String::from_utf8_lossy(&info_diagnostic)
+        .lines()
+        .any(|line| {
+            let line = line.to_ascii_lowercase();
+            line.contains("jpeg bitstream reconstruction")
+                && line.contains("available")
+                && !line.contains("not available")
+        });
 
     let mut strict_command = DjxlBuilder::new()
         .input(path)
@@ -88,10 +90,8 @@ pub fn probe_jpeg_reconstruction_eligibility(
         .arg("--output_format=jpg")
         .arg("--disable_output")
         .arg("--quiet");
-    let strict = run_jxl_reconstruction_probe(
-        &mut strict_command,
-        "strict JPEG reconstruction probe",
-    )?;
+    let strict =
+        run_jxl_reconstruction_probe(&mut strict_command, "strict JPEG reconstruction probe")?;
     if strict.status.success() {
         return Ok(JpegReconstructionEligibility::Exact);
     }

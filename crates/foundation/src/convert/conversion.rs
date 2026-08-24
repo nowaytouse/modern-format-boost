@@ -1140,7 +1140,6 @@ bitflags::bitflags! {
         const VERBOSE = 1 << 10;
         const REQUIRE_JPEG_RECONSTRUCTION = 1 << 11;
         const REQUIRE_OUTPUT_DELIVERY = 1 << 12;
-        const ALLOW_JPEG_PIXEL_REENCODE_FALLBACK = 1 << 13;
         const ALLOW_EXPERT_OPTIONS = 1 << 14;
         const ARCHIVE = 1 << 15;
     }
@@ -1234,12 +1233,6 @@ impl ConvertOptions {
     #[must_use]
     pub const fn require_output_delivery(&self) -> bool {
         self.flags.contains(ConvertFlags::REQUIRE_OUTPUT_DELIVERY)
-    }
-
-    #[must_use]
-    pub const fn allow_jpeg_pixel_reencode_fallback(&self) -> bool {
-        self.flags
-            .contains(ConvertFlags::ALLOW_JPEG_PIXEL_REENCODE_FALLBACK)
     }
 
     #[must_use]

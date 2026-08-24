@@ -275,13 +275,11 @@ pub fn verify_pixel_equivalence_integrity(
 /// Verify a final delivered JXL is safe to use as the sole retained
 /// JPEG-derived asset.
 ///
-/// The final JXL first rechecks byte-identical JPEG reconstruction after
-/// metadata preservation. When that stronger proof still holds, the pixel
-/// audit verifies orientation/structure without treating cross-decoder channel
-/// rounding as media damage. Outputs without reconstruction data retain the
-/// strict pixel-equivalence gate. Both paths also verify current hashes and
-/// decoder readability. A byte-reconstructible JXL may retain the source JPEG
-/// Orientation required by `jbrd`; other JXL outputs must not retain one.
+/// The final JXL rechecks byte-identical JPEG reconstruction after metadata
+/// preservation, then audits orientation/structure without treating
+/// cross-decoder channel rounding as media damage. Pixel equivalence alone is
+/// never sufficient for JPEG-source delivery or deletion. A reconstructible
+/// JXL may retain the source JPEG Orientation required by `jbrd`.
 ///
 /// # Errors
 /// Returns an error if any proof step fails.
@@ -310,7 +308,8 @@ pub fn verify_final_avif_delivery_integrity(
 ///
 /// Supports JXL, AVIF, and other modern formats. Checks source/output hash,
 /// non-empty output, decoder readability, and orientation-correct pixels.
-/// Non-reconstructible JXL must additionally have no residual Orientation tag.
+/// JXL delivery requires byte-identical JPEG reconstruction. Other modern
+/// formats use their format-specific pixel and orientation proof.
 ///
 /// # Errors
 /// Returns an error if any proof step fails.
@@ -353,20 +352,8 @@ pub fn verify_final_delivery_integrity(
         ))
     })?;
     let jxl_byte_reconstructible = if format == crate::image::format_detect::FormatKind::Jxl {
-        match verify_jxl_roundtrip_integrity(source_jpeg, output) {
-            Ok(IntegrityResult::RoundtripMatch { .. }) => true,
-            Ok(_) => false,
-            Err(error) => {
-                tracing::debug!(
-                    target: "fast_img_integrity",
-                    source = %source_jpeg.display(),
-                    output = %output.display(),
-                    error = %error,
-                    "final JXL is not byte-reconstructible; retaining strict pixel-equivalence proof"
-                );
-                false
-            }
-        }
+        verify_jxl_roundtrip_integrity(source_jpeg, output)?;
+        true
     } else {
         false
     };
@@ -392,13 +379,6 @@ pub fn verify_final_delivery_integrity(
         }
     }
 
-    // Exact JPEG reconstruction includes the source Exif Orientation. Removing
-    // it invalidates jbrd; the codestream Orientation remains authoritative.
-    // Pixel-encoded JXL has no such exception and must stay normalized.
-    if format == crate::image::format_detect::FormatKind::Jxl && !jxl_byte_reconstructible {
-        ensure_no_residual_orientation_tag(output)?;
-    }
-
     let source_hash = calculate_blake3_hash(source_jpeg).map_err(|e| {
         ImgQualityError::AnalysisError(format!("final-integrity: BLAKE3(source) failed: {e}"))
     })?;
@@ -416,52 +396,17 @@ pub fn verify_final_delivery_integrity(
         "final modern format delivery integrity check"
     );
 
-    Ok(IntegrityResult::FinalModernDelivery {
-        source_hash,
-        output_hash,
-    })
-}
-
-fn ensure_no_residual_orientation_tag(path: &Path) -> Result<()> {
-    use crate::ToolBuilder;
-    use crate::image_builders::ExiftoolBuilder;
-
-    if !ExiftoolBuilder::check_available() {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "final-integrity: exiftool unavailable; cannot verify Orientation tag absence for {}",
-            path.display()
-        )));
+    if jxl_byte_reconstructible {
+        Ok(IntegrityResult::RoundtripMatch {
+            source_hash,
+            output_hash,
+        })
+    } else {
+        Ok(IntegrityResult::FinalModernDelivery {
+            source_hash,
+            output_hash,
+        })
     }
-    let mut command = ExiftoolBuilder::new()
-        .arg("-s3")
-        .arg("-Orientation")
-        .input(path)
-        .build();
-    let output = run_fast_img_command_with_timeout(
-        &mut command,
-        FAST_IMG_MEDIA_PROBE_TIMEOUT,
-        "fast-img residual Orientation probe",
-    )
-    .map_err(|e| {
-        ImgQualityError::AnalysisError(format!(
-            "final-integrity: Orientation probe failed for {}: {e}",
-            path.display()
-        ))
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ImgQualityError::AnalysisError(format!(
-            "final-integrity: Orientation probe exited non-zero for {}: {stderr}",
-            path.display()
-        )));
-    }
-    if !output.stdout.is_empty() {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "final-integrity: residual Orientation tag present in {}",
-            path.display()
-        )));
-    }
-    Ok(())
 }
 
 fn first_nonempty_tool_line(bytes: &[u8]) -> Option<&str> {
@@ -499,12 +444,13 @@ pub enum IntegrityResult {
         source_hash: String,
         output_hash: String,
     },
-    /// JPEG→JXL no-JBRD fallback passed decoded pixel equivalence proof.
+    /// Intermediate pixel-equivalence proof. This never authorizes source
+    /// deletion or final JXL delivery.
     JxlPixelEquivalent {
         source_hash: String,
         output_hash: String,
     },
-    /// Final modern-format delivery passed source/output hash, decode,
+    /// Final non-JXL modern-format delivery passed source/output hash, decode,
     /// metadata, and orientation proofs.
     FinalModernDelivery {
         source_hash: String,
@@ -565,26 +511,15 @@ pub fn safe_delete_jpeg_source(
             );
             (source_hash, output_hash)
         }
-        IntegrityResult::JxlPixelEquivalent {
-            source_hash,
-            output_hash,
-        } => {
-            tracing::info!(
-                target: "fast_img_delete",
-                %source_hash,
-                %output_hash,
-                "delete-gate 1: JXL pixel-equivalence proof confirmed"
-            );
-            (source_hash, output_hash)
-        }
-        IntegrityResult::DecodeProbePassed { output_hash } => {
+        IntegrityResult::JxlPixelEquivalent { output_hash, .. }
+        | IntegrityResult::DecodeProbePassed { output_hash } => {
             tracing::error!(
                 target: "fast_img_delete",
                 %output_hash,
-                "delete-gate 1 FAIL: decode-probe-only integrity is not sufficient for deletion"
+                "delete-gate 1 FAIL: non-exact integrity is not sufficient for source deletion"
             );
             return Err(ImgQualityError::AnalysisError(
-                "delete-gate 1 FAIL: final modern-format delivery proof or raw roundtrip proof is required \
+                "delete-gate 1 FAIL: exact JXL roundtrip or final non-JXL delivery proof is required \
                  before deleting source JPEG"
                     .to_string(),
             ));
@@ -7557,7 +7492,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("final modern-format delivery proof or raw roundtrip proof is required"),
+                .contains("exact JXL roundtrip or final non-JXL delivery proof is required"),
             "unexpected: {err}"
         );
         assert!(src.path().exists());
@@ -7620,7 +7555,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_gate_accepts_jxl_pixel_equivalence_integrity() {
+    fn delete_gate_rejects_jxl_pixel_equivalence_integrity() {
         let mut src = NamedTempFile::new().unwrap();
         src.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
         let mut out = NamedTempFile::new().unwrap();
@@ -7633,8 +7568,10 @@ mod tests {
             source_hash,
             output_hash,
         };
-        safe_delete_jpeg_source(&src_path, out.path(), &integrity).unwrap();
-        assert!(!src_path.exists());
+        let error = safe_delete_jpeg_source(&src_path, out.path(), &integrity)
+            .expect_err("pixel equivalence must never authorize source deletion");
+        assert!(error.to_string().contains("non-exact integrity"));
+        assert!(src_path.exists());
     }
 
     #[test]

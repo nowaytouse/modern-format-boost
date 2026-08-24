@@ -541,7 +541,10 @@ pub fn load_fast_img_marker_json(
 pub fn fast_img_marker_requires_retry(verify_bin: &Path, output_dir: &Path) -> Result<bool> {
     let (marker, _, marker_error) = load_fast_img_marker_json(verify_bin, output_dir)?;
     if let Some(error) = marker_error {
-        bail!("fast-img marker is invalid for {}: {error}", output_dir.display());
+        bail!(
+            "fast-img marker is invalid for {}: {error}",
+            output_dir.display()
+        );
     }
     let Some(marker) = marker else {
         return Ok(false);
@@ -668,9 +671,7 @@ pub fn run_unified_verification(
     })
 }
 
-fn parse_machine_integrity_summary(
-    stdout: &str,
-) -> Result<(String, IntegritySummaryMachine)> {
+fn parse_machine_integrity_summary(stdout: &str) -> Result<(String, IntegritySummaryMachine)> {
     let mut display_lines = Vec::new();
     let mut summary = None;
     for line in stdout.lines() {
@@ -678,9 +679,8 @@ fn parse_machine_integrity_summary(
             if summary.is_some() {
                 bail!("verify emitted more than one machine integrity summary");
             }
-            summary = Some(
-                serde_json::from_str(json).context("parse verify machine integrity summary")?,
-            );
+            summary =
+                Some(serde_json::from_str(json).context("parse verify machine integrity summary")?);
         } else {
             display_lines.push(line);
         }
@@ -1226,5 +1226,4 @@ mod tests {
         assert_eq!(metrics.source_bytes_actual, Some(12_567_890_123));
         assert_eq!(metrics.output_bytes_actual, Some(8_804_321_456));
     }
-
 }

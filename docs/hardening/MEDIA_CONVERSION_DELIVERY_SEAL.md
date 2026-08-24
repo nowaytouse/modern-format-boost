@@ -7,10 +7,10 @@ This document records the **sealed** state of runtime conversion delivery (`img`
 [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](MEDIA_CONVERSION_LAYER_CONTRACT.md) (invariants **M1–M206**;
 registry test `media_conversion_contract_m1_m206_design_complete`) and is distinct from
 [`ALGORITHM_LAYER_CONTRACT.md`](ALGORITHM_LAYER_CONTRACT.md) (KNN / loop intent inference) and
-[`training_tier_audit.rs`](../crates/foundation/src/training_tier_audit.rs) (static training
+[`training_tier_audit.rs`](../../crates/foundation/src/train/training_tier_audit.rs) (static training
 tiers).
 
-**See also:** [Discipline layer seal (Rust+Py+sh 100%)](MEDIA_CONVERSION_DISCIPLINE_SEAL.md) · [README layer contracts](../README.md#-layer-contracts--training) · [CHANGELOG 0.11.4](CHANGELOG.md)
+**See also:** [Discipline layer seal (Rust+Py+sh 100%)](MEDIA_CONVERSION_DISCIPLINE_SEAL.md) · [README layer contracts](../../README.md#-layer-contracts--training) · [CHANGELOG](../CHANGELOG.md)
 
 ## Completion note (honest scope)
 
@@ -83,7 +83,7 @@ python3 crates/dev/scripts/media_conversion_delivery_heatmap.py --deep
 
 ## Heatmap baseline (M39)
 
-File: [`crates/dev/src/fixtures/media_conversion_delivery_heatmap_baseline.json`](../crates/dev/src/fixtures/media_conversion_delivery_heatmap_baseline.json)
+File: [`crates/dev/src/fixtures/media_conversion_delivery_heatmap_baseline.json`](../../crates/dev/src/fixtures/media_conversion_delivery_heatmap_baseline.json)
 
 - `numeric_forgery_offenders`: count of production lines matching the numeric-forgery pattern set (must stay **0** unless the allowlist or gate changes are audited)
 - `gate_log_anomaly_count`: must stay **1** while only `delivery_fallback_audit` emits `log_anomaly!`
@@ -92,7 +92,6 @@ After an intentional change, update the baseline and document the reason in the 
 
 ## Python orchestration
 
-[`crates/dev/scripts/media_scope.py`](../crates/dev/scripts/media_scope.py) mirrors M1–M39 for drag-and-drop / verify routing and references the same `[delivery fallback:…]` log tag in Rust traces.
+[`crates/dev/scripts/media_scope.py`](../../crates/dev/scripts/media_scope.py) mirrors M1–M39 for drag-and-drop / verify routing and references the same `[delivery fallback:…]` log tag in Rust traces.
 
 ---
-

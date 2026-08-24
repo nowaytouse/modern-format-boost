@@ -642,7 +642,7 @@ fn project_heif_security_limits() -> libheif_rs::SecurityLimits {
 ///
 /// # Errors
 /// Returns an error when the context cannot be created, configured, or parsed.
-pub(crate) fn read_heif_context_with_project_limits(data: &[u8]) -> Result<HeifContext> {
+pub(crate) fn read_heif_context_with_project_limits(data: &[u8]) -> Result<HeifContext<'_>> {
     let mut ctx = HeifContext::new().map_err(|error| {
         ImgQualityError::ImageReadError(format!("Failed to create HEIF context: {error}"))
     })?;

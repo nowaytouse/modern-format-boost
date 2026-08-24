@@ -5,7 +5,7 @@
 //!
 //! | Product | Scope | `--codec hevc\|av1` meaning |
 //! |---------|-------|------------------------------|
-//! | **`img`** | **Static stills only** | **`hevc`** (default) → **JXL** batch; **`av1`** → **AVIF** still strategy. Animated assets are **ignored** (never forwarded to `vid`). |
+//! | **`img`** | **Static stills only** | **`hevc`** (default) → **JXL** batch. AVIF is reserved for `img fast-img --strategy avif` Meme Mode. Animated assets are **ignored** (never forwarded to `vid`). |
 //! | **`vid`** | **Video + animated raster** | **HEVC** / **AV1** video delivery (`SelectedCodec`). |
 //!
 //! Same flag names, **different semantics per binary**. `img` does **not**
@@ -15,10 +15,10 @@
 //!
 //! | Layer | Module | Responsibility |
 //! |-------|--------|----------------|
-//! | **Img static delivery** | [`crate::delivery_codec_strategy::ImgStaticDelivery`] | JXL vs AVIF (`--codec hevc` / `av1` on `img`) |
+//! | **Img static delivery** | [`crate::delivery_codec_strategy::ImgStaticDelivery`] | JXL-only (`--codec hevc` on `img`) |
 //! | **Video delivery codec** | [`crate::conversion_types::SelectedCodec`] | HEVC / AV1 GPU explore, containers (`vid` only) |
 //! | **CRF search mode** | [`crate::explore_strategy`] | `ExploreMode` — not HEVC vs AV1 |
-//! | **Static API strategy** | `img::determine_strategy` | JXL / AVIF for `smart_convert()` |
+//! | **Static API strategy** | `img::determine_strategy` | JXL / retain for `smart_convert()`; AVIF is Meme Mode only |
 //! | **Video container path** | `vid::determine_strategy_with_apple_compat` | Skip/GIF/loop + `delivery_target` |
 //!
 //! ## HEVC vs AV1 policy (tightened)
@@ -58,47 +58,32 @@ pub const DEFAULT_IMG_STATIC_DELIVERY: ImgStaticDelivery = ImgStaticDelivery::Jx
 pub enum ImgStaticDelivery {
     /// CLI `hevc` → primary **JXL** batch path (default).
     Jxl,
-    /// CLI `av1` → **AVIF** still strategy for applicable lossy assets (not
-    /// video AV1).
-    Avif,
 }
 
 impl ImgStaticDelivery {
-    /// Parse `img run --codec` (`hevc` → JXL, `av1` → AVIF).
+    /// Parse `img run --codec` (`hevc` → JXL).
     ///
     /// # Errors
-    /// Returns an error when the label is not `hevc`/`av1` (or accepted
-    /// aliases).
+    /// Returns an error when the label is not `hevc` (or an accepted JXL
+    /// alias), including explicit rejection of AVIF aliases.
     pub fn parse_cli_label(label: &str) -> Result<Self, String> {
         match label.trim().to_ascii_lowercase().as_str() {
             "hevc" | "h265" | "x265" | "jxl" => Ok(Self::Jxl),
-            "av1" | "av01" | "avif" => Ok(Self::Avif),
+            "av1" | "av01" | "avif" => Err(
+                "manual AVIF selection is unavailable in img run; AVIF is reserved for fast-img \
+                 Meme Mode. Use `img fast-img --strategy avif <input>`"
+                    .to_string(),
+            ),
             other => Err(format!(
-                "unsupported img --codec '{other}'; use hevc (JXL, default) or av1 (AVIF stills)"
+                "unsupported img --codec '{other}'; use hevc (JXL, default)"
             )),
         }
-    }
-
-    /// Fail-closed validation for `img run` flags.
-    ///
-    /// # Errors
-    /// Returns an error when AVIF static strategy is combined with
-    /// `--apple-compat`.
-    pub fn validate_img_flags(self, apple_compat: bool) -> Result<()> {
-        if self == Self::Avif && apple_compat {
-            bail!(
-                "AVIF static strategy (--codec av1) does not use --apple-compat; that flag is for \
-                 vid video delivery"
-            );
-        }
-        Ok(())
     }
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Jxl => "hevc",
-            Self::Avif => "av1",
         }
     }
 
@@ -106,7 +91,6 @@ impl ImgStaticDelivery {
     pub const fn static_format_label(self) -> &'static str {
         match self {
             Self::Jxl => "JXL",
-            Self::Avif => "AVIF",
         }
     }
 
@@ -116,7 +100,6 @@ impl ImgStaticDelivery {
     pub const fn to_format_kind(self) -> crate::image::format_detect::FormatKind {
         match self {
             Self::Jxl => crate::image::format_detect::FormatKind::Jxl,
-            Self::Avif => crate::image::format_detect::FormatKind::Avif,
         }
     }
 }
@@ -127,15 +110,9 @@ impl ImgStaticDelivery {
 /// Returns an error when the label is unsupported or flags are incompatible.
 pub fn resolve_cli_img_static_delivery(
     label: &str,
-    apple_compat: bool,
+    _apple_compat: bool,
 ) -> Result<ImgStaticDelivery> {
-    let delivery = ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)?;
-    anyhow::ensure!(
-        delivery != ImgStaticDelivery::Avif,
-        "manual AVIF selection is unavailable in img run; AVIF is reserved for fast-img Meme Mode. Use `img fast-img --strategy avif <input>`"
-    );
-    delivery.validate_img_flags(apple_compat)?;
-    Ok(delivery)
+    ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)
 }
 
 /// Parse a fast-img strategy string (`"jxl"` / `"avif"`) into the

@@ -253,6 +253,10 @@ pub fn collect_image_files_for_perceived_speed(
     extensions: &[&str],
     recursive: bool,
 ) -> crate::unified_error::Result<Vec<PathBuf>> {
+    if !crate::algorithm_runtime::static_quality_db_lookup_enabled() {
+        return scan_image_files(dir, extensions, recursive);
+    }
+
     let cached = load_cached_image_tree(dir, extensions, recursive)
         .filter(|snapshot| validate_cached_image_tree(snapshot, dir, extensions, recursive));
     let snapshot = if let Some(snapshot) = cached {

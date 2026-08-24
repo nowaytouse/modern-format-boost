@@ -179,13 +179,15 @@ enum Commands {
 
     /// Fast image encoding: true JPEGs → reversible JXL, or static images → AVIF.
     ///
-    /// Detects true JPEGs via content identity, strips residual EXIF Orientation
-    /// after encode, and deletes sources only after verification. JXL mode also
+    /// Detects true JPEGs via content identity, requires byte-identical JPEG
+    /// reconstruction after all metadata work, and deletes sources only after
+    /// that final proof. JXL mode also
     /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC originals to
     /// Photos with UUID/hash custody proof; uncertain or lossless originals remain.
     ///
-    /// Locked decisions: D1=Photos import required, D2=abort on delete failure,
-    /// D3=pixel-diff plus tag assert, D4=Rust-only, D5=subcommand,
+    /// Locked decisions: D1=Photos import only with shortest-path,
+    /// D2=abort on delete failure, D3=exact JBRD plus orientation audit,
+    /// D4=Rust-only, D5=subcommand,
     /// D6=verified source delete mandatory, D7=JPEG-path-only detection.
     #[command(name = "fast-img")]
     FastImg {
@@ -240,7 +242,9 @@ enum Commands {
         extreme_precision: bool,
     },
 
-    /// Restore true JXL files back to JPEG in an adjacent output tree.
+    /// Restore reconstructible JXL files to byte-identical JPEGs. Additional
+    /// JXL XMP is delivered as a verified adjacent `.xmp` sidecar so the JPEG
+    /// payload is never rewritten.
     #[command(name = "restore-jpeg")]
     RestoreJpeg {
         /// Input directory (or single file) containing source JXL files.
@@ -265,11 +269,17 @@ enum Commands {
     },
 }
 
-const fn command_requires_database(command: &Commands) -> bool {
-    !matches!(
-        command,
-        Commands::FastImg { .. } | Commands::RestoreJpeg { .. }
-    )
+fn command_requires_database(command: &Commands) -> bool {
+    match command {
+        Commands::Run { .. } => foundation::static_quality_db_lookup_enabled(),
+        Commands::CacheStats | Commands::IngestSamples { .. } | Commands::DbHealth => true,
+        Commands::Verify { .. }
+        | Commands::RestoreTimestamps { .. }
+        | Commands::LockCheck { .. }
+        | Commands::PathHash { .. }
+        | Commands::FastImg { .. }
+        | Commands::RestoreJpeg { .. } => false,
+    }
 }
 
 fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
@@ -288,6 +298,16 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn canonicalize_img_run_roots(
+    input: PathBuf,
+    base_dir: Option<PathBuf>,
+) -> (PathBuf, Option<PathBuf>) {
+    let input = foundation::media_conversion_gate::canonicalize_for_tool_input(&input);
+    let base_dir =
+        base_dir.map(|base| foundation::media_conversion_gate::canonicalize_for_tool_input(&base));
+    (input, base_dir)
+}
+
 fn main() -> anyhow::Result<()> {
     let result = main_inner();
     foundation::progress_mode::flush_log_file();
@@ -299,8 +319,8 @@ fn initialize_analysis_cache(command: &Commands) -> Option<Arc<AnalysisCache>> {
         return None;
     }
 
-    // Full img flows require PostgreSQL. FastImg and restore-jpeg are deliberately
-    // excluded because they do not use DB/cache state.
+    // PostgreSQL is mandatory only for explicit database operations or when the
+    // optional static-quality heuristic was enabled by the user.
     if let Err(error) = foundation::database::open_pg_client() {
         foundation::log_fatal!(
             "Infrastructure",
@@ -424,6 +444,7 @@ fn main_inner() -> anyhow::Result<()> {
         } => {
             use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 
+            let (input, base_dir) = canonicalize_img_run_roots(input, base_dir);
             let resume = foundation::checkpoint::resolve_resume_choice(
                 &input,
                 output.as_deref(),
@@ -546,7 +567,9 @@ fn main_inner() -> anyhow::Result<()> {
                 );
             }
 
-            foundation::database::report_db_status();
+            if cache.is_some() {
+                foundation::database::report_db_status();
+            }
 
             let mut config_flags = ConfigFlags::USE_GPU;
             config_flags.set(ConfigFlags::FORCE, force);
@@ -569,7 +592,6 @@ fn main_inner() -> anyhow::Result<()> {
                 flags: config_flags,
                 child_threads: 0,
                 cache,
-                static_delivery: img_static_delivery,
                 error_mode: foundation::BatchErrorMode::current(),
             };
 
@@ -1033,7 +1055,6 @@ struct AutoConvertConfig {
     child_threads: usize,
 
     cache: Option<Arc<AnalysisCache>>,
-    static_delivery: foundation::delivery_codec_strategy::ImgStaticDelivery,
     error_mode: foundation::BatchErrorMode,
 }
 
@@ -1110,6 +1131,22 @@ const fn fast_img_avif_source_is_lossless(
     }
 }
 
+const fn fast_static_uses_modern_compression_preflight(
+    format: &foundation::image_detection::DetectedFormat,
+) -> bool {
+    use foundation::image_detection::DetectedFormat;
+
+    matches!(
+        format,
+        DetectedFormat::WebP
+            | DetectedFormat::AVIF
+            | DetectedFormat::HEIC
+            | DetectedFormat::HEIF
+            | DetectedFormat::JXL
+            | DetectedFormat::JP2
+    )
+}
+
 fn fast_static_skip_or_ignore(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1131,14 +1168,7 @@ fn fast_static_skip_or_ignore(
             )
         })?;
 
-    if !matches!(
-        detected_format,
-        DetectedFormat::WebP
-            | DetectedFormat::AVIF
-            | DetectedFormat::HEIC
-            | DetectedFormat::HEIF
-            | DetectedFormat::JXL
-    ) {
+    if !fast_static_uses_modern_compression_preflight(&detected_format) {
         return Ok(None);
     }
 
@@ -1608,22 +1638,6 @@ fn dispatch_static_conversion(
             convert_to_jxl(input, options, 0.0_f32, analysis.conversion_color_context())?
         }
         _ => {
-            use foundation::delivery_codec_strategy::ImgStaticDelivery;
-            if config.static_delivery == ImgStaticDelivery::Avif {
-                // AVIF static delivery: always use quality=100 (lossy max quality).
-                // AVIF advantage is in lossy compression; DB score mapping is not
-                // applicable here — use fixed q=100 per design spec.
-                foundation::log_detail!(&format!(
-                    "{} Lossy→AVIF (q=100) conversion decision for: {}",
-                    foundation::infra::static_logs::messages::LABEL_DONE,
-                    input.display()
-                ));
-                return Ok(img::lossless_converter::convert_to_avif(
-                    input,
-                    Some(100),
-                    options,
-                )?);
-            }
             if config.verbose() {
                 log_detail!(&format!(
                     " {} Lossy→JXL (Near-Lossless): {}",
@@ -5936,6 +5950,13 @@ struct RestoreJpegCommitProof {
     output_rel: String,
     source_hash: String,
     output_hash: String,
+    xmp_sidecar: Option<RestoreJpegSidecarProof>,
+}
+
+#[derive(Debug, Clone)]
+struct RestoreJpegSidecarProof {
+    path: PathBuf,
+    hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -5999,7 +6020,7 @@ fn write_restore_jpeg_manifest(
     let manifest = output_root.join(RESTORE_JPEG_MANIFEST_NAME);
     let temp_manifest = manifest.with_extension("tsv.tmp");
     let mut content = String::from(
-        "# MFB_RESTORE_JPEG_MANIFEST_V1\nsource_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n",
+        "# MFB_RESTORE_JPEG_MANIFEST_V2\nsource_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_blake3\tsource_deleted\n",
     );
     for record in records {
         content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
@@ -6009,6 +6030,13 @@ fn write_restore_jpeg_manifest(
         content.push_str(&record.proof.source_hash);
         content.push('\t');
         content.push_str(&record.proof.output_hash);
+        content.push('\t');
+        if let Some(sidecar) = &record.proof.xmp_sidecar {
+            let sidecar_rel = restore_jpeg_relative_string(&sidecar.path, output_root)?;
+            content.push_str(&restore_jpeg_hex_encode(&sidecar_rel));
+            content.push('\t');
+            content.push_str(&sidecar.hash);
+        }
         content.push('\t');
         content.push_str(if record.source_deleted {
             "true\n"
@@ -6125,65 +6153,121 @@ fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Resu
     Ok(())
 }
 
-fn restore_jpeg_embed_all_metadata(input: &Path, output: &Path) -> anyhow::Result<()> {
-    let report = foundation::metadata::preserve_for_delivery(input, output).with_context(|| {
-        format!(
-            "restore-jpeg failed to preserve embedded metadata {} -> {}",
-            input.display(),
-            output.display()
-        )
-    })?;
-    if matches!(
-        report.exif,
-        foundation::metadata::MetadataLayerOutcome::PartialAudit
-    ) || matches!(
-        report.xattr,
-        foundation::metadata::MetadataLayerOutcome::PartialAudit
-    ) || matches!(
-        report.timestamps,
-        foundation::metadata::MetadataLayerOutcome::PartialAudit
-    ) {
+fn restore_jpeg_output_xmp_path(output: &Path) -> PathBuf {
+    output.with_extension("xmp")
+}
+
+fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Result<bool> {
+    let mut command = foundation::DjxlBuilder::new()
+        .input(input)
+        .output(temp_xmp)
+        .build();
+    command.arg("--output_format=xmp");
+    let extract = run_restore_image_command(command, "restore-jpeg XMP extraction")
+        .with_context(|| format!("restore-jpeg failed to extract XMP from {}", input.display()))?;
+    if !extract.status.success() {
+        let stderr = String::from_utf8_lossy(&extract.stderr);
+        let _ = restore_jpeg_remove_temp(temp_xmp, "XMP extraction failure");
         anyhow::bail!(
-            "restore-jpeg metadata preservation was partial for {} -> {}",
+            "restore-jpeg XMP extraction failed for {}: {}",
             input.display(),
-            output.display()
+            stderr.trim()
         );
     }
-    foundation::metadata::merge_xmp_sidecar_into_dest(input, output).with_context(|| {
+    let metadata = std::fs::metadata(temp_xmp).with_context(|| {
         format!(
-            "restore-jpeg failed to embed source XMP sidecar {} -> {}",
-            input.display(),
-            output.display()
+            "restore-jpeg XMP extraction did not create {}",
+            temp_xmp.display()
         )
     })?;
-    let filesystem_report = foundation::metadata::preserve_filesystem_for_delivery(input, output)
-        .with_context(|| {
-            format!(
-                "restore-jpeg failed to reapply filesystem metadata after XMP merge {} -> {}",
-                input.display(),
-                output.display()
-            )
+    if metadata.len() == 0 {
+        restore_jpeg_remove_temp(temp_xmp, "empty XMP extraction")?;
+        return Ok(false);
+    }
+    foundation::metadata::validate_xmp_sidecar(temp_xmp).with_context(|| {
+        format!(
+            "restore-jpeg extracted invalid XMP from {}",
+            input.display()
+        )
+    })?;
+    Ok(true)
+}
+
+fn restore_jpeg_commit_xmp_sidecar(
+    input: &Path,
+    output: &Path,
+    force: bool,
+) -> anyhow::Result<Option<RestoreJpegSidecarProof>> {
+    let sidecar_output = restore_jpeg_output_xmp_path(output);
+    let temp_xmp = foundation::path_safety::isolated_temp_path_for_search(&sidecar_output)
+        .map_err(|err| anyhow::anyhow!("restore-jpeg XMP temp path failed: {err}"))?;
+    let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
+    let extracted = restore_jpeg_extract_xmp_to_temp(input, &temp_xmp)?;
+    let adjacent = foundation::metadata::find_xmp_sidecar(input);
+
+    if let Some(adjacent) = adjacent.as_deref() {
+        foundation::metadata::validate_xmp_sidecar(adjacent).with_context(|| {
+            format!("restore-jpeg source XMP sidecar is invalid: {}", adjacent.display())
         })?;
-    if matches!(
-        filesystem_report.xattr,
-        foundation::metadata::MetadataLayerOutcome::PartialAudit
-    ) || matches!(
-        filesystem_report.timestamps,
-        foundation::metadata::MetadataLayerOutcome::PartialAudit
-    ) {
-        anyhow::bail!(
-            "restore-jpeg filesystem metadata reapply was partial for {} -> {}",
-            input.display(),
-            output.display()
+        if extracted {
+            let extracted_hash = calculate_blake3_hash(&temp_xmp)?;
+            let adjacent_hash = calculate_blake3_hash(adjacent)?;
+            anyhow::ensure!(
+                extracted_hash == adjacent_hash,
+                "restore-jpeg found conflicting container and adjacent XMP for {}",
+                input.display()
+            );
+        } else {
+            std::fs::copy(adjacent, &temp_xmp).with_context(|| {
+                format!(
+                    "restore-jpeg failed to stage source XMP sidecar {}",
+                    adjacent.display()
+                )
+            })?;
+        }
+    } else if !extracted {
+        return Ok(None);
+    }
+
+    let expected_hash = calculate_blake3_hash(&temp_xmp)?;
+    if sidecar_output.exists() {
+        let current_hash = calculate_blake3_hash(&sidecar_output)?;
+        if current_hash == expected_hash {
+            restore_jpeg_remove_temp(&temp_xmp, "matching existing XMP sidecar")?;
+            return Ok(Some(RestoreJpegSidecarProof {
+                path: sidecar_output,
+                hash: current_hash,
+            }));
+        }
+        anyhow::ensure!(
+            force,
+            "restore-jpeg existing XMP sidecar differs from source metadata: {}",
+            sidecar_output.display()
         );
     }
-    foundation::metadata::verify_exact_metadata_copy(input, output)?;
-    foundation::metadata::verify_output_embedded_metadata(
-        input,
-        output,
-        foundation::metadata::MetadataOutputPolicy::PreserveSource,
+
+    let committed = foundation::conversion::commit_temp_to_output_preserving_exact_payload(
+        &temp_xmp,
+        &sidecar_output,
+        force,
+        Some(input),
     )?;
-    Ok(())
+    anyhow::ensure!(committed, "restore-jpeg XMP sidecar commit was not completed");
+    let current_hash = calculate_blake3_hash(&sidecar_output)?;
+    if current_hash != expected_hash {
+        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+            "restore-jpeg changed XMP sidecar cleanup",
+            &sidecar_output,
+        );
+        anyhow::bail!(
+            "restore-jpeg XMP sidecar changed during commit: {}",
+            sidecar_output.display()
+        );
+    }
+    Ok(Some(RestoreJpegSidecarProof {
+        path: sidecar_output,
+        hash: current_hash,
+    }))
 }
 
 fn restore_jpeg_build_current_proof_with_decoder<F>(
@@ -6273,13 +6357,6 @@ where
             );
         }
 
-        foundation::metadata::verify_output_embedded_metadata(
-            input,
-            output,
-            foundation::metadata::MetadataOutputPolicy::PreserveSource,
-        )
-        .context("restore-jpeg proof gate: embedded metadata custody failed")?;
-
         let output_hash = calculate_blake3_hash(output).with_context(|| {
             format!(
                 "restore-jpeg proof gate failed to hash restored output {}",
@@ -6312,6 +6389,7 @@ where
                 )
             })?,
             output_hash,
+            xmp_sidecar: None,
         })
     })();
     let cleanup_result = restore_jpeg_remove_temp(&temp_output, "fresh decode proof");
@@ -6331,16 +6409,16 @@ fn restore_jpeg_build_current_proof(
     output: &Path,
     output_root: &Path,
 ) -> anyhow::Result<RestoreJpegCommitProof> {
-    restore_jpeg_build_current_proof_with_decoder(
+    let xmp_sidecar = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
+    let mut proof = restore_jpeg_build_current_proof_with_decoder(
         input,
         input_root,
         output,
         output_root,
-        |source, temp_output| {
-            restore_jpeg_decode_to_temp(source, temp_output)?;
-            restore_jpeg_embed_all_metadata(source, temp_output)
-        },
-    )
+        restore_jpeg_decode_to_temp,
+    )?;
+    proof.xmp_sidecar = xmp_sidecar;
+    Ok(proof)
 }
 
 fn restore_single_jpeg(
@@ -6392,12 +6470,11 @@ fn restore_single_jpeg(
         );
     }
 
-    restore_jpeg_embed_all_metadata(input, &temp_output)?;
-
-    // Keep the metadata-enriched official djxl reconstruction for the
+    // Keep the official byte-exact djxl reconstruction for the
     // post-commit byte proof. This avoids launching djxl a second time for
     // every committed file.
     let proof_snapshot = temp_output.with_extension("mfb-restore-proof.jpg");
+    let _proof_guard = foundation::conversion::TempOutputGuard::new(proof_snapshot.clone());
     std::fs::copy(&temp_output, &proof_snapshot).with_context(|| {
         format!(
             "restore-jpeg failed to snapshot official djxl output {}",
@@ -6424,6 +6501,19 @@ fn restore_single_jpeg(
             return Err(err);
         }
     };
+    let xmp_sidecar = match restore_jpeg_commit_xmp_sidecar(input, &output, force) {
+        Ok(proof) => proof,
+        Err(error) => {
+            if committed {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "restore-jpeg incomplete metadata delivery cleanup",
+                    &output,
+                );
+            }
+            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed XMP sidecar delivery");
+            return Err(error);
+        }
+    };
     let proof_result = restore_jpeg_build_current_proof_with_decoder(
         input,
         input_root,
@@ -6448,16 +6538,31 @@ fn restore_single_jpeg(
         )
     });
     let cleanup_result = restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof");
-    let proof = match (proof_result, cleanup_result) {
+    let mut proof = match (proof_result, cleanup_result) {
         (Ok(proof), Ok(())) => proof,
         (Ok(_), Err(cleanup_err)) => return Err(cleanup_err),
-        (Err(err), Ok(())) => return Err(err),
+        (Err(err), Ok(())) => {
+            if committed {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "restore-jpeg failed final proof output cleanup",
+                    &output,
+                );
+            }
+            return Err(err);
+        }
         (Err(err), Err(cleanup_err)) => {
+            if committed {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "restore-jpeg failed final proof output cleanup",
+                    &output,
+                );
+            }
             return Err(err.context(format!(
                 "restore-jpeg proof snapshot cleanup also failed: {cleanup_err}"
             )));
         }
     };
+    proof.xmp_sidecar = xmp_sidecar;
 
     Ok(RestoreJpegResult { committed, proof })
 }
@@ -6537,6 +6642,19 @@ fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow
             "restore-jpeg delete gate: stale restore proof for {} -> {}",
             input.display(),
             output.display()
+        );
+    }
+    if let Some(sidecar) = &proof.xmp_sidecar {
+        let sidecar_hash = calculate_blake3_hash(&sidecar.path).with_context(|| {
+            format!(
+                "restore-jpeg delete gate failed to hash XMP sidecar {}",
+                sidecar.path.display()
+            )
+        })?;
+        anyhow::ensure!(
+            sidecar_hash == sidecar.hash,
+            "restore-jpeg delete gate: stale XMP sidecar proof for {}",
+            sidecar.path.display()
         );
     }
     tracing::info!(
@@ -6690,8 +6808,7 @@ fn restore_jpeg_preflight(
             .par_iter()
             .map(|source| {
                 let result = foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(source);
-                let completed =
-                    checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let completed = checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == files.len() {
                     println!(
                         "[PREFLIGHT] checked {completed}/{} JXL reconstruction candidates",
@@ -6818,7 +6935,7 @@ fn run_restore_jpeg(
     force: bool,
     keep_source: bool,
 ) -> anyhow::Result<()> {
-    if let Err(err) = foundation::tools::require(&["jxlinfo", "djxl", "exiftool"]) {
+    if let Err(err) = foundation::tools::require(&["jxlinfo", "djxl"]) {
         log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
         std::process::exit(foundation::constants::EXIT_CODE_ERROR);
     }
@@ -6910,8 +7027,7 @@ fn run_restore_jpeg(
     let mut processing_failures = Vec::new();
 
     if keep_source {
-        let outcome =
-            restore_jpeg_keep_source_parallel(&files, &input_root, &output_root, force)?;
+        let outcome = restore_jpeg_keep_source_parallel(&files, &input_root, &output_root, force)?;
         restored = outcome.restored;
         skipped = outcome.skipped;
         restore_records = outcome.records;
@@ -6980,25 +7096,18 @@ fn run_restore_jpeg(
         })?;
     }
     if output_root.exists() {
-        foundation::io_utils::prune_empty_directories_within(
-            &output_root,
-            &output_candidate_dirs,
-        )
-        .with_context(|| {
-            format!(
-                "restore-jpeg refused unsafe empty output cleanup under {}",
-                output_root.display()
-            )
-        })?;
+        foundation::io_utils::prune_empty_directories_within(&output_root, &output_candidate_dirs)
+            .with_context(|| {
+                format!(
+                    "restore-jpeg refused unsafe empty output cleanup under {}",
+                    output_root.display()
+                )
+            })?;
     }
     let source_dirs_pruned = if keep_source {
         0
     } else {
-        restore_jpeg_prune_empty_source_dirs(
-            &input_root,
-            &deleted_source_dirs,
-            input.is_dir(),
-        )?
+        restore_jpeg_prune_empty_source_dirs(&input_root, &deleted_source_dirs, input.is_dir())?
     };
     let retained_sources = candidate_count.saturating_sub(deleted_sources);
     let delivered = restored + skipped;
@@ -8549,8 +8658,8 @@ mod fast_img_hardening_tests {
         ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag, ExpertOptionsFlag,
         FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
         FastImgRunOptions, FastImgTranscodeError, FreshFlag, RecursiveFlag, RetryFlag,
-        ShortestPathFlag, command_requires_database, fast_img_archive_stale_working_copy,
-        fast_img_cleanup_complete_has_shortest_path_proof,
+        ShortestPathFlag, canonicalize_img_run_roots, command_requires_database,
+        fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
         fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
@@ -8568,10 +8677,10 @@ mod fast_img_hardening_tests {
         fast_img_validate_cleanup_retry_jxl_only_delivery_exit,
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
-        fast_static_modern_compression, restore_jpeg_build_current_proof_with_decoder,
-        restore_jpeg_candidate_files, restore_jpeg_delete_verified_source,
-        restore_jpeg_djxl_command, restore_jpeg_output_path_for, restore_jpeg_preflight,
-        restore_jpeg_prune_empty_source_dirs,
+        fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
+        restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
+        restore_jpeg_delete_verified_source, restore_jpeg_djxl_command,
+        restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
         validate_fast_img_marker_source_state,
     };
@@ -8712,6 +8821,43 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn fast_static_preflight_includes_jp2() {
+        assert!(fast_static_uses_modern_compression_preflight(
+            &foundation::image_detection::DetectedFormat::JP2
+        ));
+    }
+
+    #[test]
+    fn normal_img_run_does_not_require_database_without_heuristic_opt_in() -> anyhow::Result<()> {
+        let _lock = foundation::media_conversion_gate::mutex_guard_or_recover(
+            "normal_img_database_policy_test",
+            FAST_IMG_TEST_ENV_LOCK.lock(),
+        );
+        let _heuristic = TestEnvGuard::set(foundation::constants::HEURISTIC_QUALITY_ENV_KEY, "0");
+        let parsed = Cli::try_parse_from(["img", "run", "/photos"])?;
+
+        assert!(!command_requires_database(&parsed.command));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn img_run_canonicalizes_input_and_base_to_the_same_filesystem_identity() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let real = temp.path().join("Album");
+        let alias = temp.path().join("AlbumAlias");
+        std::fs::create_dir_all(&real)?;
+        std::os::unix::fs::symlink(&real, &alias)?;
+
+        let (input, base) = canonicalize_img_run_roots(alias, Some(real.clone()));
+
+        assert_eq!(input, real.canonicalize()?);
+        assert_eq!(base, Some(real.canonicalize()?));
+        Ok(())
+    }
+
+    #[test]
     fn fast_img_jpeg_selection_does_not_require_full_analysis() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("header-only.jpg");
@@ -8772,7 +8918,7 @@ mod fast_img_hardening_tests {
         output: &std::path::Path,
         output_root: &std::path::Path,
     ) -> anyhow::Result<super::RestoreJpegCommitProof> {
-        restore_jpeg_build_current_proof_with_decoder(
+        let mut proof = restore_jpeg_build_current_proof_with_decoder(
             source,
             input_root,
             output,
@@ -8781,7 +8927,9 @@ mod fast_img_hardening_tests {
                 std::fs::copy(output, temp_output)?;
                 Ok(())
             },
-        )
+        )?;
+        proof.xmp_sidecar = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
+        Ok(proof)
     }
 
     fn write_date_created_xmp(path: &Path) -> anyhow::Result<()> {
@@ -8908,7 +9056,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_embeds_adjacent_xmp_into_final_jpeg() -> anyhow::Result<()> {
+    fn restore_jpeg_preserves_exact_jpeg_and_delivers_xmp_sidecar() -> anyhow::Result<()> {
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -8923,6 +9071,8 @@ mod fast_img_hardening_tests {
         let source_xmp = input_root.join("camera.xmp");
         assert!(write_real_reconstructible_jxl(&source)?);
         write_date_created_xmp(&source_xmp)?;
+        let expected_jpeg = root.path().join("expected-camera.jpg");
+        restore_jpeg_decode_to_temp(&source, &expected_jpeg)?;
         #[cfg(target_os = "macos")]
         {
             let status = std::process::Command::new("/usr/bin/xattr")
@@ -8937,17 +9087,17 @@ mod fast_img_hardening_tests {
 
         assert!(restored.committed);
         assert!(output.exists());
-        assert!(foundation::metadata::find_xmp_sidecar(&output).is_none());
+        assert_eq!(std::fs::read(&output)?, std::fs::read(&expected_jpeg)?);
+        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
+            .context("restored XMP sidecar missing")?;
+        assert_eq!(std::fs::read(restored_xmp)?, std::fs::read(&source_xmp)?);
         let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
             .arg("-s3")
             .arg("-XMP-photoshop:DateCreated")
             .arg(&output)
             .output()?;
         assert!(date_created.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&date_created.stdout).trim(),
-            "2025:10:24 12:00:24+08:00"
-        );
+        assert!(String::from_utf8_lossy(&date_created.stdout).trim().is_empty());
         #[cfg(target_os = "macos")]
         {
             let copied_xattr = std::process::Command::new("/usr/bin/xattr")
@@ -8970,6 +9120,7 @@ mod fast_img_hardening_tests {
             super::restore_single_jpeg(&source_without_xmp, &input_root, &output_root, false)?;
         assert!(restored_without_xmp.committed);
         assert!(output_root.join("plain.jpg").exists());
+        assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg")).is_none());
         Ok(())
     }
 
@@ -9053,10 +9204,10 @@ mod fast_img_hardening_tests {
             return Ok(());
         }
         write_date_created_xmp(&source_xmp)?;
+        let expected_xmp = std::fs::read(&source_xmp)?;
         std::fs::write(&unrelated_png, b"\x89PNG\r\n\x1a\nnot-jxl")?;
         std::fs::write(&unrelated_xmp, b"<x:xmpmeta/>")?;
         write_real_jpeg(&output, [10, 20, 30])?;
-        foundation::metadata::merge_xmp_sidecar_into_dest(&source, &output)?;
         let proof = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)?;
 
         let deleted = restore_jpeg_delete_verified_source(&proof)?;
@@ -9064,7 +9215,9 @@ mod fast_img_hardening_tests {
         assert!(deleted);
         assert!(!source.exists());
         assert!(!source_xmp.exists());
-        assert!(foundation::metadata::find_xmp_sidecar(&output).is_none());
+        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
+            .context("verified restored XMP sidecar missing")?;
+        assert_eq!(std::fs::read(restored_xmp)?, expected_xmp);
         assert!(unrelated_png.exists());
         assert!(unrelated_xmp.exists());
         assert!(output.exists());
@@ -9086,7 +9239,6 @@ mod fast_img_hardening_tests {
         }
         write_date_created_xmp(&source_xmp)?;
         write_real_jpeg(&output, [10, 20, 30])?;
-        foundation::metadata::merge_xmp_sidecar_into_dest(&source, &output)?;
         let proof = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)?;
 
         assert!(restore_jpeg_delete_verified_source(&proof)?);
@@ -9098,7 +9250,7 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_proof_refuses_unembedded_xmp_sidecar() -> anyhow::Result<()> {
+    fn restore_jpeg_proof_refuses_malformed_xmp_sidecar() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -9109,15 +9261,15 @@ mod fast_img_hardening_tests {
         if !write_real_reconstructible_jxl(&source)? {
             return Ok(());
         }
-        write_date_created_xmp(&source_xmp)?;
+        std::fs::write(&source_xmp, b"<x:xmpmeta>")?;
         write_real_jpeg(&output, [10, 20, 30])?;
         let Err(error) = restore_jpeg_test_proof(&source, &input_root, &output, &output_root)
         else {
-            anyhow::bail!("unembedded XMP sidecar did not block restore proof");
+            anyhow::bail!("malformed XMP sidecar did not block restore proof");
         };
 
         assert!(
-            format!("{error:?}").contains("DateCreated"),
+            format!("{error:?}").contains("invalid"),
             "unexpected restore proof error: {error:?}"
         );
         assert!(source.exists());
