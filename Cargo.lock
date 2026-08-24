@@ -157,7 +157,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -485,7 +485,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2593,7 +2593,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2640,7 +2640,7 @@ checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2772,9 +2772,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2842,7 +2842,7 @@ source = "git+https://github.com/dtolnay/thiserror#ef9383b37d7c96b01e10df35d3e9e
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3626,7 +3626,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#ee9216fb9e16bcdf9036bcc50602a677cd623ce1"
+source = "git+https://github.com/google/zerocopy#0eeb7fa0058c37f4911e690fd7d6476f6e829e85"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3634,7 +3634,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#ee9216fb9e16bcdf9036bcc50602a677cd623ce1"
+source = "git+https://github.com/google/zerocopy#0eeb7fa0058c37f4911e690fd7d6476f6e829e85"
 dependencies = [
  "proc-macro2",
  "quote",

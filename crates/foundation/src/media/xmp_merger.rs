@@ -132,20 +132,23 @@ fn reconstruct_jpeg_to_temp(jxl: &Path) -> Result<tempfile::NamedTempFile> {
         .input(jxl)
         .output(temp.path())
         .build();
-    command.arg("--reconstruct_jpeg").arg("--quiet");
     let output = crate::process_runner::run_command_with_liveness_timeout(
         &mut command,
         Duration::from_secs(120),
         crate::process_runner::image_process_hard_timeout(),
         "XMP JBRD baseline reconstruction",
     )?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let diagnostic = stderr
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("no djxl diagnostic");
+    if !crate::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output) {
+        let diagnostic = if output.status.success() {
+            "djxl used pixel-to-JPEG fallback".to_string()
+        } else {
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("no djxl diagnostic")
+                .to_string()
+        };
         bail!(
             "strict JPEG reconstruction failed before XMP merge for {}: {diagnostic}",
             jxl.display()

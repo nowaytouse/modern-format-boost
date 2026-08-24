@@ -1174,6 +1174,10 @@ mod tests {
     fn query_record(uuid: &str) -> PhotosQueryRecord {
         PhotosQueryRecord {
             uuid: uuid.to_string(),
+            filename: String::new(),
+            original_filename: String::new(),
+            uti: String::new(),
+            uti_original: String::new(),
             path: None,
             path_derivatives: Vec::new(),
             ismissing: false,
@@ -1198,6 +1202,10 @@ mod tests {
     fn audit_album_path_preserves_source_hierarchy() -> Result<()> {
         let record = PhotosQueryRecord {
             uuid: "00000000-0000-0000-0000-000000000000".to_string(),
+            filename: String::new(),
+            original_filename: String::new(),
+            uti: String::new(),
+            uti_original: String::new(),
             path: None,
             path_derivatives: Vec::new(),
             ismissing: false,

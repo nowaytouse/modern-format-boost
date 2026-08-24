@@ -7,8 +7,10 @@ All notable changes to this project will be documented in this file.
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
 - **Exact recovery-original collector**: The existing Rust collector now has a
-  backup handoff that re-probes live non-reconstructible JXLs and extracts only
-  their originals plus XMP. A single JXL accepts one same-basename backup file
+  single backup-recovery purpose; the obsolete optimized-media relocation path
+  and its move/prune machinery have been removed. It re-probes live
+  non-reconstructible JXLs and extracts only their originals plus XMP. A single
+  JXL accepts one same-basename backup file
   or a backup folder; folder backups use one exact relative-directory and
   basename match after magic-byte format detection. Photos backups use exact
   audited UUIDs and read-only `osxphotos` original export. Ambiguity, missing
@@ -16,6 +18,13 @@ All notable changes to this project will be documented in this file.
   proof fail closed. Every delivered file receives a BLAKE3 record in the
   atomic `.mfb_recovery_collection.json`, and the AppKit GUI exposes the same
   workflow as “Collect recovery originals”.
+
+- **Clear recovery naming and libjxl compatibility**: The native operation is
+  again named “Restore Original JPEG” instead of exposing its internal audit
+  mechanism. Exact JPEG reconstruction no longer requires the newer
+  `djxl --reconstruct_jpeg` switch: all supported libjxl generations use their
+  default reconstruction path, while any pixel-to-JPEG fallback remains
+  explicitly detected and rejected.
 
 - **Archive-grade JXL/XMP transaction**: Append-only XMP overlays now capture
   source file identity plus original-container/JBRD/XMP hashes, preserve the
@@ -49,7 +58,7 @@ All notable changes to this project will be documented in this file.
   existing deliveries instead of scattering `_2` / `_3` output trees.
 - **Capability-driven native GUI**: The AppKit host now owns one operation
   capability map. Fixed image/video operations no longer expose an invalid
-  media selector, Restore JPEG has no redundant action selector, unsupported
+  media selector, Restore Original JPEG has no redundant action selector, unsupported
   flags are rejected before launch, and Photos TCC is requested only when the
   selected restore path is a Photos library. Selecting a library now reveals a
   live native folder/album picker; it forwards opaque UUIDs through the same CLI

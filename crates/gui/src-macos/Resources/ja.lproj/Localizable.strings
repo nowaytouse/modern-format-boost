@@ -28,7 +28,7 @@
 "operation.fast_jxl" = "高速画像 · JPEG XL";
 "operation.fast_avif" = "高速画像 · AVIF";
 "operation.fast_video" = "高速動画";
-"operation.restore_jpeg" = "JPEG 復元と JXL 監査";
+"operation.restore_jpeg" = "元の JPEG を復元";
 "operation.collect" = "復旧用オリジナルを収集";
 "operation.merge_xmp" = "XMP メタデータを統合";
 "operation.icloud_import" = "iCloud メディアを読み込む";
@@ -67,7 +67,7 @@
 "error.photos_unavailable" = "読み込み権限の確認のために写真アプリを開けませんでした";
 "error.photos_denied" = "写真アプリのオートメーション権限が拒否されました（OSStatus %d）";
 "error.photos_check" = "写真アプリのオートメーション権限確認に失敗しました（OSStatus %d）";
-"error.photos_scope_unavailable" = "JPEG 復元で写真ライブラリを選択してからアルバムを選んでください";
+"error.photos_scope_unavailable" = "「元の JPEG を復元」で写真ライブラリを選択してからアルバムを選んでください";
 "error.photos_scope_too_large" = "写真の階層応答が安全なサイズ上限を超えました";
 "error.photos_scope_load" = "写真の階層を読み込めませんでした: %@";
 "error.photos_scope_invalid" = "写真の階層に無効または期限切れの UUID が含まれています";

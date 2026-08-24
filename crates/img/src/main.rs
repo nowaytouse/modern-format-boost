@@ -6321,31 +6321,38 @@ fn run_restore_image_command(
 }
 
 fn restore_jpeg_djxl_command(input: &Path, output: &Path) -> std::process::Command {
-    let mut command = foundation::DjxlBuilder::new()
+    foundation::DjxlBuilder::new()
         .input(input)
         .output(output)
-        .build();
-    command.arg("--reconstruct_jpeg");
-    command
+        .build()
+}
+
+fn restore_jpeg_decode_failure(output: &std::process::Output) -> Option<String> {
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(output) {
+        None
+    } else if output.status.success() {
+        Some("djxl used pixel-to-JPEG fallback instead of exact reconstruction".to_string())
+    } else {
+        Some(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
     let command = restore_jpeg_djxl_command(input, temp_output);
     let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
-    if !decode.status.success() {
-        let stderr = String::from_utf8_lossy(&decode.stderr);
+    if let Some(diagnostic) = restore_jpeg_decode_failure(&decode) {
         if let Err(cleanup_err) = restore_jpeg_remove_temp(temp_output, "djxl failure") {
             anyhow::bail!(
                 "restore-jpeg djxl failed for {}: {}; additionally cleanup failed: {cleanup_err}",
                 input.display(),
-                stderr.trim()
+                diagnostic
             );
         }
         anyhow::bail!(
             "restore-jpeg djxl failed for {}: {}",
             input.display(),
-            stderr.trim()
+            diagnostic
         );
     }
     Ok(())
@@ -6666,19 +6673,18 @@ fn restore_single_jpeg(
     let command = restore_jpeg_djxl_command(input, &temp_output);
     let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
         .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
-    if !decode.status.success() {
-        let stderr = String::from_utf8_lossy(&decode.stderr);
+    if let Some(diagnostic) = restore_jpeg_decode_failure(&decode) {
         if let Err(cleanup_err) = restore_jpeg_remove_temp(&temp_output, "djxl failure") {
             anyhow::bail!(
                 "restore-jpeg djxl failed for {}: {}; additionally cleanup failed: {cleanup_err}",
                 input.display(),
-                stderr.trim()
+                diagnostic
             );
         }
         anyhow::bail!(
             "restore-jpeg djxl failed for {}: {}",
             input.display(),
-            stderr.trim()
+            diagnostic
         );
     }
 
@@ -9226,9 +9232,11 @@ mod fast_img_hardening_tests {
     use super::{
         ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag, ExpertOptionsFlag,
         FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
-        FastImgRunOptions, FastImgTranscodeError, FreshFlag, RecursiveFlag, RetryFlag,
-        ShortestPathFlag, canonicalize_img_run_roots, command_requires_database,
-        fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
+        FastImgRunOptions, FastImgTranscodeError, FreshFlag, RESTORE_JPEG_MANIFEST_NAME,
+        RecursiveFlag, RestoreJpegAuditRecord, RestoreJpegAuditStatus, RestoreJpegCommitProof,
+        RestoreJpegManifestRecord, RetryFlag, ShortestPathFlag, canonicalize_img_run_roots,
+        command_requires_database, fast_img_archive_stale_working_copy,
+        fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
         fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
@@ -9247,12 +9255,12 @@ mod fast_img_hardening_tests {
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
-        restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
-        restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
-        restore_jpeg_delete_verified_source, restore_jpeg_djxl_command,
+        restore_jpeg_audit_marker_path, restore_jpeg_build_current_proof_with_decoder,
+        restore_jpeg_candidate_files, restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
+        restore_jpeg_delete_verified_source, restore_jpeg_djxl_command, restore_jpeg_hex_encode,
         restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
-        validate_fast_img_marker_source_state,
+        validate_fast_img_marker_source_state, write_restore_jpeg_manifest,
     };
     use anyhow::Context;
     use clap::Parser;
@@ -9631,12 +9639,12 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_decoder_forbids_pixel_to_jpeg_fallback() {
+    fn restore_jpeg_decoder_uses_version_neutral_default_reconstruction() {
         let command =
             restore_jpeg_djxl_command(Path::new("archive.jxl"), Path::new("restored.jpg"));
         let args: Vec<_> = command.get_args().collect();
 
-        assert!(args.iter().any(|arg| *arg == "--reconstruct_jpeg"));
+        assert!(!args.iter().any(|arg| *arg == "--reconstruct_jpeg"));
         assert!(!args.iter().any(|arg| *arg == "--pixels_to_jpeg"));
     }
 
@@ -10437,12 +10445,10 @@ mod fast_img_hardening_tests {
         let decode = std::process::Command::new(foundation::constants::TOOL_DJXL)
             .arg(&out)
             .arg(&reconstructed)
-            .arg("--reconstruct_jpeg")
-            .arg("--quiet")
             .output()
             .context("strictly reconstruct refreshed JXL")?;
         assert!(
-            decode.status.success(),
+            foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&decode),
             "strict JXL reconstruction failed: {}",
             String::from_utf8_lossy(&decode.stderr)
         );

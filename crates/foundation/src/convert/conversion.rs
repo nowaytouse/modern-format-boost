@@ -3812,9 +3812,7 @@ mod tests {
         command_status_success(
             Command::new(crate::constants::TOOL_DJXL)
                 .arg(&output)
-                .arg(&reconstructed)
-                .arg("--reconstruct_jpeg")
-                .arg("--quiet"),
+                .arg(&reconstructed),
             "strictly reconstruct JPEG",
         );
         assert_eq!(
@@ -3871,9 +3869,7 @@ mod tests {
         command_status_success(
             Command::new(crate::constants::TOOL_DJXL)
                 .arg(&output)
-                .arg(&reconstructed_updated)
-                .arg("--reconstruct_jpeg")
-                .arg("--quiet"),
+                .arg(&reconstructed_updated),
             "strictly reconstruct JPEG after XMP update",
         );
         assert_eq!(

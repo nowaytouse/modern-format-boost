@@ -130,7 +130,6 @@ pub fn verify_jxl_roundtrip_integrity(
         .input(jxl_output)
         .output(temp_path)
         .build();
-    decode_command.arg("--reconstruct_jpeg");
     let decode_output = run_fast_img_command_with_timeout(
         &mut decode_command,
         FAST_IMG_MEDIA_PROBE_TIMEOUT,
@@ -138,8 +137,12 @@ pub fn verify_jxl_roundtrip_integrity(
     )
     .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}")))?;
 
-    if !decode_output.status.success() {
-        let stderr = first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
+    if !crate::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&decode_output) {
+        let stderr = if decode_output.status.success() {
+            "djxl used pixel-to-JPEG fallback"
+        } else {
+            first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>")
+        };
         return Err(ImgQualityError::AnalysisError(format!(
             "integrity: djxl exited non-zero for {}: {stderr}",
             jxl_output.display()

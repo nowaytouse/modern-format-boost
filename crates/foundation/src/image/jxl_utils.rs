@@ -15,7 +15,7 @@ use std::time::Duration;
 /// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JpegReconstructionEligibility {
-    /// `djxl --reconstruct_jpeg` accepts the payload.
+    /// The official decoder reconstructs the original JPEG without pixel fallback.
     Exact,
     /// The JXL is pixel-decodable but contains no JPEG reconstruction data.
     PixelOnly,
@@ -30,6 +30,29 @@ fn first_nonempty_tool_line(bytes: &[u8]) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or("no diagnostic")
         .to_string()
+}
+
+/// Whether `djxl` completed without its lossy pixel-to-JPEG fallback.
+///
+/// Plain `djxl INPUT OUTPUT.jpg` reconstructs JPEG bitstreams by default on
+/// every supported libjxl generation. The newer `--reconstruct_jpeg` switch is
+/// deliberately not required because older production/CI decoders reject it.
+#[must_use]
+pub fn djxl_completed_exact_jpeg_reconstruction(output: &std::process::Output) -> bool {
+    if !output.status.success() {
+        return false;
+    }
+    let diagnostic = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+    !diagnostic.contains("pixels_to_jpeg")
+        && !diagnostic.contains("pixels-to-jpeg")
+        && !diagnostic.contains("pixel-to-jpeg")
+        && !diagnostic.contains("decoded to pixels")
+        && !diagnostic.contains("could not decode losslessly to jpeg")
 }
 
 fn run_jxl_reconstruction_probe(
@@ -82,21 +105,26 @@ pub fn probe_jpeg_reconstruction_eligibility(
                 && !line.contains("not available")
         });
 
+    let strict_output = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "jxl_exact_reconstruction_probe",
+        None,
+        Some(".jpg"),
+    )
+    .map_err(|error| format!("strict JPEG reconstruction temp allocation failed: {error}"))?;
     let mut strict_command = DjxlBuilder::new()
         .input(path)
-        .output(Path::new("-"))
+        .output(strict_output.path())
         .build();
-    strict_command
-        .arg("--reconstruct_jpeg")
-        .arg("--output_format=jpg")
-        .arg("--disable_output")
-        .arg("--quiet");
     let strict =
         run_jxl_reconstruction_probe(&mut strict_command, "strict JPEG reconstruction probe")?;
-    if strict.status.success() {
+    if djxl_completed_exact_jpeg_reconstruction(&strict) {
         return Ok(JpegReconstructionEligibility::Exact);
     }
-    let strict_diagnostic = first_nonempty_tool_line(&strict.stderr);
+    let strict_diagnostic = if strict.status.success() {
+        "djxl used pixel-to-JPEG fallback instead of exact reconstruction".to_string()
+    } else {
+        first_nonempty_tool_line(&strict.stderr)
+    };
 
     let mut pixel_command = DjxlBuilder::new()
         .input(path)

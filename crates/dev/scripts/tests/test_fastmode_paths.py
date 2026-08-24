@@ -84,7 +84,8 @@ class TestFastModePaths(unittest.TestCase):
         )
         self.assertEqual(
             fastmode_paths.build_fast_img_restore_command(
-                Path("/opt/mfb/img"), Path("/Users/example/Pictures/debug.photoslibrary")
+                Path("/opt/mfb/img"),
+                Path("/Users/example/Pictures/debug.photoslibrary"),
             ),
             [
                 "/opt/mfb/img",

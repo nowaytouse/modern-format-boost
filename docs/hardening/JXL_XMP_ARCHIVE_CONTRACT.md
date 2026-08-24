@@ -5,12 +5,12 @@ XMP overlays, Tier 2 sidecars, and JPEG restoration.
 
 ## Ownership boundary
 
-| Layer | Owner | Mutation policy |
-| --- | --- | --- |
-| JBRD and reconstructed JPEG bitstream | Reconstruction-owned | Immutable |
-| Original Exif, XMP, ICC, JUMBF, unknown boxes, codestream | Reconstruction-owned | Immutable |
-| Appended XMP overlay | Overlay-owned | Append only after validation |
-| MFB audit fields and manifests | Application-owned | Versioned, atomic, and hash-linked |
+| Layer                                                     | Owner                | Mutation policy                    |
+| --------------------------------------------------------- | -------------------- | ---------------------------------- |
+| JBRD and reconstructed JPEG bitstream                     | Reconstruction-owned | Immutable                          |
+| Original Exif, XMP, ICC, JUMBF, unknown boxes, codestream | Reconstruction-owned | Immutable                          |
+| Appended XMP overlay                                      | Overlay-owned        | Append only after validation       |
+| MFB audit fields and manifests                            | Application-owned    | Versioned, atomic, and hash-linked |
 
 An external XMP sidecar is never merged by rewriting a reconstructible JXL.
 The complete existing container is copied byte-for-byte, one validated `xml `

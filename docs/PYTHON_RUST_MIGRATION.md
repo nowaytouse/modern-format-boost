@@ -54,7 +54,7 @@ implementation boundary, not a second public command surface.
 | ----------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |
 | `cache_cleaner`                           | `cache_cleaner.py`                           | Rust binary unit tests                                                      |
 | `check_all`                               | `check_all.py`                               | Rust binary unit tests and CI workflow contract                             |
-| `collect_optimized`                       | `collect_optimized.py`                       | snapshot/restore failure-propagation unit tests                             |
+| `collect_optimized`                       | `collect_optimized.py`                       | mandatory-backup CLI lock plus BLAKE3 recovery manifest checks              |
 | `create_live_photo`                       | `create_live_photo.py`                       | `create_live_photo` runtime integration test                                |
 | `generate_test_media`                     | `generate_test_media.py`                     | FFmpeg failure-propagation unit test and CI fixture generation              |
 | `icloud_import`                           | `icloud_import.py`                           | album, rename, lock, and preflight unit tests                               |

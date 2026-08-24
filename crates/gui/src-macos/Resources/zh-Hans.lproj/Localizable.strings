@@ -28,7 +28,7 @@
 "operation.fast_jxl" = "快速图像 · JPEG XL";
 "operation.fast_avif" = "快速图像 · AVIF";
 "operation.fast_video" = "快速视频";
-"operation.restore_jpeg" = "恢复 JPEG 与审计 JXL";
+"operation.restore_jpeg" = "恢复原始 JPEG";
 "operation.collect" = "收集恢复原件";
 "operation.merge_xmp" = "合并 XMP 元数据";
 "operation.icloud_import" = "导入 iCloud 媒体";
@@ -67,7 +67,7 @@
 "error.photos_unavailable" = "无法打开“照片”来检查导入权限";
 "error.photos_denied" = "“照片”自动化权限已被拒绝（OSStatus %d）";
 "error.photos_check" = "“照片”自动化权限检查失败（OSStatus %d）";
-"error.photos_scope_unavailable" = "请先选择照片图库包和“恢复 JPEG”操作，再选择相册";
+"error.photos_scope_unavailable" = "请先选择照片图库包和“恢复原始 JPEG”操作，再选择相册";
 "error.photos_scope_too_large" = "照片层级响应超过安全大小上限";
 "error.photos_scope_load" = "无法读取照片层级：%@";
 "error.photos_scope_invalid" = "照片层级包含无效或已失效的 UUID";

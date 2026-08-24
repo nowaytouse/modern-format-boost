@@ -28,7 +28,7 @@
 "operation.fast_jxl" = "Fast Image · JPEG XL";
 "operation.fast_avif" = "Fast Image · AVIF";
 "operation.fast_video" = "Fast Video";
-"operation.restore_jpeg" = "JPEG restore and JXL audit";
+"operation.restore_jpeg" = "Restore Original JPEG";
 "operation.collect" = "Collect recovery originals";
 "operation.merge_xmp" = "Merge XMP metadata";
 "operation.icloud_import" = "Import iCloud media";
@@ -67,7 +67,7 @@
 "error.photos_unavailable" = "Photos could not be opened for the import permission check";
 "error.photos_denied" = "Photos Automation permission was denied (OSStatus %d)";
 "error.photos_check" = "Photos Automation permission check failed (OSStatus %d)";
-"error.photos_scope_unavailable" = "Choose a Photos library package with JPEG restore before selecting an album";
+"error.photos_scope_unavailable" = "Choose a Photos library package with Restore Original JPEG before selecting an album";
 "error.photos_scope_too_large" = "The Photos hierarchy response exceeded the safe size limit";
 "error.photos_scope_load" = "Could not read the Photos hierarchy: %@";
 "error.photos_scope_invalid" = "The Photos hierarchy contained an invalid or stale UUID";

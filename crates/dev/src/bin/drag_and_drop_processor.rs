@@ -11,8 +11,7 @@ use dev::infra::drag_drop::{
     build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
     create_directory_structure, delete_fast_img_shortest_path_output_dir,
     effective_success_failure_counts, fast_img_retained_file_names, fast_img_session_size_metrics,
-    get_unique_output_path, run_unified_verification, safety_check, scan_content,
-    sync_non_media_files,
+    run_unified_verification, safety_check, scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -1367,6 +1366,10 @@ fn plan_cli_invocations(
         args.backup.is_none() || args.mode == LaunchMode::Collect,
         "--backup is available only with --mode collect"
     );
+    anyhow::ensure!(
+        args.mode != LaunchMode::Collect || args.backup.is_some(),
+        "--mode collect requires --backup; legacy optimized-media relocation was removed"
+    );
 
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
@@ -1420,24 +1423,21 @@ fn plan_cli_invocations(
                 ))?);
             }
             LaunchMode::Collect => {
-                let output = args.output.clone().unwrap_or_else(|| {
-                    if args.backup.is_some() {
-                        adjacent_output(input, "recovery_originals")
-                    } else {
-                        unique_adjacent_output(input, "collected")
-                    }
-                });
-                let mut collect_args = vec![
+                let output = args
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| adjacent_output(input, "recovery_originals"));
+                let backup = args
+                    .backup
+                    .as_ref()
+                    .context("collect recovery originals requires --backup")?;
+                let collect_args = vec![
                     input.to_string_lossy().into_owned(),
                     output.to_string_lossy().into_owned(),
                     "--yes".to_string(),
+                    "--backup".to_string(),
+                    backup.to_string_lossy().into_owned(),
                 ];
-                if let Some(backup) = &args.backup {
-                    collect_args.extend([
-                        "--backup".to_string(),
-                        backup.to_string_lossy().into_owned(),
-                    ]);
-                }
                 commands.push(dev_bin_command(
                     project_root,
                     "collect_optimized",
@@ -1492,9 +1492,9 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::Images => "Images Only",
         LaunchMode::Videos => "Videos/Animated",
         LaunchMode::FastImg => "Fast Image",
-        LaunchMode::RestoreJpeg => "Restore JPEG",
+        LaunchMode::RestoreJpeg => "Restore Original JPEG",
         LaunchMode::FastVid => "Fast Video",
-        LaunchMode::Collect => "Collect Optimized",
+        LaunchMode::Collect => "Collect Recovery Originals",
         LaunchMode::MergeXmp => "Merge XMP",
         LaunchMode::IcloudImport => "iCloud Import",
         LaunchMode::Diagnostic => "Diagnostic Verify",
@@ -1532,11 +1532,7 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
     let snapshot = args.inputs.first().map(|p| probe_system_snapshot(p));
     RuntimeDashboard {
         target_path: target,
-        mode_label: if args.mode == LaunchMode::Collect && args.backup.is_some() {
-            "Collect Recovery Originals".to_string()
-        } else {
-            mode_label(&args.mode).to_string()
-        },
+        mode_label: mode_label(&args.mode).to_string(),
         target_type: target_type_label(args).to_string(),
         output_path: args.output.as_ref().map(|p| p.display().to_string()),
         ultimate: args.ultimate && mode_supports_ultimate(&args.mode),
@@ -2248,24 +2244,23 @@ fn execute_menu_selection(
                 2 => LaunchMode::IcloudImport,
                 _ => LaunchMode::Collect,
             };
-            let output = if mode == LaunchMode::Collect {
-                Some(get_unique_output_path(&target.with_file_name(format!(
-                    "{}_collected",
-                    target.file_name().unwrap_or_default().to_string_lossy()
-                ))))
-            } else {
-                None
-            };
-            let args = build_run_args(
+            let collecting_recovery_originals = mode == LaunchMode::Collect;
+            let mut args = build_run_args(
                 target,
                 mode,
-                output,
+                None,
                 false,
                 false,
                 false,
                 ProcessingFilter::Both,
                 None,
             );
+            if collecting_recovery_originals {
+                let Some(backup) = prompt_for_input()? else {
+                    return Ok(false);
+                };
+                args.backup = Some(backup);
+            }
             run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
         }
         _ => match maint_sub {
@@ -2411,8 +2406,8 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
 
         let ws = [
             (
-                "Tool: Collect Optimized Media [Tab to Switch]",
-                "Move optimized outputs into a mirrored directory tree.",
+                "Tool: Collect Recovery Originals [Tab to Switch]",
+                "Copy only audited originals from an exact backup; never move source media.",
             ),
             (
                 "Tool: Merge XMP Attachments [Tab to Switch]",
@@ -2962,13 +2957,18 @@ mod tests {
     #[test]
     fn test_workspace_tool_modes_delegate_to_rust_bins() {
         let target = PathBuf::from("/input/Album");
-        let collect_out = PathBuf::from("/input/Album_collected");
         let modes = [
             (
                 LaunchMode::Collect,
-                Some(collect_out),
+                Some(PathBuf::from("/backup/Album")),
                 "/repo/target/release/collect_optimized",
-                vec!["/input/Album", "/input/Album_collected", "--yes"],
+                vec![
+                    "/input/Album",
+                    "/input/Album_recovery_originals",
+                    "--yes",
+                    "--backup",
+                    "/backup/Album",
+                ],
             ),
             (
                 LaunchMode::MergeXmp,
@@ -2984,12 +2984,12 @@ mod tests {
             ),
         ];
 
-        for (mode, output, program, expected_args) in modes {
+        for (mode, backup, program, expected_args) in modes {
             let args = Args {
                 inputs: vec![target.clone()],
                 mode,
-                output,
-                backup: None,
+                output: None,
+                backup,
                 archive: false,
                 shortest_path: false,
                 retry: false,
