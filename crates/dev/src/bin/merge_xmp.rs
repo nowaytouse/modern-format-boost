@@ -13,7 +13,6 @@ use dev::infra::ui_tokens::pick_symbol;
 use foundation::xmp_merger::{Config as XmpMergerConfig, LogLevel, OverwriteMode, XmpMerger};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -150,14 +149,6 @@ fn merge_target(target: &Path, args: &Args) -> Result<MergeSummary> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-
-    // Resolve through the shared policy so GUI launches and tool overrides agree.
-    let Some(exiftool) = foundation::common_utils::resolve_tool_path("exiftool") else {
-        bail!("exiftool was not found or failed its runtime health check");
-    };
-    if Command::new(exiftool).arg("-ver").output().is_err() {
-        bail!("exiftool could not be started");
-    }
 
     println!();
     println!("Modern Format Boost — XMP Merger Tool (8-Strategy Edition)");

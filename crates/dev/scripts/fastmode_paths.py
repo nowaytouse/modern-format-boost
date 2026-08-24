@@ -54,8 +54,7 @@ def fast_img_output_dir_for_target(
 
 
 def _unique_adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
-    target = target_dir.expanduser()
-    base = target.with_name(f"{target.name}_{suffix_name}")
+    base = _adjacent_dir(target_dir, suffix_name)
     candidate = base
     suffix = 2
     while candidate.exists():
@@ -64,9 +63,14 @@ def _unique_adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
     return candidate
 
 
+def _adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
+    target = target_dir.expanduser()
+    return target.with_name(f"{target.name}_{suffix_name}")
+
+
 def fast_img_restore_output_dir_for_target(target_dir: Path) -> Path:
-    """Resolve the adjacent JPEG restoration output directory."""
-    return _unique_adjacent_dir(target_dir, "restored_jpeg")
+    """Resolve the stable adjacent JPEG restoration output directory."""
+    return _adjacent_dir(target_dir, "restored_jpeg")
 
 
 def fast_vid_output_dir_for_target(target_dir: Path) -> Path:
@@ -99,17 +103,29 @@ def build_fast_img_command(
 
 
 def build_fast_img_restore_command(
-    img_binary: Path, target_dir: Path, *, output_dir: Path
+    img_binary: Path,
+    target_dir: Path,
+    *,
+    output_dir: Path | None = None,
+    photos_album_id: str | None = None,
+    photos_folder_id: str | None = None,
 ) -> list[str]:
     """Build the Rust JXL-to-JPEG restore command for drag-and-drop launches."""
-    return [
+    if photos_album_id and photos_folder_id:
+        raise ValueError("select either a Photos album or folder UUID")
+    command = [
         str(img_binary),
         "restore-jpeg",
         str(target_dir),
-        "--output",
-        str(output_dir),
         "--recursive",
     ]
+    if output_dir is not None:
+        command.extend(["--output", str(output_dir)])
+    if photos_album_id:
+        command.extend(["--photos-album-id", photos_album_id])
+    if photos_folder_id:
+        command.extend(["--photos-folder-id", photos_folder_id])
+    return command
 
 
 def build_fast_vid_command(

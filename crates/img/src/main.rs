@@ -244,16 +244,27 @@ enum Commands {
         extreme_precision: bool,
     },
 
-    /// Restore reconstructible JXL files to byte-identical JPEGs. Additional
-    /// JXL XMP is delivered as a verified adjacent `.xmp` sidecar so the JPEG
-    /// payload is never rewritten; embedding it would change the original bytes.
+    /// List native Photos folders/albums with the UUIDs accepted by restore-jpeg.
+    #[command(name = "photos-albums")]
+    PhotosAlbums {
+        /// Photos library package to inspect.
+        #[arg(value_name = "LIBRARY")]
+        library: PathBuf,
+
+        /// Emit machine-readable JSON for the native GUI.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+
+    /// Restore exact JPEGs and isolate non-reversible JXL automatically. A
+    /// Photos-library input audits live assets without rewriting media bytes.
     #[command(name = "restore-jpeg")]
     RestoreJpeg {
-        /// Input directory (or single file) containing source JXL files.
+        /// JXL file/directory, Photos library, or concrete asset inside one.
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Output directory. Defaults to an adjacent *_`restored_jpeg` directory.
+        /// Output directory for local exact JPEG restoration.
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -268,6 +279,14 @@ enum Commands {
         /// Preserve source JXL files after verified JPEG reconstruction.
         #[arg(long, default_value_t = false)]
         keep_source: bool,
+
+        /// Audit only one native Photos album UUID.
+        #[arg(long, conflicts_with = "photos_folder_id")]
+        photos_album_id: Option<String>,
+
+        /// Audit every album below one native Photos folder UUID.
+        #[arg(long, conflicts_with = "photos_album_id")]
+        photos_folder_id: Option<String>,
     },
 }
 
@@ -280,6 +299,7 @@ fn command_requires_database(command: &Commands) -> bool {
         | Commands::LockCheck { .. }
         | Commands::PathHash { .. }
         | Commands::FastImg { .. }
+        | Commands::PhotosAlbums { .. }
         | Commands::RestoreJpeg { .. } => false,
     }
 }
@@ -683,14 +703,60 @@ fn main_inner() -> anyhow::Result<()> {
             };
             run_fast_img(options)?;
         }
+        Commands::PhotosAlbums { library, json } => {
+            let containers =
+                foundation::image::photos_jxl_audit::list_photos_audit_containers(&library)?;
+            if json {
+                println!(
+                    "{}",
+                    foundation::image::photos_jxl_audit::photos_audit_containers_json(&containers)?
+                );
+            } else if containers.is_empty() {
+                println!("No selectable user albums or folders were found.");
+            } else {
+                for container in containers {
+                    println!(
+                        "{}\t{}\t{}",
+                        container.kind.as_str(),
+                        container.id,
+                        container.path.join(" / ")
+                    );
+                }
+            }
+        }
         Commands::RestoreJpeg {
             input,
             output,
             recursive,
             force,
             keep_source,
+            photos_album_id,
+            photos_folder_id,
         } => {
-            run_restore_jpeg(&input, output.as_deref(), recursive, force, keep_source)?;
+            let selected_container = match (photos_album_id, photos_folder_id) {
+                (Some(id), None) => Some(
+                    foundation::image::photos_jxl_audit::PhotosAuditContainerSelection::new(
+                        foundation::image::photos_jxl_audit::PhotosAuditContainerKind::Album,
+                        &id,
+                    )?,
+                ),
+                (None, Some(id)) => Some(
+                    foundation::image::photos_jxl_audit::PhotosAuditContainerSelection::new(
+                        foundation::image::photos_jxl_audit::PhotosAuditContainerKind::Folder,
+                        &id,
+                    )?,
+                ),
+                (None, None) => None,
+                (Some(_), Some(_)) => unreachable!("clap rejects two Photos scopes"),
+            };
+            run_restore_jpeg(
+                &input,
+                output.as_deref(),
+                recursive,
+                force,
+                keep_source,
+                selected_container,
+            )?;
         }
     }
 
@@ -5931,6 +5997,7 @@ fn restore_jpeg_input_root(input: &Path) -> anyhow::Result<PathBuf> {
 }
 
 const RESTORE_JPEG_MANIFEST_NAME: &str = ".mfb_restore_jpeg_manifest.tsv";
+const RESTORE_JPEG_AUDIT_MANIFEST_NAME: &str = ".mfb_restore_jpeg_audit.tsv";
 
 #[derive(Debug, Clone)]
 struct RestoreJpegCommitProof {
@@ -5939,8 +6006,11 @@ struct RestoreJpegCommitProof {
     source_rel: String,
     output_rel: String,
     source_hash: String,
+    reconstruction_hash: String,
     output_hash: String,
     xmp_sidecar: Option<RestoreJpegSidecarProof>,
+    verified_unix_seconds: u64,
+    djxl_version: String,
 }
 
 #[derive(Debug, Clone)]
@@ -5966,6 +6036,60 @@ struct RestoreJpegPreflight {
     restorable: Vec<PathBuf>,
     ineligible: Vec<RestoreJpegFailure>,
     failures: Vec<RestoreJpegFailure>,
+    audit_records: Vec<RestoreJpegAuditRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreJpegAuditStatus {
+    Exact,
+    PixelOnly,
+    ReconstructionRejected,
+    ProbeFailed,
+    InvalidJxlNamedFile,
+}
+
+impl RestoreJpegAuditStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::PixelOnly => "pixel-only",
+            Self::ReconstructionRejected => "reconstruction-rejected",
+            Self::ProbeFailed => "probe-failed",
+            Self::InvalidJxlNamedFile => "invalid-jxl-named-file",
+        }
+    }
+
+    const fn marker_group(self) -> Option<&'static str> {
+        match self {
+            Self::Exact => None,
+            Self::PixelOnly | Self::ReconstructionRejected => Some("Reconstruction Blocked"),
+            Self::ProbeFailed | Self::InvalidJxlNamedFile => Some("Needs Review"),
+        }
+    }
+
+    const fn marker_suffix(self) -> Option<&'static str> {
+        match self {
+            Self::Exact => None,
+            Self::PixelOnly | Self::ReconstructionRejected => Some(".mfb-recovery-needed.txt"),
+            Self::ProbeFailed | Self::InvalidJxlNamedFile => Some(".mfb-needs-review.txt"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RestoreJpegAuditRecord {
+    source: PathBuf,
+    status: RestoreJpegAuditStatus,
+    reason: String,
+}
+
+#[derive(Debug)]
+struct RestoreJpegAuditArtifacts {
+    session_root: PathBuf,
+    manifest: PathBuf,
+    exact: usize,
+    recovery_needed: usize,
+    needs_review: usize,
 }
 
 #[derive(Debug, Default)]
@@ -5997,6 +6121,93 @@ fn restore_jpeg_hex_encode(text: &str) -> String {
     encoded
 }
 
+fn restore_jpeg_djxl_version() -> anyhow::Result<&'static str> {
+    static VERSION: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    let version = VERSION.get_or_init(|| {
+        let mut command = std::process::Command::new(foundation::constants::TOOL_DJXL);
+        command.arg("--version");
+        let output = foundation::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            std::time::Duration::from_secs(15),
+            std::time::Duration::from_secs(30),
+            "restore-jpeg djxl version probe",
+        )
+        .map_err(|error| format!("failed to run djxl --version: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "djxl --version failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let mut diagnostic = output.stdout;
+        diagnostic.extend_from_slice(&output.stderr);
+        let diagnostic_text = String::from_utf8_lossy(&diagnostic);
+        let version = diagnostic_text
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .ok_or_else(|| "djxl --version returned no version text".to_string())?;
+        Ok(version.chars().take(256).collect())
+    });
+    version
+        .as_deref()
+        .map_err(|error| anyhow::anyhow!(error.clone()))
+}
+
+fn restore_jpeg_verified_unix_seconds() -> anyhow::Result<u64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("restore-jpeg system clock precedes Unix epoch")?
+        .as_secs())
+}
+
+fn write_restore_jpeg_durable_text(
+    path: &Path,
+    temp_prefix: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "restore-jpeg manifest path has no parent: {}",
+            path.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "restore-jpeg failed to create manifest directory {}",
+            parent.display()
+        )
+    })?;
+    let mut staged = foundation::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "restore_jpeg_manifest",
+        parent,
+        temp_prefix,
+        ".tsv",
+    )?;
+    staged
+        .as_file_mut()
+        .write_all(content.as_bytes())
+        .with_context(|| format!("restore-jpeg failed to stage manifest {}", path.display()))?;
+    staged.as_file_mut().flush()?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| {
+        anyhow::anyhow!(
+            "restore-jpeg failed to atomically commit manifest {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    foundation::io_utils::sync_committed_file_and_parent(path).with_context(|| {
+        format!(
+            "restore-jpeg failed to durably commit manifest {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn write_restore_jpeg_manifest(
     output_root: &Path,
     records: &[RestoreJpegManifestRecord],
@@ -6008,9 +6219,8 @@ fn write_restore_jpeg_manifest(
         )
     })?;
     let manifest = output_root.join(RESTORE_JPEG_MANIFEST_NAME);
-    let temp_manifest = manifest.with_extension("tsv.tmp");
     let mut content = String::from(
-        "# MFB_RESTORE_JPEG_MANIFEST_V2\nsource_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_blake3\tsource_deleted\n",
+        "# MFB_RESTORE_JPEG_MANIFEST_V3\nsource_rel_hex\toutput_rel_hex\tsource_jxl_blake3\treconstruction_jpeg_blake3\trestored_jpeg_blake3\txmp_rel_hex\txmp_blake3\tverified_unix_seconds\tmfb_version\tdjxl_version_hex\tsource_deleted\n",
     );
     for record in records {
         content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
@@ -6019,6 +6229,8 @@ fn write_restore_jpeg_manifest(
         content.push('\t');
         content.push_str(&record.proof.source_hash);
         content.push('\t');
+        content.push_str(&record.proof.reconstruction_hash);
+        content.push('\t');
         content.push_str(&record.proof.output_hash);
         content.push('\t');
         if let Some(sidecar) = &record.proof.xmp_sidecar {
@@ -6026,7 +6238,15 @@ fn write_restore_jpeg_manifest(
             content.push_str(&restore_jpeg_hex_encode(&sidecar_rel));
             content.push('\t');
             content.push_str(&sidecar.hash);
+        } else {
+            content.push('\t');
         }
+        content.push('\t');
+        content.push_str(&record.proof.verified_unix_seconds.to_string());
+        content.push('\t');
+        content.push_str(env!("CARGO_PKG_VERSION"));
+        content.push('\t');
+        content.push_str(&restore_jpeg_hex_encode(&record.proof.djxl_version));
         content.push('\t');
         content.push_str(if record.source_deleted {
             "true\n"
@@ -6034,19 +6254,7 @@ fn write_restore_jpeg_manifest(
             "false\n"
         });
     }
-    std::fs::write(&temp_manifest, content).with_context(|| {
-        format!(
-            "restore-jpeg failed to write manifest temp {}",
-            temp_manifest.display()
-        )
-    })?;
-    std::fs::rename(&temp_manifest, &manifest).with_context(|| {
-        format!(
-            "restore-jpeg failed to commit manifest {}",
-            manifest.display()
-        )
-    })?;
-    Ok(())
+    write_restore_jpeg_durable_text(&manifest, "mfb-restore-manifest-", &content)
 }
 
 fn record_and_delete_restored_jpeg_source(
@@ -6389,8 +6597,11 @@ where
                     input.display()
                 )
             })?,
+            reconstruction_hash: reconstructed_hash,
             output_hash,
             xmp_sidecar: None,
+            verified_unix_seconds: restore_jpeg_verified_unix_seconds()?,
+            djxl_version: restore_jpeg_djxl_version()?.to_string(),
         })
     })();
     let cleanup_result = restore_jpeg_remove_temp(&temp_output, "fresh decode proof");
@@ -6638,6 +6849,13 @@ fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow
             output.display()
         )
     })?;
+    if proof.reconstruction_hash != proof.output_hash {
+        anyhow::bail!(
+            "restore-jpeg delete gate: manifest reconstruction/output proof disagrees for {} -> {}",
+            input.display(),
+            output.display()
+        );
+    }
     if source_hash != proof.source_hash || output_hash != proof.output_hash {
         anyhow::bail!(
             "restore-jpeg delete gate: stale restore proof for {} -> {}",
@@ -6742,19 +6960,26 @@ fn restore_jpeg_canonical_output_root(output_root: &Path) -> anyhow::Result<Path
 }
 
 fn restore_jpeg_validate_disjoint_roots(
-    input_root: &Path,
+    input_selection: &Path,
     output_root: &Path,
 ) -> anyhow::Result<()> {
-    let canonical_input = std::fs::canonicalize(input_root).with_context(|| {
+    let canonical_input = std::fs::canonicalize(input_selection).with_context(|| {
         format!(
-            "restore-jpeg failed to canonicalize input root {}",
-            input_root.display()
+            "restore-jpeg failed to canonicalize input selection {}",
+            input_selection.display()
         )
     })?;
     let canonical_output = restore_jpeg_canonical_output_root(output_root)?;
-    if canonical_input == canonical_output || canonical_output.starts_with(&canonical_input) {
+    let overlaps = if canonical_input.is_dir() {
+        canonical_input == canonical_output
+            || canonical_output.starts_with(&canonical_input)
+            || canonical_input.starts_with(&canonical_output)
+    } else {
+        canonical_input == canonical_output
+    };
+    if overlaps {
         anyhow::bail!(
-            "restore-jpeg requires disjoint input and output roots: input={} output={}",
+            "restore-jpeg requires disjoint input and output selections: input={} output={}",
             canonical_input.display(),
             canonical_output.display()
         );
@@ -6763,11 +6988,12 @@ fn restore_jpeg_validate_disjoint_roots(
 }
 
 fn restore_jpeg_preflight(
+    input_selection: &Path,
     input_root: &Path,
     output_root: &Path,
     files: &[PathBuf],
 ) -> anyhow::Result<RestoreJpegPreflight> {
-    restore_jpeg_validate_disjoint_roots(input_root, output_root)?;
+    restore_jpeg_validate_disjoint_roots(input_selection, output_root)?;
     if files.is_empty() {
         anyhow::bail!(
             "restore-jpeg found no true JXL files in {}",
@@ -6824,35 +7050,288 @@ fn restore_jpeg_preflight(
     let mut restorable = Vec::with_capacity(files.len());
     let mut ineligible = Vec::new();
     let mut failures = Vec::new();
+    let mut audit_records = Vec::with_capacity(files.len());
     for (source, result) in results {
         match result {
             Ok(foundation::jxl_utils::JpegReconstructionEligibility::Exact) => {
+                audit_records.push(RestoreJpegAuditRecord {
+                    source: source.clone(),
+                    status: RestoreJpegAuditStatus::Exact,
+                    reason: "official djxl reproduced the original JPEG bitstream".to_string(),
+                });
                 restorable.push(source);
             }
             Ok(foundation::jxl_utils::JpegReconstructionEligibility::PixelOnly) => {
+                audit_records.push(RestoreJpegAuditRecord {
+                    source: source.clone(),
+                    status: RestoreJpegAuditStatus::PixelOnly,
+                    reason: "healthy JXL has no exact JPEG bitstream reconstruction data"
+                        .to_string(),
+                });
                 ineligible.push(RestoreJpegFailure {
                     source,
                     reason: "valid pixel-decodable JXL has no exact JPEG bitstream reconstruction data; pixel-to-JPEG fallback is forbidden".to_string(),
                 });
             }
-            Ok(
-                foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
-                    diagnostic,
-                },
-            ) => ineligible.push(RestoreJpegFailure {
-                source,
-                reason: format!(
+            Ok(foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
+                diagnostic,
+            }) => {
+                let reason = format!(
                     "jxlinfo advertises JPEG reconstruction but official djxl rejects it; the valid pixel payload is retained without lossy fallback: {diagnostic}"
-                ),
-            }),
-            Err(reason) => failures.push(RestoreJpegFailure { source, reason }),
+                );
+                audit_records.push(RestoreJpegAuditRecord {
+                    source: source.clone(),
+                    status: RestoreJpegAuditStatus::ReconstructionRejected,
+                    reason: reason.clone(),
+                });
+                ineligible.push(RestoreJpegFailure { source, reason });
+            }
+            Err(reason) => {
+                audit_records.push(RestoreJpegAuditRecord {
+                    source: source.clone(),
+                    status: RestoreJpegAuditStatus::ProbeFailed,
+                    reason: reason.clone(),
+                });
+                failures.push(RestoreJpegFailure { source, reason });
+            }
         }
     }
     Ok(RestoreJpegPreflight {
         restorable,
         ineligible,
         failures,
+        audit_records,
     })
+}
+
+fn restore_jpeg_audit_marker_path(
+    input_root: &Path,
+    staging_root: &Path,
+    record: &RestoreJpegAuditRecord,
+) -> anyhow::Result<Option<PathBuf>> {
+    let Some(group) = record.status.marker_group() else {
+        return Ok(None);
+    };
+    let suffix = record
+        .status
+        .marker_suffix()
+        .context("restore-jpeg audit marker suffix missing")?;
+    let relative = record.source.strip_prefix(input_root).with_context(|| {
+        format!(
+            "restore-jpeg audit source {} is outside root {}",
+            record.source.display(),
+            input_root.display()
+        )
+    })?;
+    anyhow::ensure!(
+        relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_))),
+        "restore-jpeg audit refused unsafe relative path {}",
+        relative.display()
+    );
+    let mut marker = staging_root.join(group).join(relative);
+    let name = marker.file_name().ok_or_else(|| {
+        anyhow::anyhow!(
+            "restore-jpeg audit source has no file name: {}",
+            record.source.display()
+        )
+    })?;
+    let mut marker_name = name.to_os_string();
+    marker_name.push(suffix);
+    marker.set_file_name(marker_name);
+    Ok(Some(marker))
+}
+
+fn restore_jpeg_audit_safe_line(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn restore_jpeg_unique_audit_session_root(
+    output_root: &Path,
+    audited_unix_seconds: u64,
+) -> PathBuf {
+    let base = format!("Audit_{audited_unix_seconds}_{}", std::process::id());
+    let first = output_root.join(&base);
+    if !first.exists() {
+        return first;
+    }
+    for sequence in 2_u32.. {
+        let candidate = output_root.join(format!("{base}_{sequence}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded audit session suffix space exhausted")
+}
+
+fn write_restore_jpeg_audit_artifacts(
+    input_root: &Path,
+    output_root: &Path,
+    preflight: &RestoreJpegPreflight,
+    scan_failures: &[RestoreJpegFailure],
+) -> anyhow::Result<RestoreJpegAuditArtifacts> {
+    let mut records = preflight.audit_records.clone();
+    records.extend(scan_failures.iter().map(|failure| RestoreJpegAuditRecord {
+        source: failure.source.clone(),
+        status: RestoreJpegAuditStatus::InvalidJxlNamedFile,
+        reason: failure.reason.clone(),
+    }));
+    records.sort_by(|left, right| left.source.cmp(&right.source));
+
+    let audited_unix_seconds = restore_jpeg_verified_unix_seconds()?;
+    let djxl_version = restore_jpeg_djxl_version()?;
+    if output_root.exists() {
+        let metadata = std::fs::symlink_metadata(output_root).with_context(|| {
+            format!(
+                "restore-jpeg audit could not inspect output root {}",
+                output_root.display()
+            )
+        })?;
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "restore-jpeg audit output root must be a real directory, not a file or symlink: {}",
+            output_root.display()
+        );
+    } else {
+        std::fs::create_dir_all(output_root).with_context(|| {
+            format!(
+                "restore-jpeg audit could not create output root {}",
+                output_root.display()
+            )
+        })?;
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".mfb-audit-staging-")
+        .tempdir_in(output_root)
+        .with_context(|| {
+            format!(
+                "restore-jpeg audit could not create staging storage in {}",
+                output_root.display()
+            )
+        })?;
+    let mut content = String::from(
+        "# MFB_RESTORE_JPEG_AUDIT_V2\nsource_rel_hex\tstatus\tattention\tsource_blake3\treason_hex\taudited_unix_seconds\tmfb_version\tdjxl_version_hex\n",
+    );
+    let mut exact = 0_usize;
+    let mut recovery_needed = 0_usize;
+    let mut needs_review = 0_usize;
+    for record in &records {
+        let source_rel = restore_jpeg_relative_string(&record.source, input_root)?;
+        let source_hash = match calculate_blake3_hash(&record.source) {
+            Ok(hash) => hash,
+            Err(error) if record.status == RestoreJpegAuditStatus::Exact => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "restore-jpeg audit could not hash exact candidate {}",
+                        record.source.display()
+                    )
+                });
+            }
+            Err(_) => String::new(),
+        };
+        content.push_str(&restore_jpeg_hex_encode(&source_rel));
+        content.push('\t');
+        content.push_str(record.status.as_str());
+        content.push('\t');
+        let attention = match record.status.marker_group() {
+            None => {
+                exact += 1;
+                "none"
+            }
+            Some("Reconstruction Blocked") => {
+                recovery_needed += 1;
+                "restore-from-backup"
+            }
+            Some("Needs Review") => {
+                needs_review += 1;
+                "review"
+            }
+            Some(_) => unreachable!("unknown restore-jpeg audit marker group"),
+        };
+        content.push_str(attention);
+        content.push('\t');
+        content.push_str(&source_hash);
+        content.push('\t');
+        content.push_str(&restore_jpeg_hex_encode(&record.reason));
+        content.push('\t');
+        content.push_str(&audited_unix_seconds.to_string());
+        content.push('\t');
+        content.push_str(env!("CARGO_PKG_VERSION"));
+        content.push('\t');
+        content.push_str(&restore_jpeg_hex_encode(djxl_version));
+        content.push('\n');
+
+        if let Some(marker) = restore_jpeg_audit_marker_path(input_root, staging.path(), record)? {
+            let recommendation = if attention == "restore-from-backup" {
+                "Restore the original media from backup at this same relative location, then reprocess it."
+            } else {
+                "Review this file before recovery; its JXL identity or reconstruction status could not be proven."
+            };
+            let marker_content = format!(
+                "MFB JXL AUDIT MARKER V1\nstatus={}\nattention={}\nsource_relative_path={}\nsource_rel_hex={}\nsource_blake3={}\nreason={}\nrecommended_action={}\n",
+                record.status.as_str(),
+                attention,
+                restore_jpeg_audit_safe_line(&source_rel),
+                restore_jpeg_hex_encode(&source_rel),
+                source_hash,
+                restore_jpeg_audit_safe_line(&record.reason),
+                recommendation,
+            );
+            write_restore_jpeg_durable_text(&marker, "mfb-jxl-audit-marker-", &marker_content)?;
+        }
+    }
+    let manifest = staging.path().join(RESTORE_JPEG_AUDIT_MANIFEST_NAME);
+    write_restore_jpeg_durable_text(&manifest, "mfb-restore-audit-", &content)?;
+    let session_root = restore_jpeg_unique_audit_session_root(output_root, audited_unix_seconds);
+    std::fs::rename(staging.path(), &session_root).with_context(|| {
+        format!(
+            "restore-jpeg audit could not commit session {}",
+            session_root.display()
+        )
+    })?;
+    let _staging_path = staging.keep();
+    foundation::io_utils::sync_parent_directory(&session_root).with_context(|| {
+        format!(
+            "restore-jpeg audit could not durably commit session {}",
+            session_root.display()
+        )
+    })?;
+    Ok(RestoreJpegAuditArtifacts {
+        manifest: session_root.join(RESTORE_JPEG_AUDIT_MANIFEST_NAME),
+        session_root,
+        exact,
+        recovery_needed,
+        needs_review,
+    })
+}
+
+fn log_restore_jpeg_audit_artifacts(
+    artifacts: &RestoreJpegAuditArtifacts,
+) -> anyhow::Result<usize> {
+    let audited = artifacts
+        .exact
+        .checked_add(artifacts.recovery_needed)
+        .and_then(|count| count.checked_add(artifacts.needs_review))
+        .context("restore-jpeg audit count overflow")?;
+    println!(
+        "[AUDIT   ] records={audited} exact={} recovery_needed={} needs_review={} session={} manifest={}",
+        artifacts.exact,
+        artifacts.recovery_needed,
+        artifacts.needs_review,
+        artifacts.session_root.display(),
+        artifacts.manifest.display(),
+    );
+    Ok(audited)
 }
 
 fn restore_jpeg_keep_source_parallel(
@@ -6938,7 +7417,56 @@ fn run_restore_jpeg(
     recursive: bool,
     force: bool,
     keep_source: bool,
+    selected_container: Option<foundation::image::photos_jxl_audit::PhotosAuditContainerSelection>,
 ) -> anyhow::Result<()> {
+    if let Some(mut scope) = foundation::image::photos_jxl_audit::detect_photos_audit_scope(input)?
+    {
+        anyhow::ensure!(
+            output_dir.is_none() && !force && !keep_source,
+            "Photos-library JXL audit selects its own persistent checkpoint; --output, --force, and --keep-source are local-folder options"
+        );
+        anyhow::ensure!(
+            scope.selected_asset_path.is_none() || selected_container.is_none(),
+            "Photos album/folder selection requires the library package, not one concrete asset"
+        );
+        scope.selected_container = selected_container;
+        let audit_scope = scope.selected_container.as_ref().map_or_else(
+            || {
+                if scope.selected_asset_path.is_some() {
+                    "asset".to_string()
+                } else {
+                    "whole-library".to_string()
+                }
+            },
+            |selection| format!("{}:{}", selection.kind.as_str(), selection.id),
+        );
+        let summary = foundation::image::photos_jxl_audit::run_photos_jxl_audit(&scope)?;
+        println!("Succeeded: {}", summary.audited);
+        println!("Skipped: 0");
+        println!("Ignored: 0");
+        println!("Failed: 0");
+        println!(
+            "[AUDIT   ] Photos library={} scope={} audited={} exact={} recovery_needed={} needs_review={} album_links_verified={} checkpoint={}",
+            summary.library.display(),
+            audit_scope,
+            summary.audited,
+            summary.exact,
+            summary.recovery_needed,
+            summary.needs_review,
+            summary.album_links_verified,
+            summary.checkpoint.display(),
+        );
+        println!(
+            "[DONE    ] Photos added only existing asset references to mirrored MFB audit albums; MFB did not rewrite media bytes or edit Photos Library package files directly"
+        );
+        return Ok(());
+    }
+
+    anyhow::ensure!(
+        selected_container.is_none(),
+        "--photos-album-id and --photos-folder-id require a Photos library package"
+    );
+
     if let Err(err) = foundation::tools::require(&["jxlinfo", "djxl"]) {
         log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
         std::process::exit(foundation::constants::EXIT_CODE_ERROR);
@@ -6949,11 +7477,39 @@ fn run_restore_jpeg(
         Some(path) => path.to_path_buf(),
         None => restore_jpeg_default_output_dir(input)?,
     };
-    let (candidates, mut probe_failures) = restore_jpeg_candidate_files(input, recursive)?;
+    restore_jpeg_validate_disjoint_roots(input, &output_root)?;
+    let (candidates, probe_failures) = restore_jpeg_candidate_files(input, recursive)?;
     let candidate_count = candidates.len() + probe_failures.len();
     if candidates.is_empty() {
-        for failed in &probe_failures {
-            eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+        let empty_preflight = RestoreJpegPreflight {
+            restorable: Vec::new(),
+            ineligible: Vec::new(),
+            failures: Vec::new(),
+            audit_records: Vec::new(),
+        };
+        if !probe_failures.is_empty() {
+            for failed in &probe_failures {
+                eprintln!(
+                    "[REVIEW  ] {}: {}",
+                    restore_jpeg_relative_string(&failed.source, &input_root)?,
+                    failed.reason
+                );
+            }
+            let artifacts = write_restore_jpeg_audit_artifacts(
+                &input_root,
+                &output_root,
+                &empty_preflight,
+                &probe_failures,
+            )?;
+            let classified = log_restore_jpeg_audit_artifacts(&artifacts)?;
+            println!("Succeeded: 0");
+            println!("Skipped: {classified}");
+            println!("Ignored: 0");
+            println!("Failed: 0");
+            println!(
+                "[DONE    ] no exact JPEG reconstruction was possible; every JXL-named source was retained and mirrored recovery/review markers preserve its relative location"
+            );
+            return Ok(());
         }
         println!("Succeeded: 0");
         println!("Skipped: 0");
@@ -6971,44 +7527,51 @@ fn run_restore_jpeg(
             probe_failures.len()
         );
     }
-    let preflight = restore_jpeg_preflight(&input_root, &output_root, &candidates)?;
-    for skipped in &preflight.ineligible {
-        eprintln!(
-            "[SKIP    ] {}: {}",
-            skipped.source.display(),
-            skipped.reason
-        );
-    }
-    for failed in &preflight.failures {
-        eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
-    }
-    for failed in &probe_failures {
-        eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
-    }
+    let preflight = restore_jpeg_preflight(input, &input_root, &output_root, &candidates)?;
     let ineligible_count = preflight.ineligible.len();
-    probe_failures.extend(preflight.failures);
+    let review_count = preflight.failures.len() + probe_failures.len();
+    let audit_artifacts = if ineligible_count > 0 || review_count > 0 {
+        for blocked in &preflight.ineligible {
+            eprintln!(
+                "[RECOVERY] {}: {}",
+                restore_jpeg_relative_string(&blocked.source, &input_root)?,
+                blocked.reason
+            );
+        }
+        for failed in preflight.failures.iter().chain(&probe_failures) {
+            eprintln!(
+                "[REVIEW  ] {}: {}",
+                restore_jpeg_relative_string(&failed.source, &input_root)?,
+                failed.reason
+            );
+        }
+        let artifacts = write_restore_jpeg_audit_artifacts(
+            &input_root,
+            &output_root,
+            &preflight,
+            &probe_failures,
+        )?;
+        log_restore_jpeg_audit_artifacts(&artifacts)?;
+        Some(artifacts)
+    } else {
+        None
+    };
     let files = preflight.restorable;
     let file_count = files.len();
     println!(
         "[SCAN    ] Found {file_count} exact-reconstruction JXL files, {ineligible_count} safely retained ineligible files, and {} invalid/probe failures in {}",
-        probe_failures.len(),
+        review_count,
         input_root.display()
     );
     if files.is_empty() {
         println!("Succeeded: 0");
-        println!("Skipped: {ineligible_count}");
+        println!("Skipped: {}", ineligible_count + review_count);
         println!("Ignored: 0");
-        println!("Failed: {}", probe_failures.len());
-        if probe_failures.is_empty() {
-            println!(
-                "[DONE    ] no JXL in this batch can reproduce original JPEG bytes; all {candidate_count} JXL/XMP sources were retained and no pixel-to-JPEG fallback was used"
-            );
-            return Ok(());
-        }
-        anyhow::bail!(
-            "restore-jpeg found no exact-reconstruction candidate and {} invalid/unreadable JXL file(s); all sources were retained",
-            probe_failures.len()
+        println!("Failed: 0");
+        println!(
+            "[DONE    ] no JXL in this batch can reproduce original JPEG bytes; all {candidate_count} JXL/XMP sources were retained and mirrored recovery/review markers were committed without pixel fallback"
         );
+        return Ok(());
     }
 
     let output_candidate_dirs = files
@@ -7115,11 +7678,10 @@ fn run_restore_jpeg(
     };
     let retained_sources = candidate_count.saturating_sub(deleted_sources);
     let delivered = restored + skipped;
-    let probe_failure_count = probe_failures.len();
     let processing_failure_count = processing_failures.len();
-    let failure_count = probe_failure_count.saturating_add(processing_failure_count);
+    let failure_count = processing_failure_count;
     println!("Succeeded: {delivered}");
-    println!("Skipped: {ineligible_count}");
+    println!("Skipped: {}", ineligible_count + review_count);
     println!("Ignored: 0");
     println!("Failed: {failure_count}");
     if failure_count == 0 {
@@ -7134,17 +7696,20 @@ fn run_restore_jpeg(
                 output_root.display()
             );
         }
+        if let Some(artifacts) = &audit_artifacts {
+            println!(
+                "[REVIEW  ] recovery/review markers committed at {}",
+                artifacts.session_root.display()
+            );
+        }
         return Ok(());
     }
 
     println!(
-        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} probe_failed={probe_failure_count} processing_failed={processing_failure_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} processing_failed={processing_failure_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
         output_root.display(),
     );
-    anyhow::bail!(restore_jpeg_failure_summary(
-        probe_failure_count,
-        processing_failure_count
-    ))
+    anyhow::bail!(restore_jpeg_failure_summary(0, processing_failure_count))
 }
 
 fn fast_img_source_hash_set(
@@ -8966,6 +9531,7 @@ mod fast_img_hardening_tests {
             recursive,
             force,
             keep_source,
+            ..
         } = parsed.command
         else {
             anyhow::bail!("expected restore-jpeg command");
@@ -8989,9 +9555,79 @@ mod fast_img_hardening_tests {
             recursive: true,
             force: false,
             keep_source: false,
+            photos_album_id: None,
+            photos_folder_id: None,
         };
 
         assert!(!command_requires_database(&command));
+    }
+
+    #[test]
+    fn restore_jpeg_has_no_mode_switch() {
+        assert!(
+            Cli::try_parse_from(["img", "restore-jpeg", "/photos/archive", "--mode", "export",])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn restore_jpeg_audit_marker_preserves_relative_structure() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let input = root.path().join("input");
+        let staging = root.path().join("staging");
+        let source = input.join("day1/family/photo.jxl");
+        let record = RestoreJpegAuditRecord {
+            source,
+            status: RestoreJpegAuditStatus::PixelOnly,
+            reason: "no reconstruction payload".to_string(),
+        };
+        assert_eq!(
+            restore_jpeg_audit_marker_path(&input, &staging, &record)?,
+            Some(
+                staging
+                    .join("Reconstruction Blocked/day1/family")
+                    .join("photo.jxl.mfb-recovery-needed.txt")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_v3_manifest_records_reconstruction_and_toolchain_proof() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let output = root.path().join("restored/photo.jpg");
+        std::fs::create_dir_all(output.parent().context("missing output parent")?)?;
+        std::fs::write(&output, b"jpeg")?;
+        let proof = RestoreJpegCommitProof {
+            source: root.path().join("source/photo.jxl"),
+            output,
+            source_rel: "photo.jxl".to_string(),
+            output_rel: "photo.jpg".to_string(),
+            source_hash: "source-hash".to_string(),
+            reconstruction_hash: "jpeg-hash".to_string(),
+            output_hash: "jpeg-hash".to_string(),
+            xmp_sidecar: None,
+            verified_unix_seconds: 1,
+            djxl_version: "djxl test-version".to_string(),
+        };
+        write_restore_jpeg_manifest(
+            root.path(),
+            &[RestoreJpegManifestRecord {
+                proof,
+                source_deleted: false,
+            }],
+        )?;
+
+        let manifest = std::fs::read_to_string(root.path().join(RESTORE_JPEG_MANIFEST_NAME))?;
+        assert!(manifest.starts_with("# MFB_RESTORE_JPEG_MANIFEST_V3\n"));
+        assert!(manifest.contains("source-hash\tjpeg-hash\tjpeg-hash"));
+        assert!(manifest.contains(&restore_jpeg_hex_encode("djxl test-version")));
+        assert!(!manifest.contains("photos_uuid"));
+        assert_eq!(
+            manifest.lines().nth(2).map(|line| line.split('\t').count()),
+            Some(11)
+        );
+        Ok(())
     }
 
     #[test]
@@ -9044,6 +9680,7 @@ mod fast_img_hardening_tests {
         );
 
         let preflight = restore_jpeg_preflight(
+            &input_root,
             &input_root,
             &output_root,
             &[reconstructible, non_reconstructible],
@@ -9140,12 +9777,33 @@ mod fast_img_hardening_tests {
         else {
             anyhow::bail!("nested output root was accepted");
         };
-        assert!(err.to_string().contains("disjoint input and output roots"));
+        assert!(
+            err.to_string()
+                .contains("disjoint input and output selections")
+        );
 
         restore_jpeg_validate_disjoint_roots(
             &input_root,
             &root.path().join("Album_restored_jpeg"),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_single_file_allows_adjacent_output_directory() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let input = root.path().join("archive.jxl");
+        std::fs::write(&input, MINIMAL_JXL_BYTES)?;
+
+        restore_jpeg_validate_disjoint_roots(&input, &root.path().join("restored_jpeg"))?;
+
+        let Err(err) = restore_jpeg_validate_disjoint_roots(&input, &input) else {
+            anyhow::bail!("source file itself was accepted as an output root");
+        };
+        assert!(
+            err.to_string()
+                .contains("disjoint input and output selections")
+        );
         Ok(())
     }
 
@@ -10951,6 +11609,7 @@ mod fast_img_hardening_tests {
             quarantined: false,
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         });
 
         marker.stage = FastImgStageName::Gate2Failed;
@@ -11787,6 +12446,7 @@ mod fast_img_hardening_tests {
                 quarantined: false,
                 photos_uuid: Some("UUID-A".to_string()),
                 library_blake3: None,
+                xmp_sidecar_blake3: None,
             }],
             import_error_count: 1,
         };

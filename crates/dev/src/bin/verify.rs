@@ -463,9 +463,9 @@ fn load_restore_jpeg_manifest(
             continue;
         }
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 5 && parts.len() != 7 {
+        if parts.len() != 5 && parts.len() != 7 && parts.len() != 11 && parts.len() != 12 {
             errors.push(format!(
-                "line {line_idx}: expected 5 or 7 TSV fields, got {}",
+                "line {line_idx}: expected 5, 7, 11, or legacy 12 TSV fields, got {}",
                 parts.len()
             ));
             continue;
@@ -473,11 +473,66 @@ fn load_restore_jpeg_manifest(
         let source_rel_hex = parts[0];
         let output_rel_hex = parts[1];
         let source_hash = parts[2];
-        let output_hash = parts[3];
-        let (xmp_rel_hex, xmp_hash, source_deleted) = if parts.len() == 7 {
-            (parts[4], parts[5], parts[6])
-        } else {
-            ("", "", parts[4])
+        let (reconstruction_hash, output_hash, xmp_rel_hex, xmp_hash, source_deleted) =
+            if parts.len() == 11 || parts.len() == 12 {
+                let source_deleted_index = if parts.len() == 11 { 10 } else { 11 };
+                (
+                    parts[3],
+                    parts[4],
+                    parts[5],
+                    parts[6],
+                    parts[source_deleted_index],
+                )
+            } else if parts.len() == 7 {
+                (parts[3], parts[3], parts[4], parts[5], parts[6])
+            } else {
+                (parts[3], parts[3], "", "", parts[4])
+            };
+        if parts.len() == 11 || parts.len() == 12 {
+            if reconstruction_hash != output_hash {
+                errors.push(format!(
+                    "line {line_idx}: reconstruction and restored JPEG hashes differ"
+                ));
+                continue;
+            }
+            if parts[7]
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .is_none()
+            {
+                errors.push(format!(
+                    "line {line_idx}: verified_unix_seconds must be a positive integer"
+                ));
+                continue;
+            }
+            if parts[8].trim().is_empty() {
+                errors.push(format!("line {line_idx}: missing MFB version"));
+                continue;
+            }
+            let decode_optional_hex = |value: &str| {
+                if value.is_empty() {
+                    return Ok(String::new());
+                }
+                hex_decode(value)
+                    .and_then(|bytes| String::from_utf8(bytes).map_err(anyhow::Error::from))
+            };
+            match decode_optional_hex(parts[9]) {
+                Ok(version) if !version.trim().is_empty() => {}
+                Ok(_) => {
+                    errors.push(format!("line {line_idx}: missing djxl version"));
+                    continue;
+                }
+                Err(_) => {
+                    errors.push(format!("line {line_idx}: invalid djxl version hex/UTF-8"));
+                    continue;
+                }
+            }
+            if parts.len() == 12 && !parts[10].is_empty() && decode_optional_hex(parts[10]).is_err()
+            {
+                errors.push(format!("line {line_idx}: invalid Photos UUID hex/UTF-8"));
+                continue;
+            }
         };
 
         let source_rel = match hex_decode(source_rel_hex)
@@ -1095,6 +1150,45 @@ fn run_fast_img_delivery_check(
     Ok(stats)
 }
 
+fn is_restore_jpeg_audit_marker(restored_dir: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(restored_dir) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(session_name)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(group_name)) = components.next() else {
+        return false;
+    };
+    let Some(session_name) = session_name.to_str() else {
+        return false;
+    };
+    if !session_name.starts_with("Audit_")
+        || !restored_dir
+            .join(session_name)
+            .join(".mfb_restore_jpeg_audit.tsv")
+            .is_file()
+    {
+        return false;
+    }
+    let expected_suffix = match group_name.to_str() {
+        Some("Reconstruction Blocked") => ".mfb-recovery-needed.txt",
+        Some("Needs Review") => ".mfb-needs-review.txt",
+        _ => return false,
+    };
+    let mut file_name = None;
+    for component in components {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        file_name = Some(name);
+    }
+    file_name
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(expected_suffix))
+}
+
 fn run_fast_img_restore_check(
     source_dir: &Path,
     restored_dir: &Path,
@@ -1162,6 +1256,9 @@ fn run_fast_img_restore_check(
             continue;
         }
         if path.file_name().and_then(|f| f.to_str()) == Some(".mfb_restore_jpeg_manifest.tsv") {
+            continue;
+        }
+        if is_restore_jpeg_audit_marker(&restored_dir, &path) {
             continue;
         }
         if path
@@ -2577,6 +2674,34 @@ mod tests {
     use serial_test::serial;
 
     #[test]
+    fn test_restore_audit_marker_exemption_is_scoped_to_owned_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = temp.path().join("Audit_1_2");
+        let marker = session
+            .join("Reconstruction Blocked/nested")
+            .join("photo.jxl.mfb-recovery-needed.txt");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::write(
+            session.join(".mfb_restore_jpeg_audit.tsv"),
+            "# MFB_RESTORE_JPEG_AUDIT_V2\n",
+        )
+        .unwrap();
+        fs::write(&marker, "marker").unwrap();
+
+        assert!(is_restore_jpeg_audit_marker(temp.path(), &marker));
+        assert!(!is_restore_jpeg_audit_marker(
+            temp.path(),
+            &temp.path().join("spoof.mfb-recovery-needed.txt")
+        ));
+        assert!(!is_restore_jpeg_audit_marker(
+            temp.path(),
+            &session
+                .join("Other")
+                .join("photo.jxl.mfb-recovery-needed.txt")
+        ));
+    }
+
+    #[test]
     fn test_collect_bundle_run_logs_finds_nested_jsonl_and_run_logs() {
         let temp = tempfile::tempdir().unwrap();
         let nested = temp.path().join("nested");
@@ -2658,6 +2783,42 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_b
         assert_eq!(records[0].xmp_rel.as_deref(), Some("out/file1.xmp"));
         assert_eq!(records[0].xmp_blake3.as_deref(), Some("xmp-hash"));
         assert!(records[0].source_deleted);
+    }
+
+    #[test]
+    fn test_load_restore_jpeg_manifest_v3_validates_reconstruction_and_toolchain() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manifest_path = tempdir.path().join(".mfb_restore_jpeg_manifest.tsv");
+        let tsv_content = "\
+# MFB_RESTORE_JPEG_MANIFEST_V3
+source_rel_hex\toutput_rel_hex\tsource_jxl_blake3\treconstruction_jpeg_blake3\trestored_jpeg_blake3\txmp_rel_hex\txmp_blake3\tverified_unix_seconds\tmfb_version\tdjxl_version_hex\tsource_deleted
+7372632f66696c65312e4a584c\t6f75742f66696c65312e6a7067\thash1\tjpeg-hash\tjpeg-hash\t\t\t1\t0.11.3\t646a786c20302e31332e30\tfalse
+";
+        fs::write(&manifest_path, tsv_content).unwrap();
+
+        let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
+        assert!(errors.is_empty(), "Expected no errors, got: {errors:?}");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source_blake3, "hash1");
+        assert_eq!(records[0].output_blake3, "jpeg-hash");
+        assert!(!records[0].source_deleted);
+    }
+
+    #[test]
+    fn test_load_restore_jpeg_manifest_v3_rejects_nonidentical_reconstruction_hash() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manifest_path = tempdir.path().join(".mfb_restore_jpeg_manifest.tsv");
+        let tsv_content = "\
+# MFB_RESTORE_JPEG_MANIFEST_V3
+source_rel_hex\toutput_rel_hex\tsource_jxl_blake3\treconstruction_jpeg_blake3\trestored_jpeg_blake3\txmp_rel_hex\txmp_blake3\tverified_unix_seconds\tmfb_version\tdjxl_version_hex\tsource_deleted
+7372632f66696c65312e4a584c\t6f75742f66696c65312e6a7067\thash1\treconstructed\trewritten\t\t\t1\t0.11.3\t646a786c20302e31332e30\tfalse
+";
+        fs::write(&manifest_path, tsv_content).unwrap();
+
+        let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
+        assert!(records.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("reconstruction and restored JPEG hashes differ"));
     }
 
     #[test]

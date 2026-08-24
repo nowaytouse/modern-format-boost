@@ -82,6 +82,17 @@ class TestFastModePaths(unittest.TestCase):
                 "--recursive",
             ],
         )
+        self.assertEqual(
+            fastmode_paths.build_fast_img_restore_command(
+                Path("/opt/mfb/img"), Path("/Users/example/Pictures/debug.photoslibrary")
+            ),
+            [
+                "/opt/mfb/img",
+                "restore-jpeg",
+                "/Users/example/Pictures/debug.photoslibrary",
+                "--recursive",
+            ],
+        )
         self.assertNotIn("--shortest-path", command)
         self.assertNotIn("--auto-import", command)
         self.assertNotIn("--archive", command)
@@ -146,6 +157,16 @@ class TestFastModePaths(unittest.TestCase):
             Path("/Users/example/Pictures/Album_restored_jpeg"),
         )
 
+    def test_fastmode_restore_jpeg_dir_is_stable_when_output_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Album"
+            expected = Path(tmp) / "Album_restored_jpeg"
+            expected.mkdir()
+
+            self.assertEqual(
+                fastmode_paths.fast_img_restore_output_dir_for_target(src), expected
+            )
+
     def test_fastmode_restore_jpeg_command_uses_rust_restore_subcommand(self):
         command = fastmode_paths.build_fast_img_restore_command(
             Path("/opt/mfb/img"),
@@ -159,9 +180,9 @@ class TestFastModePaths(unittest.TestCase):
                 "/opt/mfb/img",
                 "restore-jpeg",
                 "/Users/example/Pictures/Album_optimized",
+                "--recursive",
                 "--output",
                 "/Users/example/Pictures/Album_restored_jpeg",
-                "--recursive",
             ],
         )
 

@@ -35,7 +35,24 @@ covers **how results are shown**, not how they are computed.
 | U14 | Quality-intel `log_summary_header!` uses gate title helpers                                                                                                                                                                                                                                                               | `ui_visual_artifact_audit_title`; `quality_report_headers_use_gate_u14`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | U15 | Path security `Display` errors use `ui_user_facing_error`                                                                                                                                                                                                                                                                 | `path_validator_security_errors_use_gate_u15`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
-| U16 | The macOS GUI is AppKit-only, follows system/light/dark appearance, ships English/Simplified Chinese/Japanese resources, preserves stable bundle identity/signing/TCC entitlements, and maps to the same CLI/resume contract | Native-host `--self-test`; `build.sh`; `plutil`; bundle dependency inspection must show AppKit/CoreServices and no WebKit |
+| U16 | The macOS GUI is AppKit-only, follows system/light/dark appearance, ships English/Simplified Chinese/Japanese resources, preserves stable bundle identity/signing/TCC entitlements, and maps to the same CLI/resume contract | Native-host `--self-test`; Rust `smart_build --gui`; `plutil`; bundle dependency inspection must show AppKit/CoreServices and no WebKit |
+| U17 | Every operation declares its supported media filter, strategy, ultimate/shortest-path/resume flags, and Photos-TCC requirement. The GUI hides or disables unsupported controls and command construction rejects impossible combinations instead of silently forwarding them. Restore JPEG derives local recovery or Photos audit from the selected input path, without a second mode selector; a Photos package exposes a live native folder/album UUID picker. Recovery collection requires an explicit same-kind backup and forwards it without shell interpolation. | Native-host `--self-test` covers fixed FastImg/restore filters, mode-free restore, Photos UUID and recovery-backup argument mapping, impossible-option rejection and path-aware Photos Automation routing |
+
+## Native operation capabilities
+
+The AppKit shell derives controls and command arguments from one capability
+map. FastImg JXL/AVIF are image-only, FastVid is video-only, and Restore JPEG is
+image-only with no secondary mode. General processing operations may expose the
+media selector; utility operations do not pretend to support media or encoder
+flags. Restore derives local recovery or live Photos audit from the selected
+path. Only a Photos-library selection requests Photos Automation; ordinary file
+and folder recovery does not. Selecting a Photos package reveals one native
+AppKit scope control: whole library, one exact album UUID, or one folder UUID
+expanded to descendant albums. The hierarchy is loaded live through the bundled
+`img photos-albums` command, and stale/invalid UUIDs fail before any mutation.
+Collect recovery originals reveals a second native path picker and accepts only
+folder-to-folder or Photos-library-to-Photos-library recovery, matching the
+backend's exact relative-path or UUID identity rule.
 
 ## Allowlisted UX exceptions
 
@@ -61,6 +78,7 @@ covers **how results are shown**, not how they are computed.
 | U11          | `ui_tracing_path_and_result_box_use_gate_u11`                                                                                                                                                                                                                                                                                                                                                                                       |
 | U12–U15      | `database_loop_stderr_and_duration_use_gate_u12`, `probe_detection_stderr_use_gate_u13`, `quality_report_headers_use_gate_u14`, `path_validator_security_errors_use_gate_u15`                                                                                                                                                                                                                                                       |
 | U16          | Native-host argument/TCC/log/localization self-test plus bundle dependency and resource inspection                                                                                                                                                                                                                                                                                                                                  |
+| U17          | Native-host capability/argument mapping and Photos Automation routing self-test                                                                                                                                                                                                                                                                                                                                                     |
 | Contract doc | `ui_contract_doc_exists`                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Verification commands
@@ -68,7 +86,7 @@ covers **how results are shown**, not how they are computed.
 ```bash
 cargo test -p foundation configure_terminal_ux symbols_pick report --lib
 cargo test -p dev --test test_real_silent_fallbacks ui_ -- --test-threads=1
-bash crates/gui/src-macos/build.sh
+cargo run --locked --release -p dev --bin smart_build -- --gui
 'target/release/bundle/macos/Modern Format Boost.app/Contents/MacOS/Modern Format Boost' --self-test
 otool -L 'target/release/bundle/macos/Modern Format Boost.app/Contents/MacOS/Modern Format Boost'
 ```

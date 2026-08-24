@@ -1213,8 +1213,31 @@ pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) -> io::Result<bool> {
     merge_xmp_sidecar(src, dst)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetadataOwnership {
+    ReconstructionOwned,
+    OverlayOwned,
+}
+
+pub(crate) const XMP_OVERLAY_MAX_BYTES: u64 = 100 * 1024 * 1024;
+const XMP_OVERLAY_MAX_DEPTH: usize = 256;
+const XMP_OVERLAY_MAX_EVENTS: usize = 1_000_000;
+const JXL_APPEND_MAX_BOXES: usize = 1_000_000;
+const JXL_APPEND_MAX_XML_BOXES: usize = 64;
+
+impl MetadataOwnership {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReconstructionOwned => "reconstruction-owned",
+            Self::OverlayOwned => "overlay-owned",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct JxlBoxSpan {
+    box_offset: u64,
+    box_size: u64,
     payload_offset: u64,
     payload_size: u64,
 }
@@ -1222,6 +1245,134 @@ struct JxlBoxSpan {
 struct AppendableJxlContainer {
     total_size: u64,
     last_xml: Option<JxlBoxSpan>,
+    jbrd: Option<JxlBoxSpan>,
+    xml_box_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JxlFileIdentity {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+fn jxl_file_identity(path: &Path) -> io::Result<JxlFileIdentity> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "JXL overlay target must be a regular non-symlink file: {}",
+                path.display()
+            ),
+        ));
+    }
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Ok(JxlFileIdentity {
+        len: metadata.len(),
+        modified: metadata.modified()?,
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+    })
+}
+
+fn blake3_file_hash(path: &Path) -> io::Result<String> {
+    crate::common_utils::calculate_blake3_hash(path)
+        .map_err(|error| io::Error::other(format!("failed to hash {}: {error}", path.display())))
+}
+
+fn blake3_open_file_hash(file: &mut std::fs::File) -> io::Result<String> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn blake3_file_span(path: &Path, offset: u64, size: u64) -> io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut remaining = size;
+    let mut buffer = [0_u8; 16 * 1024];
+    while remaining > 0 {
+        let chunk = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| io::Error::other("JXL audit span size overflow"))?;
+        file.read_exact(&mut buffer[..chunk])?;
+        hasher.update(&buffer[..chunk]);
+        remaining -= chunk as u64;
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn jxl_box_hash(path: &Path, span: Option<JxlBoxSpan>) -> io::Result<Option<String>> {
+    span.map(|span| blake3_file_span(path, span.box_offset, span.box_size))
+        .transpose()
+}
+
+fn format_overlay_id(hash: &str) -> io::Result<String> {
+    if hash.len() < 32 || !hash.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "overlay audit hash cannot form a UUID",
+        ));
+    }
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hash[0..8],
+        &hash[8..12],
+        &hash[12..16],
+        &hash[16..20],
+        &hash[20..32]
+    ))
+}
+
+fn djxl_version_for_overlay_audit() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            let path = crate::common_utils::resolve_tool_path_or_audit(crate::constants::TOOL_DJXL);
+            let mut command = std::process::Command::new(path);
+            command.arg("--version");
+            let Ok(output) = crate::process_runner::run_command_with_liveness_timeout(
+                &mut command,
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(15),
+                "JXL XMP overlay djxl version probe",
+            ) else {
+                return "unavailable".to_string();
+            };
+            if !output.status.success() {
+                return "unavailable".to_string();
+            }
+            let diagnostic = if output.stdout.is_empty() {
+                output.stderr
+            } else {
+                output.stdout
+            };
+            String::from_utf8_lossy(&diagnostic)
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map_or_else(
+                    || "unavailable".to_string(),
+                    |line| line.chars().take(256).collect(),
+                )
+        })
+        .as_str()
 }
 
 fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlContainer> {
@@ -1241,7 +1392,22 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
 
     let mut offset = 0_u64;
     let mut last_xml = None;
+    let mut jbrd = None;
+    let mut box_count = 0_usize;
+    let mut xml_box_count = 0_usize;
     while offset < total_size {
+        box_count = box_count
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("JXL box counter overflow"))?;
+        if box_count > JXL_APPEND_MAX_BOXES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "JXL box count exceeds the append safety limit: {}",
+                    path.display()
+                ),
+            ));
+        }
         if total_size - offset < 8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1275,11 +1441,27 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
                 format!("invalid JXL box boundary in {}", path.display()),
             ));
         }
+        let span = JxlBoxSpan {
+            box_offset: offset,
+            box_size,
+            payload_offset: offset + header_size,
+            payload_size: box_size - header_size,
+        };
         if header[4..8] == *b"xml " {
-            last_xml = Some(JxlBoxSpan {
-                payload_offset: offset + header_size,
-                payload_size: box_size - header_size,
-            });
+            xml_box_count = xml_box_count
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("JXL XML box counter overflow"))?;
+            last_xml = Some(span);
+        } else if header[4..8] == *b"jbrd" {
+            if jbrd.replace(span).is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "JXL contains multiple top-level jbrd boxes: {}",
+                        path.display()
+                    ),
+                ));
+            }
         }
         offset = offset
             .checked_add(box_size)
@@ -1288,6 +1470,8 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
     Ok(AppendableJxlContainer {
         total_size,
         last_xml,
+        jbrd,
+        xml_box_count,
     })
 }
 
@@ -1333,20 +1517,46 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
             format!("refusing empty XMP sidecar {}", path.display()),
         ));
     }
+    if payload_size > XMP_OVERLAY_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "XMP sidecar exceeds the {}-byte archive safety limit: {}",
+                XMP_OVERLAY_MAX_BYTES,
+                path.display()
+            ),
+        ));
+    }
 
     let mut reader = quick_xml::Reader::from_reader(BufReader::new(&mut *file));
     let mut buffer = Vec::new();
     let mut depth = 0_usize;
     let mut roots = 0_usize;
+    let mut event_count = 0_usize;
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(quick_xml::events::Event::Start(_)) => {
+                if depth >= XMP_OVERLAY_MAX_DEPTH {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("XMP nesting exceeds the safety limit: {}", path.display()),
+                    ));
+                }
                 if depth == 0 {
                     roots += 1;
                 }
                 depth += 1;
             }
             Ok(quick_xml::events::Event::Empty(_)) if depth == 0 => roots += 1,
+            Ok(quick_xml::events::Event::DocType(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "XMP document type declarations are forbidden: {}",
+                        path.display()
+                    ),
+                ));
+            }
             Ok(quick_xml::events::Event::End(_)) => {
                 depth = depth.checked_sub(1).ok_or_else(|| {
                     io::Error::new(
@@ -1363,6 +1573,18 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
                     format!("invalid XMP sidecar {}: {error}", path.display()),
                 ));
             }
+        }
+        event_count = event_count
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("XMP event counter overflow"))?;
+        if event_count > XMP_OVERLAY_MAX_EVENTS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "XMP event count exceeds the safety limit: {}",
+                    path.display()
+                ),
+            ));
         }
         buffer.clear();
     }
@@ -1386,11 +1608,14 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
 /// Returns an error for non-files, empty payloads, malformed XML, or I/O
 /// failures.
 pub fn validate_xmp_sidecar(path: &Path) -> io::Result<()> {
-    let metadata = std::fs::metadata(path)?;
-    if !metadata.is_file() {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("XMP sidecar is not a regular file: {}", path.display()),
+            format!(
+                "XMP sidecar is not a regular non-symlink file: {}",
+                path.display()
+            ),
         ));
     }
     let mut file = std::fs::File::open(path)?;
@@ -1403,12 +1628,34 @@ pub fn validate_xmp_sidecar(path: &Path) -> io::Result<()> {
 /// Returns `Ok(false)` when the same overlay is already the last `xml ` box.
 pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Result<bool> {
     let xmp_path = require_regular_sidecar(xmp_path.to_path_buf(), "XMP")?;
+    let source_identity = jxl_file_identity(dst)?;
     let container = validate_appendable_jxl_container(dst)?;
     let mut xmp = std::fs::File::open(&xmp_path)?;
     let payload_size = validate_xmp_document(&mut xmp, &xmp_path)?;
     if jxl_last_xml_payload_matches(dst, &container, &mut xmp, payload_size)? {
         return Ok(false);
     }
+    if container.xml_box_count >= JXL_APPEND_MAX_XML_BOXES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "JXL already contains {} XML boxes; refusing unbounded overlay growth: {}",
+                container.xml_box_count,
+                dst.display()
+            ),
+        ));
+    }
+    let original_container_hash = blake3_file_hash(dst)?;
+    let original_jbrd_hash = jxl_box_hash(dst, container.jbrd)?;
+    let original_xmp_hash = container
+        .last_xml
+        .map(|span| blake3_file_span(dst, span.payload_offset, span.payload_size))
+        .transpose()?;
+    // Hash the already-open descriptor rather than reopening the path. If a
+    // sidecar is concurrently replaced, the audit hash still describes the
+    // exact bytes copied into the committed overlay.
+    let overlay_hash = blake3_open_file_hash(&mut xmp)?;
+
     // JBRD can reference the exact bytes of an earlier `xml `/`brob` box. Keep
     // every existing box frozen and add the effective XMP as a later overlay;
     // reconstructible callers still prove the recovered JPEG after this write.
@@ -1427,8 +1674,8 @@ pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Resu
     let mut staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
         "jbrd_xmp_box",
         parent,
-        "mfb-jbrd-xmp-",
-        ".jxl",
+        ".mfb-jbrd-xmp-",
+        ".tmp",
     )?;
     let copied = io::copy(&mut std::fs::File::open(dst)?, staged.as_file_mut())?;
     if copied != original_size {
@@ -1478,7 +1725,91 @@ pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Resu
             format!("JXL XMP append size mismatch for {}", dst.display()),
         ));
     }
+    let staged_path = staged.path();
+    let committed = validate_appendable_jxl_container(staged_path)?;
+    let committed_prefix_hash = blake3_file_span(staged_path, 0, original_size)?;
+    if committed_prefix_hash != original_container_hash {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "JXL reconstruction-owned prefix changed while appending XMP to {}",
+                dst.display()
+            ),
+        ));
+    }
+    let final_jbrd_hash = jxl_box_hash(staged_path, committed.jbrd)?;
+    if final_jbrd_hash != original_jbrd_hash {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "JXL jbrd bytes changed while appending XMP to {}",
+                dst.display()
+            ),
+        ));
+    }
+    let committed_overlay = committed.last_xml.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "JXL staged overlay is missing its final XML box: {}",
+                dst.display()
+            ),
+        )
+    })?;
+    let committed_overlay_hash = blake3_file_span(
+        staged_path,
+        committed_overlay.payload_offset,
+        committed_overlay.payload_size,
+    )?;
+    if committed_overlay_hash != overlay_hash {
+        return Err(io::Error::other(format!(
+            "XMP changed concurrently while staging its JXL overlay; original retained: {}",
+            xmp_path.display()
+        )));
+    }
+    let final_container_hash = blake3_file_hash(staged_path)?;
+    let live_identity = jxl_file_identity(dst)?;
+    let live_hash = blake3_file_hash(dst)?;
+    if live_identity != source_identity || live_hash != original_container_hash {
+        return Err(io::Error::other(format!(
+            "JXL changed concurrently while staging XMP overlay; original retained: {}",
+            dst.display()
+        )));
+    }
     staged.persist(dst).map_err(|error| error.error)?;
+    crate::io_utils::sync_committed_file_and_parent(dst)?;
+    let overlay_chain_hash = blake3::hash(
+        format!(
+            "v1:{original_container_hash}:{}:{overlay_hash}:{final_container_hash}",
+            original_xmp_hash.as_deref().unwrap_or("none")
+        )
+        .as_bytes(),
+    )
+    .to_hex()
+    .to_string();
+    let overlay_id = format_overlay_id(&overlay_chain_hash)?;
+    let created_unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| io::Error::other(format!("system clock precedes Unix epoch: {error}")))?
+        .as_secs();
+    tracing::info!(
+        target: "jxl_xmp_audit",
+        event_id = "MFB-JXL-001",
+        overlay_id = %overlay_id,
+        overlay_schema = 1_u8,
+        reconstruction_ownership = MetadataOwnership::ReconstructionOwned.as_str(),
+        overlay_ownership = MetadataOwnership::OverlayOwned.as_str(),
+        original_container_blake3 = %original_container_hash,
+        original_jbrd_blake3 = original_jbrd_hash.as_deref().unwrap_or("none"),
+        original_xmp_blake3 = original_xmp_hash.as_deref().unwrap_or("none"),
+        overlay_blake3 = %overlay_hash,
+        final_container_blake3 = %final_container_hash,
+        mfb_version = env!("CARGO_PKG_VERSION"),
+        djxl_version = djxl_version_for_overlay_audit(),
+        created_unix_seconds,
+        path = %dst.display(),
+        "JXL XMP overlay atomically committed; all pre-existing container bytes remain frozen"
+    );
     Ok(true)
 }
 
@@ -1495,8 +1826,40 @@ pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
     Ok(true)
 }
 
+/// Record the proof that closes a previously committed JXL XMP overlay.
+///
+/// The final-container hash links this event to `MFB-JXL-001`. Exact JPEG
+/// reconstruction callers also supply the byte-identical JPEG hash; healthy
+/// pixel-only JXL callers record the explicit non-JBRD classification instead.
+pub(crate) fn audit_jxl_overlay_reconstruction_proof(
+    dst: &Path,
+    reconstructed_jpeg_hash: Option<&str>,
+) -> io::Result<()> {
+    let container = validate_appendable_jxl_container(dst)?;
+    let final_container_hash = blake3_file_hash(dst)?;
+    let final_jbrd_hash = jxl_box_hash(dst, container.jbrd)?;
+    let proof = if reconstructed_jpeg_hash.is_some() {
+        "exact-jpeg-reconstruction"
+    } else {
+        "non-jbrd-classification-preserved"
+    };
+    tracing::info!(
+        target: "jxl_xmp_audit",
+        event_id = "MFB-JXL-002",
+        proof,
+        final_container_blake3 = %final_container_hash,
+        final_jbrd_blake3 = final_jbrd_hash.as_deref().unwrap_or("none"),
+        reconstructed_jpeg_blake3 = reconstructed_jpeg_hash.unwrap_or("none"),
+        mfb_version = env!("CARGO_PKG_VERSION"),
+        djxl_version = djxl_version_for_overlay_audit(),
+        path = %dst.display(),
+        "JXL XMP overlay proof closed after reconstruction-state verification"
+    );
+    Ok(())
+}
+
 fn require_regular_sidecar(path: PathBuf, label: &str) -> io::Result<PathBuf> {
-    let metadata = std::fs::metadata(&path).map_err(|e| {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|e| {
         crate::media_conversion_gate::delivery_metadata_path_audit(
             "delivery_metadata_sidecar",
             &path,
@@ -1507,7 +1870,7 @@ fn require_regular_sidecar(path: PathBuf, label: &str) -> io::Result<PathBuf> {
             format!("failed to inspect {label} sidecar {}: {e}", path.display()),
         )
     })?;
-    if !metadata.is_file() {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         crate::media_conversion_gate::delivery_metadata_path_audit(
             "delivery_metadata_sidecar",
             &path,

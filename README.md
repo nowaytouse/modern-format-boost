@@ -7,7 +7,7 @@
 
 **Evidence-driven media optimization — preserve source semantics, verify delivery, fail closed.**
 
-[English](README.md) · [简体中文](docs/README_ZH.md) · [繁體中文](docs/README_ZH_TW.md) · [日本語](docs/README_JA.md) · [한국어](docs/README_KO.md) · [Español](docs/README_ES.md) · [Français](docs/README_FR.md) · [Português](docs/README_PT.md) · [Русский](docs/README_RU.md) · [العربية](docs/README_AR.md)
+[English](README.md) · [简体中文](docs/README_ZH.md)
 
 ## What is Modern Format Boost?
 
@@ -55,6 +55,10 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and
   delivers additional JXL XMP as a separately hashed `.xmp` sidecar, because a
   one-file enriched JPEG cannot also be byte-identical to the original.
+- Overlay commits use a same-directory temporary file, source identity/hash
+  recheck, atomic rename and file/parent flush. A versioned audit chain records
+  JBRD, overlay, final-container and reconstruction hashes without storing
+  media content; see the [archive contract](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md).
 - This is not a magic size reducer. Container metadata can make the complete
   file larger even when the media payload passes, and a high-quality candidate
   may provide no storage saving at all.
@@ -623,6 +627,20 @@ img fast-img --strategy avif /path/to/media
 # Add verified Apple Photos delivery to AVIF Meme Mode (macOS).
 img fast-img --strategy avif --shortest-path /path/to/media
 
+# Restore exact JPEGs and isolate non-reversible historical JXL automatically.
+img restore-jpeg /path/to/archive
+
+# On macOS, selecting a Photos library automatically audits its live assets.
+img restore-jpeg /path/to/Library.photoslibrary
+
+# List live user folders/albums, then restrict the same audit by native UUID.
+img photos-albums /path/to/Library.photoslibrary
+img restore-jpeg /path/to/Library.photoslibrary --photos-album-id ALBUM_UUID
+img restore-jpeg /path/to/Library.photoslibrary --photos-folder-id FOLDER_UUID
+
+# Re-check affected JXLs and collect only their originals + XMP from a backup.
+collect_optimized /path/to/audited /path/to/recovered --backup /path/to/backup --yes
+
 # Video + animated raster (HEVC default)
 vid run /path/to/media
 
@@ -660,6 +678,28 @@ working copy. State handling is explicit:
   then permits source/output cleanup. No second import flag is required.
 - `img fast-img --retry`: resumes only after the stored source identity and
   live delivery state match. `--no-resume` starts an isolated task.
+- `img restore-jpeg INPUT` has no behavior mode to choose. A normal file or
+  folder restores every byte-exact JPEG and its validated XMP delivery; JXL
+  that needs backup recovery or manual review stays untouched and receives a
+  marker under mirrored `Reconstruction Blocked` / `Needs Review` trees. A
+  Photos library (or one concrete asset path inside it) instead performs a live
+  UUID audit: exact-reversible assets remain unmarked, while affected existing
+  assets are referenced in `MFB JXL Audit` albums preserving their original
+  folder/album hierarchy. MFB never rewrites media bytes or edits Photos database
+  files directly; Photos records only album membership. An external BLAKE3/UUID
+  checkpoint makes reruns resumable and idempotent. The native AppKit GUI shows
+  a live folder/album picker after a Photos library is selected; the CLI exposes
+  the same native UUIDs through `img photos-albums`. Album scope is exact, while
+  folder scope expands through the live native hierarchy to its descendant album
+  UUIDs—neither path guesses by display name or equates incompatible database IDs.
+- `collect_optimized AUDITED DEST --backup BACKUP` is the recovery handoff.
+  It re-probes current JXL bytes instead of trusting stale markers. Folder
+  backups require one content-recognized static original at the same relative
+  directory and basename; Photos backups require the exact audited UUID. It
+  copies/exports only affected originals plus XMP, never writes the backup or a
+  Photos database, rejects ambiguous/missing matches, verifies byte hashes, and
+  leaves `.mfb_recovery_collection.json` as the resumable BLAKE3 proof. The
+  native GUI exposes the same flow as **Collect recovery originals**.
 - `--allow-size-tolerance`: relaxes the default strict output-size gate.
 - `--allow-expert-options`: permits explicitly gated fallback/experimental
   encoder paths; it does not weaken final verification.
@@ -718,6 +758,7 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 | Media conversion delivery (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](docs/hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](docs/hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
 | Algorithm / inference gates        | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
 | Terminal + native macOS UI         | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
+| JXL/XMP archive + JPEG restoration | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
 | Logging / session                  | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
 | Database                           | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
 
@@ -753,7 +794,11 @@ requires positive container/bitstream evidence for all three properties:
 supported modern format, confirmed static, and `CompressionType::Lossy`.
 Lossless, JPEG-reconstruction JXL, animated, unknown/inconclusive, generic HEIF
 and failed probes are retained. An admitted candidate is imported as the
-original media; Tier 2 does not re-encode it merely to make it importable.
+original media; Tier 2 does not re-encode it merely to make it importable. If a
+validated adjacent XMP exists, an isolated temporary copy receives that XMP
+before Photos import. The live asset must match the enriched delivery hash,
+while cleanup separately rechecks the unchanged on-disk source and sidecar
+hashes. A missing sidecar is valid and does not block import.
 
 **3. When does FastImg delete an original?**
 
@@ -820,6 +865,19 @@ folder. Cleanup refuses Photos Library packages, dangerous roots and
 out-of-root/symlink candidates, and uses non-recursive empty-directory removal;
 any remaining media, sidecar, `.DS_Store` or concurrently created file keeps
 the directory.
+
+**12. Does `restore-jpeg` require an export or audit mode?**
+
+No. The input decides the safe behavior. A normal file/folder reconstructs
+byte-identical JPEGs and may remove an exact source only after the durable
+Manifest V3 delete gate; pixel-only/rejected reconstruction gets a recovery
+marker and invalid/unreadable data gets a review marker under the same relative
+tree. A Photos library performs live UUID audit instead and references only the
+affected existing assets in `MFB JXL Audit` albums. MFB does not rewrite media
+bytes or edit library database files directly; Photos records album membership.
+The AppKit picker and `img photos-albums` select a live album/folder by native
+UUID; selecting a folder includes descendant albums while preserving their
+hierarchy. Whole-library audit remains the default.
 
 ---
 

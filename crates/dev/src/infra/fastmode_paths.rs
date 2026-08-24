@@ -13,14 +13,20 @@ pub fn default_mfb_state_root() -> Result<PathBuf> {
     foundation::process_lock::get_mfb_root()
 }
 
+fn adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
+    let mut file_name = target_dir.file_name().unwrap_or_default().to_os_string();
+    file_name.push(format!("_{suffix_name}"));
+    target_dir.with_file_name(file_name)
+}
+
 fn unique_adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
-    let target = target_dir.to_path_buf();
-    let file_name = target.file_name().and_then(|f| f.to_str()).unwrap_or("");
-    let base = target.with_file_name(format!("{file_name}_{suffix_name}"));
+    let base = adjacent_dir(target_dir, suffix_name);
     let mut candidate = base.clone();
     let mut suffix = 2;
     while candidate.exists() {
-        candidate = base.with_file_name(format!("{file_name}_{suffix_name}_{suffix}"));
+        let mut file_name = base.file_name().unwrap_or_default().to_os_string();
+        file_name.push(format!("_{suffix}"));
+        candidate = base.with_file_name(file_name);
         suffix += 1;
     }
     candidate
@@ -29,7 +35,7 @@ fn unique_adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
 /// Resolve the adjacent JPEG restoration output directory.
 #[must_use]
 pub fn fast_img_restore_output_dir_for_target(target_dir: &Path) -> PathBuf {
-    unique_adjacent_dir(target_dir, "restored_jpeg")
+    adjacent_dir(target_dir, "restored_jpeg")
 }
 
 /// Resolve the adjacent full-pipeline output directory for vid `FastMode`.
@@ -85,16 +91,28 @@ pub fn build_fast_img_command(
 pub fn build_fast_img_restore_command(
     img_binary: &Path,
     target_dir: &Path,
-    output_dir: &Path,
+    output_dir: Option<&Path>,
+    photos_album_id: Option<&str>,
+    photos_folder_id: Option<&str>,
 ) -> Vec<String> {
-    vec![
+    debug_assert!(photos_album_id.is_none() || photos_folder_id.is_none());
+    let mut command = vec![
         img_binary.to_string_lossy().to_string(),
         "restore-jpeg".to_string(),
         target_dir.to_string_lossy().to_string(),
-        "--output".to_string(),
-        output_dir.to_string_lossy().to_string(),
         "--recursive".to_string(),
-    ]
+    ];
+    if let Some(output_dir) = output_dir {
+        command.push("--output".to_string());
+        command.push(output_dir.to_string_lossy().to_string());
+    }
+    if let Some(id) = photos_album_id {
+        command.extend(["--photos-album-id".to_string(), id.to_string()]);
+    }
+    if let Some(id) = photos_folder_id {
+        command.extend(["--photos-folder-id".to_string(), id.to_string()]);
+    }
+    command
 }
 
 /// Build the Rust animated-image/video `FastMode` command.
@@ -333,11 +351,23 @@ mod tests {
     }
 
     #[test]
+    fn test_fastmode_restore_jpeg_dir_is_stable_when_output_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("Album");
+        let expected = temp.path().join("Album_restored_jpeg");
+        std::fs::create_dir_all(&expected).unwrap();
+
+        assert_eq!(fast_img_restore_output_dir_for_target(&src), expected);
+    }
+
+    #[test]
     fn test_fastmode_restore_jpeg_command_uses_rust_restore_subcommand() {
         let command = build_fast_img_restore_command(
             Path::new("/opt/mfb/img"),
             Path::new("/Users/example/Pictures/Album_optimized"),
-            Path::new("/Users/example/Pictures/Album_restored_jpeg"),
+            Some(Path::new("/Users/example/Pictures/Album_restored_jpeg")),
+            None,
+            None,
         );
         assert_eq!(
             command,
@@ -345,9 +375,9 @@ mod tests {
                 "/opt/mfb/img".to_string(),
                 "restore-jpeg".to_string(),
                 "/Users/example/Pictures/Album_optimized".to_string(),
+                "--recursive".to_string(),
                 "--output".to_string(),
                 "/Users/example/Pictures/Album_restored_jpeg".to_string(),
-                "--recursive".to_string(),
             ]
         );
     }

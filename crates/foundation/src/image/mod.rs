@@ -48,6 +48,8 @@ pub mod modern_lossy_static;
 
 pub mod png_validation;
 
+pub mod photos_jxl_audit;
+
 pub mod orientation;
 
 pub mod siegfried;

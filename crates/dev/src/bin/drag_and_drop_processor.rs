@@ -89,6 +89,10 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
+    /// Backup folder or Photos library used by recovery-original collection.
+    #[arg(long, value_name = "PATH")]
+    backup: Option<PathBuf>,
+
     #[arg(long)]
     archive: bool,
 
@@ -140,6 +144,14 @@ struct Args {
 
     #[arg(long)]
     pub strategy: Option<String>,
+
+    /// Restrict restore-jpeg to one native Photos album UUID.
+    #[arg(long, conflicts_with = "photos_folder_id")]
+    photos_album_id: Option<String>,
+
+    /// Restrict restore-jpeg to one native Photos folder UUID.
+    #[arg(long, conflicts_with = "photos_album_id")]
+    photos_folder_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -682,17 +694,21 @@ fn du_size_recursive(path: &Path) -> Result<u64> {
     Ok(total)
 }
 
-fn unique_adjacent_output(input: &Path, suffix: &str) -> PathBuf {
+fn adjacent_output(input: &Path, suffix: &str) -> PathBuf {
     let name = input
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("output"))
         .to_string_lossy();
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
-    let base = parent.join(format!("{name}_{suffix}"));
+    parent.join(format!("{name}_{suffix}"))
+}
+
+fn unique_adjacent_output(input: &Path, suffix: &str) -> PathBuf {
+    let base = adjacent_output(input, suffix);
     let mut candidate = base;
     let mut count = 2;
     while candidate.exists() {
-        candidate = parent.join(format!("{name}_{suffix}_{count}"));
+        candidate = adjacent_output(input, &format!("{suffix}_{count}"));
         count += 1;
     }
     candidate
@@ -1197,8 +1213,8 @@ fn run_fast_img_restore_post_success(
         .as_ref()
         .context("restore-jpeg verifier omitted its machine integrity summary")?;
     summary.img.succeeded = counts.optimized_count;
-    summary.img.skipped = counts.skipped_count;
-    summary.img.failed = counts.failed_count;
+    summary.img.skipped = summary.img.skipped.max(counts.skipped_count);
+    summary.img.failed = summary.img.failed.max(counts.failed_count);
     summary.vid = ProcessorStats::default();
     Ok(())
 }
@@ -1326,6 +1342,18 @@ fn dev_bin_command(project_root: &Path, bin: &str, args: Vec<String>) -> Result<
     LaunchCommand::from_argv(launch_argv)
 }
 
+fn resolve_restore_jpeg_launch_output(
+    input: &Path,
+    requested_output: Option<&Path>,
+) -> Result<(Option<PathBuf>, bool)> {
+    let is_photos_audit =
+        foundation::image::photos_jxl_audit::detect_photos_audit_scope(input)?.is_some();
+    let output = requested_output
+        .map(Path::to_path_buf)
+        .or_else(|| (!is_photos_audit).then(|| fast_img_restore_output_dir_for_target(input)));
+    Ok((output, is_photos_audit))
+}
+
 fn plan_cli_invocations(
     args: &Args,
     project_root: &Path,
@@ -1335,6 +1363,10 @@ fn plan_cli_invocations(
         // Handled by main menu
         return Ok(Vec::new());
     }
+    anyhow::ensure!(
+        args.backup.is_none() || args.mode == LaunchMode::Collect,
+        "--backup is available only with --mode collect"
+    );
 
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
@@ -1364,12 +1396,14 @@ fn plan_cli_invocations(
                 ))?);
             }
             LaunchMode::RestoreJpeg => {
-                let output = args
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| fast_img_restore_output_dir_for_target(input));
+                let (output, _) =
+                    resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
                 commands.push(LaunchCommand::from_argv(build_fast_img_restore_command(
-                    &img_bin, input, &output,
+                    &img_bin,
+                    input,
+                    output.as_deref(),
+                    args.photos_album_id.as_deref(),
+                    args.photos_folder_id.as_deref(),
                 ))?);
             }
             LaunchMode::FastVid => {
@@ -1386,17 +1420,28 @@ fn plan_cli_invocations(
                 ))?);
             }
             LaunchMode::Collect => {
-                let output = args
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| unique_adjacent_output(input, "collected"));
+                let output = args.output.clone().unwrap_or_else(|| {
+                    if args.backup.is_some() {
+                        adjacent_output(input, "recovery_originals")
+                    } else {
+                        unique_adjacent_output(input, "collected")
+                    }
+                });
+                let mut collect_args = vec![
+                    input.to_string_lossy().into_owned(),
+                    output.to_string_lossy().into_owned(),
+                    "--yes".to_string(),
+                ];
+                if let Some(backup) = &args.backup {
+                    collect_args.extend([
+                        "--backup".to_string(),
+                        backup.to_string_lossy().into_owned(),
+                    ]);
+                }
                 commands.push(dev_bin_command(
                     project_root,
                     "collect_optimized",
-                    vec![
-                        input.to_string_lossy().into_owned(),
-                        output.to_string_lossy().into_owned(),
-                    ],
+                    collect_args,
                 )?);
             }
             LaunchMode::MergeXmp => {
@@ -1487,7 +1532,11 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
     let snapshot = args.inputs.first().map(|p| probe_system_snapshot(p));
     RuntimeDashboard {
         target_path: target,
-        mode_label: mode_label(&args.mode).to_string(),
+        mode_label: if args.mode == LaunchMode::Collect && args.backup.is_some() {
+            "Collect Recovery Originals".to_string()
+        } else {
+            mode_label(&args.mode).to_string()
+        },
         target_type: target_type_label(args).to_string(),
         output_path: args.output.as_ref().map(|p| p.display().to_string()),
         ultimate: args.ultimate && mode_supports_ultimate(&args.mode),
@@ -1533,6 +1582,20 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
+        anyhow::ensure!(
+            args.mode == LaunchMode::RestoreJpeg && args.inputs.len() == 1,
+            "Photos album/folder selection requires one restore-jpeg library input"
+        );
+        let scope = foundation::image::photos_jxl_audit::detect_photos_audit_scope(
+            args.inputs.first().expect("one validated Photos input"),
+        )?
+        .context("Photos album/folder selection requires a Photos library package")?;
+        anyhow::ensure!(
+            scope.selected_asset_path.is_none(),
+            "Photos album/folder selection requires the library package, not one concrete asset"
+        );
+    }
     let root = resolve_runtime_root()?;
     let started = Instant::now();
     draw_banner(env!("CARGO_PKG_VERSION"));
@@ -1619,13 +1682,15 @@ fn run_drag_drop(
 
     if matches!(args.mode, LaunchMode::FastImg | LaunchMode::RestoreJpeg) && !args.dry_run {
         if args.mode == LaunchMode::RestoreJpeg {
-            let output = args.output.clone().unwrap_or_else(|| {
-                fast_img_restore_output_dir_for_target(args.inputs.first().expect("input"))
-            });
+            let input = args.inputs.first().expect("input");
+            let (output, is_photos_audit) =
+                resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
             let command = LaunchCommand::from_argv(build_fast_img_restore_command(
                 &cli_binary(&root, "img"),
-                &args.inputs[0],
-                &output,
+                input,
+                output.as_deref(),
+                args.photos_album_id.as_deref(),
+                args.photos_folder_id.as_deref(),
             ))?;
             draw_separator("Processing (restore-jpeg)");
             match command.run_with_session(false, session) {
@@ -1648,14 +1713,20 @@ fn run_drag_drop(
                 Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
                 Err(err) => first_error = Some(err),
             }
-            if first_error.is_none() {
-                if output.is_dir() {
+            if first_error.is_none() && is_photos_audit {
+                summary.integrity_state = Some("CLEAN");
+                println!(
+                    "   {} Photos JXL audit completed with live UUID/album proof",
+                    pick_symbol("✅", "[OK]")
+                );
+            } else if first_error.is_none() {
+                if output.as_deref().is_some_and(Path::is_dir) {
                     run_fast_img_restore_post_success(
                         args,
                         &root,
                         session.expect("session"),
                         &mut summary,
-                        &output,
+                        output.as_deref().expect("local restore output"),
                     )?;
                 } else if summary.img.succeeded == 0 && summary.img.failed == 0 {
                     summary.integrity_state = Some("CLEAN");
@@ -1666,7 +1737,10 @@ fn run_drag_drop(
                 } else {
                     bail!(
                         "restore-jpeg reported successful outputs but output directory is missing: {}",
-                        output.display()
+                        output.as_deref().map_or_else(
+                            || "<not selected>".to_owned(),
+                            |path| path.display().to_string()
+                        )
                     );
                 }
             }
@@ -2150,8 +2224,11 @@ fn execute_menu_selection(
                     FastImgAction::Normal => (LaunchMode::FastImg, false),
                     FastImgAction::ShortestPath => (LaunchMode::FastImg, true),
                 };
-                let output = matches!(action, FastImgAction::RestoreJpeg)
-                    .then(|| fast_img_restore_output_dir_for_target(target));
+                let output = if matches!(action, FastImgAction::RestoreJpeg) {
+                    resolve_restore_jpeg_launch_output(target, None)?.0
+                } else {
+                    None
+                };
                 let args = build_run_args(
                     target,
                     mode,
@@ -2254,6 +2331,7 @@ fn build_run_args(
         inputs: vec![target.to_path_buf()],
         mode,
         output,
+        backup: None,
         archive,
         shortest_path,
         retry: false,
@@ -2270,6 +2348,8 @@ fn build_run_args(
         images_only: matches!(filter, ProcessingFilter::ImagesOnly),
         videos_only: matches!(filter, ProcessingFilter::VideosOnly),
         strategy,
+        photos_album_id: None,
+        photos_folder_id: None,
     }
 }
 
@@ -2810,6 +2890,28 @@ mod tests {
     }
 
     #[test]
+    fn restore_jpeg_launch_output_is_selected_by_input_location() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Album");
+        let library = temp.path().join("Debug.photoslibrary");
+        let library_asset = library.join("originals/photo.jxl");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::create_dir_all(library_asset.parent().unwrap()).unwrap();
+        std::fs::write(&library_asset, b"jxl").unwrap();
+
+        let (local_output, local_is_photos) =
+            resolve_restore_jpeg_launch_output(&local, None).unwrap();
+        assert!(!local_is_photos);
+        assert_eq!(local_output, Some(temp.path().join("Album_restored_jpeg")));
+
+        for input in [&library, &library_asset] {
+            let (output, is_photos) = resolve_restore_jpeg_launch_output(input, None).unwrap();
+            assert!(is_photos);
+            assert_eq!(output, None);
+        }
+    }
+
+    #[test]
     fn test_auto_directory_defaults_to_rust_img_and_vid_cli() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("Album");
@@ -2818,6 +2920,7 @@ mod tests {
             inputs: vec![input],
             mode: LaunchMode::Auto,
             output: Some(PathBuf::from("/tmp/Album_optimized")),
+            backup: None,
             archive: true,
             shortest_path: false,
             retry: false,
@@ -2834,6 +2937,8 @@ mod tests {
             images_only: false,
             videos_only: false,
             strategy: None,
+            photos_album_id: None,
+            photos_folder_id: None,
         };
 
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
@@ -2863,7 +2968,7 @@ mod tests {
                 LaunchMode::Collect,
                 Some(collect_out),
                 "/repo/target/release/collect_optimized",
-                vec!["/input/Album", "/input/Album_collected"],
+                vec!["/input/Album", "/input/Album_collected", "--yes"],
             ),
             (
                 LaunchMode::MergeXmp,
@@ -2884,6 +2989,7 @@ mod tests {
                 inputs: vec![target.clone()],
                 mode,
                 output,
+                backup: None,
                 archive: false,
                 shortest_path: false,
                 retry: false,
@@ -2900,6 +3006,8 @@ mod tests {
                 images_only: false,
                 videos_only: false,
                 strategy: None,
+                photos_album_id: None,
+                photos_folder_id: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);
@@ -2934,6 +3042,7 @@ mod tests {
                 inputs: vec![target.clone()],
                 mode,
                 output: None,
+                backup: None,
                 archive: false,
                 shortest_path: false,
                 retry: false,
@@ -2950,6 +3059,8 @@ mod tests {
                 images_only: false,
                 videos_only: false,
                 strategy: None,
+                photos_album_id: None,
+                photos_folder_id: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);

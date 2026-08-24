@@ -147,11 +147,31 @@ private enum OperationMode: String, CaseIterable {
         }
     }
 
-    var supportsShortestPath: Bool {
+    var capabilities: OperationCapabilities {
         switch self {
-        case .fastImgJxl, .fastImgAvif, .fastVid: true
-        default: false
+        case .adjacent:
+            OperationCapabilities(usesProcessingSelection: true, supportsUltimate: true, supportsResume: true)
+        case .fastImgJxl, .fastImgAvif:
+            OperationCapabilities(fixedProcessingMode: .imagesOnly, supportsUltimate: true, supportsShortestPath: true, supportsResume: true)
+        case .fastVid:
+            OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true)
+        case .restoreJpeg:
+            OperationCapabilities(fixedProcessingMode: .imagesOnly)
+        case .collect, .mergeXmp, .iCloudImport, .diagnostic, .cacheClean, .databaseManager:
+            OperationCapabilities()
         }
+    }
+}
+
+private struct OperationCapabilities {
+    var usesProcessingSelection = false
+    var fixedProcessingMode: ProcessingMode? = nil
+    var supportsUltimate = false
+    var supportsShortestPath = false
+    var supportsResume = false
+
+    func resolvedProcessingMode(_ selected: ProcessingMode) -> ProcessingMode? {
+        fixedProcessingMode ?? (usesProcessingSelection ? selected : nil)
     }
 }
 
@@ -159,11 +179,38 @@ private struct ProcessorRequest {
     let targetPath: String
     let processingMode: ProcessingMode
     let operationMode: OperationMode
+    var backupPath: String? = nil
     var ultimate = true
     var verbose = true
     var shortestPath = false
     var resume = false
     var fresh = false
+    var photosContainer: PhotosAuditContainer?
+}
+
+private enum PhotosAuditContainerKind: String, Decodable {
+    case folder
+    case album
+
+    var argument: String {
+        switch self {
+        case .folder: "--photos-folder-id"
+        case .album: "--photos-album-id"
+        }
+    }
+}
+
+private struct PhotosAuditContainer: Decodable, Equatable {
+    let kind: PhotosAuditContainerKind
+    let id: String
+    let name: String
+    let parentID: String?
+    let path: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case kind, id, name, path
+        case parentID = "parent_id"
+    }
 }
 
 private enum ProcessorCommand {
@@ -172,15 +219,49 @@ private enum ProcessorCommand {
             throw HostError(message: localized("error.select_target"))
         }
 
+        let capabilities = request.operationMode.capabilities
+        guard !request.shortestPath || capabilities.supportsShortestPath else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        guard !request.ultimate || capabilities.supportsUltimate else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        guard (!request.resume && !request.fresh) || capabilities.supportsResume else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        if request.photosContainer != nil {
+            guard request.operationMode == .restoreJpeg,
+                  isPhotosLibraryPackagePath(request.targetPath)
+            else {
+                throw HostError(message: localized("error.photos_scope_unavailable"))
+            }
+        }
+        if request.operationMode == .collect {
+            guard let backup = request.backupPath, !backup.isEmpty else {
+                throw HostError(message: localized("error.select_backup"))
+            }
+            guard isPhotosLibraryPackagePath(backup)
+                == isPhotosLibraryPackagePath(request.targetPath)
+            else {
+                throw HostError(message: localized("error.backup_kind_mismatch"))
+            }
+        } else if request.backupPath != nil {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+
         var arguments: [String] = []
-        if let mode = request.processingMode.argument { arguments.append(mode) }
+        if let processing = capabilities.resolvedProcessingMode(request.processingMode),
+           let mode = processing.argument
+        {
+            arguments.append(mode)
+        }
         if let mode = request.operationMode.backendMode { arguments += ["--mode", mode] }
         if let strategy = request.operationMode.strategy {
             arguments += ["--strategy", strategy]
         }
         if request.ultimate { arguments.append("--ultimate") }
         if request.verbose { arguments.append("--verbose") }
-        if request.shortestPath, request.operationMode.supportsShortestPath {
+        if request.shortestPath {
             arguments.append("--shortest-path")
         }
         if request.resume {
@@ -189,6 +270,10 @@ private enum ProcessorCommand {
         } else if request.fresh {
             arguments.append("--no-resume")
         }
+        if let container = request.photosContainer {
+            arguments += [container.kind.argument, container.id]
+        }
+        if let backup = request.backupPath { arguments += ["--backup", backup] }
         arguments.append(request.targetPath)
         return arguments
     }
@@ -214,9 +299,32 @@ private enum ProcessorCommand {
     }
 }
 
+private func isPhotosLibraryPath(_ path: String) -> Bool {
+    URL(fileURLWithPath: path)
+        .resolvingSymlinksInPath()
+        .standardized.pathComponents.contains { component in
+        let component = component.lowercased()
+        return component.hasSuffix(".photoslibrary") || component.hasSuffix(".photolibrary")
+    }
+}
+
+private func isPhotosLibraryPackagePath(_ path: String) -> Bool {
+    let component = URL(fileURLWithPath: path)
+        .resolvingSymlinksInPath()
+        .standardized.lastPathComponent.lowercased()
+    return component.hasSuffix(".photoslibrary") || component.hasSuffix(".photolibrary")
+}
+
+private func isPhotosUUID(_ value: String) -> Bool {
+    let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.map(\.count) == [8, 4, 4, 4, 12] else { return false }
+    return parts.joined().allSatisfy { $0.isHexDigit }
+}
+
 private func processingRequiresPhotosAutomation(_ request: ProcessorRequest) -> Bool {
     request.operationMode == .iCloudImport
-        || (request.shortestPath && request.operationMode.supportsShortestPath)
+        || (request.shortestPath && request.operationMode.capabilities.supportsShortestPath)
+        || (request.operationMode == .restoreJpeg && isPhotosLibraryPath(request.targetPath))
 }
 
 private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
@@ -353,6 +461,40 @@ private enum ProcessorLocator {
         candidates().first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
+    static func resolveTool(named name: String) -> URL? {
+        var seen = Set<String>()
+        for processor in candidates() {
+            let directory = processor.deletingLastPathComponent()
+            for candidate in [
+                directory.appendingPathComponent(name),
+                directory.deletingLastPathComponent().appendingPathComponent(name),
+            ] where seen.insert(candidate.path).inserted
+                && FileManager.default.isExecutableFile(atPath: candidate.path)
+            {
+                return candidate
+            }
+        }
+        let bundleURL = Bundle.main.bundleURL.standardized
+        let isAppBundle = bundleURL.pathExtension == "app"
+        let isBuildBundle = bundleURL.path.contains("/target/release/bundle/macos/")
+        if var ancestor = Bundle.main.executableURL?.deletingLastPathComponent() {
+            while ancestor.path != "/" {
+                let isReleaseRoot = ancestor.lastPathComponent == "release"
+                    && ancestor.deletingLastPathComponent().lastPathComponent == "target"
+                if !isAppBundle || (isBuildBundle && isReleaseRoot) {
+                    let candidate = ancestor.appendingPathComponent(name)
+                    if seen.insert(candidate.path).inserted,
+                       FileManager.default.isExecutableFile(atPath: candidate.path)
+                    {
+                        return candidate
+                    }
+                }
+                ancestor.deleteLastPathComponent()
+            }
+        }
+        return nil
+    }
+
     static func missingError() -> String {
         let checked = candidates().map(\.path).joined(separator: "; ")
         return localized("error.backend_missing", checked)
@@ -380,6 +522,40 @@ private enum PhotosAutomationPreflightError: LocalizedError {
     }
 }
 
+private func queryPhotosAuditContainers(binary: URL, library: String) throws -> [PhotosAuditContainer] {
+    let process = Process()
+    process.executableURL = binary
+    process.arguments = ["photos-albums", library, "--json"]
+    let combined = Pipe()
+    process.standardOutput = combined
+    process.standardError = combined
+    try process.run()
+    let data = combined.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard data.count <= 16 * 1024 * 1024 else {
+        throw HostError(message: localized("error.photos_scope_too_large"))
+    }
+    guard process.terminationStatus == 0 else {
+        let detail = String(decoding: data.prefix(8_192), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw HostError(message: localized("error.photos_scope_load", detail))
+    }
+    let containers = try JSONDecoder().decode([PhotosAuditContainer].self, from: data)
+    let ids = Set(containers.map(\.id))
+    guard ids.count == containers.count,
+          containers.allSatisfy({
+              isPhotosUUID($0.id)
+                  && !$0.name.isEmpty
+                  && !$0.path.isEmpty
+                  && $0.path.last == $0.name
+                  && $0.parentID.map { isPhotosUUID($0) && ids.contains($0) } ?? true
+          })
+    else {
+        throw HostError(message: localized("error.photos_scope_invalid"))
+    }
+    return containers
+}
+
 @MainActor
 private final class NativeHost {
     var onLog: ((String) -> Void)?
@@ -389,6 +565,33 @@ private final class NativeHost {
     private var pendingProcessCompletion: (() -> Void)?
 
     var isRunning: Bool { activeProcess != nil }
+
+    func loadPhotosAuditContainers(
+        library: String,
+        completion: @escaping (Result<[PhotosAuditContainer], Error>) -> Void
+    ) {
+        guard activeProcess == nil else {
+            completion(.failure(HostError(message: localized("error.task_running"))))
+            return
+        }
+        guard let binary = ProcessorLocator.resolveTool(named: "img") else {
+            completion(.failure(HostError(message: localized("error.img_backend_missing"))))
+            return
+        }
+        requestPhotosAutomationPermission { result in
+            switch result {
+            case let .failure(error):
+                completion(.failure(error))
+            case .success:
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result = Result {
+                        try queryPhotosAuditContainers(binary: binary, library: library)
+                    }
+                    DispatchQueue.main.async { completion(result) }
+                }
+            }
+        }
+    }
 
     func checkVersionAlignment() -> String {
         guard let binary = ProcessorLocator.resolve() else {
@@ -682,10 +885,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let mediaLabel = NSTextField(labelWithString: "")
     private let operationLabel = NSTextField(labelWithString: "")
+    private let photosScopeLabel = NSTextField(labelWithString: "")
     private let metadataSafetyLabel = NSTextField(wrappingLabelWithString: "")
     private let languageLabel = NSTextField(labelWithString: "")
     private let appearanceLabel = NSTextField(labelWithString: "")
     private let targetField = NSTextField()
+    private let backupLabel = NSTextField(labelWithString: "")
+    private let backupField = NSTextField()
     private let processingPopup = NSPopUpButton()
     private let operationPopup = NSPopUpButton()
     private let languagePopup = NSPopUpButton()
@@ -699,6 +905,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
+    private let backupButton = NSButton(title: "", target: nil, action: nil)
+    private let backupRow = NSStackView()
+    private let photosScopeButton = NSButton(title: "", target: nil, action: nil)
+    private let photosScopeRow = NSStackView()
     private let openButton = NSButton(title: "", target: nil, action: nil)
     private let copyButton = NSButton(title: "", target: nil, action: nil)
     private let runButton = NSButton(title: "", target: nil, action: nil)
@@ -706,6 +916,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var sawResumeDecision = false
     private var configurationControlsEnabled = true
     private var processorStatus = ""
+    private var selectedPhotosContainer: PhotosAuditContainer?
 
     override init() {
         window = NSWindow(
@@ -803,6 +1014,22 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetRow.spacing = 8
         targetField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        backupField.isEditable = false
+        backupField.isSelectable = true
+        backupField.lineBreakMode = .byTruncatingMiddle
+        backupButton.target = self
+        backupButton.action = #selector(chooseBackup)
+        backupLabel.alignment = .right
+        backupLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        backupRow.addArrangedSubview(backupLabel)
+        backupRow.addArrangedSubview(backupField)
+        backupRow.addArrangedSubview(backupButton)
+        backupRow.orientation = .horizontal
+        backupRow.alignment = .centerY
+        backupRow.spacing = 8
+        backupField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        backupRow.isHidden = true
+
         processingPopup.target = self
         processingPopup.action = #selector(configurationChanged)
         operationPopup.target = self
@@ -815,6 +1042,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
+
+        photosScopeButton.target = self
+        photosScopeButton.action = #selector(choosePhotosScope)
+        photosScopeButton.lineBreakMode = .byTruncatingMiddle
+        photosScopeButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        photosScopeLabel.alignment = .right
+        photosScopeLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        photosScopeRow.addArrangedSubview(photosScopeLabel)
+        photosScopeRow.addArrangedSubview(photosScopeButton)
+        photosScopeRow.orientation = .horizontal
+        photosScopeRow.alignment = .centerY
+        photosScopeRow.spacing = 12
+        photosScopeRow.isHidden = true
 
         metadataSafetyLabel.font = .systemFont(ofSize: 11)
         metadataSafetyLabel.textColor = .secondaryLabelColor
@@ -872,7 +1112,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.alignment = .centerY
         statusRow.spacing = 8
         let stack = NSStackView(views: [
-            header, targetRow, grid, metadataSafetyLabel, options, commandField, actionRow,
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
             logScroll, statusRow,
         ])
         stack.orientation = .vertical
@@ -880,7 +1120,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
-            header, targetRow, grid, metadataSafetyLabel, options, commandField, actionRow,
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
             logScroll, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -912,14 +1152,78 @@ private final class AppController: NSObject, NSWindowDelegate {
         if panel.runModal() == .OK, let path = panel.url?.path { acceptTarget(path) }
     }
 
+    @objc private func chooseBackup() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.title = localized("panel.backup.title")
+        if panel.runModal() == .OK, let path = panel.url?.path {
+            backupField.stringValue = path
+            configurationChanged()
+        }
+    }
+
     private func acceptTarget(_ path: String) {
+        selectedPhotosContainer = nil
         targetField.stringValue = path
         configurationChanged()
     }
 
+    @objc private func choosePhotosScope() {
+        let library = targetField.stringValue
+        guard selectedOperation == .restoreJpeg,
+              isPhotosLibraryPackagePath(library),
+              !host.isRunning
+        else {
+            present(HostError(message: localized("error.photos_scope_unavailable")))
+            return
+        }
+        photosScopeButton.isEnabled = false
+        statusLabel.stringValue = localized("status.photos_scope_loading")
+        host.loadPhotosAuditContainers(library: library) { [weak self] result in
+            guard let self, self.targetField.stringValue == library else { return }
+            self.applyCapabilityState()
+            switch result {
+            case let .success(containers):
+                self.presentPhotosScopePicker(containers)
+            case let .failure(error):
+                self.present(error)
+            }
+        }
+    }
+
+    private func presentPhotosScopePicker(_ containers: [PhotosAuditContainer]) {
+        let alert = NSAlert()
+        alert.messageText = localized("photos.scope.picker.title")
+        alert.informativeText = localized("photos.scope.picker.info", containers.count)
+        alert.addButton(withTitle: localized("button.select"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 560, height: 26))
+        popup.addItem(withTitle: localized("photos.scope.entire_library"))
+        for container in containers {
+            let kind = localized("photos.scope.\(container.kind.rawValue)")
+            popup.addItem(withTitle: "\(kind)  \(container.path.joined(separator: " › "))")
+        }
+        if let selectedPhotosContainer,
+           let index = containers.firstIndex(of: selectedPhotosContainer)
+        {
+            popup.selectItem(at: index + 1)
+        }
+        alert.accessoryView = popup
+        if alert.runModal() == .alertFirstButtonReturn {
+            selectedPhotosContainer = popup.indexOfSelectedItem == 0
+                ? nil
+                : containers[safe: popup.indexOfSelectedItem - 1]
+            configurationChanged()
+        } else {
+            statusLabel.stringValue = localized("status.ready")
+        }
+    }
+
     @objc private func configurationChanged() {
-        shortestPathCheck.isEnabled = configurationControlsEnabled && selectedOperation.supportsShortestPath
-        if !shortestPathCheck.isEnabled { shortestPathCheck.state = .off }
+        applyCapabilityState()
         updateMetadataSafetyNotice()
         guard !targetField.stringValue.isEmpty else {
             commandField.stringValue = ""
@@ -965,18 +1269,48 @@ private final class AppController: NSObject, NSWindowDelegate {
         OperationMode.allCases[safe: operationPopup.indexOfSelectedItem] ?? .adjacent
     }
 
+    private func applyCapabilityState() {
+        let capabilities = selectedOperation.capabilities
+        if let fixed = capabilities.fixedProcessingMode {
+            processingPopup.selectItem(
+                at: ProcessingMode.allCases.firstIndex { $0.rawValue == fixed.rawValue } ?? 0,
+            )
+        }
+        processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
+        ultimateCheck.isEnabled = configurationControlsEnabled && capabilities.supportsUltimate
+        shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
+        resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
+        let backupAvailable = selectedOperation == .collect
+        backupRow.isHidden = !backupAvailable
+        backupButton.isEnabled = configurationControlsEnabled && backupAvailable
+        let photosScopeAvailable = selectedOperation == .restoreJpeg
+            && isPhotosLibraryPackagePath(targetField.stringValue)
+        if !photosScopeAvailable { selectedPhotosContainer = nil }
+        photosScopeRow.isHidden = !photosScopeAvailable
+        photosScopeButton.isEnabled = configurationControlsEnabled && photosScopeAvailable
+        photosScopeButton.title = selectedPhotosContainer.map {
+            let kind = localized("photos.scope.\($0.kind.rawValue)")
+            return "\(kind)  \($0.path.joined(separator: " › "))"
+        } ?? localized("photos.scope.entire_library")
+        if !ultimateCheck.isEnabled { ultimateCheck.state = .off }
+        if !shortestPathCheck.isEnabled { shortestPathCheck.state = .off }
+        if !resumeCheck.isEnabled { resumeCheck.state = .off }
+    }
+
     private func updateMetadataSafetyNotice() {
         let key: String?
         switch selectedOperation {
         case .adjacent, .fastImgJxl, .mergeXmp:
             key = "metadata.jxl_overlay"
         case .restoreJpeg:
-            key = "metadata.restore_exact"
+            key = "metadata.restore_auto"
+        case .collect:
+            key = "metadata.recovery_collect"
         default:
             key = nil
         }
         metadataSafetyLabel.isHidden = key == nil
-        metadataSafetyLabel.stringValue = key.map(localized) ?? ""
+        metadataSafetyLabel.stringValue = key.map { localized($0) } ?? ""
     }
 
     private func request() throws -> ProcessorRequest {
@@ -988,10 +1322,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             targetPath: targetField.stringValue,
             processingMode: processing,
             operationMode: selectedOperation,
+            backupPath: selectedOperation == .collect ? backupField.stringValue : nil,
             ultimate: ultimateCheck.state == .on,
             verbose: verboseCheck.state == .on,
             shortestPath: shortestPathCheck.state == .on,
             resume: resumeCheck.state == .on,
+            photosContainer: selectedPhotosContainer,
         )
     }
 
@@ -1073,11 +1409,15 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func applyLocalization() {
         subtitleLabel.stringValue = localized("app.subtitle")
         targetField.placeholderString = localized("field.target.placeholder")
+        backupField.placeholderString = localized("field.backup.placeholder")
+        backupLabel.stringValue = localized("field.backup")
         mediaLabel.stringValue = localized("field.media")
         operationLabel.stringValue = localized("field.operation")
+        photosScopeLabel.stringValue = localized("field.photos_scope")
         languageLabel.stringValue = localized("field.language")
         appearanceLabel.stringValue = localized("field.appearance")
         chooseButton.title = localized("button.choose")
+        backupButton.title = localized("button.choose")
         openButton.title = localized("button.open_terminal")
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
@@ -1105,12 +1445,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func setProcessing(_ processing: Bool) {
         configurationControlsEnabled = !processing
         for control in [
-            chooseButton, processingPopup, operationPopup, ultimateCheck, verboseCheck,
-            resumeCheck, openButton, copyButton, runButton,
+            chooseButton, backupButton, operationPopup, verboseCheck, openButton, copyButton, runButton,
         ] {
             control.isEnabled = !processing
         }
-        shortestPathCheck.isEnabled = !processing && selectedOperation.supportsShortestPath
+        applyCapabilityState()
         if processing {
             progressIndicator.startAnimation(nil)
             statusLabel.stringValue = localized("status.running")
@@ -1193,6 +1532,12 @@ private func runSelfTest() -> Int32 {
             fputs("native-host self-test fixed window sizing failed\n", stderr)
             return 1
         }
+        if Bundle.main.bundleURL.pathExtension == "app",
+           ProcessorLocator.resolveTool(named: "img") == nil
+        {
+            fputs("native-host self-test bundled img lookup failed\n", stderr)
+            return 1
+        }
         let request = ProcessorRequest(
             targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
             ultimate: true, verbose: true, shortestPath: true, resume: true,
@@ -1205,9 +1550,66 @@ private func runSelfTest() -> Int32 {
             fputs("native-host self-test argument mapping failed\n", stderr)
             return 1
         }
+        let restore = ProcessorRequest(
+            targetPath: "/tmp/archive", processingMode: .videosOnly, operationMode: .restoreJpeg,
+            ultimate: false, verbose: true,
+        )
+        let restoreExpected = [
+            "--images-only", "--mode", "restore-jpeg", "--verbose", "/tmp/archive",
+        ]
+        guard try ProcessorCommand.arguments(from: restore) == restoreExpected else {
+            fputs("native-host self-test restore capability mapping failed\n", stderr)
+            return 1
+        }
+        let collect = ProcessorRequest(
+            targetPath: "/tmp/audited",
+            processingMode: .both,
+            operationMode: .collect,
+            backupPath: "/tmp/backup",
+            ultimate: false,
+            verbose: true
+        )
+        guard try ProcessorCommand.arguments(from: collect) == [
+            "--mode", "collect", "--verbose", "--backup", "/tmp/backup", "/tmp/audited",
+        ] else {
+            fputs("native-host self-test recovery backup mapping failed\n", stderr)
+            return 1
+        }
+        let album = PhotosAuditContainer(
+            kind: .album,
+            id: "11111111-1111-1111-1111-111111111111",
+            name: "Archive",
+            parentID: nil,
+            path: ["Archive"]
+        )
+        let scopedRestore = ProcessorRequest(
+            targetPath: "/tmp/debug.photoslibrary",
+            processingMode: .imagesOnly,
+            operationMode: .restoreJpeg,
+            ultimate: false,
+            verbose: true,
+            photosContainer: album
+        )
+        guard try ProcessorCommand.arguments(from: scopedRestore) == [
+            "--images-only", "--mode", "restore-jpeg", "--verbose",
+            "--photos-album-id", album.id, "/tmp/debug.photoslibrary",
+        ] else {
+            fputs("native-host self-test Photos album scope mapping failed\n", stderr)
+            return 1
+        }
+        do {
+            _ = try ProcessorCommand.arguments(from: ProcessorRequest(
+                targetPath: "/tmp/video", processingMode: .imagesOnly,
+                operationMode: .fastVid, ultimate: true, verbose: false,
+            ))
+            fputs("native-host self-test unsupported FastVid ultimate flag was accepted\n", stderr)
+            return 1
+        } catch {}
         guard processingRequiresPhotosAutomation(request),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport)),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid, shortestPath: true)),
+              !processingRequiresPhotosAutomation(restore),
+              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/debug.photoslibrary", processingMode: .imagesOnly, operationMode: .restoreJpeg, ultimate: false)),
               !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .fastImgJxl))
         else {
             fputs("native-host self-test Photos Automation routing failed\n", stderr)
@@ -1231,7 +1633,7 @@ private func runSelfTest() -> Int32 {
             binary: URL(fileURLWithPath: "/tmp/processor"),
             arguments: ProcessorCommand.arguments(from: hostile),
         )
-        guard shell == "cd '/tmp' && '/tmp/processor' '--mode' 'fast-img' '--strategy' 'jxl' '/tmp/media'\"'\"'$(id)'" else {
+        guard shell == "cd '/tmp' && '/tmp/processor' '--images-only' '--mode' 'fast-img' '--strategy' 'jxl' '/tmp/media'\"'\"'$(id)'" else {
             fputs("native-host self-test shell quoting failed: \(shell)\n", stderr)
             return 1
         }

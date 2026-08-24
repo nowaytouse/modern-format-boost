@@ -1737,6 +1737,7 @@ pub fn commit_temp_to_output_preserving_exact_payload(
             "Embedded payload changed during commit: expected {expected_hash}, got {actual_hash}"
         )));
     }
+    crate::io_utils::sync_committed_file_and_parent(output)?;
     Ok(true)
 }
 
@@ -1774,6 +1775,18 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
             return Err(std::io::Error::other(format!(
                 "JPEG reconstruction proof failed after metadata commit: {error}"
             )));
+        }
+        if crate::metadata::find_xmp_sidecar(source).is_some() {
+            let reconstructed_jpeg_hash = crate::common_utils::calculate_blake3_hash(source)
+                .map_err(|error| {
+                    std::io::Error::other(format!(
+                        "Failed to hash source JPEG for JXL XMP audit: {error}"
+                    ))
+                })?;
+            crate::metadata::audit_jxl_overlay_reconstruction_proof(
+                output,
+                Some(&reconstructed_jpeg_hash),
+            )?;
         }
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_METADATA,
@@ -2045,6 +2058,8 @@ fn commit_temp_to_output_with_metadata_inner(
     if !repaired_jxl_exif_after_commit {
         repair_corrupt_jxl_brotli_exif_for_delivery(output, None)?;
     }
+
+    crate::io_utils::sync_committed_file_and_parent(output)?;
 
     Ok(true)
 }

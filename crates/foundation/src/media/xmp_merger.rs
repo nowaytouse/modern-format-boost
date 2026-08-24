@@ -53,6 +53,11 @@ fn is_potential_media(ext: &str) -> bool {
     !EXCLUDED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
 }
 
+fn is_regular_non_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
 #[derive(Debug, Clone)]
 pub struct XmpFile {
     pub path: PathBuf,
@@ -149,6 +154,74 @@ fn reconstruct_jpeg_to_temp(jxl: &Path) -> Result<tempfile::NamedTempFile> {
     Ok(temp)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceFileIdentity {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+fn source_file_identity(path: &Path) -> Result<SourceFileIdentity> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect XMP merge target {}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!(
+            "XMP merge target must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Ok(SourceFileIdentity {
+        len: metadata.len(),
+        modified: metadata
+            .modified()
+            .with_context(|| format!("failed to read XMP merge target mtime {}", path.display()))?,
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SidecarDeleteProof {
+    identity: SourceFileIdentity,
+    blake3: String,
+}
+
+fn sidecar_delete_proof(path: &Path) -> Result<SidecarDeleteProof> {
+    Ok(SidecarDeleteProof {
+        identity: source_file_identity(path)?,
+        blake3: crate::common_utils::calculate_blake3_hash(path)
+            .with_context(|| format!("failed to hash XMP sidecar {}", path.display()))?,
+    })
+}
+
+fn delete_unchanged_sidecar(path: &Path, expected: &SidecarDeleteProof) -> Result<()> {
+    let current = sidecar_delete_proof(path).with_context(|| {
+        format!(
+            "XMP merge succeeded but the sidecar cannot be revalidated for deletion; retained {}",
+            path.display()
+        )
+    })?;
+    if &current != expected {
+        bail!(
+            "XMP merge succeeded but the sidecar changed concurrently; retained {}",
+            path.display()
+        );
+    }
+    crate::io_utils::safe_remove_file(path).with_context(|| {
+        format!(
+            "XMP merge succeeded but the verified sidecar could not be deleted: {}",
+            path.display()
+        )
+    })
+}
+
 impl XmpMerger {
     #[must_use]
     pub const fn new(config: Config) -> Self {
@@ -173,7 +246,7 @@ impl XmpMerger {
     pub fn find_xmp_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut xmp_files = Vec::new();
 
-        for entry in WalkDir::new(dir).follow_links(true) {
+        for entry in WalkDir::new(dir).follow_links(false) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -190,7 +263,7 @@ impl XmpMerger {
             };
 
             let path = entry.path();
-            if path.is_file()
+            if entry.file_type().is_file()
                 && path
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("xmp"))
@@ -384,7 +457,7 @@ impl XmpMerger {
         if xmp_str.to_lowercase().ends_with(".xmp") {
             let base = &xmp_str[..xmp_str.len() - 4];
             let base_path = PathBuf::from(base);
-            if base_path.exists() && base_path.is_file() {
+            if is_regular_non_symlink(&base_path) {
                 return Some(base_path);
             }
         }
@@ -398,7 +471,7 @@ impl XmpMerger {
         let xmp_root_stem = crate::media_conversion_gate::path_stem_root_segment(&xmp_stem_raw);
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -429,7 +502,7 @@ impl XmpMerger {
         let xmp_stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -462,7 +535,7 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -503,7 +576,7 @@ impl XmpMerger {
         let xmp_filename = xmp_path.file_name()?.to_string_lossy();
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -568,7 +641,7 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -620,7 +693,7 @@ impl XmpMerger {
             };
 
             let path = entry.path();
-            if !path.is_file() || path == xmp_path {
+            if !is_regular_non_symlink(&path) || path == xmp_path {
                 continue;
             }
 
@@ -682,7 +755,7 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-            if !path.is_file() {
+            if !is_regular_non_symlink(&path) {
                 continue;
             }
 
@@ -925,6 +998,7 @@ impl XmpMerger {
         } else {
             None
         };
+        let source_identity = source_file_identity(media_path)?;
         let source_hash =
             crate::common_utils::calculate_blake3_hash(media_path).with_context(|| {
                 format!(
@@ -932,13 +1006,13 @@ impl XmpMerger {
                     media_path.display()
                 )
             })?;
-        let source_size = std::fs::metadata(media_path)?.len();
+        let source_size = source_identity.len;
         let parent = crate::media_conversion_gate::output_parent_or_dot(media_path);
         let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
             "jxl_xmp_overlay",
             parent,
-            "mfb-jxl-xmp-",
-            ".jxl",
+            ".mfb-jxl-xmp-",
+            ".tmp",
         )?;
         let staged_path = staged.into_temp_path();
         let copied = std::fs::copy(media_path, &staged_path)?;
@@ -1024,6 +1098,17 @@ impl XmpMerger {
                 media_path.display()
             );
         }
+        let current_identity = source_file_identity(media_path)?;
+        if current_identity != source_identity {
+            bail!(
+                "JXL file identity changed concurrently during XMP merge; original retained: {}",
+                media_path.display()
+            );
+        }
+        std::fs::File::open(&staged_path)
+            .with_context(|| format!("failed to open staged JXL {}", staged_path.display()))?
+            .sync_all()
+            .with_context(|| format!("failed to flush staged JXL {}", staged_path.display()))?;
         staged_path.persist(media_path).map_err(|error| {
             anyhow::anyhow!(
                 "failed to atomically commit XMP overlay to {}: {}",
@@ -1031,6 +1116,21 @@ impl XmpMerger {
                 error.error
             )
         })?;
+        crate::io_utils::sync_committed_file_and_parent(media_path).with_context(|| {
+            format!(
+                "failed to durably commit XMP overlay to {}",
+                media_path.display()
+            )
+        })?;
+        let reconstructed_jpeg_hash = baseline_jpeg
+            .as_ref()
+            .map(|jpeg| crate::common_utils::calculate_blake3_hash(jpeg.path()))
+            .transpose()
+            .context("failed to hash exact JPEG reconstruction for XMP audit")?;
+        crate::metadata::audit_jxl_overlay_reconstruction_proof(
+            media_path,
+            reconstructed_jpeg_hash.as_deref(),
+        )?;
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_XMP,
             &format!(
@@ -1301,13 +1401,39 @@ impl XmpMerger {
             };
         };
 
+        let delete_proof = if self.config.delete_xmp_after_merge {
+            match sidecar_delete_proof(xmp_path) {
+                Ok(proof) => Some(proof),
+                Err(error) => {
+                    return MergeResult {
+                        xmp_path: xmp_path.to_path_buf(),
+                        media_path: Some(media),
+                        success: false,
+                        message: format!(
+                            "Refusing merge with requested sidecar cleanup because its preflight proof failed: {error:#}"
+                        ),
+                        match_strategy: Some(strategy),
+                    };
+                }
+            }
+        } else {
+            None
+        };
+
         match self.merge_xmp(xmp_path, &media) {
             Ok(()) => {
-                if self.config.delete_xmp_after_merge {
-                    crate::media_conversion_gate::delivery_remove_file_or_audit(
-                        "xmp_merge_sidecar_delete",
-                        xmp_path,
-                    );
+                if let Some(proof) = delete_proof.as_ref()
+                    && let Err(error) = delete_unchanged_sidecar(xmp_path, proof)
+                {
+                    return MergeResult {
+                        xmp_path: xmp_path.to_path_buf(),
+                        media_path: Some(media),
+                        success: false,
+                        message: format!(
+                            "Merge committed, but verified sidecar cleanup was refused: {error:#}"
+                        ),
+                        match_strategy: Some(strategy),
+                    };
                 }
 
                 MergeResult {
@@ -1398,7 +1524,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     ];
 
     for xmp_path in &xmp_candidates {
-        if xmp_path.is_file() {
+        if is_regular_non_symlink(xmp_path) {
             if crate::progress_mode::is_verbose_mode() {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_XMP,

@@ -18,6 +18,7 @@ pub mod infra {
     pub mod mfb_cargo_env;
     pub mod performance;
     pub mod process_stream;
+    pub mod recovery_collection;
     pub mod rich_panel;
     pub mod signal_handlers;
     pub mod system_checks;

@@ -274,6 +274,48 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Flush a committed file and the directory entry that names it.
+///
+/// A successful `rename` alone does not prove that either the file contents or
+/// its new directory entry survived a power loss. Delivery code calls this
+/// after the final rename, before it records a durable manifest or removes a
+/// source file.
+///
+/// # Errors
+/// Returns an error when the committed file cannot be flushed, or, on Unix,
+/// when its parent directory cannot be flushed.
+pub fn sync_committed_file_and_parent(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()?;
+    sync_parent_directory(path)
+}
+
+/// Flush the parent directory entry for a newly created or renamed path.
+///
+/// Directory handles are not portable to every supported platform. Unix
+/// performs the durability barrier; other platforms keep the file-level
+/// barrier supplied by [`sync_committed_file_and_parent`].
+///
+/// # Errors
+/// Returns an error on Unix when the path has no parent or that directory
+/// cannot be opened/flushed.
+pub fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("committed path has no parent directory: {}", path.display()),
+            )
+        })?;
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn is_cross_device_rename_error(err: &std::io::Error) -> bool {
     let detail = err.to_string().to_ascii_lowercase();
     matches!(err.raw_os_error(), Some(17_i32 | 18_i32))

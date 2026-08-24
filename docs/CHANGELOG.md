@@ -6,6 +6,67 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **Exact recovery-original collector**: The existing Rust collector now has a
+  backup handoff that re-probes live non-reconstructible JXLs and extracts only
+  their originals plus XMP. Folder backups use one exact relative-directory and
+  basename match after magic-byte format detection; Photos backups use exact
+  audited UUIDs and read-only `osxphotos` original export. Ambiguity, missing
+  UUIDs, JXL-only backups, path escape, concurrent byte changes, or absent XMP
+  proof fail closed. Every delivered file receives a BLAKE3 record in the
+  atomic `.mfb_recovery_collection.json`, and the AppKit GUI exposes the same
+  workflow as “Collect recovery originals”.
+
+- **Archive-grade JXL/XMP transaction**: Append-only XMP overlays now capture
+  source file identity plus original-container/JBRD/XMP hashes, preserve the
+  entire previous container prefix, reject duplicate top-level JBRD records,
+  commit through a unique same-directory temporary file, and flush the file and
+  parent directory after atomic replacement. Structured `MFB-JXL-001/002`
+  events link overlay UUID/schema, tool version, final container and exact JPEG
+  reconstruction evidence without storing media content.
+- **One input-driven JPEG/JXL recovery flow**: `img restore-jpeg INPUT` removes
+  the redundant export/audit mode choice. Files and folders restore exact JPEGs
+  and automatically emit mirrored `Reconstruction Blocked` / `Needs Review`
+  markers for everything that cannot be proven reversible. Selecting a Photos
+  library instead audits live asset UUIDs and references affected assets in
+  `MFB JXL Audit` albums without rewriting media bytes. MFB never edits Photos
+  database files directly; Photos records only album membership. Atomic local
+  manifests and an external BLAKE3/UUID checkpoint provide durable proof and
+  idempotent resumption. CLI, interactive and native-GUI entry points now share
+  the same path-driven routing; Photos UUID responses must be exact and unique,
+  album updates use bounded batches, and ambiguous duplicate hierarchy names
+  fail closed. Whole-library audit remains the default, while
+  `img photos-albums`, `--photos-album-id`, and `--photos-folder-id` expose
+  exact native scope selection. Folder selection expands the live Photos parent
+  graph to descendant album UUIDs instead of equating incompatible folder IDs.
+- **Restore proof and reporting alignment**: Photos candidates are selected by
+  Apple JPEG XL UTI and then rechecked by payload identity instead of matching
+  an extension that `osxphotos` omits from `{original_name}`. Native Photos
+  folders preserve real hierarchy, Manifest V3 keeps all 11 fields when XMP is
+  absent, and post-verification excludes only markers inside a proven MFB audit
+  session while retaining processor skip counts. Repeated local restore
+  launches reuse the same adjacent `*_restored_jpeg` directory, revalidating
+  existing deliveries instead of scattering `_2` / `_3` output trees.
+- **Capability-driven native GUI**: The AppKit host now owns one operation
+  capability map. Fixed image/video operations no longer expose an invalid
+  media selector, Restore JPEG has no redundant action selector, unsupported
+  flags are rejected before launch, and Photos TCC is requested only when the
+  selected restore path is a Photos library. Selecting a library now reveals a
+  live native folder/album picker; it forwards opaque UUIDs through the same CLI
+  path, excludes generated audit containers, and rejects stale hierarchy data
+  before Photos mutation.
+- **Tier 2 sidecar custody**: A positively admitted modern lossy static source
+  with adjacent XMP is copied into an isolated staging tree and enriched there.
+  Photos receives that copy and must prove its enriched content hash and live
+  UUID; source cleanup separately rechecks the unchanged source and XMP hashes.
+  The admitted sidecar hash is persisted with the Photos proof. Missing sidecars
+  remain valid, while any validation, merge, import or proof failure retains the
+  originals.
+- **Restore and XMP edge reliability**: Single-file `restore-jpeg` no longer
+  mistakes its parent directory for the selected input root, so the GUI's
+  sibling-of-file output works without weakening directory overlap checks. The
+  standalone XMP merger requires ExifTool only for formats whose merge path
+  actually uses it;
+  append-only JXL overlays no longer fail an unrelated global preflight.
 - **Formatter-only `check_all --fix`**: The local fix flag now runs only tracked
   workspace formatters and exits before branch/toolchain checks, compilation,
   tests, audits, documentation, benchmarks, or fuzz work. Clippy lint repair and
@@ -52,9 +113,10 @@ All notable changes to this project will be documented in this file.
   `djxl --reconstruct_jpeg`, rejects JBRD records that fall back to lossy
   pixel-to-JPEG encoding, and requires byte-identical output rather than merely
   matching decoded pixels. JXL XML metadata is restored as a validated adjacent
-  `.xmp` sidecar so the reconstructed JPEG bytes are never rewritten; manifest
-  V2 records and rechecks both JPEG and XMP hashes immediately before source
-  cleanup. Filesystem metadata is copied without changing either payload.
+  `.xmp` sidecar so the reconstructed JPEG bytes are never rewritten; Manifest
+  V3 records and rechecks source, reconstruction, JPEG and XMP hashes plus
+  tool/version evidence immediately before source cleanup. Filesystem metadata
+  is copied without changing either payload.
 - **Archive-grade JPEG commit gate**: FastImg, normal IMG and the public library
   API share the same exact JBRD rule. Pixel-equivalent or decode-only JXL is an
   intermediate diagnostic result only: it cannot be committed as a replacement

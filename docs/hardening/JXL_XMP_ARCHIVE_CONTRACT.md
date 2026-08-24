@@ -1,0 +1,170 @@
+# JXL, XMP, and JPEG Archive Contract
+
+This document is the production contract for reversible JPEG-to-JXL delivery,
+XMP overlays, Tier 2 sidecars, and JPEG restoration.
+
+## Ownership boundary
+
+| Layer | Owner | Mutation policy |
+| --- | --- | --- |
+| JBRD and reconstructed JPEG bitstream | Reconstruction-owned | Immutable |
+| Original Exif, XMP, ICC, JUMBF, unknown boxes, codestream | Reconstruction-owned | Immutable |
+| Appended XMP overlay | Overlay-owned | Append only after validation |
+| MFB audit fields and manifests | Application-owned | Versioned, atomic, and hash-linked |
+
+An external XMP sidecar is never merged by rewriting a reconstructible JXL.
+The complete existing container is copied byte-for-byte, one validated `xml `
+box is appended, and exact JPEG reconstruction is proved again. Repeating the
+same overlay is an idempotent no-op.
+
+## Durable overlay commit
+
+The commit order is fixed:
+
+1. Capture source length, modification time, device/inode identity, and BLAKE3.
+2. Copy the complete JXL into a same-directory unique temporary file.
+3. Append the validated XMP box.
+4. Flush the temporary file and verify its size.
+5. Prove that the complete pre-existing byte prefix and JBRD hash are unchanged.
+6. Hash XMP through the same open descriptor used for copying, then verify the
+   final `xml ` payload against that hash.
+7. Recheck the live source identity and BLAKE3 to reject concurrent edits.
+8. Atomically rename, then flush the committed file and parent directory.
+9. Re-prove exact JPEG reconstruction or the original non-JBRD classification.
+
+Session audit events link the transaction without storing media content:
+
+- `MFB-JXL-001`: overlay UUID/schema, original container/JBRD/XMP hashes,
+  overlay hash, final container hash, MFB version, and timestamp.
+- `MFB-JXL-002`: final container/JBRD hash plus exact reconstructed-JPEG hash,
+  or the explicit non-JBRD classification proof.
+
+A crash may leave only a hidden, uniquely named `.tmp` recovery artifact; its
+suffix cannot be rediscovered as media by JXL scans, and it cannot expose a
+partially written final JXL. No source deletion is authorized by an unfinished
+overlay transaction.
+
+## Overlay lifecycle and parser bounds
+
+The overlay chain is deterministic: an overlay UUID is derived from the prior
+container/XMP hash, new overlay hash, and final container hash. Reapplying the
+same latest XML is a no-op. A different XML becomes a new append-only version,
+so historical bytes remain auditable; a container with 64 XML boxes refuses a
+further overlay instead of growing without bound.
+
+Sidecars must be regular non-symlink files and one complete XML document. The
+parser rejects empty or over-100-MiB sidecars, document type declarations,
+nesting beyond 256 levels, more than one million events, malformed XML, unsafe
+container boundaries, duplicate top-level JBRD, and excessive JXL box counts.
+These are fail-closed limits, not permission to truncate metadata.
+
+## Tier 2 sidecars
+
+FastImg JXL Tier 2 admits only positively proven lossy, static WebP, JP2, JXL,
+AVIF, or codec-constrained HEIC originals. When no sidecar exists, the original
+media bytes are imported and verified unchanged.
+
+When an adjacent XMP exists, Tier 2 instead:
+
+1. validates the XMP;
+2. creates an isolated copy of the media;
+3. merges XMP into that copy (append-only for JXL);
+4. imports the enriched copy;
+5. verifies the live Photos asset UUID and enriched BLAKE3;
+6. keeps separate hashes for the on-disk source and Photos-delivered original;
+7. rechecks both the admitted source hash and sidecar hash after staging;
+8. persists the admitted sidecar hash with the Photos proof;
+9. removes the source and sidecar only while their current hashes still match.
+
+If staging, metadata merge, import, or live-library verification fails, both the
+source and sidecar remain. Tier 2 never deletes an unproved sidecar.
+
+## `restore-jpeg` input-driven behavior
+
+There is one command and no user-selected action mode:
+
+```text
+img restore-jpeg INPUT
+```
+
+For ordinary files and folders, byte-identical JPEGs are restored. Source
+cleanup remains behind the durable manifest and final hash gate;
+`--keep-source` disables cleanup. The same run atomically commits
+`.mfb_restore_jpeg_audit.tsv`: exact records get no marker, recovery-needed
+records are mirrored under `Reconstruction Blocked`, and uncertain/invalid
+records under `Needs Review`. Non-reconstructible media is never converted by
+a pixel-to-JPEG fallback and remains untouched.
+
+For a Photos library or one concrete asset path inside it, the command switches
+automatically to live-library audit. It resolves and re-queries real asset UUIDs,
+hashes the current originals, and adds references for affected assets to
+`MFB JXL Audit/Recovery Needed` or `MFB JXL Audit/Needs Review`, mirroring the
+source folder/album hierarchy. Exact-reversible assets remain unmarked. MFB does
+not rewrite media bytes or edit Photos database files directly; Photos records
+only album membership. A separate atomic BLAKE3/UUID checkpoint records verified
+membership for idempotent resume. Every CLI, interactive, and native-GUI launch
+uses this same input detector and therefore never supplies a local output tree
+to a Photos audit. Query and re-query results must contain valid, unique, exact
+UUID sets; native album mutations are bounded into 50-asset transactions and
+ambiguous duplicate folder or album names fail closed instead of selecting one.
+
+Whole-library audit is the default. `img photos-albums LIBRARY` and the AppKit
+picker expose the same live native container UUIDs. `--photos-album-id` selects
+one exact album; `--photos-folder-id` expands the native parent graph to all
+descendant album UUIDs before database filtering. The implementation does not
+compare a native folder UUID with an unrelated database folder identifier and
+does not use a display name as identity. Generated `MFB JXL Audit` containers
+are excluded from selection, and each selected scope receives an independent
+BLAKE3-derived checkpoint path.
+
+## Recovery-original collection
+
+`collect_optimized AUDITED DEST --backup BACKUP` is the only backup handoff;
+it does not add another `restore-jpeg` mode. Folder inputs re-probe every JXL
+from its magic bytes and accept a backup original only when the same relative
+directory and basename resolve to one non-JXL static payload. Photos inputs
+re-probe live assets already referenced by `MFB JXL Audit/Recovery Needed`, then
+resolve the backup by exact Photos UUID and export the original version plus an
+XMP sidecar through `osxphotos`.
+
+The collector never edits either backup or a Photos database. Missing,
+duplicate, changed, JXL-only, or escaped-path results fail closed. Every copied
+media/XMP output is BLAKE3-checked and recorded in the atomic
+`.mfb_recovery_collection.json`; the Photos export database and update mode make
+an interrupted export idempotently resumable.
+
+Single-file input uses the selected file as its overlap boundary and its parent
+only for relative output naming. Both the library default and the GUI's
+sibling-of-file output are valid, while selecting the source file itself as an
+output remains forbidden. Directory input and output roots must be fully
+disjoint in both directions.
+
+Valid pixel-only JXL, advertised-but-rejected reconstruction records, and probe
+failures are classified in the manifest and marker tree or live audit albums.
+They are not converted through pixel-to-JPEG fallback and are not deleted.
+
+## Restore manifest and delete gate
+
+Manifest V3 records safe relative paths, source-JXL hash, fresh reconstruction
+hash, committed JPEG hash, optional XMP hash, verification time, MFB/djxl
+versions, optional Photos UUID, and source-deletion state. The manifest is
+written to a unique temporary file, flushed, atomically renamed, and followed
+by a parent-directory flush.
+
+Deletion order is non-negotiable:
+
+1. exact reconstruction succeeds;
+2. committed JPEG is a non-empty true JPEG;
+3. fresh reconstruction and committed JPEG hashes match;
+4. optional XMP sidecar is valid and hash-matched;
+5. manifest with `source_deleted=false` is durably committed;
+6. the current source/output hashes still match the proof;
+7. source JXL and its matching XMP are removed;
+8. manifest is durably updated to `source_deleted=true`.
+
+Any failed or ambiguous gate retains the source. A verifier treats a manifest,
+filesystem, or Photos-state disagreement as an integrity warning rather than a
+successful migration.
+
+Reconstruction caches, when introduced for performance, are never authoritative
+for deletion. The final delete gate always performs a fresh hash and state proof.

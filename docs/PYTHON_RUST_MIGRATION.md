@@ -90,6 +90,16 @@ The top-level Python allowlist is finite and training-specific:
 Only the three release-worker files named above are copied into release
 archives. The rest remain source-only training implementation.
 
+The 2026-08-24 caller audit confirmed that these are not stale duplicates:
+`run_training.py` owns batch execution, `training_pipeline.py` owns the
+interactive/database-manager training workflow, and `start_training_four.py`
+is the explicit four-family launcher. Merging them would mix distinct lifecycle
+boundaries without deleting Python-native work. `mfb_ui_tokens.py` remains the
+shared `NO_COLOR`/symbol contract imported by the first two scripts, so deleting
+it would reintroduce duplicated UI policy. Conversely, the uncalled macOS
+`src-macos/build.sh` was deleted because Rust `smart_build --gui` already owns
+the complete compile, resource, validation, signing, and bundle flow.
+
 ## Removal gate
 
 A future Python-to-Rust replacement is complete only when all of these are

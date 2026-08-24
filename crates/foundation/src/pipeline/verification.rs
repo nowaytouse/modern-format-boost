@@ -41,6 +41,9 @@ pub struct LibraryAssetRecord {
     /// Photos library BLAKE3 when import rewrote container bytes but pixel proof passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_blake3: Option<String>,
+    /// Adjacent XMP BLAKE3 proven inside the Photos-delivered original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp_sidecar_blake3: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1137,6 +1140,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "b.AVIF".to_string(),
@@ -1145,6 +1149,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
             ],
         );
@@ -1636,6 +1641,7 @@ mod tests {
                 quarantined: false,
                 photos_uuid: None,
                 library_blake3: None,
+                xmp_sidecar_blake3: None,
             }],
         );
         ctx.blake3_log.insert(
@@ -1670,6 +1676,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
@@ -1678,6 +1685,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
             ],
         );
@@ -1723,6 +1731,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
@@ -1731,6 +1740,7 @@ mod tests {
                     quarantined: false,
                     photos_uuid: None,
                     library_blake3: None,
+                    xmp_sidecar_blake3: None,
                 },
             ],
         );

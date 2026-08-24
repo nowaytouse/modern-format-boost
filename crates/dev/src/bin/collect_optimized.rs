@@ -40,7 +40,7 @@ const FFPROBE_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Parser, Debug)]
 #[command(
     name = "collect_optimized",
-    about = "Move optimized media (JXL + HEVC) into a mirrored destination tree"
+    about = "Move optimized media, or collect only audited recovery originals from a backup"
 )]
 struct Args {
     /// Source directory to scan
@@ -48,6 +48,10 @@ struct Args {
 
     /// Target directory to move files into
     destination: PathBuf,
+
+    /// Collect only non-reconstructible JXL originals from this folder/Photos backup
+    #[arg(long, value_name = "PATH")]
+    backup: Option<PathBuf>,
 
     /// Preview directory mirroring and moves without making changes
     #[arg(long)]
@@ -701,6 +705,48 @@ fn main() -> Result<()> {
     } else {
         args.destination.clone()
     };
+
+    if let Some(backup) = args.backup.as_deref() {
+        let backup = backup
+            .canonicalize()
+            .with_context(|| format!("resolve backup path: {}", backup.display()))?;
+        if !args.dry_run && !args.yes {
+            print!(
+                "Collect only live non-reconstructible JXL originals from {} into {}? [y/N]: ",
+                backup.display(),
+                dest.display()
+            );
+            flush_stdout();
+            let mut answer = String::new();
+            read_stdin_line(&mut answer);
+            if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                println!("Cancelled. No files were copied.");
+                return Ok(());
+            }
+        }
+        let summary = dev::infra::recovery_collection::run_recovery_collection(
+            &src,
+            &backup,
+            &dest,
+            args.dry_run,
+        )?;
+        println!("\nRecovery collection summary");
+        println!("  affected JXL assets: {}", summary.selected);
+        println!("  copied files:        {}", summary.copied);
+        println!("  already verified:    {}", summary.skipped);
+        println!("  needs review:        {}", summary.needs_review);
+        println!("  failures:            {}", summary.failed.len());
+        if let Some(manifest) = &summary.manifest {
+            println!("  proof manifest:      {}", manifest.display());
+        }
+        for failure in summary.failed.iter().take(PROBE_FAILURE_PREVIEW) {
+            eprintln!("  [FAIL] {failure}");
+        }
+        if !summary.succeeded() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let ok = run_collection(&src, &dest, args.dry_run, args.yes)?;
     if !ok {

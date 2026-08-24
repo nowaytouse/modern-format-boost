@@ -121,17 +121,32 @@ pub fn pty_available() -> bool {
 
 fn strip_ansi_escapes(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
+    let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch == '\x1B' && chars.clone().next() == Some('[') {
-            chars.next();
-            for c in chars.by_ref() {
-                if ('@'..='~').contains(&c) {
-                    break;
+        if ch != '\x1B' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
                 }
             }
-        } else {
-            out.push(ch);
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1B' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            Some(_) | None => {}
         }
     }
     out
@@ -333,7 +348,7 @@ where
         push_line(&mut log_buffer, &final_line, &mut stats, &mut emit_line);
     }
     for line in output_tail.lines() {
-        ingest_stats_line(&mut stats, line);
+        ingest_stats_line(&mut stats, &strip_ansi_escapes(line));
     }
 
     let status = child.wait().context("wait for pty child")?;
@@ -410,6 +425,19 @@ mod tests {
         assert_eq!(stats.skipped, 2);
         assert_eq!(stats.ignored, 3);
         assert_eq!(stats.failed, 1);
+    }
+
+    #[test]
+    fn test_push_line_strips_terminal_title_and_color_sequences_before_stats() {
+        let mut stats = ProcessorStats::default();
+        let mut buffer = String::new();
+        push_line(
+            &mut buffer,
+            "\x1b]0;00s\x07\x1b[33mSkipped: 2\x1b[0m",
+            &mut stats,
+            &mut |_| {},
+        );
+        assert_eq!(stats.skipped, 2);
     }
 
     #[test]

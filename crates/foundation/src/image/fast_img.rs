@@ -644,16 +644,54 @@ fn delete_matching_xmp_sidecar_path(
     Ok(true)
 }
 
-/// Delete a tier-2 lossy modern static source after Photos import proof passes.
-///
-/// Gates (all atomic — abort without deletion if any fail):
-/// 1. Photos library BLAKE3 matches the claimed source hash.
-/// 2. Source exists on disk + size > 0.
-/// 3. Current source BLAKE3 matches the claimed hash.
-///
-/// # Errors
-/// Returns an error (source preserved) if any gate fails.
-pub fn safe_delete_modern_lossy_static_source(
+fn verified_tier2_sidecar_for_cleanup(
+    source: &Path,
+    expected_hash: Option<&str>,
+    allow_proven_absent: bool,
+) -> Result<Option<std::path::PathBuf>> {
+    let matching = crate::metadata::find_xmp_sidecar(source);
+    match (expected_hash, matching) {
+        (Some(expected), Some(sidecar)) => {
+            let metadata = std::fs::symlink_metadata(&sidecar).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "delete-gate 4 FAIL: cannot inspect XMP sidecar {}: {error}",
+                    sidecar.display()
+                ))
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "delete-gate 4 FAIL: XMP sidecar is not a regular non-symlink file: {}",
+                    sidecar.display()
+                )));
+            }
+            let actual = crate::common_utils::calculate_blake3_hash(&sidecar).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "delete-gate 4 FAIL: XMP sidecar hash failed for {}: {error}",
+                    sidecar.display()
+                ))
+            })?;
+            if actual != expected {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "delete-gate 4 FAIL: XMP sidecar changed after Photos delivery: {}",
+                    sidecar.display()
+                )));
+            }
+            Ok(Some(sidecar))
+        }
+        (Some(_), None) if allow_proven_absent => Ok(None),
+        (Some(_), None) => Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 4 FAIL: proven XMP sidecar disappeared before cleanup for {}",
+            source.display()
+        ))),
+        (None, Some(sidecar)) => Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 4 FAIL: unproved XMP sidecar appeared after Photos delivery: {}",
+            sidecar.display()
+        ))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn safe_delete_modern_lossy_static_source_after_reverify(
     source: &Path,
     import_proof: &crate::pipeline::verification::LibraryAssetRecord,
 ) -> Result<()> {
@@ -661,6 +699,26 @@ pub fn safe_delete_modern_lossy_static_source(
     use crate::io_utils::safe_remove_file;
 
     let claimed_blake3 = import_proof.blake3.as_str();
+    let photos_uuid = import_proof
+        .photos_uuid
+        .as_deref()
+        .filter(|uuid| !uuid.trim().is_empty())
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError(format!(
+                "delete-gate 1 FAIL: Photos import proof has no live asset UUID for {}",
+                source.display()
+            ))
+        })?;
+    if import_proof.xmp_sidecar_blake3.is_some() && import_proof.library_blake3.is_none() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 1 FAIL: sidecar-enriched delivery has no Photos content hash for {}",
+            source.display()
+        )));
+    }
+    let library_blake3 = import_proof
+        .library_blake3
+        .as_deref()
+        .unwrap_or(claimed_blake3);
     if import_proof.quarantined {
         return Err(ImgQualityError::AnalysisError(format!(
             "delete-gate 1 FAIL: Photos import proof for {} is quarantined",
@@ -670,9 +728,10 @@ pub fn safe_delete_modern_lossy_static_source(
     tracing::info!(
         target: "fast_img_delete",
         source = %source.display(),
-        library_blake3 = %claimed_blake3,
-        photos_uuid = import_proof.photos_uuid.as_deref().unwrap_or("<missing>"),
-        "delete-gate 1: Photos import BLAKE3 proof confirmed"
+        source_blake3 = %claimed_blake3,
+        library_blake3 = %library_blake3,
+        photos_uuid,
+        "delete-gate 1: Photos original and optional sidecar-enriched delivery proofs confirmed"
     );
 
     if !source.exists() {
@@ -681,12 +740,18 @@ pub fn safe_delete_modern_lossy_static_source(
             source.display()
         )));
     }
-    let meta = std::fs::metadata(source).map_err(|e| {
+    let meta = std::fs::symlink_metadata(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "delete-gate 2 FAIL: cannot stat source {}: {e}",
             source.display()
         ))
     })?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "delete-gate 2 FAIL: source is not a regular non-symlink file: {}",
+            source.display()
+        )));
+    }
     if meta.len() == 0 {
         return Err(ImgQualityError::AnalysisError(format!(
             "delete-gate 2 FAIL: source is empty: {}",
@@ -710,6 +775,12 @@ pub fn safe_delete_modern_lossy_static_source(
         ));
     }
 
+    let matching_xmp_sidecar = verified_tier2_sidecar_for_cleanup(
+        source,
+        import_proof.xmp_sidecar_blake3.as_deref(),
+        false,
+    )?;
+
     tracing::info!(
         target: "fast_img_delete",
         source = %source.display(),
@@ -717,7 +788,6 @@ pub fn safe_delete_modern_lossy_static_source(
         "delete-gate PASS: removing tier-2 lossy modern static source"
     );
 
-    let matching_xmp_sidecar = crate::metadata::find_xmp_sidecar(source);
     safe_remove_file(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "delete failed for tier-2 source {} (Photos custody preserved): {e}",
@@ -817,6 +887,27 @@ pub fn reverify_modern_lossy_static_photos_custody(
     Ok(())
 }
 
+/// Delete one tier-2 lossy modern static source after a fresh Photos query.
+///
+/// Gates fail closed: the live Photos UUID/content hash, local source hash, and
+/// adjacent XMP presence/hash must all match the supplied import proof. Callers
+/// deleting a batch should prefer [`delete_verified_modern_lossy_static_sources`]
+/// so the real-time Photos query is shared across the batch.
+///
+/// # Errors
+/// Returns an error and retains the source when any live or local proof fails.
+pub fn safe_delete_modern_lossy_static_source(
+    source: &Path,
+    import_proof: &crate::pipeline::verification::LibraryAssetRecord,
+) -> Result<()> {
+    let library_handle = crate::pipeline::verification::LibraryHandle {
+        imported_assets: vec![import_proof.clone()],
+        import_error_count: 0,
+    };
+    reverify_modern_lossy_static_photos_custody(&library_handle)?;
+    safe_delete_modern_lossy_static_source_after_reverify(source, import_proof)
+}
+
 fn preflight_modern_lossy_static_source_deletion(
     src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
@@ -853,15 +944,15 @@ fn preflight_modern_lossy_static_source_deletion(
         }
         let source = src_dir.join(rel);
         if source.exists() {
-            let metadata = std::fs::metadata(&source).map_err(|err| {
+            let metadata = std::fs::symlink_metadata(&source).map_err(|err| {
                 ImgQualityError::AnalysisError(format!(
                     "tier-2 source delete preflight cannot stat {}: {err}",
                     source.display()
                 ))
             })?;
-            if !metadata.is_file() || metadata.len() == 0 {
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
                 return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 source delete preflight requires a non-empty file: {}",
+                    "tier-2 source delete preflight requires a non-empty regular non-symlink file: {}",
                     source.display()
                 )));
             }
@@ -898,12 +989,19 @@ pub fn delete_verified_modern_lossy_static_sources(
     for asset in &library_handle.imported_assets {
         let source = src_dir.join(&asset.rel_path);
         if !source.exists() {
-            safe_delete_matching_xmp_sidecar(&source, &source).map_err(|err| {
-                ImgQualityError::AnalysisError(format!(
-                    "tier-2 delete failed to remove matching XMP sidecar for already-absent source {}: {err}",
-                    source.display()
-                ))
-            })?;
+            if let Some(sidecar) = verified_tier2_sidecar_for_cleanup(
+                &source,
+                asset.xmp_sidecar_blake3.as_deref(),
+                true,
+            )? {
+                crate::io_utils::safe_remove_file(&sidecar).map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 delete failed to remove proven XMP sidecar {} for already-absent source {}: {error}",
+                        sidecar.display(),
+                        source.display()
+                    ))
+                })?;
+            }
             already_deleted += 1;
             tracing::info!(
                 target: "fast_img_delete",
@@ -912,7 +1010,7 @@ pub fn delete_verified_modern_lossy_static_sources(
             );
             continue;
         }
-        safe_delete_modern_lossy_static_source(&source, asset).map_err(|err| {
+        safe_delete_modern_lossy_static_source_after_reverify(&source, asset).map_err(|err| {
             ImgQualityError::AnalysisError(format!(
                 "tier-2 delete failed for verified source {}: {err}",
                 source.display()
@@ -1254,8 +1352,258 @@ pub fn import_modern_lossy_static_tier(
     if candidates.is_empty() {
         return Ok(LibraryHandle::default());
     }
-    let import_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
-    import_or_reconcile_modern_lossy_static_candidates(&import_candidates)
+    let base_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
+    let staging = tempfile::tempdir().map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "tier-2 XMP delivery staging directory failed: {error}"
+        ))
+    })?;
+    let mut import_candidates = Vec::with_capacity(base_candidates.len());
+    let mut enriched_proofs = BTreeMap::new();
+    let mut metadata_failures = 0usize;
+
+    for candidate in base_candidates {
+        let Some(xmp_path) = crate::metadata::find_xmp_sidecar(&candidate.path) else {
+            import_candidates.push(candidate);
+            continue;
+        };
+        let relative = Path::new(&candidate.rel_path);
+        if relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            metadata_failures += 1;
+            tracing::error!(
+                target: "photos_import",
+                rel_path = %candidate.rel_path,
+                "tier-2 XMP delivery rejected unsafe relative path; source and sidecar retained"
+            );
+            continue;
+        }
+        let staged_path = staging.path().join(relative);
+        let prepare = (|| -> Result<(String, String)> {
+            let source_metadata = std::fs::symlink_metadata(&candidate.path).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 source stat failed for {}: {error}",
+                    candidate.rel_path
+                ))
+            })?;
+            if !source_metadata.is_file() || source_metadata.file_type().is_symlink() {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source is not a regular non-symlink file: {}",
+                    candidate.path.display()
+                )));
+            }
+            crate::metadata::validate_xmp_sidecar(&xmp_path).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP sidecar is invalid for {}: {error}",
+                    candidate.path.display()
+                ))
+            })?;
+            let source_hash_before = crate::common_utils::calculate_blake3_hash(&candidate.path)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 source hash failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            if source_hash_before != candidate.blake3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source changed after admission for {}; expected={} actual={source_hash_before}",
+                    candidate.rel_path, candidate.blake3
+                )));
+            }
+            let xmp_hash_before =
+                crate::common_utils::calculate_blake3_hash(&xmp_path).map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP sidecar hash failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            if let Some(parent) = staged_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP staging directory failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            }
+            let copied = std::fs::copy(&candidate.path, &staged_path).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP staging copy failed for {}: {error}",
+                    candidate.rel_path
+                ))
+            })?;
+            let source_len = std::fs::metadata(&candidate.path)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP source stat failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?
+                .len();
+            if copied != source_len {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP staging copy length mismatch for {}: source={source_len} copied={copied}",
+                    candidate.rel_path
+                )));
+            }
+            let staged_source_hash = crate::common_utils::calculate_blake3_hash(&staged_path)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 staged source hash failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            if staged_source_hash != source_hash_before {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source changed while it was copied for {}; source and sidecar retained",
+                    candidate.rel_path
+                )));
+            }
+            crate::XmpMerger::new(crate::XmpMergerConfig::default())
+                .merge_xmp(&xmp_path, &staged_path)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP merge failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            let metadata_report =
+                crate::metadata::preserve_filesystem_for_delivery(&candidate.path, &staged_path)
+                    .map_err(|error| {
+                        ImgQualityError::AnalysisError(format!(
+                            "tier-2 XMP filesystem metadata delivery failed for {}: {error}",
+                            candidate.rel_path
+                        ))
+                    })?;
+            if matches!(
+                metadata_report.xattr,
+                crate::metadata::MetadataLayerOutcome::PartialAudit
+            ) || matches!(
+                metadata_report.timestamps,
+                crate::metadata::MetadataLayerOutcome::PartialAudit
+            ) {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP filesystem metadata delivery was only partially verified for {}",
+                    candidate.rel_path
+                )));
+            }
+            crate::io_utils::sync_committed_file_and_parent(&staged_path).map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP staged delivery flush failed for {}: {error}",
+                    candidate.rel_path
+                ))
+            })?;
+            let delivery_hash =
+                crate::common_utils::calculate_blake3_hash(&staged_path).map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP staged delivery hash failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            let source_hash_after = crate::common_utils::calculate_blake3_hash(&candidate.path)
+                .map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 source recheck failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            let xmp_hash_after =
+                crate::common_utils::calculate_blake3_hash(&xmp_path).map_err(|error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 XMP sidecar recheck failed for {}: {error}",
+                        candidate.rel_path
+                    ))
+                })?;
+            if source_hash_after != source_hash_before || xmp_hash_after != xmp_hash_before {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 source or XMP changed concurrently while staging {}; both retained",
+                    candidate.rel_path
+                )));
+            }
+            Ok((delivery_hash, xmp_hash_before))
+        })();
+
+        match prepare {
+            Ok((delivery_hash, xmp_hash)) => {
+                enriched_proofs.insert(
+                    candidate.rel_path.clone(),
+                    (candidate.blake3.clone(), delivery_hash.clone(), xmp_hash),
+                );
+                import_candidates.push(PhotosImportCandidate {
+                    path: staged_path,
+                    blake3: delivery_hash,
+                    ..candidate
+                });
+            }
+            Err(error) => {
+                metadata_failures += 1;
+                tracing::error!(
+                    target: "photos_import",
+                    rel_path = %candidate.rel_path,
+                    error = %error,
+                    "tier-2 XMP delivery failed; source and sidecar retained"
+                );
+            }
+        }
+    }
+
+    let mut handle = import_or_reconcile_modern_lossy_static_candidates(&import_candidates)?;
+    apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
+    handle.import_error_count = handle
+        .import_error_count
+        .checked_add(metadata_failures)
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "tier-2 metadata failure count overflowed usize".to_string(),
+            )
+        })?;
+    Ok(handle)
+}
+
+fn apply_tier2_enriched_delivery_proofs(
+    handle: &mut LibraryHandle,
+    enriched_proofs: &BTreeMap<String, (String, String, String)>,
+) -> Result<()> {
+    for asset in &mut handle.imported_assets {
+        let Some((source_hash, delivery_hash, xmp_hash)) = enriched_proofs.get(&asset.rel_path)
+        else {
+            continue;
+        };
+        if asset.blake3 != *delivery_hash {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 XMP Photos proof drift for {}: expected={delivery_hash} actual={}",
+                asset.rel_path, asset.blake3
+            )));
+        }
+        asset.library_blake3 = Some(delivery_hash.clone());
+        asset.xmp_sidecar_blake3 = Some(xmp_hash.clone());
+        asset.blake3.clone_from(source_hash);
+        tracing::info!(
+            target: "photos_import",
+            event_id = "MFB-XMP-002",
+            rel_path = %asset.rel_path,
+            source_blake3 = %source_hash,
+            xmp_blake3 = %xmp_hash,
+            photos_delivery_blake3 = %delivery_hash,
+            photos_uuid = asset.photos_uuid.as_deref().unwrap_or("<missing>"),
+            "tier-2 sidecar metadata delivered inside the verified Photos original"
+        );
+    }
+    Ok(())
+}
+
+/// Import or reconcile an explicit set of already-verified media candidates.
+///
+/// This is used by migration workflows that must be restart-safe: a matching
+/// live Photos asset is reused only after its UUID and content hash are proved;
+/// otherwise the candidate is imported and verified through the same bounded
+/// per-item recovery path as FastImg Tier 2.
+pub fn import_or_reconcile_verified_media_candidates(
+    candidates: &[PhotosImportCandidate],
+) -> Result<LibraryHandle> {
+    import_or_reconcile_modern_lossy_static_candidates(candidates)
 }
 
 fn import_or_reconcile_modern_lossy_static_candidates(
@@ -2462,6 +2810,7 @@ where
             quarantined: is_quarantined(&entry.path)?,
             photos_uuid: Some(verified_probe.probe.uuid.clone()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         });
     }
     records.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -4014,6 +4363,7 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
             quarantined,
             photos_uuid: Some(probe.uuid.clone()),
             library_blake3: final_library_blake3,
+            xmp_sidecar_blake3: None,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -4093,6 +4443,7 @@ fn library_handle_from_batch_probes(
             quarantined,
             photos_uuid: Some(target.osxphotos_uuid.clone()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         });
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -5065,6 +5416,42 @@ mod tests {
     }
 
     #[test]
+    fn tier2_sidecar_proof_keeps_source_and_photos_hashes_distinct() {
+        let mut handle = LibraryHandle {
+            imported_assets: vec![LibraryAssetRecord {
+                rel_path: "album/photo.jxl".to_string(),
+                blake3: "enriched-delivery".to_string(),
+                sync_status: "local".to_string(),
+                quarantined: false,
+                photos_uuid: Some("uuid-1".to_string()),
+                library_blake3: None,
+                xmp_sidecar_blake3: None,
+            }],
+            import_error_count: 0,
+        };
+        let proofs = BTreeMap::from([(
+            "album/photo.jxl".to_string(),
+            (
+                "original-source".to_string(),
+                "enriched-delivery".to_string(),
+                "xmp-sidecar".to_string(),
+            ),
+        )]);
+
+        apply_tier2_enriched_delivery_proofs(&mut handle, &proofs).unwrap();
+
+        assert_eq!(handle.imported_assets[0].blake3, "original-source");
+        assert_eq!(
+            handle.imported_assets[0].library_blake3.as_deref(),
+            Some("enriched-delivery")
+        );
+        assert_eq!(
+            handle.imported_assets[0].xmp_sidecar_blake3.as_deref(),
+            Some("xmp-sidecar")
+        );
+    }
+
+    #[test]
     fn jpeg_magic_detector_accepts_minimal_jfif() {
         use crate::image::format_detect::{FormatKind, detect_true_format};
 
@@ -5536,6 +5923,7 @@ mod tests {
             quarantined: false,
             photos_uuid: Some(uuid.to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
         apply_tier2_library_assets_to_marker(
             &mut marker,
@@ -6159,6 +6547,7 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         });
         marker.blake3_log.insert(
             "b.jpg".to_string(),
@@ -6274,6 +6663,7 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         });
         let mut is_quarantined = |_path: &Path| Ok(false);
         let plan = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?;
@@ -6309,6 +6699,7 @@ mod tests {
             quarantined: false,
             photos_uuid: None,
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
         assert!(
             photos_import_report_pairs_from_persisted_assets(std::slice::from_ref(&asset)).is_err()
@@ -7584,8 +7975,10 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
-        let err = safe_delete_modern_lossy_static_source(&missing, &proof).unwrap_err();
+        let err =
+            safe_delete_modern_lossy_static_source_after_reverify(&missing, &proof).unwrap_err();
         assert!(
             err.to_string().contains("does not exist"),
             "unexpected: {err}"
@@ -7603,6 +7996,7 @@ mod tests {
                 quarantined: false,
                 photos_uuid: Some("uuid".to_string()),
                 library_blake3: None,
+                xmp_sidecar_blake3: None,
             }],
             import_error_count: 0,
         };
@@ -7621,8 +8015,10 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
-        let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
+        let err =
+            safe_delete_modern_lossy_static_source_after_reverify(src.path(), &proof).unwrap_err();
         assert!(err.to_string().contains("empty"), "unexpected: {err}");
     }
 
@@ -7637,13 +8033,72 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
-        let err = safe_delete_modern_lossy_static_source(src.path(), &proof).unwrap_err();
+        let err =
+            safe_delete_modern_lossy_static_source_after_reverify(src.path(), &proof).unwrap_err();
         assert!(
             err.to_string().contains("stale or forged"),
             "unexpected: {err}"
         );
         assert!(src.path().exists());
+    }
+
+    #[test]
+    fn tier2_delete_gate_rejects_unproved_or_changed_xmp_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("photo.webp");
+        let sidecar = temp.path().join("photo.xmp");
+        std::fs::write(&source, b"lossy-webp-bytes").unwrap();
+        std::fs::write(&sidecar, b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>").unwrap();
+        let mut proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: crate::common_utils::calculate_blake3_hash(&source).unwrap(),
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+            library_blake3: None,
+            xmp_sidecar_blake3: None,
+        };
+
+        let error = safe_delete_modern_lossy_static_source_after_reverify(&source, &proof)
+            .expect_err("a sidecar created after import must block source cleanup");
+        assert!(error.to_string().contains("unproved XMP sidecar"));
+        proof.xmp_sidecar_blake3 =
+            Some(crate::common_utils::calculate_blake3_hash(&sidecar).unwrap());
+        proof.library_blake3 = Some("verified-photos-delivery".to_string());
+        std::fs::write(
+            &sidecar,
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><changed/></x:xmpmeta>",
+        )
+        .unwrap();
+        let error = safe_delete_modern_lossy_static_source_after_reverify(&source, &proof)
+            .expect_err("a sidecar changed after import must block source cleanup");
+        assert!(error.to_string().contains("changed after Photos delivery"));
+        assert!(source.exists());
+        assert!(sidecar.exists());
+    }
+
+    #[test]
+    fn tier2_delete_gate_removes_source_and_proven_sidecar_when_all_pass() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("photo.webp");
+        let sidecar = temp.path().join("photo.xmp");
+        std::fs::write(&source, b"lossy-webp-bytes").unwrap();
+        std::fs::write(&sidecar, b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>").unwrap();
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".to_string(),
+            blake3: crate::common_utils::calculate_blake3_hash(&source).unwrap(),
+            sync_status: "uploaded".to_string(),
+            quarantined: false,
+            photos_uuid: Some("uuid".to_string()),
+            library_blake3: Some("verified-photos-delivery".to_string()),
+            xmp_sidecar_blake3: Some(crate::common_utils::calculate_blake3_hash(&sidecar).unwrap()),
+        };
+
+        safe_delete_modern_lossy_static_source_after_reverify(&source, &proof).unwrap();
+        assert!(!source.exists());
+        assert!(!sidecar.exists());
     }
 
     #[test]
@@ -7659,8 +8114,9 @@ mod tests {
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            xmp_sidecar_blake3: None,
         };
-        safe_delete_modern_lossy_static_source(&src_path, &proof).unwrap();
+        safe_delete_modern_lossy_static_source_after_reverify(&src_path, &proof).unwrap();
         assert!(!src_path.exists());
     }
 

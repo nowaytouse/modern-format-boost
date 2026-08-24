@@ -7,7 +7,7 @@
 
 **以证据驱动媒体焕新：保留源语义、核验最终交付、无法证明时失败关闭。**
 
-[English](../README.md) · [简体中文](README_ZH.md) · [繁體中文](README_ZH_TW.md) · [日本語](README_JA.md) · [한국어](README_KO.md) · [Español](README_ES.md) · [Français](README_FR.md) · [Português](README_PT.md) · [Русский](README_RU.md) · [العربية](README_AR.md)
+[English](../README.md) · [简体中文](README_ZH.md)
 
 ## 什么是 Modern Format Boost？
 
@@ -32,6 +32,7 @@
 
 - 只有通过对应路径的解码、质量、元数据与完整性闸门，候选文件才会交付。受大小约束的路径比较的是编码媒体载荷；找不到符合策略的候选时，保留源文件并明确跳过或失败。
 - JPEG→JXL 在所有元数据处理完成后仍必须通过 `djxl --reconstruct_jpeg` 逐字节重建。JBRD、原始 Exif/XMP 与编码数据会被冻结；外部 XMP 以可重复执行且不改写原始层的 overlay 追加，并再次核验精确重建。`restore-jpeg` 不再改写重建出的 JPEG；额外 XMP 会作为单独哈希核验的同名 `.xmp` 侧车交付，因为嵌入它就不可能同时保持原 JPEG 字节完全一致。
+- Overlay 采用同目录唯一临时文件、源身份/哈希复核、原子替换与文件/父目录刷盘；版本化审计链记录 JBRD、overlay、最终容器与重建哈希但不记录媒体内容。完整规则见 [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)。
 - 项目不是“魔法缩容器”。完整文件可能因容器与元数据而更大，高质量候选也可能没有任何空间收益。
 - 探索以时间换取更精确的候选：目标是在有效质量/大小策略内寻找最高质量点，而不是无条件得到最小文件。输入越多、越复杂、差异越大，耗时越高；`--ultimate` 会主动扩大搜索成本。
 
@@ -368,6 +369,24 @@ cargo build --release
 # 静图 → JXL（目录内动图会被忽略）
 img run /path/to/media
 
+# FastImg JXL 与 AVIF Meme Mode
+img fast-img --strategy jxl /path/to/media
+img fast-img --strategy avif /path/to/media
+
+# 自动精确恢复 JPEG，并隔离历史版本产生的不可逆 JXL
+img restore-jpeg /path/to/archive
+
+# macOS 下选择照片图库会自动核验实时资产
+img restore-jpeg /path/to/Library.photoslibrary
+
+# 列出实时用户文件夹/相册，并使用原生 UUID 精确限定同一审计流程
+img photos-albums /path/to/Library.photoslibrary
+img restore-jpeg /path/to/Library.photoslibrary --photos-album-id ALBUM_UUID
+img restore-jpeg /path/to/Library.photoslibrary --photos-folder-id FOLDER_UUID
+
+# 实时复核受影响 JXL，仅从备份收集对应原件与 XMP
+collect_optimized /path/to/audited /path/to/recovered --backup /path/to/backup --yes
+
 # 视频 + 动图（HEVC 默认）
 vid run /path/to/media
 
@@ -394,6 +413,8 @@ vid strategy --codec hevc /path/to/video.mp4
 - `--verbose`：显示详细的处理日志。
 - `--no-recursive`：不进入子目录。
 - `--force-video`：强制将动画图像视为视频，不考虑循环意图 (Loop Intent)。
+- `img restore-jpeg INPUT` 不再要求用户选择行为模式。普通文件或文件夹会逐字节恢复所有精确可逆 JPEG 与已核验 XMP；需要从备份恢复或无法判定的 JXL 保持原样，并按原目录生成 `Reconstruction Blocked` / `Needs Review` 标记。选择照片图库（或图库包内的一个具体资产路径）时会自动实时核验 UUID：精确可逆资产不作标记，受影响的现有资产以引用方式加入保留原文件夹/相册层级的 `MFB JXL Audit` 相册。MFB 不改写媒体字节，也不直接编辑 Photos 数据库文件；仅由 Photos 记录相册成员关系。外部 BLAKE3/UUID 检查点用于可恢复、幂等重跑。原生 AppKit GUI 会在选中图库后显示实时文件夹/相册选择器；CLI 通过 `img photos-albums` 提供相同 UUID。相册范围精确匹配，文件夹范围按 Photos 原生层级展开其全部后代相册，不按显示名称猜测，也不混用不兼容的数据库文件夹标识。
+- `collect_optimized AUDITED DEST --backup BACKUP` 负责后续原件收集，并会再次读取当前 JXL 内容，不盲信旧标记。普通备份文件夹只接受相同相对目录、相同文件名主干且内容识别为静态图片的唯一原件；备份图库只接受相同 Photos UUID。流程仅复制/导出真正受影响的原件与 XMP，不修改备份或 Photos 数据库；缺失、歧义、格式不符都会显式失败。成功或部分成功状态写入带逐文件 BLAKE3 的 `.mfb_recovery_collection.json`，可安全重跑。原生 GUI 中对应“收集恢复原件”。
 
 ### 高级子命令
 
@@ -434,6 +455,7 @@ Modern Format Boost 使用分层质量门控降低回归与静默损坏风险；
 | 媒体转换交付 (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
 | 算法 / 推理门控       | [`ALGORITHM_LAYER_CONTRACT.md`](hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                    |
 | 原生 macOS UI         | [`UI_LAYER_CONTRACT.md`](hardening/UI_LAYER_CONTRACT.md)                                                                                                                  |
+| JXL/XMP 归档与 JPEG 恢复 | [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                    |
 | 日志 / 会话           | [`LOGGING_LAYER_CONTRACT.md`](hardening/LOGGING_LAYER_CONTRACT.md) · [`LOGGING_LAYOUT.md`](hardening/LOGGING_LAYOUT.md)                                                   |
 | 数据库                | [`DATABASE_LAYER_CONTRACT.md`](hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                      |
 
@@ -471,10 +493,13 @@ macOS 14+ / iOS 17+、Chrome 91+ 和 Firefox 128+ 已提供原生支持。然而
 `img run` 是覆盖面更广的静图优化器：默认使用本地精确检测，也可显式启用数据库质量启发式，并拥有 HDR、精度、颜色与异常格式迂回路径。FastImg 是边界更窄的持久交付工作流：JXL 主层只接受可逐字节重建的真实 JPEG，Tier 2 只托管已被正向证明为有损的现代静图；AVIF Meme Mode 则对已整理的表情包执行有界质量/大小搜索。两者复用底层安全闸门，但候选选择、搜索预算、状态恢复和 Photos 策略并不相同。
 
 **5. FastImg Tier 2 能否精确判断现代静图的有损/无损？**
-只有存在格式级正向证据时才会判为有损并准入。WebP、JP2、AVIF、HEIC/HEIF 与 JXL 各自使用结构化解析和权威工具证据；`Unknown`、无损、动画、损坏容器和带 JPEG 重建数据的 JXL 都会失败关闭并保留原件。这里的“精确”指不会靠扩展名或猜测把不确定媒体当成有损，并不声称每一种编码都能从容器头证明其量化语义。
+只有存在格式级正向证据时才会判为有损并准入。WebP、JP2、AVIF、HEIC/HEIF 与 JXL 各自使用结构化解析和权威工具证据；`Unknown`、无损、动画、损坏容器和带 JPEG 重建数据的 JXL 都会失败关闭并保留原件。这里的“精确”指不会靠扩展名或猜测把不确定媒体当成有损，并不声称每一种编码都能从容器头证明其量化语义。若存在合法相邻 XMP，Tier 2 会在隔离副本中合并后交给 Photos，并分别核验 Photos 中的增强交付哈希、磁盘源文件哈希与侧车哈希；没有侧车本身是合法状态，不会阻塞导入。
 
 **6. `restore-jpeg` 会改变原始 JPEG 吗？**
 不会。它只接受 `djxl --reconstruct_jpeg` 能逐字节恢复的 JXL，重建 JPEG 后不会再用元数据工具改写该文件。JXL 内追加的 XMP overlay 会作为同名 `.xmp` 侧车单独校验、哈希和提交；删除源 JXL 前，JPEG 与 XMP（如有）的最终哈希都会再次核对。若要求单一“已嵌入新 XMP”的 JPEG，它必然不是原 JPEG 的逐字节副本，因此项目把“精确 JPEG + 已核验 XMP”作为一对交付物。
+
+**7. `restore-jpeg` 还需要选择模式吗？**
+不需要，输入位置会自动决定安全行为。普通文件或文件夹恢复逐字节一致的 JPEG，且只有 Manifest V3 删除闸门完整通过才可能清理精确可逆源；像素级 JXL 或被官方工具拒绝重建的项会生成备份恢复标记，不可读或身份无法证明的项会生成复核标记，标记树保留相对目录结构。选择照片图库时改为实时 UUID 审计：精确可逆资产不作标记，受影响资产仅以引用方式加入保留原层级的 `MFB JXL Audit` 相册。默认审计整库；GUI 或 `img photos-albums` 可按原生 UUID 选择一个相册或文件夹，文件夹会覆盖其后代相册。
 
 ---
 
