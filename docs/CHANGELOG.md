@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file.
 
 - **Exact recovery-original collector**: The existing Rust collector now has a
   backup handoff that re-probes live non-reconstructible JXLs and extracts only
-  their originals plus XMP. Folder backups use one exact relative-directory and
-  basename match after magic-byte format detection; Photos backups use exact
+  their originals plus XMP. A single JXL accepts one same-basename backup file
+  or a backup folder; folder backups use one exact relative-directory and
+  basename match after magic-byte format detection. Photos backups use exact
   audited UUIDs and read-only `osxphotos` original export. Ambiguity, missing
   UUIDs, JXL-only backups, path escape, concurrent byte changes, or absent XMP
   proof fail closed. Every delivered file receives a BLAKE3 record in the

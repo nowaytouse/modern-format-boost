@@ -693,9 +693,10 @@ working copy. State handling is explicit:
   folder scope expands through the live native hierarchy to its descendant album
   UUIDs—neither path guesses by display name or equates incompatible database IDs.
 - `collect_optimized AUDITED DEST --backup BACKUP` is the recovery handoff.
-  It re-probes current JXL bytes instead of trusting stale markers. Folder
-  backups require one content-recognized static original at the same relative
-  directory and basename; Photos backups require the exact audited UUID. It
+  It re-probes current JXL bytes instead of trusting stale markers. A single
+  audited JXL accepts either one same-basename backup file or a backup folder;
+  folder backups require one content-recognized static original at the same
+  relative directory and basename. Photos backups require the exact audited UUID. It
   copies/exports only affected originals plus XMP, never writes the backup or a
   Photos database, rejects ambiguous/missing matches, verifies byte hashes, and
   leaves `.mfb_recovery_collection.json` as the resumable BLAKE3 proof. The

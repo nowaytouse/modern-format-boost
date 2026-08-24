@@ -120,7 +120,8 @@ BLAKE3-derived checkpoint path.
 ## Recovery-original collection
 
 `collect_optimized AUDITED DEST --backup BACKUP` is the only backup handoff;
-it does not add another `restore-jpeg` mode. Folder inputs re-probe every JXL
+it does not add another `restore-jpeg` mode. A single JXL accepts one exact
+same-basename backup file or a backup folder. Folder inputs re-probe every JXL
 from its magic bytes and accept a backup original only when the same relative
 directory and basename resolve to one non-JXL static payload. Photos inputs
 re-probe live assets already referenced by `MFB JXL Audit/Recovery Needed`, then

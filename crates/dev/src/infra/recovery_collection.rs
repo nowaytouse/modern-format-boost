@@ -1,6 +1,7 @@
 //! Collect only originals proven necessary by the JXL recovery audit.
 //!
-//! Folder backups are matched by the audited relative directory and basename.
+//! Folder backups are matched by the audited relative directory and basename;
+//! a single audited JXL may use either one exact backup file or a backup folder.
 //! Photos backups are matched by the Photos UUID and exported read-only through
 //! `osxphotos`. Neither path guesses when identity is ambiguous.
 
@@ -117,6 +118,17 @@ fn checked_real_directory(path: &Path, label: &str) -> Result<PathBuf> {
         path.display()
     );
     fs::canonicalize(path).with_context(|| format!("resolve {label} directory {}", path.display()))
+}
+
+fn checked_real_input(path: &Path, label: &str) -> Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect {label} {}", path.display()))?;
+    anyhow::ensure!(
+        (metadata.is_file() || metadata.is_dir()) && !metadata.file_type().is_symlink(),
+        "{label} must be a real file or directory, not a symlink: {}",
+        path.display()
+    );
+    fs::canonicalize(path).with_context(|| format!("resolve {label} {}", path.display()))
 }
 
 fn checked_destination(path: &Path, source: &Path, backup: &Path) -> Result<PathBuf> {
@@ -356,12 +368,27 @@ fn xmp_sidecars(media: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn find_folder_backup_original(backup: &Path, relative_jxl: &Path) -> Result<PathBuf> {
-    let relative_parent = relative_jxl.parent().unwrap_or_else(|| Path::new(""));
-    let directory = backup.join(relative_parent);
     let source_stem = relative_jxl
         .file_stem()
         .and_then(|value| value.to_str())
         .context("audited JXL filename is not UTF-8")?;
+    if backup.is_file() {
+        let backup_stem = backup
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .context("backup filename is not UTF-8")?;
+        anyhow::ensure!(
+            backup_stem.eq_ignore_ascii_case(source_stem)
+                && is_static_original(detect_true_format(backup)?),
+            "backup file is not the exact non-JXL static original for {}: {}",
+            relative_jxl.display(),
+            backup.display()
+        );
+        return Ok(backup.to_path_buf());
+    }
+
+    let relative_parent = relative_jxl.parent().unwrap_or_else(|| Path::new(""));
+    let directory = backup.join(relative_parent);
     let mut matches = Vec::new();
     if directory.exists() {
         let metadata = fs::symlink_metadata(&directory)?;
@@ -447,24 +474,46 @@ fn collect_folder_recovery(
     destination: &Path,
     dry_run: bool,
 ) -> Result<RecoveryCollectionSummary> {
+    let source_is_file = source.is_file();
+    let source_root = if source_is_file {
+        source
+            .parent()
+            .context("single audited JXL has no parent directory")?
+    } else {
+        source
+    };
+    let source_kind = if source_is_file { "file" } else { "folder" };
+    let mut candidates = Vec::new();
+    if source_is_file {
+        candidates.push(source.to_path_buf());
+    } else {
+        for entry in walkdir::WalkDir::new(source).follow_links(false) {
+            let entry =
+                entry.with_context(|| format!("scan audited folder {}", source.display()))?;
+            if !entry.path_is_symlink() && entry.file_type().is_file() {
+                candidates.push(entry.into_path());
+            }
+        }
+    }
+
     let mut selected = Vec::new();
     let mut needs_review = 0_usize;
     let mut failures = Vec::new();
-    for entry in walkdir::WalkDir::new(source).follow_links(false) {
-        let entry = entry.with_context(|| format!("scan audited folder {}", source.display()))?;
-        if entry.path_is_symlink() || !entry.file_type().is_file() {
+    for path in candidates {
+        if detect_true_format(&path)? != FormatKind::Jxl {
+            anyhow::ensure!(
+                !source_is_file,
+                "single audited source is not a JXL file: {}",
+                path.display()
+            );
             continue;
         }
-        let path = entry.path();
-        if detect_true_format(path)? != FormatKind::Jxl {
-            continue;
-        }
-        match foundation::image::jxl_utils::probe_jpeg_reconstruction_eligibility(path) {
+        match foundation::image::jxl_utils::probe_jpeg_reconstruction_eligibility(&path) {
             Ok(JpegReconstructionEligibility::Exact) => {}
             Ok(
                 JpegReconstructionEligibility::PixelOnly
                 | JpegReconstructionEligibility::AdvertisedButRejected { .. },
-            ) => selected.push(path.to_path_buf()),
+            ) => selected.push(path),
             Err(error) => {
                 needs_review += 1;
                 failures.push(format!("{}: {error}", path.display()));
@@ -484,14 +533,14 @@ fn collect_folder_recovery(
             destination,
             source,
             backup,
-            "folder",
+            source_kind,
             false,
             Vec::new(),
             summary.failed.clone(),
         )?);
     }
     for source_jxl in selected {
-        let relative = source_jxl.strip_prefix(source)?;
+        let relative = source_jxl.strip_prefix(source_root)?;
         let source_hash = file_hash(&source_jxl)?;
         let original = match find_folder_backup_original(backup, relative) {
             Ok(path) => path,
@@ -520,7 +569,7 @@ fn collect_folder_recovery(
                 summary.copied += usize::from(copied);
                 summary.skipped += usize::from(!copied);
                 records.push(RecoveryManifestRecord {
-                    identity: relative_string(&source_jxl, source)?,
+                    identity: relative_string(&source_jxl, source_root)?,
                     source_jxl_blake3: source_hash.clone(),
                     output_relative_path: relative_string(&output, destination)?,
                     output_blake3: hash,
@@ -542,7 +591,7 @@ fn collect_folder_recovery(
                     summary.copied += usize::from(copied);
                     summary.skipped += usize::from(!copied);
                     records.push(RecoveryManifestRecord {
-                        identity: relative_string(&source_jxl, source)?,
+                        identity: relative_string(&source_jxl, source_root)?,
                         source_jxl_blake3: source_hash.clone(),
                         output_relative_path: relative_string(&sidecar_output, destination)?,
                         output_blake3: hash,
@@ -558,7 +607,7 @@ fn collect_folder_recovery(
             destination,
             source,
             backup,
-            "folder",
+            source_kind,
             summary.failed.is_empty(),
             records,
             summary.failed.clone(),
@@ -794,20 +843,25 @@ pub fn run_recovery_collection(
     destination: &Path,
     dry_run: bool,
 ) -> Result<RecoveryCollectionSummary> {
-    let source = checked_real_directory(source, "audited source")?;
-    let backup = checked_real_directory(backup, "backup source")?;
+    let source = checked_real_input(source, "audited source")?;
+    let backup = checked_real_input(backup, "backup source")?;
     anyhow::ensure!(source != backup, "audited source and backup must differ");
     let destination = checked_destination(destination, &source, &backup)?;
-    let source_is_photos = is_photos_library(&source);
+    let source_is_photos = source.is_dir() && is_photos_library(&source);
+    let backup_is_photos = backup.is_dir() && is_photos_library(&backup);
     anyhow::ensure!(
-        source_is_photos == is_photos_library(&backup),
-        "audited source and backup must both be folders or both be Photos libraries"
+        source_is_photos == backup_is_photos,
+        "audited source and backup must both be filesystem items or both be Photos libraries"
     );
     if source_is_photos {
         println!("[RECOVERY] exact Photos UUID collection");
         collect_photos_recovery(&source, &backup, &destination, dry_run)
     } else {
-        println!("[RECOVERY] exact relative-path folder collection");
+        anyhow::ensure!(
+            source.is_file() || backup.is_dir(),
+            "an audited folder requires a backup folder; a backup file is valid only for one audited JXL"
+        );
+        println!("[RECOVERY] exact filesystem collection");
         collect_folder_recovery(&source, &backup, &destination, dry_run)
     }
 }
@@ -828,6 +882,8 @@ mod tests {
             found.file_name().and_then(|name| name.to_str()),
             Some("photo.jpg")
         );
+        let single = find_folder_backup_original(&dir.join("photo.jpg"), Path::new("photo.jxl"))?;
+        assert_eq!(single, dir.join("photo.jpg"));
 
         fs::write(
             dir.join("photo.jpeg"),
