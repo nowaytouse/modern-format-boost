@@ -45,8 +45,9 @@ fn run_jxl_reconstruction_probe(
     .map_err(|error| format!("{context} failed: {error}"))
 }
 
-/// Classify exact JPEG reconstruction without ever enabling pixel-to-JPEG
-/// fallback. A strict reconstruction rejection is only considered a safe
+/// Classify exact JPEG reconstruction without enabling pixel-to-JPEG fallback.
+///
+/// A strict reconstruction rejection is only considered a safe
 /// retained skip after an independent pixel decode proves the JXL itself is
 /// healthy.
 ///

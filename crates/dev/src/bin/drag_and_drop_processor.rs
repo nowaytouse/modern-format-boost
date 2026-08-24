@@ -2336,7 +2336,7 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
             ),
             (
                 "Tool: Merge XMP Attachments [Tab to Switch]",
-                "Embed XMP sidecars into source media files safely.",
+                "Merge XMP safely; JXL freezes JBRD boxes and appends a verified overlay.",
             ),
             (
                 "Tool: iCloud Photo Import [Tab to Switch]",

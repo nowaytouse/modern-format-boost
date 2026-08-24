@@ -6266,8 +6266,9 @@ fn delivery_metadata_contract_artifacts_locked() {
     ))
     .expect("xmp_merger.rs readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     for sym in [
-        "should_jxl_xmp_apple_nuclear_strip",
-        "append_jxl_apple_nuclear_xmp_merge",
+        "is_jxl_container",
+        "append_xmp_overlay_to_jxl",
+        "merge_jxl_xmp_overlay",
         "xmp_jxl_apple_compat_contract",
     ] {
         assert!(

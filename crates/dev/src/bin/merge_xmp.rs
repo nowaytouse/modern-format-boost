@@ -1,8 +1,9 @@
 //! Rust XMP sidecar merge utility.
 //!
 //! Scans a file or directory for `.xmp` sidecars, pairs each sidecar with an
-//! adjacent media file using an 8-strategy pipeline and delegates
-//! metadata writing to `exiftool`.
+//! adjacent media file using an 8-strategy pipeline. JXL containers receive an
+//! append-only XMP overlay with reconstruction-state verification; other
+//! supported media delegate metadata writing to `exiftool`.
 //!
 //! Reuses the core library implementation from `foundation::xmp_merger`.
 
@@ -19,7 +20,7 @@ use std::process::Command;
 #[derive(Parser, Debug)]
 #[command(
     name = "merge_xmp",
-    about = "Merge adjacent XMP sidecars into media files (8-strategy pipeline, timestamp-safe)"
+    about = "Merge adjacent XMP sidecars (JXL overlay/reconstruction-safe; timestamp-safe)"
 )]
 struct Args {
     #[arg(value_name = "FILE_OR_DIR")]

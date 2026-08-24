@@ -1483,13 +1483,10 @@ pub fn xmp_merge_finalize() {
 #[cfg(test)]
 mod terminal_ux_tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    #[serial_test::serial]
     fn configure_terminal_ux_respects_no_color() {
-        let _guard = ENV_LOCK.lock().expect("env test lock");
         set_plain_mode(false);
         unsafe {
             std::env::set_var("NO_COLOR", "1");
@@ -1503,8 +1500,8 @@ mod terminal_ux_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn configure_terminal_ux_cli_plain() {
-        let _guard = ENV_LOCK.lock().expect("env test lock");
         set_plain_mode(false);
         configure_terminal_ux(true);
         assert!(is_plain_mode());
@@ -1512,14 +1509,10 @@ mod terminal_ux_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_set_default_run_log_file_with_session_id() {
-        let _guard = ENV_LOCK.lock().expect("env test lock");
         let original_writer = lock_log_writer().take();
-        let temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
-            "progress_mode_test_log_dir",
-            "mfb-progress-log-test-",
-        )
-        .expect("log temp dir");
+        let temp_dir = tempfile::tempdir().expect("log temp dir");
         let log_dir = temp_dir.path().join("logs");
 
         let test_session_id = "test_session_12345";
@@ -1548,14 +1541,10 @@ mod terminal_ux_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn default_run_log_writer_rotates_before_exceeding_thirty_mib() {
-        let _guard = ENV_LOCK.lock().expect("env test lock");
         let original_writer = lock_log_writer().take();
-        let temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
-            "progress_mode_run_log_cap_test",
-            "mfb-progress-log-cap-test-",
-        )
-        .expect("log temp dir");
+        let temp_dir = tempfile::tempdir().expect("log temp dir");
         let log_path = temp_dir.path().join("run.log");
 
         set_log_file(&log_path).expect("open run log");

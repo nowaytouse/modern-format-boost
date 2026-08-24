@@ -1268,7 +1268,7 @@ mod tests {
         );
 
         assert!(check.passed);
-        assert!(check.affected_files.is_empty());
+        assert_eq!(check.affected_files, [] as [std::path::PathBuf; 0]);
         assert!(check.actual.contains("1 exact-reconstructible"));
 
         let rejected = super::check_orientation_policy_with_probes(

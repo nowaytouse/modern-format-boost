@@ -473,7 +473,10 @@ pub fn convert_heic_gainmap_to_jxl(input: &Path, options: &ConvertOptions) -> Re
     })
 }
 
-/// Convert `UltraHDR JPEG` with gainmap metadata to synthesized HDR `JXL`.
+/// Explicitly convert `UltraHDR JPEG` gainmap pixels to synthesized HDR `JXL`.
+///
+/// This changes representation and cannot reconstruct the original JPEG bytes.
+/// Destructive or exact-delivery callers must use [`convert_jpeg_to_jxl`] instead.
 ///
 /// # Errors
 ///
@@ -481,6 +484,15 @@ pub fn convert_heic_gainmap_to_jxl(input: &Path, options: &ConvertOptions) -> Re
 pub fn convert_ultrahdr_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if let Err(e) = foundation::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
+    }
+    if options.should_delete_original()
+        || options.require_output_delivery()
+        || options.require_jpeg_reconstruction()
+    {
+        return Err(ImgQualityError::ConversionError(
+            "UltraHDR pixel synthesis is non-archival; use exact JPEG→JXL reconstruction for destructive or verified delivery"
+                .to_string(),
+        ));
     }
 
     if !options.force() && is_already_processed(input) {
@@ -2497,10 +2509,12 @@ pub fn convert_jpeg_to_jxl(
 
     let input_size = fs::metadata(input)?.len();
 
+    let input_bytes = fs::read(input)?;
+
     // Missing EOI means reversible JPEG bitstream reconstruction is impossible.
     // Route through the irreversible-media policy so fast delivery can record a
     // skip and standard img mode can attempt the documented direct-encode path.
-    if !is_jpeg_complete(&fs::read(input)?) {
+    if !is_jpeg_complete(&input_bytes) {
         return handle_irreversible_jpeg_encode_failure(
             input,
             input_size,
@@ -2509,39 +2523,13 @@ pub fn convert_jpeg_to_jxl(
         );
     }
 
-    // UltraHDR JPEGs must follow the HDR synthesis path, not the legacy lossless encode path.
-    // Exception: fast-img delivery mode (require_output_delivery) requires bit-exact JPEG
-    // reconstruction. UltraHDR synthesis produces a HDR-merged JXL that cannot reconstruct
-    // the original SDR JPEG bitstream, violating fast-img's reversibility contract.
-    // Skip and leave the source unmodified, identical to the truncated-JPEG guard above.
-    if foundation::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input)? {
-        if options.require_output_delivery() {
-            foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
-                "ultrahdr_fast_img_skip",
-                input,
-                "UltraHDR JPEG cannot be reversibly transcoded in fast-img mode; source remains unmodified",
-            );
-            return Ok(TaskResult::skipped_custom(
-                input,
-                input_size,
-                "Skipped: UltraHDR JPEG cannot be reversibly transcoded; source remains unmodified",
-                JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
-            ));
-        }
+    if foundation::image_jpeg_analysis::is_ultra_hdr_jpeg(&input_bytes) {
         log_detail!(&format!(
-            "{} 🌈 UltraHDR detected: {} - delegating to native HDR synthesis pipeline",
+            "{} 🌈 UltraHDR detected: {} - preserving the complete JPEG container through exact bitstream reconstruction",
             foundation::infra::static_logs::messages::LABEL_PHASE_5,
             foundation::media_conversion_gate::path_file_name_for_log(input)
         ));
-        return convert_ultrahdr_jpeg_to_jxl(input, options);
     }
-
-    // Standard JPEG conversion (non-UltraHDR)
-    log_detail!(&format!(
-        "{} UltraHDR not detected for {}: performing standard JPEG transcoding",
-        foundation::infra::static_logs::messages::LABEL_PHASE_5,
-        foundation::media_conversion_gate::path_file_name_for_log(input)
-    ));
 
     let output = get_output_path(input, EXT_JXL, options)?;
 
@@ -2589,12 +2577,7 @@ pub fn convert_jpeg_to_jxl(
             ) {
                 return fallback;
             }
-            return handle_irreversible_jpeg_encode_failure(
-                input,
-                input_size,
-                options,
-                &failure,
-            );
+            return handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure);
         }
         Err(e) => {
             return Err(ImgQualityError::ConversionError(format!(
@@ -2711,12 +2694,7 @@ pub fn convert_jpeg_to_jxl(
         {
             return fallback;
         }
-        return handle_irreversible_jpeg_encode_failure(
-            input,
-            input_size,
-            options,
-            &failure,
-        );
+        return handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure);
     }
 
     let ladder = match try_jbrd_reconstruction_ladder(
@@ -6154,8 +6132,11 @@ mod tests {
             "failed to write source orientation"
         );
 
-        let mut options = ConvertOptions::default();
-        options.output_dir = Some(tmp.path().to_path_buf());
+        let mut options = ConvertOptions {
+            output_dir: Some(tmp.path().to_path_buf()),
+            child_threads: 1,
+            ..ConvertOptions::default()
+        };
         options.flags.set(ConvertFlags::FORCE, true);
         options
             .flags
@@ -6163,8 +6144,6 @@ mod tests {
         options
             .flags
             .set(ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION, true);
-        options.child_threads = 1;
-
         let result = convert_jpeg_to_jxl(&input, &options, None).expect("conversion succeeds");
         let output = result.output_path.expect("conversion output path");
         foundation::fast_img::verify_jxl_roundtrip_integrity(&input, Path::new(&output))
@@ -7139,16 +7118,12 @@ mod tests {
         );
     }
 
-    /// Build a minimal byte sequence that satisfies both `is_jpeg_complete` and
-    /// `is_ultra_hdr_jpeg_file`: SOI + APP1 XMP with `hdrgm:` keyword + APP2 MPF
-    /// identifier + SOS + EOI.  No actual image data is needed — detection and
-    /// completeness checks only parse the header region.
+    /// Add the two `UltraHDR` identification segments to an otherwise valid JPEG.
     #[cfg(test)]
-    fn make_fake_ultrahdr_jpeg() -> Vec<u8> {
-        let mut buf = Vec::new();
-
-        // SOI
-        buf.extend_from_slice(&[0xFF, 0xD8]);
+    fn make_fake_ultrahdr_jpeg(base_jpeg: &[u8]) -> Vec<u8> {
+        assert_eq!(base_jpeg.get(..2), Some(&[0xFF, 0xD8][..]));
+        let mut buf = Vec::with_capacity(base_jpeg.len() + 256);
+        buf.extend_from_slice(&base_jpeg[..2]);
 
         // APP1 (0xE1) — XMP segment with hdrgm: namespace
         // Header: "http://ns.adobe.com/xap/1.0/\0" (29 bytes) + XMP body
@@ -7171,34 +7146,36 @@ mod tests {
         buf.extend_from_slice(mpf_id);
         buf.extend_from_slice(mpf_padding);
 
-        // SOS (Start of Scan) — stops header parsing; must precede EOI for is_jpeg_complete
-        buf.extend_from_slice(&[0xFF, 0xDA]);
-
-        // EOI — satisfies is_jpeg_complete's "EOI after SOS" invariant
-        buf.extend_from_slice(&[0xFF, 0xD9]);
+        buf.extend_from_slice(&base_jpeg[2..]);
 
         buf
     }
 
-    /// Contract: fast-img mode (`REQUIRE_OUTPUT_DELIVERY`) must skip `UltraHDR` JPEGs
-    /// rather than running HDR synthesis, which cannot reconstruct the original
-    /// JPEG bitstream and violates the reversibility contract.
-    ///
-    /// Assertions:
-    /// - result is skipped (no JXL output path)
-    /// - `skip_reason` == `JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON`
-    /// - no .JXL file was created on disk
-    /// - source bytes are byte-identical after the call
+    /// `FastImg` archives `UltraHDR` JPEGs through JPEG bitstream reconstruction.
+    /// The complete source container, including its gainmap payload, must round-trip
+    /// byte-for-byte; automatic HDR synthesis is not an archival substitute.
     #[test]
-    fn ultrahdr_jpeg_in_fast_img_mode_yields_skip_not_jxl() {
+    fn ultrahdr_jpeg_in_fast_img_mode_is_byte_exactly_reconstructible() {
         use foundation::image_jpeg_analysis::{is_jpeg_complete, is_ultra_hdr_jpeg};
         use tempfile::tempdir;
 
-        let tmp = tempdir().expect("tempdir");
-        let src = tmp.path().join("fake_ultrahdr.jpg");
-        let jxl = tmp.path().join("fake_ultrahdr.JXL");
+        for tool in ["cjxl", "djxl", "jxlinfo", "exiftool"] {
+            if !test_tool_available(tool) {
+                eprintln!("Skipping UltraHDR archival test: {tool} is unavailable");
+                return;
+            }
+        }
 
-        let fake = make_fake_ultrahdr_jpeg();
+        let tmp = tempdir().expect("tempdir");
+        let base = tmp.path().join("base.jpg");
+        let src = tmp.path().join("fake_ultrahdr.jpg");
+        image::RgbImage::from_fn(32, 32, |x, y| {
+            image::Rgb([(x * 7) as u8, (y * 7) as u8, ((x + y) * 3) as u8])
+        })
+        .save_with_format(&base, image::ImageFormat::Jpeg)
+        .expect("write valid base JPEG");
+
+        let fake = make_fake_ultrahdr_jpeg(&std::fs::read(&base).expect("read base JPEG"));
 
         // Preconditions: fixture must satisfy both guards in convert_jpeg_to_jxl
         assert!(
@@ -7222,36 +7199,27 @@ mod tests {
         options.output_dir = Some(tmp.path().to_path_buf());
 
         let result = convert_jpeg_to_jxl(&src, &options, None)
-            .expect("convert_jpeg_to_jxl must not error; UltraHDR fast-img skip is not an error");
-
-        // Skip asserted
+            .expect("UltraHDR JPEG archival conversion must complete");
         assert!(
-            result.skipped,
-            "UltraHDR JPEG in fast-img mode must be skipped, got: {:?}",
-            result.message
+            result.success && !result.skipped,
+            "UltraHDR must be archived"
         );
+        let output = result.output_path.expect("UltraHDR JXL output path");
+        foundation::fast_img::verify_jxl_roundtrip_integrity(&src, Path::new(&output))
+            .expect("UltraHDR JPEG must reconstruct byte-for-byte");
+        foundation::fast_img::verify_final_jxl_delivery_integrity(&src, Path::new(&output))
+            .expect("UltraHDR JXL must pass final delivery verification");
+        let synthesis_error = convert_ultrahdr_jpeg_to_jxl(&src, &options)
+            .expect_err("verified delivery must reject non-archival HDR synthesis");
         assert!(
-            result.output_path.is_none(),
-            "fast-img skip must not produce an output path"
-        );
-        assert_eq!(
-            result.skip_reason.as_deref(),
-            Some(JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON),
-            "skip_reason must match the canonical unavailable reason so the \
-             fast-img dispatch layer recognises it as a known skip"
+            synthesis_error.to_string().contains("non-archival"),
+            "unexpected synthesis guard: {synthesis_error}"
         );
 
-        // No JXL created on disk
-        assert!(
-            !jxl.exists(),
-            "fast-img UltraHDR skip must not create a JXL file"
-        );
-
-        // Source bytes untouched
         let source_bytes_after = std::fs::read(&src).expect("read after");
         assert_eq!(
             source_bytes_before, source_bytes_after,
-            "source JPEG must be byte-identical after fast-img skip"
+            "non-destructive test must leave the source JPEG byte-identical"
         );
     }
 

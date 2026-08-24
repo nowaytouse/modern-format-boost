@@ -682,6 +682,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let mediaLabel = NSTextField(labelWithString: "")
     private let operationLabel = NSTextField(labelWithString: "")
+    private let metadataSafetyLabel = NSTextField(wrappingLabelWithString: "")
     private let languageLabel = NSTextField(labelWithString: "")
     private let appearanceLabel = NSTextField(labelWithString: "")
     private let targetField = NSTextField()
@@ -815,6 +816,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
 
+        metadataSafetyLabel.font = .systemFont(ofSize: 11)
+        metadataSafetyLabel.textColor = .secondaryLabelColor
+        metadataSafetyLabel.maximumNumberOfLines = 3
+
         ultimateCheck.state = .on
         verboseCheck.state = .on
         for control in [ultimateCheck, verboseCheck, shortestPathCheck, resumeCheck] {
@@ -867,13 +872,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.alignment = .centerY
         statusRow.spacing = 8
         let stack = NSStackView(views: [
-            header, targetRow, grid, options, commandField, actionRow, logScroll, statusRow,
+            header, targetRow, grid, metadataSafetyLabel, options, commandField, actionRow,
+            logScroll, statusRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for view in [header, targetRow, grid, options, commandField, actionRow, logScroll, statusRow] {
+        for view in [
+            header, targetRow, grid, metadataSafetyLabel, options, commandField, actionRow,
+            logScroll, statusRow,
+        ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         root.addSubview(stack)
@@ -911,6 +920,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func configurationChanged() {
         shortestPathCheck.isEnabled = configurationControlsEnabled && selectedOperation.supportsShortestPath
         if !shortestPathCheck.isEnabled { shortestPathCheck.state = .off }
+        updateMetadataSafetyNotice()
         guard !targetField.stringValue.isEmpty else {
             commandField.stringValue = ""
             statusLabel.stringValue = processorStatus.isEmpty ? localized("status.ready") : processorStatus
@@ -953,6 +963,20 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private var selectedOperation: OperationMode {
         OperationMode.allCases[safe: operationPopup.indexOfSelectedItem] ?? .adjacent
+    }
+
+    private func updateMetadataSafetyNotice() {
+        let key: String?
+        switch selectedOperation {
+        case .adjacent, .fastImgJxl, .mergeXmp:
+            key = "metadata.jxl_overlay"
+        case .restoreJpeg:
+            key = "metadata.restore_exact"
+        default:
+            key = nil
+        }
+        metadataSafetyLabel.isHidden = key == nil
+        metadataSafetyLabel.stringValue = key.map(localized) ?? ""
     }
 
     private func request() throws -> ProcessorRequest {

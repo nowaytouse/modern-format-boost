@@ -87,6 +87,7 @@ mod tests {
         "animated_image_quality_features.rs",
         "video_quality_features.rs",
         "analysis_cache.rs",
+        "convert/batch.rs",
         "training_tier_audit.rs",
         "c_api.rs",
         "logging.rs",

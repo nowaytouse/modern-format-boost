@@ -64,11 +64,11 @@ pub fn is_true_jpeg(path: &Path) -> Result<bool> {
 /// Decodes `jxl_output` back to a JPEG via `djxl`, then compares
 /// `BLAKE3(decoded.jpg) == BLAKE3(source_jpeg)`.
 ///
-/// This is bit-exact proof the raw JXL container faithfully preserves the JPEG
-/// bitstream before delivery metadata edits. Final fast-img delivery uses
-/// [`verify_final_jxl_delivery_integrity`] because EXIF/XMP rewrites and
-/// upstream JXL Orientation exclusion can legitimately rewrite container
-/// metadata after the raw encode proof.
+/// This is bit-exact proof that either a raw or final JXL container preserves
+/// the source JPEG bitstream. Delivery keeps reconstruction-owned metadata
+/// frozen and appends any external XMP as an overlay; final fast-img delivery
+/// adds [`verify_final_jxl_delivery_integrity`] for the remaining container,
+/// orientation, and custody gates.
 ///
 /// Fails closed when `djxl` is unavailable; a JXL integrity proof requires
 /// a decoded roundtrip hash, not a non-empty output file.
@@ -519,8 +519,8 @@ pub fn safe_delete_jpeg_source(
                 "delete-gate 1 FAIL: non-exact integrity is not sufficient for source deletion"
             );
             return Err(ImgQualityError::AnalysisError(
-                "delete-gate 1 FAIL: exact JXL roundtrip or final non-JXL delivery proof is required \
-                 before deleting source JPEG"
+                "delete-gate 1 FAIL: non-exact integrity is insufficient; exact JXL roundtrip or \
+                 final non-JXL delivery proof is required before deleting source JPEG"
                     .to_string(),
             ));
         }

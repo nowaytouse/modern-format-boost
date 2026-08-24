@@ -506,7 +506,10 @@ mod tests {
         let mut dst = src.clone();
         dst.insert("IFD0:XResolution".into(), "1".into());
         dst.insert("IFD0:YResolution".into(), "1".into());
-        assert!(preserve_source_mismatches(&src, &dst).is_empty());
+        assert_eq!(
+            preserve_source_mismatches(&src, &dst),
+            [] as [std::string::String; 0]
+        );
 
         dst.insert("XMP-dc:Description".into(), "other".into());
         assert!(

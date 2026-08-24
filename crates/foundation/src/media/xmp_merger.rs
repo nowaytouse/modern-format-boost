@@ -4,7 +4,9 @@ use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{Context, Result, bail};
 use quick_xml::events::Event;
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use walkdir::WalkDir;
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
@@ -103,29 +105,48 @@ pub struct XmpMerger {
     config: Config,
 }
 
-/// CONTRACT: JXL + `Apple` compat uses nuclear `-all=` before streaming XMP
-/// (Brotli-safe path).
-fn should_jxl_xmp_apple_nuclear_strip(media_path: &Path, apple_compat: bool) -> Result<bool> {
-    if !apple_compat {
-        return Ok(false);
+fn is_jxl_container(path: &Path) -> Result<bool> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open JXL container candidate {}", path.display()))?;
+    let mut magic = [0_u8; 12];
+    match file.read_exact(&mut magic) {
+        Ok(()) => Ok(magic == *crate::constants::JXL_CONTAINER_MAGIC),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to read JXL container signature {}", path.display())),
     }
-    crate::image::format_detect::detect_true_format(media_path)
-        .map(|format| format == crate::image::format_detect::FormatKind::Jxl)
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "failed to detect media format before Apple-compatible XMP merge for {}: {error}",
-                media_path.display()
-            )
-        })
 }
 
-fn append_jxl_apple_nuclear_xmp_merge(builder: &mut ExiftoolBuilder) {
-    builder
-        .strip_all()
-        .tags_from_file("@")
-        .arg("-all:all")
-        .unsafe_tags()
-        .arg("-icc_profile");
+fn reconstruct_jpeg_to_temp(jxl: &Path) -> Result<tempfile::NamedTempFile> {
+    let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "xmp_jbrd_baseline",
+        None,
+        Some(".jpg"),
+    )?;
+    let mut command = crate::DjxlBuilder::new()
+        .input(jxl)
+        .output(temp.path())
+        .build();
+    command.arg("--reconstruct_jpeg").arg("--quiet");
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "XMP JBRD baseline reconstruction",
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let diagnostic = stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("no djxl diagnostic");
+        bail!(
+            "strict JPEG reconstruction failed before XMP merge for {}: {diagnostic}",
+            jxl.display()
+        );
+    }
+    Ok(temp)
 }
 
 impl XmpMerger {
@@ -852,6 +873,10 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if merging fails.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
+        if self.merge_jxl_xmp_overlay(xmp_path, media_path)? {
+            return Ok(());
+        }
+        Self::check_exiftool()?;
         match self.merge_xmp_core(xmp_path, media_path) {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -868,6 +893,152 @@ impl XmpMerger {
                 self.merge_xmp_fallback(xmp_path, media_path, hint.as_deref())
             }
         }
+    }
+
+    fn merge_jxl_xmp_overlay(&self, xmp_path: &Path, media_path: &Path) -> Result<bool> {
+        use crate::image::jxl_utils::JpegReconstructionEligibility;
+        use crate::metadata::MetadataLayerOutcome;
+
+        let format =
+            crate::image::format_detect::detect_true_format(media_path).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to identify media before XMP merge for {}: {error}",
+                    media_path.display()
+                )
+            })?;
+        if format != crate::image::format_detect::FormatKind::Jxl || !is_jxl_container(media_path)?
+        {
+            return Ok(false);
+        }
+
+        let eligibility = crate::image::jxl_utils::probe_jpeg_reconstruction_eligibility(
+            media_path,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "refusing JXL XMP merge without a reconstruction-state proof for {}: {error}",
+                media_path.display()
+            )
+        })?;
+        let baseline_jpeg = if matches!(&eligibility, JpegReconstructionEligibility::Exact) {
+            Some(reconstruct_jpeg_to_temp(media_path)?)
+        } else {
+            None
+        };
+        let source_hash =
+            crate::common_utils::calculate_blake3_hash(media_path).with_context(|| {
+                format!(
+                    "failed to hash JXL before XMP merge: {}",
+                    media_path.display()
+                )
+            })?;
+        let source_size = std::fs::metadata(media_path)?.len();
+        let parent = crate::media_conversion_gate::output_parent_or_dot(media_path);
+        let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "jxl_xmp_overlay",
+            parent,
+            "mfb-jxl-xmp-",
+            ".jxl",
+        )?;
+        let staged_path = staged.into_temp_path();
+        let copied = std::fs::copy(media_path, &staged_path)?;
+        if copied != source_size {
+            bail!(
+                "JXL staging copy changed length before XMP merge for {}: expected={source_size} actual={copied}",
+                media_path.display()
+            );
+        }
+
+        if !crate::metadata::append_xmp_overlay_to_jxl(xmp_path, &staged_path)? {
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_XMP,
+                &format!(
+                    "JXL XMP overlay already current; no container rewrite: {}",
+                    media_path.display()
+                )
+            );
+            return Ok(true);
+        }
+
+        if let Some(baseline_jpeg) = baseline_jpeg.as_ref() {
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(
+                baseline_jpeg.path(),
+                &staged_path,
+            )
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "refusing XMP overlay because exact JPEG reconstruction changed for {}: {error}",
+                    media_path.display()
+                )
+            })?;
+        } else {
+            let staged_eligibility =
+                crate::image::jxl_utils::probe_jpeg_reconstruction_eligibility(&staged_path)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "JXL became unreadable while staging XMP overlay for {}: {error}",
+                            media_path.display()
+                        )
+                    })?;
+            let classification_preserved = matches!(
+                (&eligibility, &staged_eligibility),
+                (
+                    JpegReconstructionEligibility::PixelOnly,
+                    JpegReconstructionEligibility::PixelOnly
+                ) | (
+                    JpegReconstructionEligibility::AdvertisedButRejected { .. },
+                    JpegReconstructionEligibility::AdvertisedButRejected { .. }
+                )
+            );
+            if !classification_preserved {
+                bail!(
+                    "JXL reconstruction state changed while staging XMP overlay for {}",
+                    media_path.display()
+                );
+            }
+        }
+
+        let metadata_report =
+            crate::metadata::preserve_filesystem_for_delivery(media_path, &staged_path)?;
+        if matches!(metadata_report.xattr, MetadataLayerOutcome::PartialAudit)
+            || matches!(
+                metadata_report.timestamps,
+                MetadataLayerOutcome::PartialAudit
+            )
+        {
+            bail!(
+                "filesystem metadata preservation was partial while staging XMP overlay for {}",
+                media_path.display()
+            );
+        }
+        let current_hash =
+            crate::common_utils::calculate_blake3_hash(media_path).with_context(|| {
+                format!(
+                    "failed to re-hash JXL before committing XMP overlay: {}",
+                    media_path.display()
+                )
+            })?;
+        if current_hash != source_hash {
+            bail!(
+                "JXL changed concurrently during XMP merge; original retained: {}",
+                media_path.display()
+            );
+        }
+        staged_path.persist(media_path).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to atomically commit XMP overlay to {}: {}",
+                media_path.display(),
+                error.error
+            )
+        })?;
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_XMP,
+            &format!(
+                "JXL XMP overlay committed without rewriting codec/JBRD bytes; reconstruction state verified: {}",
+                media_path.display()
+            )
+        );
+        Ok(true)
     }
 
     fn merge_xmp_core(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
@@ -898,12 +1069,6 @@ impl XmpMerger {
 
         if matches!(self.config.overwrite_mode, OverwriteMode::Original) {
             builder.overwrite_original();
-        }
-
-        let apple_compat = std::env::var(crate::constants::ENV_APPLE_COMPAT).is_ok();
-
-        if should_jxl_xmp_apple_nuclear_strip(media_path, apple_compat)? {
-            append_jxl_apple_nuclear_xmp_merge(&mut builder);
         }
 
         let mut cmd = builder.build();
@@ -1168,8 +1333,6 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if processing fails.
     pub fn process_directory(&self, dir: &Path) -> Result<Vec<MergeResult>> {
-        Self::check_exiftool()?;
-
         let xmp_files = self.find_xmp_files(dir)?;
         let mut results = Vec::with_capacity(xmp_files.len());
 

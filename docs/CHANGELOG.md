@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **Formatter-only `check_all --fix`**: The local fix flag now runs only tracked
+  workspace formatters and exits before branch/toolchain checks, compilation,
+  tests, audits, documentation, benchmarks, or fuzz work. Clippy lint repair and
+  `pyupgrade` semantic rewrites are no longer hidden inside the formatting mode;
+  repository health remains an explicit CI operation.
+- **Documentation contract**: The primary English and Chinese guides now state
+  the project's per-media search motivation, runtime and platform boundaries,
+  payload-versus-whole-file size semantics, and why database/learned heuristics
+  remain explicit rather than silently participating in normal image work.
 - **Modern lossy static delivery**: FastImg JXL mode now discovers static WebP,
   JXL, AVIF, HEIC/HEIF, and JP2 by content identity, admits only positively
   proven lossy sources, and preserves unknown, lossless, animated, or JPEG-
@@ -28,8 +37,12 @@ All notable changes to this project will be documented in this file.
 - **Reconstructible-JXL metadata custody**: JPEG-reconstruction outputs preserve
   codec-carried Exif instead of rewriting it, then re-prove byte-identical JPEG
   reconstruction after external XMP has been appended as a standard JXL XML
-  box. The append path atomically preserves the existing JBRD, Exif, ICC, and
-  codestream bytes instead of asking ExifTool to rewrite the container. Sources
+  box. The append path atomically preserves the existing JBRD, Exif, XMP,
+  JUMBF, ICC, unknown, and codestream boxes instead of asking ExifTool to
+  rewrite the container. The
+  standalone XMP merger now uses that same gated transaction, and an unchanged
+  latest overlay is an idempotent no-op rather than another appended box. A
+  JXL-only merge no longer requires the unrelated ExifTool preflight. Sources
   without an XMP sidecar remain valid; when a sidecar exists the
   embedded metadata audit is mandatory before delivery or source cleanup. Gate 1
   permits an Orientation tag only for that exact reconstruction path;
@@ -53,6 +66,14 @@ All notable changes to this project will be documented in this file.
   dependency for a path that deliberately never rewrites the JPEG. Failed final
   proofs clean newly committed JPEG candidates, and the temporary exact-proof
   snapshot is guarded against error-path leakage.
+- **UltraHDR JPEG exact archive**: Normal IMG and FastImg JXL now send complete
+  UltraHDR JPEGs through the same JBRD path as other JPEGs. The full source
+  container—including MPF gainmaps, private camera payloads and metadata—must
+  reconstruct byte-for-byte before delivery. JBRD metadata custody uses that
+  exact reconstruction as the authority instead of comparing ExifTool's outer
+  JXL tag view, which omits some Google private groups. Pixel-level HDR synthesis
+  remains an explicit non-archival operation and is rejected by destructive or
+  verified-delivery callers.
 - **Batch-isolated JPEG restoration**: One legacy JXL with unusable JPEG
   reconstruction data no longer aborts healthy siblings. Every candidate is
   independently classified by official `jxlinfo` plus strict and pixel-health
@@ -413,7 +434,7 @@ All notable changes to this project will be documented in this file.
 - **Animated AVIF Authority**: Animated sources are normalized to Y4M frames and
   encoded with libavif's official `avifenc`; FFmpeg is retained for frame
   extraction/rasterization where libavif does not accept the source container.
-- **UltraHDR Fast-Img Skip**: UltraHDR JPEGs are now explicitly skipped in fast-img delivery mode (`REQUIRE_OUTPUT_DELIVERY`) because HDR synthesis cannot reconstruct the original SDR JPEG bitstream, violating the reversibility contract. Sources remain unmodified with proper audit logging.
+- **UltraHDR FastImg Archive**: UltraHDR JPEGs use exact JPEG bitstream reconstruction in FastImg JXL mode; they are no longer routed to non-reconstructible HDR synthesis or skipped solely because they contain an MPF gainmap.
 - **Photos Import Hardening**:
   - Increased import timeout from 3600s to 86400s (24 hours) for large batch operations.
   - Enhanced poison detection with specific reasons: `zero_import_items`, `invalid_connection`, `appleevent_timeout`.
@@ -430,7 +451,7 @@ All notable changes to this project will be documented in this file.
 
 ### Testing & Hardening
 
-- **UltraHDR Unit Test**: Added `ultrahdr_jpeg_in_fast_img_mode_yields_skip_not_jxl` test to verify UltraHDR JPEGs are skipped (not converted) in fast-img mode with proper skip reason and no JXL output.
+- **UltraHDR Unit Test**: Added `ultrahdr_jpeg_in_fast_img_mode_is_byte_exactly_reconstructible` to require a delivered JXL, strict JPEG reconstruction and byte-identical source recovery.
 - **Retranscode Unit Tests**: Added `resume_reused_fast_img_output_keeps_recorded_collision_path` and `stale_proof_retranscode_keeps_marker_out_rel_path` tests to verify marker output path preservation during retranscode scenarios.
 
 ### Consolidated Summary

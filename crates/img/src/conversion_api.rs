@@ -382,7 +382,7 @@ pub fn execute_conversion(
             input_path,
             &temp_path,
             &detection.format,
-            &detection.compression,
+            detection.compression,
             config,
         ),
         TargetFormat::NoConversion => {
@@ -591,7 +591,7 @@ fn convert_to_jxl(
     input: &Path,
     output: &Path,
     format: &DetectedFormat,
-    compression: &CompressionType,
+    compression: CompressionType,
     config: &ConversionConfig,
 ) -> Result<()> {
     let input_abs = canonicalize_input(input);

@@ -1213,7 +1213,18 @@ pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) -> io::Result<bool> {
     merge_xmp_sidecar(src, dst)
 }
 
-fn validate_appendable_jxl_container(path: &Path) -> io::Result<u64> {
+#[derive(Clone, Copy)]
+struct JxlBoxSpan {
+    payload_offset: u64,
+    payload_size: u64,
+}
+
+struct AppendableJxlContainer {
+    total_size: u64,
+    last_xml: Option<JxlBoxSpan>,
+}
+
+fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlContainer> {
     let total_size = std::fs::metadata(path)?.len();
     let mut file = std::fs::File::open(path)?;
     let mut magic = [0_u8; 12];
@@ -1229,6 +1240,7 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<u64> {
     }
 
     let mut offset = 0_u64;
+    let mut last_xml = None;
     while offset < total_size {
         if total_size - offset < 8 {
             return Err(io::Error::new(
@@ -1263,11 +1275,54 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<u64> {
                 format!("invalid JXL box boundary in {}", path.display()),
             ));
         }
+        if header[4..8] == *b"xml " {
+            last_xml = Some(JxlBoxSpan {
+                payload_offset: offset + header_size,
+                payload_size: box_size - header_size,
+            });
+        }
         offset = offset
             .checked_add(box_size)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "JXL box offset overflow"))?;
     }
-    Ok(total_size)
+    Ok(AppendableJxlContainer {
+        total_size,
+        last_xml,
+    })
+}
+
+fn jxl_last_xml_payload_matches(
+    path: &Path,
+    container: &AppendableJxlContainer,
+    xmp: &mut std::fs::File,
+    payload_size: u64,
+) -> io::Result<bool> {
+    let Some(last_xml) = container.last_xml else {
+        return Ok(false);
+    };
+    if last_xml.payload_size != payload_size {
+        return Ok(false);
+    }
+
+    let mut jxl = std::fs::File::open(path)?;
+    jxl.seek(SeekFrom::Start(last_xml.payload_offset))?;
+    xmp.seek(SeekFrom::Start(0))?;
+    let mut remaining = payload_size;
+    let mut jxl_buffer = [0_u8; 16 * 1024];
+    let mut xmp_buffer = [0_u8; 16 * 1024];
+    while remaining > 0 {
+        let chunk = usize::try_from(remaining.min(jxl_buffer.len() as u64))
+            .map_err(|_| io::Error::other("XMP comparison size overflow"))?;
+        jxl.read_exact(&mut jxl_buffer[..chunk])?;
+        xmp.read_exact(&mut xmp_buffer[..chunk])?;
+        if jxl_buffer[..chunk] != xmp_buffer[..chunk] {
+            xmp.seek(SeekFrom::Start(0))?;
+            return Ok(false);
+        }
+        remaining -= chunk as u64;
+    }
+    xmp.seek(SeekFrom::Start(0))?;
+    Ok(true)
 }
 
 fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u64> {
@@ -1342,21 +1397,24 @@ pub fn validate_xmp_sidecar(path: &Path) -> io::Result<()> {
     validate_xmp_document(&mut file, path).map(|_| ())
 }
 
-/// Append an external XMP sidecar as a JXL `xml ` box without rewriting the
-/// existing JBRD, Exif, ICC, or codestream bytes.
-pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
-    src: &Path,
-    dst: &Path,
-) -> io::Result<bool> {
-    let Some(xmp_path) = find_xmp_sidecar(src) else {
-        return Ok(false);
-    };
-    let xmp_path = require_regular_sidecar(xmp_path, "XMP")?;
-    let original_size = validate_appendable_jxl_container(dst)?;
+/// Append one authoritative XMP overlay to a JXL container without rewriting
+/// existing JBRD, Exif, ICC, XMP, JUMBF, unknown, or codestream bytes.
+///
+/// Returns `Ok(false)` when the same overlay is already the last `xml ` box.
+pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Result<bool> {
+    let xmp_path = require_regular_sidecar(xmp_path.to_path_buf(), "XMP")?;
+    let container = validate_appendable_jxl_container(dst)?;
     let mut xmp = std::fs::File::open(&xmp_path)?;
     let payload_size = validate_xmp_document(&mut xmp, &xmp_path)?;
+    if jxl_last_xml_payload_matches(dst, &container, &mut xmp, payload_size)? {
+        return Ok(false);
+    }
+    // JBRD can reference the exact bytes of an earlier `xml `/`brob` box. Keep
+    // every existing box frozen and add the effective XMP as a later overlay;
+    // reconstructible callers still prove the recovered JPEG after this write.
+    let original_size = container.total_size;
     let standard_size = payload_size.checked_add(8);
-    let header_size = if standard_size.is_some_and(|size| size <= u64::from(u32::MAX)) {
+    let header_size = if standard_size.is_some_and(|size| u32::try_from(size).is_ok()) {
         8_u64
     } else {
         16_u64
@@ -1421,6 +1479,19 @@ pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
         ));
     }
     staged.persist(dst).map_err(|error| error.error)?;
+    Ok(true)
+}
+
+/// Merge an adjacent XMP sidecar into a JPEG-reconstructible JXL while keeping
+/// the reconstruction-owned metadata layer byte-for-byte frozen.
+pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
+    src: &Path,
+    dst: &Path,
+) -> io::Result<bool> {
+    let Some(xmp_path) = find_xmp_sidecar(src) else {
+        return Ok(false);
+    };
+    append_xmp_overlay_to_jxl(&xmp_path, dst)?;
     Ok(true)
 }
 

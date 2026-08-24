@@ -1742,7 +1742,7 @@ pub fn commit_temp_to_output_preserving_exact_payload(
 
 /// Commit a JPEG-reconstructible JXL without rewriting its codec-carried Exif.
 ///
-/// libjxl 0.12's double-orientation fix applies to JXL input decoded to pixels;
+/// libjxl 0.12+'s double-orientation fix applies to JXL input decoded to pixels;
 /// it does not remove JPEG Exif stored for bitstream reconstruction.
 /// `cjxl --lossless_jpeg=1` stores the original JPEG metadata as part of the
 /// reconstruction contract. Filesystem metadata is still preserved, and an
@@ -1765,16 +1765,23 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
     })?;
     let committed =
         commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)?;
-    if committed
-        && let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
-    {
-        crate::media_conversion_gate::delivery_remove_file_or_audit(
-            "JPEG reconstruction invalidated during metadata commit",
-            output,
+    if committed {
+        if let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output) {
+            crate::media_conversion_gate::delivery_remove_file_or_audit(
+                "JPEG reconstruction invalidated during metadata commit",
+                output,
+            );
+            return Err(std::io::Error::other(format!(
+                "JPEG reconstruction proof failed after metadata commit: {error}"
+            )));
+        }
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "Exact JPEG reconstruction verified after immutable JBRD/XMP metadata delivery: {}",
+                output.display()
+            )
         );
-        return Err(std::io::Error::other(format!(
-            "JPEG reconstruction proof failed after metadata commit: {error}"
-        )));
     }
     Ok(committed)
 }
@@ -1816,8 +1823,17 @@ fn commit_temp_to_output_with_metadata_inner(
         crate::io_utils::robust_move(temp, output)?;
     }
 
-    if preserve_codec_embedded_metadata && let Some(src) = original {
-        crate::metadata::merge_xmp_sidecar_into_reconstructible_jxl(src, output)?;
+    if preserve_codec_embedded_metadata
+        && let Some(src) = original
+        && crate::metadata::merge_xmp_sidecar_into_reconstructible_jxl(src, output)?
+    {
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_METADATA,
+            &format!(
+                "XMP sidecar present as a JXL overlay; reconstruction-owned metadata remains frozen: {}",
+                output.display()
+            )
+        );
     }
 
     let mut repaired_jxl_exif_after_commit = preserve_codec_embedded_metadata;
@@ -2000,23 +2016,29 @@ fn commit_temp_to_output_with_metadata_inner(
                     output.display()
                 ))
             })?;
-            // CONTRACT: embedded identity tags must match the paired source (not a
-            // wrong temp / other product) after filesystem metadata verification.
-            crate::metadata::verify_output_embedded_metadata(
-                src,
-                output,
-                crate::metadata::MetadataOutputPolicy::Preserve,
-            )
-            .map_err(|e| {
-                crate::media_conversion_gate::delivery_remove_file_or_audit(
-                    "embedded metadata mismatch output cleanup",
+            // A reconstructible JXL keeps the source JPEG (including private
+            // MakerNote/MPF payloads) inside JBRD. ExifTool does not necessarily
+            // expose those tags through the outer JXL container, so a cross-format
+            // tag-map comparison produces false loss reports. The wrapper performs
+            // the stronger byte-identical JPEG reconstruction proof after this
+            // commit; the JXL XML overlay path audits any external XMP separately.
+            if !preserve_codec_embedded_metadata {
+                crate::metadata::verify_output_embedded_metadata(
+                    src,
                     output,
-                );
-                std::io::Error::other(format!(
-                    "Delivery embedded metadata verification failed for {}: {e}",
-                    output.display()
-                ))
-            })?;
+                    crate::metadata::MetadataOutputPolicy::Preserve,
+                )
+                .map_err(|e| {
+                    crate::media_conversion_gate::delivery_remove_file_or_audit(
+                        "embedded metadata mismatch output cleanup",
+                        output,
+                    );
+                    std::io::Error::other(format!(
+                        "Delivery embedded metadata verification failed for {}: {e}",
+                        output.display()
+                    ))
+                })?;
+            }
         }
     }
 
@@ -3719,8 +3741,9 @@ mod tests {
                 .arg("-IFD0:Orientation=Horizontal (normal)")
                 .arg("-IFD0:ModifyDate=2025:10:24 12:00:24")
                 .arg("-ExifIFD:LightSource=Unknown")
+                .arg("-XMP-dc:Title=Original embedded title")
                 .arg(&source),
-            "add embedded Exif to reconstructible JPEG fixture",
+            "add embedded Exif/XMP to reconstructible JPEG fixture",
         );
         std::fs::write(
             &source_xmp,
@@ -3762,6 +3785,11 @@ mod tests {
             "2025:10:24 12:00:24+08:00",
             "source sidecar metadata must be embedded in the delivered JXL",
         );
+        assert_eq!(
+            exiftool_tag_value(&output, "-XMP-dc:Title"),
+            "Original embedded title",
+            "the overlay must not hide reconstruction-owned embedded XMP",
+        );
         assert!(
             crate::metadata::find_xmp_sidecar(&output).is_none(),
             "JXL delivery must not depend on a copied output sidecar"
@@ -3777,6 +3805,79 @@ mod tests {
         assert_eq!(
             std::fs::read(&reconstructed).expect("read reconstructed JPEG"),
             std::fs::read(&source).expect("read source JPEG"),
+        );
+
+        let delivered_once = std::fs::read(&output).expect("read first delivered JXL");
+        assert!(
+            commit_reconstructible_jxl_to_output_with_metadata(
+                &output,
+                &output,
+                true,
+                Some(&source),
+            )
+            .expect("repeat reconstructible commit"),
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("read repeated delivered JXL"),
+            delivered_once,
+            "replaying the same XMP overlay must not append duplicate boxes",
+        );
+
+        std::fs::write(
+            &source_xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 6.0.0">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+<photoshop:DateCreated>2026-08-24T15:16:17+08:00</photoshop:DateCreated>
+</rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .expect("update source XMP");
+        assert!(
+            commit_reconstructible_jxl_to_output_with_metadata(
+                &output,
+                &output,
+                true,
+                Some(&source),
+            )
+            .expect("commit updated reconstructible overlay"),
+        );
+        let delivered_updated = std::fs::read(&output).expect("read updated delivered JXL");
+        assert!(
+            delivered_updated.starts_with(&delivered_once),
+            "an XMP update must append without rewriting the previous container bytes",
+        );
+        assert_eq!(
+            exiftool_tag_value(&output, "-XMP-photoshop:DateCreated"),
+            "2026:08:24 15:16:17+08:00",
+            "the newest XMP overlay must be the effective metadata value",
+        );
+        let reconstructed_updated = temp_dir.path().join("reconstructed-updated.jpg");
+        command_status_success(
+            Command::new(crate::constants::TOOL_DJXL)
+                .arg(&output)
+                .arg(&reconstructed_updated)
+                .arg("--reconstruct_jpeg")
+                .arg("--quiet"),
+            "strictly reconstruct JPEG after XMP update",
+        );
+        assert_eq!(
+            std::fs::read(&reconstructed_updated).expect("read updated reconstruction"),
+            std::fs::read(&source).expect("read source JPEG after XMP update"),
+        );
+        assert!(
+            commit_reconstructible_jxl_to_output_with_metadata(
+                &output,
+                &output,
+                true,
+                Some(&source),
+            )
+            .expect("repeat updated reconstructible commit"),
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("read repeated updated JXL"),
+            delivered_updated,
+            "replaying the updated XMP overlay must also be idempotent",
         );
     }
 

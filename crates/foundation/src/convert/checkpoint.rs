@@ -1319,6 +1319,22 @@ pub fn resolve_resume_choice(
     resume: bool,
     no_resume: bool,
 ) -> io::Result<bool> {
+    resolve_resume_choice_for_terminal(
+        target_dir,
+        output_root,
+        resume,
+        no_resume,
+        io::stdin().is_terminal(),
+    )
+}
+
+fn resolve_resume_choice_for_terminal(
+    target_dir: &Path,
+    output_root: Option<&Path>,
+    resume: bool,
+    no_resume: bool,
+    stdin_is_terminal: bool,
+) -> io::Result<bool> {
     if resume && no_resume {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -1337,7 +1353,7 @@ pub fn resolve_resume_choice(
     if saved == 0 {
         return Ok(false);
     }
-    if !io::stdin().is_terminal() {
+    if !stdin_is_terminal {
         return Err(io::Error::other(format!(
             "MFB_RESUME_DECISION_REQUIRED: detected {saved} valid saved checkpoint entries; rerun with --resume to continue or --no-resume to restart"
         )));
@@ -1656,7 +1672,7 @@ mod tests {
 
         assert_eq!(Manager::saved_entry_count(target, None)?, 1);
         assert_eq!(Manager::saved_entry_count(target, None)?, 1);
-        let decision_error = resolve_resume_choice(target, None, false, false)
+        let decision_error = resolve_resume_choice_for_terminal(target, None, false, false, false)
             .expect_err("non-interactive caller must choose explicitly");
         assert!(
             decision_error

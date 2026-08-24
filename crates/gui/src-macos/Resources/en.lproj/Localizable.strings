@@ -26,6 +26,8 @@
 "operation.diagnostic" = "Diagnostics";
 "operation.cache_clean" = "Clean cache";
 "operation.database" = "Database manager";
+"metadata.jxl_overlay" = "JPEG XL safety: reconstruction-owned boxes stay immutable; external XMP is appended as an overlay and exact reconstruction is re-verified.";
+"metadata.restore_exact" = "Exact restore keeps the original JPEG bytes. Additional XMP is delivered as a verified adjacent sidecar because embedding it would change those bytes.";
 "option.ultimate" = "Highest quality";
 "option.verbose" = "Detailed logs";
 "option.shortest_path" = "Import to Photos";

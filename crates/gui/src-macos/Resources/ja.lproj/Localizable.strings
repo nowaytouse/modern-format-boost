@@ -26,6 +26,8 @@
 "operation.diagnostic" = "診断";
 "operation.cache_clean" = "キャッシュを消去";
 "operation.database" = "データベース管理";
+"metadata.jxl_overlay" = "JPEG XL の安全方針：再構築に使う元の box は変更せず、外部 XMP は overlay として追加し、完全再構築を再検証します。";
+"metadata.restore_exact" = "厳密な復元では元の JPEG バイト列を維持します。追加 XMP は埋め込むとバイト列が変わるため、検証済みの隣接 sidecar として出力します。";
 "option.ultimate" = "最高品質";
 "option.verbose" = "詳細ログ";
 "option.shortest_path" = "写真に読み込む";

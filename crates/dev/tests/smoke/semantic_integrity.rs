@@ -65,6 +65,7 @@ fn smoke_semantic_integrity_skips_vs_errors() -> Result<()> {
         base_dir: Some(input_dir_path),
         resume: false,
         protect_destructive_dirs: false,
+        prune_empty_source_dirs: false,
         error_mode: foundation::BatchErrorMode::LogAndContinue,
     };
 

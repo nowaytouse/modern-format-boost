@@ -648,12 +648,10 @@ pub fn run_unified_verification(
             println!();
         }
     }
-    let warnings = integrity_summary
-        .as_ref()
-        .map(|summary| summary.has_warnings);
-    let issue_count = integrity_summary
-        .as_ref()
-        .map_or(0, |summary| summary.issue_count);
+    let (warnings, issue_count) = match &integrity_summary {
+        Some(summary) => (Some(summary.has_warnings), summary.issue_count),
+        None => (None, 0),
+    };
     let exit_code = delegated_exit_code(output.status, "verify", "run_unified_verification");
     if let Some(summary) = &integrity_summary {
         let expected_success = !summary.has_warnings;

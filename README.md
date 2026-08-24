@@ -50,8 +50,11 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   encoded media payloads and require the candidate to fit the active policy;
   if no candidate fits, the source is retained and the result is skip/failure.
 - JPEG→JXL delivery requires a byte-identical `djxl --reconstruct_jpeg` proof
-  after metadata commit. `restore-jpeg` keeps those JPEG bytes unchanged and
-  delivers additional JXL XMP as a separately hashed `.xmp` sidecar.
+  after metadata commit. Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
+  external XMP is appended as an idempotent overlay and the exact reconstruction
+  proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and
+  delivers additional JXL XMP as a separately hashed `.xmp` sidecar, because a
+  one-file enriched JPEG cannot also be byte-identical to the original.
 - This is not a magic size reducer. Container metadata can make the complete
   file larger even when the media payload passes, and a high-quality candidate
   may provide no storage saving at all.
@@ -68,6 +71,23 @@ and local conversion paths, but Apple Photos custody, TCC and iCloud checks are
 macOS-only and non-Apple production coverage is currently less mature. Keep an
 independent backup for irreplaceable archives on every platform.
 
+### Why this project exists
+
+Most one-shot converters apply one quality, effort and speed policy to every
+file. Modern Format Boost instead treats each media item as an independent
+search and delivery decision: it spends more time finding a candidate that
+satisfies the active size/quality policy, then verifies metadata and integrity
+before cleanup. The extra runtime is intentional; a small or fast result is not
+accepted as a substitute for an auditable one.
+
+The wider workspace—database, training and quality gates—exists to make those
+decisions inspectable and to catch silent fallback. Optional systems remain
+optional: ordinary `img run`, FastImg and JPEG restoration use exact local
+analysis by default, while PostgreSQL and learned quality heuristics are used
+only by commands or options that explicitly request them. The project welcomes
+platform-specific production evidence, especially for Linux and Windows paths
+that have less real-world coverage today.
+
 Think of it as a conservative optimizer that prefers honest skip/ignore
 outcomes over silent quality damage:
 
@@ -83,10 +103,10 @@ outcomes over silent quality damage:
   efficient batching and maximum throughput.
 - 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via
   extraction sidecars and x265 SEI injection.
-- 🌅 **HDR Gainmap Synthesis & Preservation**: Automatically synthesizes
-  high-fidelity HDR JXL from HEIC and UltraHDR JPEG gainmaps while preserving
-  non-embeddable auxiliary assets such as HEIC depth maps and raw UltraHDR
-  gainmaps as sidecars.
+- 🌅 **HDR Gainmap Preservation**: HEIC gainmaps may synthesize high-fidelity
+  HDR JXL while preserving non-embeddable auxiliary assets such as depth maps.
+  UltraHDR JPEG instead follows the exact JPEG-archive path by default, keeping
+  its complete MPF/gainmap container byte-reconstructible.
 - **🔍 Vendor Metadata Awareness**: Intelligent scanning for Samsung/Google
   specific XMP namespaces in HEIC files to ensure maximum context preservation.
 
@@ -157,17 +177,21 @@ Every file goes through a multi-stage decision pipeline:
   before choosing a destructive or lossy route. Unknown evidence stays unknown.
 - **Stage 2 — Route & Encode**: True JPEG uses reversible JPEG reconstruction
   when the JBRD path is available; lossless sources use lossless JXL (`d=0`);
-  quality-matched lossy routes are kept separate from lossless claims.
+  quality-matched lossy routes are kept separate from lossless claims. Adjacent
+  XMP is appended after the immutable reconstruction layer and the final JXL is
+  re-proved before delivery; generic metadata rewrites never touch JBRD output.
 - **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are
   pre-processed into temporary 16-bit PNGs or **32-bit OpenEXR** to ensure
   `cjxl` compatibility without silently reducing the detected precision. A
   recoverable native-decoder failure can use FFmpeg/ImageMagick adapters only
   on an explicitly permitted path; every resulting candidate still runs the
   normal structure, pixel/orientation, metadata and size gates.
-- **Stage 4 — HDR Gainmap Synthesis**: Intercepts HEIC gainmap assets
-  (Apple/Google) and UltraHDR JPEGs, synthesizes true HDR JXL output, and
-  preserves non-embeddable auxiliary assets such as raw gainmaps/depth maps as
-  sidecars.
+- **Stage 4 — HDR Gainmap Handling**: HEIC gainmap assets may synthesize true
+  HDR JXL and preserve non-embeddable depth/gainmap assets as sidecars.
+  UltraHDR JPEG is archived through JBRD instead: the original JPEG, including
+  its MPF gainmap and private metadata, must reconstruct byte-for-byte. Explicit
+  UltraHDR pixel synthesis is non-archival and is never selected automatically
+  by a destructive or verified-delivery path.
 - **Stage 5 — Static-only on `img`**: `img run` **ignores** animated assets
   (`IMG_ANIMATED_HANDOFF`). Use **`vid run`** for GIF/WebP/APNG and all video.
 - **Stage 6 — Verify & Commit**: Output structure, decoded pixels/orientation,
@@ -269,11 +293,12 @@ flowchart TD
 
 ### `img run`
 
-| Input                                             | Action                                                       |
-| ------------------------------------------------- | ------------------------------------------------------------ |
-| Static JPEG / PNG / lossless modern / HDR gainmap | JXL conversion or HDR synthesis, followed by delivery checks |
-| Lossy modern still / existing JXL still           | Usually skip to avoid generational loss or redundant work    |
-| Animated or unverified animatable container       | Ignore on `img`; run `vid` separately if wanted              |
+| Input                                          | Action                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------ |
+| Static JPEG (including UltraHDR)               | Byte-reconstructible JXL archive followed by delivery checks |
+| PNG / lossless modern / supported HEIC gainmap | Lossless JXL conversion or HDR synthesis and delivery checks |
+| Lossy modern still / existing JXL still        | Usually skip to avoid generational loss or redundant work    |
+| Animated or unverified animatable container    | Ignore on `img`; run `vid` separately if wanted              |
 
 `img run` enables content exploration, quality matching, compression, metadata
 preservation, timestamp preservation, recursion and Apple compatibility by
@@ -444,15 +469,15 @@ best-effort fallback applies.
 
 ### HDR Format Strategy
 
-| HDR Type          | Detection                                | Preservation Strategy                                                                                         |
-| :---------------- | :--------------------------------------- | :------------------------------------------------------------------------------------------------------------ |
-| **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                               |
-| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized to 32-bit linear HDR -> JXL (True HDR)                                                            |
-| **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:)            | Synthesized to true HDR JXL; raw gainmap preserved as `.gainmap.jpg`; `hdrgm` metadata bridged for provenance |
-| **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                               |
-| **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                   |
-| **HDR10+**        | ST2094-40 dynamic metadata               | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention)         |
-| **SDR**           | No HDR markers                           | Standard processing (yuv420p)                                                                                 |
+| HDR Type          | Detection                                | Preservation Strategy                                                                                                                                      |
+| :---------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                                                                            |
+| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized to 32-bit linear HDR -> JXL (True HDR)                                                                                                         |
+| **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:)            | Exact JPEG→JXL archive by default; the full MPF/gainmap JPEG reconstructs byte-for-byte. Explicit pixel synthesis is non-archival and non-destructive only |
+| **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                                                                            |
+| **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                                                                |
+| **HDR10+**        | ST2094-40 dynamic metadata               | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention)                                                      |
+| **SDR**           | No HDR markers                           | Standard processing (yuv420p)                                                                                                                              |
 
 ## ⬇️ Installation
 

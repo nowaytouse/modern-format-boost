@@ -10,14 +10,14 @@
 	<string>icon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.modernformatboost.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
 		<string>zh-Hans</string>
 		<string>ja</string>
 	</array>
-	<key>CFBundleInfoDictionaryVersion</key>
-	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Modern Format Boost</string>
 	<key>CFBundlePackageType</key>

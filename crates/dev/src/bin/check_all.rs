@@ -1,6 +1,6 @@
 //! Modern Format Boost - Workspace Auditor in Rust.
 //! Checks code formatting, Cargo.toml validity, changelog versions, and runs
-//! tests.
+//! tests. `--fix` is a local, formatter-only mode and exits before audits.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -23,7 +23,10 @@ struct Args {
     #[arg(long = "no-expensive", help = "Skip slow checks")]
     no_expensive: bool,
 
-    #[arg(long = "fix", help = "Auto-fix formatting issues")]
+    #[arg(
+        long = "fix",
+        help = "Format all tracked workspace files, then exit without checks or audits"
+    )]
     fix: bool,
 
     #[arg(long = "build", help = "Run full release build")]
@@ -808,34 +811,6 @@ fn main() -> Result<()> {
     let repo_root = get_project_root()?;
     std::env::set_current_dir(&repo_root).context("change directory to repo root")?;
 
-    if args.install_nightly {
-        println!("Installing nightly toolchain + components...");
-        if install_nightly()? {
-            println!("  OK: nightly toolchain installed/updated");
-        } else {
-            println!("  Warning: rustup install failed; continuing with available toolchain");
-        }
-    }
-
-    let nc = probe_nightly(&repo_root);
-
-    println!("--- Modern Quality Suite ---");
-    println!("Root: {}", repo_root.display());
-    println!("Nightly: {}", nc.status_line());
-    if nc.toolchain && !nc.missing_components().is_empty() {
-        println!(
-            "  Missing nightly components: {}",
-            nc.missing_components().join(", ")
-        );
-        println!("  Fix: {}", nc.install_hint());
-    } else if !nc.toolchain {
-        println!(
-            "  Nightly toolchain not found. Install: rustup toolchain install nightly --component \
-             clippy --component rustfmt --component miri --component rust-src --component \
-             llvm-tools"
-        );
-    }
-
     let git_files = git_tracked_existing_files(&repo_root);
     let py_files = files_with_suffixes(&git_files, &[".py"]);
     let shell_files = files_with_suffixes(&git_files, &[".sh"]);
@@ -848,30 +823,10 @@ fn main() -> Result<()> {
     let web_files =
         files_with_suffixes(&git_files, &[".vue", ".ts", ".js", ".cjs", ".css", ".html"]);
 
-    // 1. Branch Guard
-    let branch_output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output();
-    match branch_output {
-        Ok(out) => {
-            let current_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !args.allow_non_nightly && current_branch != args.branch {
-                eprintln!(
-                    "Fatal: required branch '{}', current is '{}'. Use --allow-non-nightly or \
-                     --branch <n>.",
-                    args.branch, current_branch
-                );
-                std::process::exit(2);
-            }
-        }
-        Err(err) => {
-            println!("Warning: could not determine git branch: {err}");
-        }
-    }
-
-    // 2. Fix mode (Explicit user opt-in for multi-language workspace formatting)
+    // 1. Local formatter-only mode. Keep this branch before every branch,
+    // toolchain, compile, test, audit, documentation, benchmark, and fuzz check.
     if args.fix {
-        println!("Running multi-language auto-fixers across workspace...");
+        println!("Formatting tracked workspace files (no checks or audits)...");
         // Rust
         run_required(
             &repo_root,
@@ -879,35 +834,9 @@ fn main() -> Result<()> {
             "cargo",
             &["fmt", "--all"],
         )?;
-        run_required(
-            &repo_root,
-            "clippy_strict --fix",
-            "cargo",
-            &[
-                "run",
-                "--locked",
-                "-p",
-                "dev",
-                "--bin",
-                "clippy_strict",
-                "--",
-                "--fix",
-            ],
-        )?;
         // Python
         if command_exists("ruff") {
-            run_required(
-                &repo_root,
-                "ruff check --fix",
-                "ruff",
-                &["check", "--fix", "."],
-            )?;
             run_required(&repo_root, "ruff format", "ruff", &["format", "."])?;
-        }
-        if command_exists("pyupgrade") && !py_files.is_empty() {
-            let mut pyupgrade_args = vec!["--py311-plus".to_string()];
-            pyupgrade_args.extend(py_files.iter().cloned());
-            run_required_vec(&repo_root, "pyupgrade", "pyupgrade", &pyupgrade_args)?;
         }
         // Shell
         if command_exists("shfmt") && !shell_files.is_empty() {
@@ -947,6 +876,58 @@ fn main() -> Result<()> {
             let mut plutil_args = vec!["-convert".to_string(), "xml1".to_string()];
             plutil_args.extend(plist_files.iter().cloned());
             run_required_vec(&repo_root, "plutil -convert xml1", "plutil", &plutil_args)?;
+        }
+
+        println!("\nFORMAT FIX COMPLETED; no checks, tests, audits, or builds were run");
+        return Ok(());
+    }
+
+    if args.install_nightly {
+        println!("Installing nightly toolchain + components...");
+        if install_nightly()? {
+            println!("  OK: nightly toolchain installed/updated");
+        } else {
+            println!("  Warning: rustup install failed; continuing with available toolchain");
+        }
+    }
+
+    let nc = probe_nightly(&repo_root);
+
+    println!("--- Modern Quality Suite ---");
+    println!("Root: {}", repo_root.display());
+    println!("Nightly: {}", nc.status_line());
+    if nc.toolchain && !nc.missing_components().is_empty() {
+        println!(
+            "  Missing nightly components: {}",
+            nc.missing_components().join(", ")
+        );
+        println!("  Fix: {}", nc.install_hint());
+    } else if !nc.toolchain {
+        println!(
+            "  Nightly toolchain not found. Install: rustup toolchain install nightly --component \
+             clippy --component rustfmt --component miri --component rust-src --component \
+             llvm-tools"
+        );
+    }
+
+    // 2. Branch Guard
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output();
+    match branch_output {
+        Ok(out) => {
+            let current_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !args.allow_non_nightly && current_branch != args.branch {
+                eprintln!(
+                    "Fatal: required branch '{}', current is '{}'. Use --allow-non-nightly or \
+                     --branch <n>.",
+                    args.branch, current_branch
+                );
+                std::process::exit(2);
+            }
+        }
+        Err(err) => {
+            println!("Warning: could not determine git branch: {err}");
         }
     }
 

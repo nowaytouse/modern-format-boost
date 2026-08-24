@@ -26,6 +26,8 @@
 "operation.diagnostic" = "诊断";
 "operation.cache_clean" = "清理缓存";
 "operation.database" = "数据库管理";
+"metadata.jxl_overlay" = "JPEG XL 安全策略：冻结重建所依赖的原始 box；外部 XMP 仅作为 overlay 追加，并再次逐字节核验重建结果。";
+"metadata.restore_exact" = "精确恢复会保持原始 JPEG 字节不变。额外 XMP 以已核验的相邻侧车交付，因为嵌入 JPEG 必然改变原始字节。";
 "option.ultimate" = "最高质量";
 "option.verbose" = "详细日志";
 "option.shortest_path" = "导入到照片";

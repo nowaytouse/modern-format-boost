@@ -158,13 +158,10 @@ pub fn is_extension_allowed(path: &Path, allowed_extensions: &[&str]) -> bool {
 /// # Errors
 /// Returns an error if the path is an Apple Photos library.
 pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|error| format!("resolve relative Photos guard path: {error}"))?
-            .join(path)
-    };
+    let absolute = crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
+        path,
+        "resolve relative Photos guard path",
+    )?;
     let existing = absolute
         .ancestors()
         .find(|ancestor| ancestor.exists())

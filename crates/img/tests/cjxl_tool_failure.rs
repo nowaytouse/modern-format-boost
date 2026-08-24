@@ -1,12 +1,9 @@
-use img::lossless_converter::convert_jpeg_to_jxl;
-use std::env;
 use std::fs;
+use std::process::Command;
 use tempfile::tempdir;
 
-// This integration test simulates a failing `cjxl` binary by putting a small wrapper
-// script on PATH that prints a typical cjxl stderr message and exits non-zero.
-// It then runs the lossless converter on a tiny truncated JPEG and asserts the
-// converter fails (records a conversion error) rather than crashing or succeeding.
+// Run the CLI in a child process with an explicit failing `cjxl` override. This
+// avoids process-global PATH mutation and ensures the valid JPEG reaches cjxl.
 
 #[test]
 fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
@@ -14,59 +11,65 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir)?;
 
-    // Create a fake cjxl that prints the stderr message and exits 1
+    // Create a fake cjxl that passes tool discovery but fails real encoding.
     #[cfg(unix)]
-    let _cjxl_path = {
+    let cjxl_path = {
         let p = bin_dir.join("cjxl");
         fs::write(
             &p,
-            "#!/bin/sh\necho 'JPEG XL encoder v0.11.2' >&2\necho 'Encoding [JPEG, lossless encode, effort: 11]' >&2\necho 'Error while decoding the JPEG image. It may be corrupt (e.g. truncated) or of an unsupported type (e.g. CMYK).' >&2\nexit 1\n",
+            "#!/bin/sh\ncase \"$1\" in --version|--help|-h) echo 'JPEG XL encoder v0.13.0'; exit 0;; esac\necho 'Error while decoding the JPEG image' >&2\nexit 1\n",
         )?;
-        // make executable
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&p)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&p, perms)?;
-        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&p)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&p, perms)?;
         p
     };
 
     #[cfg(windows)]
-    let _cjxl_path = {
+    let cjxl_path = {
         let p = bin_dir.join("cjxl.bat");
-        fs::write(&p, "@echo JPEG XL encoder v0.11.2 && exit /b 1")?;
+        fs::write(
+            &p,
+            "@if \"%1\"==\"--version\" (echo JPEG XL encoder v0.13.0 & exit /b 0)\n@echo Error while decoding the JPEG image 1>&2\n@exit /b 1\n",
+        )?;
         p
     };
 
-    // Prepend our fake bin to PATH
-    let old_path = env::var_os("PATH").unwrap_or_default();
-    let mut new_path = bin_dir.into_os_string();
-    new_path.push(":");
-    new_path.push(&old_path);
-    // tests in this repo sometimes set env in unsafe blocks for CI consistency
-    unsafe { std::env::set_var("PATH", new_path) };
-
-    // Prepare a truncated JPEG input
     let src_dir = td.path().join("src");
+    let output_dir = td.path().join("output");
     fs::create_dir_all(&src_dir)?;
-    let input_path = src_dir.join("truncated.jpg");
-    fs::write(&input_path, vec![0xFFu8, 0xD8, 0xFF, 0xE0])?;
+    fs::create_dir_all(&output_dir)?;
+    let input_path = src_dir.join("valid.jpg");
+    image::RgbImage::from_pixel(16, 16, image::Rgb([12, 34, 56]))
+        .save_with_format(&input_path, image::ImageFormat::Jpeg)?;
 
-    // Run convert_jpeg_to_jxl which should attempt cjxl and fail
-    let options = img::ConvertOptions::default();
-
-    let res = convert_jpeg_to_jxl(&input_path, &options, None);
-
-    // Expect an error and that the message references cjxl / EncodeImageJXL
-    let Err(e) = res else {
-        anyhow::bail!("conversion unexpectedly succeeded");
-    };
-    let e = e.to_string();
-    assert!(
-        e.contains("EncodeImageJXL") || e.contains("cjxl") || e.contains("Error while decoding"),
-        "unexpected error message: {e}"
+    let output = Command::new(env!("CARGO_BIN_EXE_img"))
+        .arg("run")
+        .arg(&input_path)
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--force")
+        .arg("--plain")
+        .env("MFB_TOOL_CJXL", &cjxl_path)
+        .output()?;
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+    assert!(
+        !output.status.success(),
+        "conversion unexpectedly succeeded"
+    );
+    assert!(
+        diagnostics.contains("cjxl") || diagnostics.contains("Error while decoding"),
+        "unexpected error message: {diagnostics}"
+    );
+    assert!(
+        input_path.exists(),
+        "failed conversion must retain its source"
+    );
+    assert!(!output_dir.join("valid.JXL").exists());
     Ok(())
 }

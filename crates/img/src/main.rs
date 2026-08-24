@@ -181,7 +181,9 @@ enum Commands {
     ///
     /// Detects true JPEGs via content identity, requires byte-identical JPEG
     /// reconstruction after all metadata work, and deletes sources only after
-    /// that final proof. JXL mode also
+    /// that final proof. External XMP is appended without rewriting the
+    /// reconstruction-owned JXL boxes, then reconstruction is proved again.
+    /// JXL mode also
     /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC originals to
     /// Photos with UUID/hash custody proof; uncertain or lossless originals remain.
     ///
@@ -244,7 +246,7 @@ enum Commands {
 
     /// Restore reconstructible JXL files to byte-identical JPEGs. Additional
     /// JXL XMP is delivered as a verified adjacent `.xmp` sidecar so the JPEG
-    /// payload is never rewritten.
+    /// payload is never rewritten; embedding it would change the original bytes.
     #[command(name = "restore-jpeg")]
     RestoreJpeg {
         /// Input directory (or single file) containing source JXL files.
@@ -1606,18 +1608,6 @@ fn dispatch_static_conversion(
             convert_to_jxl(input, options, 0.0_f32, analysis.conversion_color_context())?
         }
         ("JPEG", _) => {
-            use foundation::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
-            if is_ultra_hdr_jpeg_file(input)? {
-                foundation::log_detail!(&format!(
-                    "{} UltraHDR Migration Cycle: {} (Gainmap detected)",
-                    foundation::infra::static_logs::messages::LABEL_DONE,
-                    input.display()
-                ));
-                return Ok(img::lossless_converter::convert_ultrahdr_jpeg_to_jxl(
-                    input, options,
-                )?);
-            }
-
             if config.verbose() {
                 foundation::log_detail!(&format!(
                     "{} JPEG→JXL Lossless Transcode Cycle: {}",
@@ -6163,8 +6153,13 @@ fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Re
         .output(temp_xmp)
         .build();
     command.arg("--output_format=xmp");
-    let extract = run_restore_image_command(command, "restore-jpeg XMP extraction")
-        .with_context(|| format!("restore-jpeg failed to extract XMP from {}", input.display()))?;
+    let extract =
+        run_restore_image_command(command, "restore-jpeg XMP extraction").with_context(|| {
+            format!(
+                "restore-jpeg failed to extract XMP from {}",
+                input.display()
+            )
+        })?;
     if !extract.status.success() {
         let stderr = String::from_utf8_lossy(&extract.stderr);
         let _ = restore_jpeg_remove_temp(temp_xmp, "XMP extraction failure");
@@ -6207,7 +6202,10 @@ fn restore_jpeg_commit_xmp_sidecar(
 
     if let Some(adjacent) = adjacent.as_deref() {
         foundation::metadata::validate_xmp_sidecar(adjacent).with_context(|| {
-            format!("restore-jpeg source XMP sidecar is invalid: {}", adjacent.display())
+            format!(
+                "restore-jpeg source XMP sidecar is invalid: {}",
+                adjacent.display()
+            )
         })?;
         if extracted {
             let extracted_hash = calculate_blake3_hash(&temp_xmp)?;
@@ -6252,7 +6250,10 @@ fn restore_jpeg_commit_xmp_sidecar(
         force,
         Some(input),
     )?;
-    anyhow::ensure!(committed, "restore-jpeg XMP sidecar commit was not completed");
+    anyhow::ensure!(
+        committed,
+        "restore-jpeg XMP sidecar commit was not completed"
+    );
     let current_hash = calculate_blake3_hash(&sidecar_output)?;
     if current_hash != expected_hash {
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
@@ -6888,14 +6889,17 @@ fn restore_jpeg_keep_source_parallel(
         files
             .par_iter()
             .map(|file| {
-                let result = restore_single_jpeg(file, input_root, output_root, force);
-                if let Ok(restored_file) = &result {
-                    if restored_file.committed {
-                        restored.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        skipped.fetch_add(1, Ordering::Relaxed);
+                let result = match restore_single_jpeg(file, input_root, output_root, force) {
+                    Ok(restored_file) => {
+                        if restored_file.committed {
+                            restored.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(restored_file)
                     }
-                }
+                    Err(error) => Err(error),
+                };
                 let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == file_count {
                     println!(
@@ -8679,6 +8683,7 @@ mod fast_img_hardening_tests {
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
         restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
+        restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
         restore_jpeg_delete_verified_source, restore_jpeg_djxl_command,
         restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
@@ -9097,7 +9102,7 @@ mod fast_img_hardening_tests {
             .arg(&output)
             .output()?;
         assert!(date_created.status.success());
-        assert!(String::from_utf8_lossy(&date_created.stdout).trim().is_empty());
+        assert_eq!(String::from_utf8_lossy(&date_created.stdout).trim(), "");
         #[cfg(target_os = "macos")]
         {
             let copied_xattr = std::process::Command::new("/usr/bin/xattr")
@@ -9856,7 +9861,7 @@ mod fast_img_hardening_tests {
                 out_rel: Some("a.JXL".to_string()),
                 src: foundation::common_utils::calculate_blake3_hash(&src)?,
                 out: old_hash.clone(),
-                library_asset: Some(old_hash.clone()),
+                library_asset: Some(old_hash),
             },
         );
 
@@ -9875,7 +9880,7 @@ mod fast_img_hardening_tests {
         assert_eq!(summary.refreshed, 0);
         assert_eq!(summary.invalidated, 1);
         assert!(summary.marker_changed);
-        assert!(entry.out.is_empty());
+        assert_eq!(entry.out, "");
         assert_eq!(entry.library_asset, None);
         assert_eq!(persisted.stage, FastImgStageName::OutputPrepared);
         assert_eq!(persisted.gate1_checks, Gate1Checks::default());

@@ -36,9 +36,13 @@ fn truncated_jpeg_is_failed_with_delivery_required() -> anyhow::Result<()> {
     assert!(
         result
             .message
-            .contains("JPEG cannot be reversibly transcoded")
-            || result.message.contains("encode preflight rejected"),
+            .contains("JPEG cannot be byte-identically reconstructed"),
         "unexpected failure message: {}",
+        result.message
+    );
+    assert!(
+        result.message.contains("source remains unmodified"),
+        "failure must state the source-retention guarantee: {}",
         result.message
     );
     Ok(())
