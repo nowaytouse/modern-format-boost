@@ -1,15 +1,14 @@
 // CONTRACT: M23 metadata preservation stack (metadata/mod.rs + platform modules).
 
 use super::{
-    MetadataLayerOutcome, XATTR_PRESERVE_SKIP_KEYS,
+    AaeSidecarAction, MetadataLayerOutcome, XATTR_PRESERVE_SKIP_KEYS, aae_sidecar_destination,
     delivery_policy::{
         exiftool_combined_output_indicates_no_source_tags, is_metadata_delivery_soft_error,
         is_xattr_api_absence,
     },
-    aae_sidecar_destination, find_aae_sidecar, find_xmp_sidecar, handle_aae_sidecar,
+    exiv2_xmp_fallback_allowed, find_aae_sidecar, find_xmp_sidecar, handle_aae_sidecar,
     is_xattr_preserve_skipped, merge_xmp_sidecar_into_dest, preserve_for_delivery,
     preserve_pro_delivery_layer_order, should_preserve_xattr, verify_exact_metadata_copy,
-    AaeSidecarAction,
 };
 #[cfg(target_os = "macos")]
 use super::{
@@ -319,6 +318,24 @@ fn contract_xmp_sidecar_merge_fails_closed_when_destination_missing() {
 }
 
 #[test]
+fn contract_jxl_xmp_never_uses_exiv2_fallback() {
+    let temp = TempDir::new().expect("tempdir");
+    let jxl = temp.path().join("archive.JXL");
+    let unknown = temp.path().join("unclassified.bin");
+    fs::write(&jxl, crate::constants::JXL_CONTAINER_MAGIC).expect("write JXL container magic");
+    fs::write(&unknown, b"not a media container").expect("write unknown payload");
+
+    assert!(
+        !exiv2_xmp_fallback_allowed(&jxl).expect("detect JXL container"),
+        "JXL XMP failure must retain the file rather than route through Exiv2"
+    );
+    assert!(
+        !exiv2_xmp_fallback_allowed(&unknown).expect("classify unknown payload"),
+        "unknown destination identity must not authorize an Exiv2 mutation"
+    );
+}
+
+#[test]
 fn contract_delivery_policy_exiftool_no_source_tags_locked() {
     assert!(exiftool_combined_output_indicates_no_source_tags(
         "0 image files updated"
@@ -429,7 +446,6 @@ fn contract_exact_metadata_copy_verifier_ignores_macos_runtime_xattr_noise() {
     assert_eq!(check.mismatches.len(), 0);
 }
 
-
 #[cfg(target_os = "macos")]
 #[test]
 fn contract_exact_metadata_copy_verifier_ignores_lastuseddate_app_variants() {
@@ -467,7 +483,6 @@ fn contract_exact_metadata_copy_verifier_ignores_lastuseddate_app_variants() {
         check.mismatches
     );
     assert_eq!(check.mismatches.len(), 0);
-
 }
 
 #[cfg(target_os = "macos")]
@@ -480,8 +495,7 @@ fn contract_preserve_for_delivery_copies_lastuseddate_variants_end_to_end() {
     fs::write(&dst, b"output").expect("write dst");
 
     xattr::set(&src, "com.apple.lastuseddate#PS", b"photoshop ts").expect("set src #PS");
-    xattr::set(&src, "com.apple.lastuseddate#Safari", b"safari ts")
-        .expect("set src #Safari");
+    xattr::set(&src, "com.apple.lastuseddate#Safari", b"safari ts").expect("set src #Safari");
 
     let report = preserve_for_delivery(&src, &dst).expect("delivery metadata copy");
     assert!(
@@ -508,10 +522,8 @@ fn contract_preserve_for_delivery_copies_icloud_cpl_variants_end_to_end() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"output").expect("write dst");
 
-    xattr::set(&src, "com.apple.cpl.original", b"icloud original")
-        .expect("set src cpl original");
-    xattr::set(&src, "com.apple.cpl.delete", b"icloud delete")
-        .expect("set src cpl delete");
+    xattr::set(&src, "com.apple.cpl.original", b"icloud original").expect("set src cpl original");
+    xattr::set(&src, "com.apple.cpl.delete", b"icloud delete").expect("set src cpl delete");
 
     let report = preserve_for_delivery(&src, &dst).expect("delivery metadata copy");
     assert!(
@@ -538,10 +550,8 @@ fn contract_exact_copy_xattr_reapply_restores_icloud_cpl_after_file_mutation() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"output").expect("write dst");
 
-    xattr::set(&src, "com.apple.cpl.original", b"icloud original")
-        .expect("set src cpl original");
-    xattr::set(&src, "com.apple.cpl.delete", b"icloud delete")
-        .expect("set src cpl delete");
+    xattr::set(&src, "com.apple.cpl.original", b"icloud original").expect("set src cpl original");
+    xattr::set(&src, "com.apple.cpl.delete", b"icloud delete").expect("set src cpl delete");
 
     let mut report = MetadataDeliveryReport::default();
     reapply_macos_exact_copy_xattrs_for_delivery(&src, &dst, &mut report);
@@ -682,7 +692,6 @@ fn contract_macos_file_added_time_is_reapplied_and_verified_after_filetime() {
         "macOS file Date Added must be verified after re-application"
     );
 }
-
 
 #[test]
 fn contract_commit_delivery_runs_exact_metadata_verification_after_timestamps() {

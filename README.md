@@ -894,6 +894,17 @@ The AppKit picker and `img photos-albums` select a live album/folder by native
 UUID; selecting a folder includes descendant albums while preserving their
 hierarchy. Whole-library audit remains the default.
 
+**13. Can a JXL marked reconstruction-rejected be repaired without a backup?**
+
+Only when the exact reconstruction-owned metadata change can be undone. A
+lossless JPEG transcode stores the original JPEG coefficients in the JXL
+codestream, but JBRD may also require the original Exif/XMP/JUMBF container
+bytes. If those bytes were rewritten, readable pixels do not prove that the
+original JPEG file remains byte-recoverable. MFB therefore keeps the JXL and
+sidecar, forbids pixel-to-JPEG fallback, and requests an exact original or
+metadata backup. Decoding to a lossless pixel format can preserve the visible
+image, but it is a derivative rather than restoration of the original JPEG.
+
 ---
 
 ## ⚖️ License

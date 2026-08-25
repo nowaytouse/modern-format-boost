@@ -7,7 +7,7 @@
 //!
 //! Reuses the core library implementation from `foundation::xmp_merger`.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use dev::infra::ui_tokens::pick_symbol;
 use foundation::xmp_merger::{Config as XmpMergerConfig, LogLevel, OverwriteMode, XmpMerger};
@@ -148,6 +148,7 @@ fn merge_target(target: &Path, args: &Args) -> Result<MergeSummary> {
 }
 
 fn main() -> Result<()> {
+    foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
 
     println!();

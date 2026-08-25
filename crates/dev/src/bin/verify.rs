@@ -2366,6 +2366,7 @@ fn parse_logs(
 }
 
 fn main() -> Result<()> {
+    foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
 
     if let Some(ref optimized_dir) = args.fast_img_marker_json {

@@ -1204,8 +1204,9 @@ pub(super) fn preserve_pro_for_delivery(
 /// Merge source's XMP sidecar into destination (for conversion output).
 ///
 /// Returns `Ok(false)` when no sidecar exists, `Ok(true)` when a sidecar was
-/// merged, and `Err` when a sidecar exists but neither the primary nor fallback
-/// merge path can preserve it.
+/// merged, and `Err` when a sidecar exists but its safe merge path cannot
+/// preserve it. JXL never falls back to a metadata writer that could rewrite
+/// reconstruction-owned container bytes.
 ///
 /// # Errors
 /// Returns an error if a discovered XMP sidecar cannot be merged into `dst`.
@@ -2863,6 +2864,25 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     ok
 }
 
+/// Returns whether Exiv2 may be used after the primary XMP merge failed.
+///
+/// JXL uses an append-only XML overlay so its existing container/JBRD bytes
+/// stay frozen. An arbitrary secondary metadata writer is therefore unsafe.
+/// Unknown destination identity is also retained rather than guessed.
+fn exiv2_xmp_fallback_allowed(dst: &Path) -> io::Result<bool> {
+    let format = crate::image::format_detect::detect_true_format(dst).map_err(|error| {
+        io::Error::other(format!(
+            "refusing Exiv2 XMP fallback because destination format could not be verified for {}: {error}",
+            dst.display()
+        ))
+    })?;
+    Ok(!matches!(
+        format,
+        crate::image::format_detect::FormatKind::Jxl
+            | crate::image::format_detect::FormatKind::Unknown
+    ))
+}
+
 fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
     let xmp_path = find_xmp_sidecar(src);
 
@@ -2913,6 +2933,15 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
             }
             Err(e) => {
                 let err_str = e.to_string();
+                let fallback_allowed = exiv2_xmp_fallback_allowed(dst)?;
+                if !fallback_allowed {
+                    crate::progress_mode::xmp_merge_failure(&err_str);
+                    return Err(io::Error::other(format!(
+                        "Failed to merge XMP sidecar {} into {}: {err_str}; refusing Exiv2 fallback for JXL because it can rewrite reconstruction-owned container bytes",
+                        xmp.display(),
+                        dst.display()
+                    )));
+                }
                 let format_unsupported = err_str.to_lowercase().contains("format error in file");
                 if format_unsupported {
                     crate::ui_stderr::line(

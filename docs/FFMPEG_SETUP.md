@@ -12,24 +12,17 @@ AI 滤镜），并确保系统依赖兼容。
 
 ## 📖 English
 
-### The "Link Overwrite" Strategy
+### The Tap-Owned FFmpeg Strategy
 
-Homebrew's standard `chromaprint` package strictly depends on the formula named
-`ffmpeg`. To satisfy this dependency while using the enhanced version, we
-install both and use Homebrew's linking system to toggle the active version.
+Use the enhanced `homebrew-ffmpeg` formula as the one Homebrew-managed
+`ffmpeg` installation. Current tap guidance does not support keeping the core
+formula linked alongside it, so do not use `brew unlink`/`brew link --overwrite`
+as a switching mechanism. Resolve any pre-existing core installation before
+installing the tap formula.
 
-#### 1. Install Official FFmpeg
+#### 1. Install the Full-Featured Tap Version
 
-This satisfies dependencies for other packages like `chromaprint`.
-
-```bash
-brew install ffmpeg
-
-```
-
-#### 2. Install Full-Featured Tap Version
-
-Install the enhanced version from the tap. It will be built in its own Cellar.
+Install the enhanced version directly from the tap:
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
@@ -75,61 +68,53 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-libbluray \
     --with-libbs2b \
     --with-libcaca \
-    --with-libdvdnav \
-    --with-libdvdread \
     --with-libgsm \
     --with-openssl@3 \
     --with-speex
 
 ```
 
-_Note: `--with-decklink` and `--with-libflite` are excluded as they require
-manual SDKs or have current platform issues._
+_Note: `--with-dvd` is the tap's single DVD switch and enables both
+`libdvdnav` and `libdvdread`. `--with-decklink` is intentionally excluded
+because it needs the Blackmagic DeckLink SDK. The tap does not declare Flite
+as a dependency; Homebrew now provides it, so install `flite` first and append
+`--with-libflite` only when text-to-speech support is required. This does not
+add a media encoder used by MFB. `--with-alt-name` only changes command names
+and does not add codec capability. The current formula exposes `ggml` as an
+optional dependency, while `--with-whisper-cpp` is the switch that adds
+FFmpeg's `--enable-whisper`._
 
-#### 3. Overwrite Systems Links
+For the widest Homebrew-only feature set, run `brew install flite` before the
+command above and append `--with-libflite`. DeckLink remains the only
+capability that requires a separately supplied SDK.
 
-Toggle the active `ffmpeg` command to the tap version.
+#### 2. Verify the Installed Capability Set
+
+`ffprobe` inspects media; encoder and filter availability belongs to `ffmpeg`.
+Verify the active binary rather than inferring capability from its package name:
 
 ```bash
-# Unlink the core version
-brew unlink ffmpeg
-# Link the full-featured version
-brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
-
-```
-
-#### 4. Accessing Official Version (Optional)
-
-The core version is still in the Cellar. You can create a dedicated alias for
-it:
-
-```bash
-# Create a symbolic link to the core version with a unique name
-ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
-
+ffmpeg -hide_banner -buildconf
+ffmpeg -hide_banner -encoders
+ffmpeg -hide_banner -decoders
+ffmpeg -hide_banner -filters
+ffprobe -version
 ```
 
 ---
 
 ## 🇨🇳 简体中文
 
-### “链接覆盖”策略
+### Tap 独占 FFmpeg 策略
 
-Homebrew 标准的 `chromaprint` 软件包严格依赖于名为 `ffmpeg` 的公式。为了满足此依赖，我们先安装官方版，再安装增强版并利用
-Homebrew 的链接机制进行切换。
+将增强版 `homebrew-ffmpeg` 作为 Homebrew 管理的唯一 `ffmpeg` 安装。
+当前 tap 的说明不支持与 core 版同时保持链接，因此不要把
+`brew unlink` / `brew link --overwrite` 当作切换机制；若系统已有 core
+版，应先单独处理该冲突，再安装 tap 版。
 
-#### 1. 安装官方 FFmpeg
+#### 1. 安装“终极全功能版”
 
-这步是为了安装 `chromaprint` 等依赖于 `ffmpeg` 名称的包。
-
-```bash
-brew install ffmpeg
-
-```
-
-#### 2. 安装“终极全功能版”
-
-从 `homebrew-ffmpeg` 安装增强版。它会安装在独立的目录中，不会覆盖原版。
+直接从 `homebrew-ffmpeg` 安装增强版：
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
@@ -175,34 +160,31 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-libbluray \
     --with-libbs2b \
     --with-libcaca \
-    --with-libdvdnav \
-    --with-libdvdread \
     --with-libgsm \
     --with-openssl@3 \
     --with-speex
 
 ```
 
-_注意：`--with-decklink` 和 `--with-libflite` 已排除，前者需要手动下载 SDK，后者存在兼容性问题。_
+_注意：`--with-dvd` 是该 tap 唯一的 DVD 开关，会同时启用 `libdvdnav` 与
+`libdvdread`。`--with-decklink` 被有意排除，因为它需要 Blackmagic DeckLink
+SDK。该 tap 没有为 Flite 声明依赖；Homebrew 目前已经提供 `flite`，如确实需要文本
+转语音，可先安装它，再为上面的命令追加 `--with-libflite`。这不会增加 MFB 使用的
+媒体编码器。`--with-alt-name` 只改变命令名，不增加编解码能力。当前 formula 将
+`ggml` 暴露为可选依赖；真正为 FFmpeg 添加 `--enable-whisper` 的开关是
+`--with-whisper-cpp`。_
 
-#### 3. 覆盖系统链接
+如果追求 Homebrew 可提供的最宽功能集，可先执行 `brew install flite`，再给上面的
+命令追加 `--with-libflite`。DeckLink 仍是唯一必须另外提供 SDK 的能力。
 
-将 `ffmpeg` 命令指向全功能版。
+#### 2. 验证实际能力集
 
-```bash
-# 断开官方版链接
-brew unlink ffmpeg
-# 强制链接全功能版
-brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
-
-```
-
-#### 4. 调用官方原版（可选）
-
-官方版本依然在系统中，你可以通过建立别名来随时调用它：
+`ffprobe` 负责探测媒体；编解码器和滤镜能力属于 `ffmpeg`。不要只根据包名推断，直接检查当前实际运行的二进制：
 
 ```bash
-# 将官方核心版链接为 'ffmpeg-official'
-ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
-
+ffmpeg -hide_banner -buildconf
+ffmpeg -hide_banner -encoders
+ffmpeg -hide_banner -decoders
+ffmpeg -hide_banner -filters
+ffprobe -version
 ```

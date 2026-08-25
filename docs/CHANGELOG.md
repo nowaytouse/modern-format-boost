@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **JXL XMP fallback barrier**: If append-only JXL XMP enrichment cannot prove
+  a safe commit, MFB now retains the JXL and sidecar instead of invoking Exiv2.
+  Unclassified destinations are likewise retained; no secondary metadata writer
+  may rewrite reconstruction-owned JBRD/container bytes after the primary
+  guarded path failed.
+- **Exact-recovery state clarity**: Pixel-decodable JXLs with rejected JBRD are
+  now described as visually readable but not original-JPEG recoverable from the
+  current file alone. MFB names exact metadata restoration or an exact backup as
+  the only lossless recovery routes and continues to forbid pixel-to-JPEG
+  fallback.
+- **FFmpeg capability documentation**: The macOS setup guide now follows the
+  current `homebrew-ffmpeg` tap ownership model and documents runtime capability
+  inspection with `ffmpeg -buildconf`, encoder/decoder/filter listings, and
+  `ffprobe -version` rather than the obsolete core/tap relinking workflow.
+- **Focused lint cleanup**: Removed two non-semantic `img` Clippy suppressions
+  by borrowing canonicalization inputs and making FastImg option notification
+  explicitly non-fallible; orchestration-specific suppressions remain scoped.
+- **Packaged ghost-mode coverage**: Recovery collection, XMP merge, iCloud
+  import, and diagnostic verification now initialize the existing MFB scratch
+  environment before parsing paths or launching tools, matching `img`, `vid`,
+  and the App launcher.
+
 - **Reliable recovery classification and backup comparison**: Exact JPEG
   reconstruction is now independent from XMP-layer agreement. Conflicting
   container/adjacent XMP no longer turns a reversible JXL into a false

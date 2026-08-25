@@ -13267,6 +13267,10 @@ fn media_conversion_output_adjacent_temp_m171() {
         "crates/img/src/main.rs",
         "crates/vid/src/main.rs",
         "crates/dev/src/bin/drag_and_drop_processor.rs",
+        "crates/dev/src/bin/collect_optimized.rs",
+        "crates/dev/src/bin/merge_xmp.rs",
+        "crates/dev/src/bin/icloud_import.rs",
+        "crates/dev/src/bin/verify.rs",
     ] {
         let main_rs = fs::read_to_string(root.join(entry)).expect("main.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
         assert!(

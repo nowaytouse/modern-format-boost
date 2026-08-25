@@ -154,6 +154,17 @@ Valid pixel-only JXL, advertised-but-rejected reconstruction records, and probe
 failures are classified in the manifest and marker tree or live audit albums.
 They are not converted through pixel-to-JPEG fallback and are not deleted.
 
+Pixel readability is not proof that the original JPEG file is still exactly
+recoverable. JPEG reconstruction may depend on the reconstruction-owned Exif,
+XMP, or JUMBF bytes referenced by JBRD. If a historical metadata writer changed
+those bytes, exact recovery is possible only when the original metadata change
+can be undone byte-for-byte or an exact original/backup is available. An
+adjacent sidecar is useful metadata but is not assumed to be those original
+container bytes. Reordering boxes, removing overlays, substituting a sidecar,
+or accepting `--pixels_to_jpeg` must never be reported as original-JPEG
+recovery. A pixel decode may be exported to a lossless pixel format for visual
+rescue, but that is a derivative and does not repair JPEG bitstream identity.
+
 ## Read-only backup comparison
 
 `collect_optimized CURRENT REPORT --backup BACKUP --compare` compares two

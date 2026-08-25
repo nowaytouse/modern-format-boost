@@ -498,6 +498,7 @@ fn select_import_mode() -> ImportMode {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
+    foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
 
     // This preflight must run before tool discovery, locks, folder rename, or Photos access.

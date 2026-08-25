@@ -320,14 +320,9 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn canonicalize_img_run_roots(
-    input: PathBuf,
-    base_dir: Option<PathBuf>,
-) -> (PathBuf, Option<PathBuf>) {
-    let input = foundation::media_conversion_gate::canonicalize_for_tool_input(&input);
-    let base_dir =
-        base_dir.map(|base| foundation::media_conversion_gate::canonicalize_for_tool_input(&base));
+fn canonicalize_img_run_roots(input: &Path, base_dir: Option<&Path>) -> (PathBuf, Option<PathBuf>) {
+    let input = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
+    let base_dir = base_dir.map(foundation::media_conversion_gate::canonicalize_for_tool_input);
     (input, base_dir)
 }
 
@@ -467,7 +462,7 @@ fn main_inner() -> anyhow::Result<()> {
         } => {
             use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 
-            let (input, base_dir) = canonicalize_img_run_roots(input, base_dir);
+            let (input, base_dir) = canonicalize_img_run_roots(&input, base_dir.as_deref());
             let resume = foundation::checkpoint::resolve_resume_choice(
                 &input,
                 output.as_deref(),
@@ -2486,8 +2481,7 @@ fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Resu
         })
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<()> {
+fn validate_fast_img_options(options: &FastImgRunOptions<'_>) {
     if options.extreme_precision {
         println!(
             "[FASTIMG ] --extreme-precision is reserved for the JXL-to-AVIF recovery path; Meme Mode keeps its bounded coarse-plus-binary search"
@@ -2508,7 +2502,6 @@ fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<
         );
         std::process::exit(foundation::constants::EXIT_CODE_ERROR);
     }
-    Ok(())
 }
 
 struct FastImgSourceInventory {
@@ -3004,7 +2997,7 @@ fn fast_img_prepare_retry_plan(
 }
 
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
-    validate_fast_img_options(&options)?;
+    validate_fast_img_options(&options);
     let FastImgRunOptions {
         input,
         output_dir,
@@ -3094,10 +3087,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if existing_marker.is_none()
-        && source_jpegs.is_empty()
-        && modern_lossy_candidates.is_empty()
-    {
+    if existing_marker.is_none() && source_jpegs.is_empty() && modern_lossy_candidates.is_empty() {
         if !working_copy_existed && working_copy.is_dir() {
             std::fs::remove_dir(&working_copy).with_context(|| {
                 format!(
@@ -6451,10 +6441,7 @@ fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Re
     Ok(true)
 }
 
-fn restore_jpeg_stage_adjacent_xmp(
-    adjacent: &Path,
-    temp_xmp: &Path,
-) -> anyhow::Result<String> {
+fn restore_jpeg_stage_adjacent_xmp(adjacent: &Path, temp_xmp: &Path) -> anyhow::Result<String> {
     let source_hash = calculate_blake3_hash(adjacent)?;
     std::fs::copy(adjacent, temp_xmp).with_context(|| {
         format!(
@@ -7173,14 +7160,14 @@ fn restore_jpeg_preflight(
                 });
                 ineligible.push(RestoreJpegFailure {
                     source,
-                    reason: "valid pixel-decodable JXL has no exact JPEG bitstream reconstruction data; pixel-to-JPEG fallback is forbidden".to_string(),
+                    reason: "valid pixel-decodable JXL has no exact JPEG bitstream reconstruction data; the image pixels remain readable, but the original JPEG bytes cannot be regenerated from this file alone; pixel-to-JPEG fallback is forbidden".to_string(),
                 });
             }
             Ok(foundation::jxl_utils::JpegReconstructionEligibility::AdvertisedButRejected {
                 diagnostic,
             }) => {
                 let reason = format!(
-                    "jxlinfo advertises JPEG reconstruction but official djxl rejects it; the valid pixel payload is retained without lossy fallback: {diagnostic}"
+                    "jxlinfo advertises JPEG reconstruction but official djxl rejects it; the valid pixel payload is retained without lossy fallback, but exact original-JPEG recovery requires the original reconstruction-owned metadata bytes or an exact backup: {diagnostic}"
                 );
                 audit_records.push(RestoreJpegAuditRecord {
                     source: source.clone(),
@@ -9379,13 +9366,14 @@ mod fast_img_hardening_tests {
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
-        restore_jpeg_audit_marker_path, restore_jpeg_build_current_proof_with_decoder,
-        restore_jpeg_candidate_files, restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
+        record_and_delete_restored_jpeg_source, restore_jpeg_audit_marker_path,
+        restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
+        restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
         restore_jpeg_delete_verified_source, restore_jpeg_djxl_command, restore_jpeg_hex_encode,
         restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
-        restore_jpeg_validate_disjoint_roots, restore_single_jpeg,
-        record_and_delete_restored_jpeg_source, run_fast_img, validate_cleanup_complete_marker,
-        validate_fast_img_marker_source_state, write_restore_jpeg_manifest,
+        restore_jpeg_validate_disjoint_roots, restore_single_jpeg, run_fast_img,
+        validate_cleanup_complete_marker, validate_fast_img_marker_source_state,
+        write_restore_jpeg_manifest,
     };
     use anyhow::Context;
     use clap::Parser;
@@ -9553,7 +9541,7 @@ mod fast_img_hardening_tests {
         std::fs::create_dir_all(&real)?;
         std::os::unix::fs::symlink(&real, &alias)?;
 
-        let (input, base) = canonicalize_img_run_roots(alias, Some(real.clone()));
+        let (input, base) = canonicalize_img_run_roots(&alias, Some(&real));
 
         assert_eq!(input, real.canonicalize()?);
         assert_eq!(base, Some(real.canonicalize()?));
@@ -9920,10 +9908,8 @@ mod fast_img_hardening_tests {
         assert!(foundation::metadata::merge_xmp_sidecar_into_dest(
             &source, &source,
         )?);
-        let adjacent_xmp = std::fs::read_to_string(&source_xmp)?.replace(
-            "2025-10-24T12:00:24+08:00",
-            "2026-08-25T12:00:24+08:00",
-        );
+        let adjacent_xmp = std::fs::read_to_string(&source_xmp)?
+            .replace("2025-10-24T12:00:24+08:00", "2026-08-25T12:00:24+08:00");
         std::fs::write(&source_xmp, adjacent_xmp.as_bytes())?;
         let expected_jpeg = root.path().join("expected-camera.jpg");
         restore_jpeg_decode_to_temp(&source, &expected_jpeg)?;
@@ -9936,11 +9922,13 @@ mod fast_img_hardening_tests {
         let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
             .context("restored adjacent XMP sidecar missing")?;
         assert_eq!(std::fs::read(restored_xmp)?, adjacent_xmp.as_bytes());
-        assert!(restored
-            .proof
-            .source_retention_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("both metadata layers")));
+        assert!(
+            restored
+                .proof
+                .source_retention_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("both metadata layers"))
+        );
 
         let mut records = Vec::new();
         assert!(!record_and_delete_restored_jpeg_source(
@@ -11773,8 +11761,7 @@ mod fast_img_hardening_tests {
             extreme_precision: false,
         };
 
-        super::validate_fast_img_options(&options)
-            .expect("JXL shortest-path must reach the verified Photos delivery pipeline");
+        super::validate_fast_img_options(&options);
     }
 
     #[test]
