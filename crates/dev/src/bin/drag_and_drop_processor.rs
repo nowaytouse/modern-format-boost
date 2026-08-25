@@ -2639,6 +2639,7 @@ fn run_watch_loop(args: &Args, session: &DragDropSession) -> Result<()> {
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
+    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
     install_signal_handlers()?;
     unsafe {
         std::env::set_var("MFB_GUI_LAUNCH", "1");

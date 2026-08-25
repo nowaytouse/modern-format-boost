@@ -13263,7 +13263,11 @@ fn media_conversion_output_adjacent_temp_m171() {
         "hdr production must not call .tempfile_in() directly (M171)"
     );
 
-    for entry in ["crates/img/src/main.rs", "crates/vid/src/main.rs"] {
+    for entry in [
+        "crates/img/src/main.rs",
+        "crates/vid/src/main.rs",
+        "crates/dev/src/bin/drag_and_drop_processor.rs",
+    ] {
         let main_rs = fs::read_to_string(root.join(entry)).expect("main.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
         assert!(
             main_rs.contains("init_ghost_mode"),

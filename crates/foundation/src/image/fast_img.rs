@@ -1072,9 +1072,9 @@ pub fn prune_empty_source_dirs_for_tier2_assets(
         }
     }
     let result = if remove_selected_root {
-        crate::io_utils::prune_empty_directories_within(src_dir, &dirs)
+        crate::io_utils::prune_delivered_directories_within(src_dir, &dirs)
     } else {
-        crate::io_utils::prune_empty_descendants_within(src_dir, &dirs)
+        crate::io_utils::prune_delivered_descendants_within(src_dir, &dirs)
     };
     result.map_err(|err| {
         ImgQualityError::AnalysisError(format!(
@@ -1347,6 +1347,64 @@ pub fn build_modern_lossy_static_import_candidates(
         .collect()
 }
 
+fn parse_exiftool_image_data_sha256(stdout: &[u8]) -> Result<String> {
+    let text = std::str::from_utf8(stdout).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "ExifTool ImageDataHash returned non-UTF-8 output: {error}"
+        ))
+    })?;
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let hash = lines.next().ok_or_else(|| {
+        ImgQualityError::AnalysisError(
+            "ExifTool did not return an ImageDataHash for the admitted tier-2 media".to_string(),
+        )
+    })?;
+    if lines.next().is_some()
+        || hash.len() != 64
+        || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "ExifTool returned an invalid SHA-256 ImageDataHash: {hash:?}"
+        )));
+    }
+    Ok(hash.to_ascii_lowercase())
+}
+
+fn tier2_image_data_sha256(path: &Path) -> Result<String> {
+    use crate::ToolBuilder;
+
+    let mut builder = crate::ExiftoolBuilder::new();
+    builder
+        .arg("-api")
+        .arg("ImageHashType=SHA256")
+        .arg("-s3")
+        .arg("-ImageDataHash")
+        .input(path);
+    let mut command = builder.build();
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        Duration::from_secs(120),
+        "tier-2 image-data hash proof",
+    )
+    .map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "tier-2 ImageDataHash command failed for {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !output.status.success() {
+        let diagnostic = crate::io_utils::tail_error_lines(
+            &String::from_utf8_lossy(&output.stderr),
+            3,
+        );
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 ImageDataHash failed for {}: {diagnostic}",
+            path.display()
+        )));
+    }
+    parse_exiftool_image_data_sha256(&output.stdout)
+}
+
 /// Import tier-2 lossy modern static sources directly into Photos.
 pub fn import_modern_lossy_static_tier(
     src_dir: &Path,
@@ -1416,6 +1474,7 @@ pub fn import_modern_lossy_static_tier(
                     candidate.rel_path, candidate.blake3
                 )));
             }
+            let source_image_data_hash = tier2_image_data_sha256(&candidate.path)?;
             let xmp_hash_before =
                 crate::common_utils::calculate_blake3_hash(&xmp_path).map_err(|error| {
                     ImgQualityError::AnalysisError(format!(
@@ -1464,6 +1523,13 @@ pub fn import_modern_lossy_static_tier(
                     candidate.rel_path
                 )));
             }
+            let staged_image_data_hash = tier2_image_data_sha256(&staged_path)?;
+            if staged_image_data_hash != source_image_data_hash {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 staging changed the admitted image payload for {}; source and sidecar retained",
+                    candidate.rel_path
+                )));
+            }
             crate::XmpMerger::new(crate::XmpMergerConfig::default())
                 .merge_xmp(&xmp_path, &staged_path)
                 .map_err(|error| {
@@ -1472,6 +1538,13 @@ pub fn import_modern_lossy_static_tier(
                         candidate.rel_path
                     ))
                 })?;
+            let merged_image_data_hash = tier2_image_data_sha256(&staged_path)?;
+            if merged_image_data_hash != source_image_data_hash {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 XMP merge changed the image payload for {}; source and sidecar retained",
+                    candidate.rel_path
+                )));
+            }
             let metadata_report =
                 crate::metadata::preserve_filesystem_for_delivery(&candidate.path, &staged_path)
                     .map_err(|error| {
@@ -1525,6 +1598,15 @@ pub fn import_modern_lossy_static_tier(
                     candidate.rel_path
                 )));
             }
+            tracing::info!(
+                target: "photos_import",
+                rel_path = %candidate.rel_path,
+                source_blake3 = %source_hash_before,
+                xmp_blake3 = %xmp_hash_before,
+                image_data_sha256 = %source_image_data_hash,
+                delivery_blake3 = %delivery_hash,
+                "tier-2 XMP delivery proved A-to-X-to-C custody and unchanged image payload"
+            );
             Ok((delivery_hash, xmp_hash_before))
         })();
 
@@ -5416,6 +5498,19 @@ mod tests {
         image
             .save_with_format(path, image::ImageFormat::Jpeg)
             .unwrap();
+    }
+
+    #[test]
+    fn tier2_image_data_hash_parser_is_exact() {
+        let hash = b"3C38ABF1811E7F27F6FB26331B5068E5A0BB901117A28D79A12D2D4B4AC52244\n";
+        assert_eq!(
+            parse_exiftool_image_data_sha256(hash).unwrap(),
+            "3c38abf1811e7f27f6fb26331b5068e5a0bb901117a28d79a12d2d4b4ac52244"
+        );
+        assert!(parse_exiftool_image_data_sha256(b"").is_err());
+        assert!(parse_exiftool_image_data_sha256(b"abc\n").is_err());
+        let duplicate = [hash.as_slice(), hash.as_slice()].concat();
+        assert!(parse_exiftool_image_data_sha256(&duplicate).is_err());
     }
 
     #[test]

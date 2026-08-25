@@ -138,7 +138,7 @@ pub fn prune_empty_directories_within(
     root: &Path,
     candidates: &[PathBuf],
 ) -> std::io::Result<usize> {
-    prune_empty_directory_candidates_within(root, candidates, true)
+    prune_empty_directory_candidates_within(root, candidates, true, false)
 }
 
 /// Remove empty descendants below a controlled root while preserving the root.
@@ -153,13 +153,44 @@ pub fn prune_empty_descendants_within(
     root: &Path,
     candidates: &[PathBuf],
 ) -> std::io::Result<usize> {
-    prune_empty_directory_candidates_within(root, candidates, false)
+    prune_empty_directory_candidates_within(root, candidates, false, false)
+}
+
+/// Remove empty directories and genuine Finder metadata left behind after a
+/// verified media delivery.
+///
+/// A file named `.DS_Store` is removed only when it is the directory's sole
+/// entry and carries Finder's `Bud1` header. Every other hidden or user file is
+/// preserved, and directory removal remains non-recursive.
+///
+/// # Errors
+/// Returns an error under the same fail-closed rules as
+/// [`prune_empty_directories_within`].
+pub fn prune_delivered_directories_within(
+    root: &Path,
+    candidates: &[PathBuf],
+) -> std::io::Result<usize> {
+    prune_empty_directory_candidates_within(root, candidates, true, true)
+}
+
+/// Equivalent to [`prune_delivered_directories_within`] while preserving the
+/// selected root itself.
+///
+/// # Errors
+/// Returns an error under the same fail-closed rules as
+/// [`prune_empty_descendants_within`].
+pub fn prune_delivered_descendants_within(
+    root: &Path,
+    candidates: &[PathBuf],
+) -> std::io::Result<usize> {
+    prune_empty_directory_candidates_within(root, candidates, false, true)
 }
 
 fn prune_empty_directory_candidates_within(
     root: &Path,
     candidates: &[PathBuf],
     remove_root: bool,
+    remove_finder_metadata: bool,
 ) -> std::io::Result<usize> {
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
     crate::safety::check_safe_for_destructive(root, "remove empty directories")
@@ -242,6 +273,9 @@ fn prune_empty_directory_candidates_within(
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     let mut removed = 0;
     for directory in directories {
+        if remove_finder_metadata {
+            remove_finder_metadata_if_only_entry(&directory)?;
+        }
         match fs::remove_dir(&directory) {
             Ok(()) => removed += 1,
             Err(error)
@@ -253,6 +287,45 @@ fn prune_empty_directory_candidates_within(
         }
     }
     Ok(removed)
+}
+
+fn remove_finder_metadata_if_only_entry(directory: &Path) -> std::io::Result<()> {
+    const DS_STORE_MAGIC: [u8; 8] = [0, 0, 0, 1, b'B', b'u', b'd', b'1'];
+
+    let mut entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let Some(entry) = entries.next().transpose()? else {
+        return Ok(());
+    };
+    if entries.next().transpose()?.is_some()
+        || entry.file_name().as_os_str() != std::ffi::OsStr::new(".DS_Store")
+    {
+        return Ok(());
+    }
+
+    let path = entry.path();
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mut magic = [0_u8; DS_STORE_MAGIC.len()];
+    let mut file = fs::File::open(&path)?;
+    match std::io::Read::read_exact(&mut file, &mut magic) {
+        Ok(()) if magic == DS_STORE_MAGIC => {}
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    drop(file);
+
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Robust move that handles cross-filesystem boundaries (EXDEV).
@@ -587,6 +660,34 @@ mod tests {
             0
         );
         assert!(hidden_file_root.is_dir());
+
+        let delivered_root = parent.path().join("delivered-root");
+        let delivered_leaf = delivered_root.join("nested");
+        fs::create_dir_all(&delivered_leaf)?;
+        fs::write(
+            delivered_leaf.join(".DS_Store"),
+            [0, 0, 0, 1, b'B', b'u', b'd', b'1', 0],
+        )?;
+        assert_eq!(
+            prune_delivered_directories_within(
+                &delivered_root,
+                std::slice::from_ref(&delivered_leaf),
+            )?,
+            2
+        );
+        assert!(!delivered_root.exists());
+
+        let disguised_root = parent.path().join("disguised-root");
+        fs::create_dir_all(&disguised_root)?;
+        fs::write(disguised_root.join(".DS_Store"), b"user payload")?;
+        assert_eq!(
+            prune_delivered_directories_within(
+                &disguised_root,
+                std::slice::from_ref(&disguised_root),
+            )?,
+            0
+        );
+        assert!(disguised_root.join(".DS_Store").is_file());
 
         let photos_library = parent.path().join("Debug.photoslibrary");
         fs::create_dir_all(&photos_library)?;
